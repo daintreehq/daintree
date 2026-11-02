@@ -28,6 +28,13 @@ vi.mock("../relayIdentity.js", () => ({
   restoreDecisionsIdentity: setupRuns.restore,
 }));
 
+// The #16000 launch and prompt wait are viewless's; here only what delivery hands them (#16019).
+const viewless = vi.hoisted(() => ({ resume: vi.fn(), wait: vi.fn() }));
+vi.mock("../../viewless/index.js", () => ({
+  resumeAgentSessionAsPaneLive: viewless.resume,
+  waitForAgentAtPromptLive: viewless.wait,
+}));
+
 // Building an archive and the relay's delete are their own modules'; here only how the entry runs them.
 const dataRuns = vi.hoisted(() => ({ buildArchive: vi.fn(), deleteRelay: vi.fn() }));
 vi.mock("../dataExport.js", () => ({ buildDecisionsArchive: dataRuns.buildArchive }));
@@ -1115,6 +1122,48 @@ describe("Decisions entry", () => {
       ).resolves.toMatchObject({ port: 4200 });
       expect(mcpRefs.lazyHoldListener).toHaveBeenCalledWith("decisions", route);
       openedRoutes[0]!.letGo();
+      await stopDecisions();
+    });
+
+    it("gives delivery the #16000 launch and prompt wait to resume a gone run's session with", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      const resume = connections[0]!.options.delivery?.resume;
+      expect(resume).toBeDefined();
+
+      const request = {
+        projectId: "project-1",
+        worktreeId: "wt-1",
+        agentId: "codex",
+        sessionId: "session-1",
+        cwd: "/repo/wt-1",
+        signal: new AbortController().signal,
+      };
+      const launched = {
+        status: "existing",
+        projectId: "project-1",
+        worktreeId: "wt-1",
+        terminalId: "t-1",
+      };
+      viewless.resume.mockResolvedValueOnce(launched);
+      await expect(resume!.resumeSession(request)).resolves.toBe(launched);
+      expect(viewless.resume).toHaveBeenCalledWith(request);
+      viewless.resume.mockRejectedValueOnce(new Error("no deps"));
+      await expect(resume!.resumeSession(request)).rejects.toThrow("no deps");
+
+      const waitOptions = { timeoutMs: 5_000, signal: request.signal, promptOnly: true as const };
+      const waited = { terminalId: "t-1", outcome: "timeout" };
+      viewless.wait.mockResolvedValueOnce(waited);
+      await expect(resume!.waitForPrompt("t-1", waitOptions)).resolves.toBe(waited);
+      expect(viewless.wait).toHaveBeenCalledWith("t-1", waitOptions);
+
+      const dir = mkdtempSync(join(tmpdir(), "decisions-resume-"));
+      const file = join(dir, "not-a-folder");
+      writeFileSync(file, "");
+      await expect(resume!.isDirectory(dir)).resolves.toBe(true);
+      await expect(resume!.isDirectory(file)).resolves.toBe(false);
+      rmSync(dir, { recursive: true, force: true });
+      await expect(resume!.isDirectory(join(tmpdir(), "decisions-no-such-dir"))).rejects.toThrow();
       await stopDecisions();
     });
 

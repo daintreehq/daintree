@@ -36,6 +36,12 @@ export interface AgentSessionPaneRequest {
    * the worktree's root.
    */
   cwd?: string;
+  /**
+   * Abandons the launch when aborted before the spawn. A spawn already sent
+   * finishes as a saved pane. A concurrent identical call joins this one's
+   * launch, signal and all.
+   */
+  signal?: AbortSignal;
 }
 
 export type AgentSessionPaneRefusal =
@@ -50,7 +56,8 @@ export type AgentSessionPaneRefusal =
   | "terminals-unavailable"
   | "panel-limit"
   | "missing-cli"
-  | "spawn-failed";
+  | "spawn-failed"
+  | "cancelled";
 
 export type AgentSessionPaneResult =
   | {
@@ -114,7 +121,9 @@ const inFlight = new Map<string, Promise<AgentSessionPaneResult>>();
  * The resume is built as a view's resume builds it: the journaled launch
  * flags reconciled against the current settings, the agent's name as the
  * title, the ambient environment. It never falls back to "the latest"
- * conversation: an agent that can't reopen one by id is refused.
+ * conversation: an agent that can't reopen one by id is refused. Nor to a
+ * new one: a Claude conversation the CLI never wrote fails the spawn
+ * (`exactResume`) rather than starting afresh under its id.
  *
  * A live pane of the same worktree already holding the session is returned
  * instead of a second agent on one transcript, as `findLiveResumePanelId`
@@ -147,7 +156,18 @@ export async function resumeAgentSessionAsPane(
 
   const key = JSON.stringify([project.id, request.worktreeId, request.agentId, sessionId]);
   const pending = inFlight.get(key);
-  if (pending) return pending;
+  if (pending) {
+    const joined = await pending;
+    if (
+      !(joined.status === "refused" && joined.reason === "cancelled") ||
+      request.signal?.aborted
+    ) {
+      return joined;
+    }
+    // Abandoned by its own caller, not this one: launch again once it has gone.
+    if (inFlight.get(key) === pending) inFlight.delete(key);
+    return resumeAgentSessionAsPane(request, deps, runtime);
+  }
   const run = Promise.resolve().then(() =>
     launchResumedPane(project, { ...request, sessionId }, agentConfig, deps, runtime)
   );
@@ -272,6 +292,7 @@ async function launchResumedPane(
   if (cliDetail && !isAgentLaunchable(cliDetail.state)) {
     return refused("missing-cli", `${agentConfig.name} can't be launched on this machine.`);
   }
+  if (request.signal?.aborted) return refused("cancelled", "The resume was abandoned.");
 
   const terminalId = `terminal-${randomUUID()}`;
   const title = agentConfig.name;
@@ -295,6 +316,8 @@ async function launchResumedPane(
           launchAgentId: agentId,
           agentLaunchFlags: savedFlags,
           agentSessionId: sessionId,
+          // A conversation the CLI never wrote is refused, never started afresh under its id.
+          exactResume: true,
           ...(actionContext !== undefined ? { actionContext } : {}),
         },
       ]);

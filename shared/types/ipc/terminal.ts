@@ -76,6 +76,12 @@ export interface TerminalSpawnOptions {
    * can't lose it.
    */
   agentSessionId?: string;
+  /**
+   * Refuse the spawn rather than start a fresh conversation under the id when
+   * the Claude conversation `command` resumes was never written (#12371): the
+   * caller needs that exact conversation or nothing (#16019).
+   */
+  exactResume?: boolean;
   /** Worktree the terminal is spawned in; persisted in agent session history */
   worktreeId?: string;
   /** Preset ID the agent is being launched with (needed for fallback chain lookup on exit). */

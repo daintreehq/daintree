@@ -130,6 +130,8 @@ describe("resumeAgentSessionAsPane", () => {
       worktreeId: WORKTREE.id,
       launchAgentId: "claude",
       agentSessionId: SESSION,
+      // A conversation the CLI never wrote fails the spawn, never starts afresh under the id.
+      exactResume: true,
       actionContext: { projectId: PROJECT.id, focusedTerminalId: terminalId },
     });
     // The CLI found by the probe, reopening exactly this conversation.
@@ -232,6 +234,52 @@ describe("resumeAgentSessionAsPane", () => {
     const result = await resumeAgentSessionAsPane({ ...REQUEST, agentId }, deps, makeRuntime());
     expect(result).toMatchObject({ status: "refused", reason });
     expect(spawns(invoke)).toHaveLength(0);
+  });
+
+  it("launches nothing once the caller has given up, and still launches for one that hasn't", async () => {
+    const { deps, invoke, store } = resumeDeps();
+    const controller = new AbortController();
+    const runtime = makeRuntime({
+      // Given up while the launch was being prepared, just before the spawn.
+      isDirectory: vi.fn(async () => {
+        controller.abort();
+        return true;
+      }),
+    });
+
+    await expect(
+      resumeAgentSessionAsPane({ ...REQUEST, signal: controller.signal }, deps, runtime)
+    ).resolves.toMatchObject({ status: "refused", reason: "cancelled" });
+    expect(spawns(invoke)).toEqual([]);
+    expect(runtime.confirmSpawn).not.toHaveBeenCalled();
+    expect(store.read()?.terminals ?? []).toEqual([]);
+
+    await expect(
+      resumeAgentSessionAsPane(
+        { ...REQUEST, signal: new AbortController().signal },
+        deps,
+        makeRuntime()
+      )
+    ).resolves.toMatchObject({ status: "launched" });
+  });
+
+  it("launches for a caller that joined a launch its own caller gave up on", async () => {
+    const { deps, invoke } = resumeDeps();
+    const abandoned = new AbortController();
+    const first = resumeAgentSessionAsPane(
+      { ...REQUEST, signal: abandoned.signal },
+      deps,
+      makeRuntime({ isDirectory: vi.fn(async () => (abandoned.abort(), true)) })
+    );
+    const joined = resumeAgentSessionAsPane(
+      { ...REQUEST, signal: new AbortController().signal },
+      deps,
+      makeRuntime()
+    );
+
+    await expect(first).resolves.toMatchObject({ status: "refused", reason: "cancelled" });
+    await expect(joined).resolves.toMatchObject({ status: "launched" });
+    expect(spawns(invoke)).toHaveLength(1);
   });
 
   it("refuses a project it doesn't know", async () => {

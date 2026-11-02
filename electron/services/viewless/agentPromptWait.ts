@@ -27,10 +27,14 @@ export interface AgentPromptWaitResult {
  * until the state machine first sees its prompt, so a terminal not yet
  * announced is waited for rather than read as idle, and `completed`, which a
  * prompt follows, never ends the wait. A timeout leaves the agent running.
+ *
+ * `promptOnly` settles only on `waiting` for its `prompt`: `idle` (which can
+ * be a bare shell) and the other kinds of wait are passed through, so an
+ * approval on screen keeps the wait going until the prompt follows it.
  */
 export function waitForAgentAtPrompt(
   terminalId: string,
-  options: { timeoutMs: number; signal?: AbortSignal }
+  options: { timeoutMs: number; signal?: AbortSignal; promptOnly?: boolean }
 ): Promise<AgentPromptWaitResult> {
   const store = getAgentAvailabilityStore();
   const { signal } = options;
@@ -61,7 +65,11 @@ export function waitForAgentAtPrompt(
       observed = { state, ...(state === "waiting" && waitingReason ? { waitingReason } : {}) };
       // A kill resets the agent to idle just before it announces the kill.
       if (state === "idle" && trigger === "exit") return;
-      if (state === "waiting" || state === "idle") finish("settled");
+      const atRest =
+        options.promptOnly === true
+          ? state === "waiting" && waitingReason === "prompt"
+          : state === "waiting" || state === "idle";
+      if (atRest) finish("settled");
       else if (state === "exited") finish("exited");
     };
 
@@ -85,6 +93,11 @@ export function waitForAgentAtPrompt(
       })
     );
 
+    // A caller that has already given up gets that, whatever the agent is doing.
+    if (signal?.aborted) {
+      finish("aborted");
+      return;
+    }
     // Read again now that nothing can slip past the listeners.
     if (store.isTerminalClosed(terminalId)) {
       finish("closed");
@@ -93,10 +106,6 @@ export function waitForAgentAtPrompt(
     const current = store.getTerminalSnapshot(terminalId);
     if (current) observe(current.state, current.waitingReason);
     if (settled) return;
-    if (signal?.aborted) {
-      finish("aborted");
-      return;
-    }
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

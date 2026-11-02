@@ -44,6 +44,8 @@ import {
 } from "../../mcp-server/terminalNotify.js";
 import { MIN_NOTIFY_INTERVAL_MS } from "../../../../shared/types/terminalNotify.js";
 import { openDb } from "../../persistence/db.js";
+import type { AgentPromptWaitResult } from "../../viewless/agentPromptWait.js";
+import type { AgentSessionPaneRequest } from "../../viewless/viewlessAgentResume.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import type { DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
 import {
@@ -60,6 +62,7 @@ const migrationsFolder = path.resolve(__dirname, "../../persistence/migrations")
 const ORIGIN_URL = "https://decisions.example.workers.dev";
 const HOST = "host-own-01";
 const PANE = "pane-1";
+const RESUMED = "terminal-resumed-1";
 const Q1 = "0190f0aa11112222333344445555aa01";
 const Q2 = "0190f0aa11112222333344445555aa02";
 const CRASHED = "0190f0aa11112222333344445555cc01";
@@ -278,6 +281,17 @@ function setup(
     ptyReady?: boolean;
     /** The first hold fails: thrown at once, or rejected later. */
     failFirstHold?: "sync" | "async";
+    /**
+     * Resumes a gone run's session (#16019) into `RESUMED`, which reaches its
+     * prompt unless `wait` says otherwise, or hands back the `existing` pane.
+     */
+    resume?: {
+      wait?: (terminalId: string, signal: AbortSignal) => Promise<AgentPromptWaitResult>;
+      directories?: readonly string[];
+      existing?: string;
+      /** Held until the test lets the launch finish. */
+      launchGate?: Promise<void>;
+    };
   } = {}
 ) {
   const store = options.store ?? new DaintreeLocalStore(sqlite);
@@ -320,6 +334,55 @@ function setup(
   };
   const keys = new MemoryKeyStore();
   void keys.save(stored);
+  const launches: Array<Omit<AgentSessionPaneRequest, "signal">> = [];
+  const launchSignals: Array<AbortSignal | undefined> = [];
+  const waits: string[] = [];
+  const directories = new Set(options.resume?.directories ?? ["/repo/wt-1"]);
+  const resumeOptions = options.resume;
+  const resume = resumeOptions && {
+    resumeSession: async (request: AgentSessionPaneRequest) => {
+      const { signal, ...rest } = request;
+      launches.push(rest);
+      launchSignals.push(signal);
+      if (resumeOptions.launchGate) await resumeOptions.launchGate;
+      if (resumeOptions.existing !== undefined) {
+        return {
+          status: "existing" as const,
+          projectId: request.projectId,
+          worktreeId: request.worktreeId,
+          terminalId: resumeOptions.existing,
+        };
+      }
+      client.terminals.set(RESUMED, {
+        ...atPrompt(),
+        agentState: "working" as const,
+        lastStateChange: Date.now(),
+        detectedAgentId: request.agentId,
+        launchGeneration: 1,
+        agentSessionId: request.sessionId ?? undefined,
+      });
+      client.generations.set(RESUMED, 1);
+      principals.set(RESUMED, "principal-resumed");
+      return {
+        status: "launched" as const,
+        projectId: request.projectId,
+        worktreeId: request.worktreeId,
+        terminalId: RESUMED,
+        cwd: request.cwd ?? "",
+        savedInLayout: true,
+      };
+    },
+    waitForPrompt: async (
+      terminalId: string,
+      waitOptions: { timeoutMs: number; signal: AbortSignal }
+    ): Promise<AgentPromptWaitResult> => {
+      waits.push(terminalId);
+      if (resumeOptions.wait) return resumeOptions.wait(terminalId, waitOptions.signal);
+      settle(terminalId);
+      return { terminalId, outcome: "settled", state: "waiting", waitingReason: "prompt" };
+    },
+    isDirectory: async (path: string) => directories.has(path),
+  };
   const delivery = new AnswerDelivery({
     deps: {
       hostId: () => HOST,
@@ -345,6 +408,7 @@ function setup(
         signals.add(onPane);
         return () => signals.delete(onPane);
       },
+      ...(resume ? { resume } : {}),
     },
     identity,
     store,
@@ -356,6 +420,32 @@ function setup(
   const patch = (fields: Partial<NotifyTerminalInfo>) =>
     client.terminals.set(PANE, { ...client.terminals.get(PANE)!, ...fields });
   const signals_ = (signal: PaneSignal) => [...signals].forEach((onPane) => onPane(signal));
+  /**
+   * The agent in `paneId` reaches its prompt now, as main's state events say:
+   * as `info`, or as its run was, at the prompt.
+   */
+  function settle(paneId: string, info?: NotifyTerminalInfo): void {
+    const current = client.terminals.get(paneId);
+    client.terminals.set(
+      paneId,
+      info ?? {
+        ...current,
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: Date.now(),
+      }
+    );
+    for (const listener of stateListeners) {
+      listener({
+        terminalId: paneId,
+        state: "waiting",
+        previousState: "working",
+        waitingReason: "prompt",
+        timestamp: Date.now(),
+      });
+    }
+    signals_("settled");
+  }
   /** The agent's turn: it starts working, as main's state events say. */
   const works = () => {
     patch({ agentState: "working", lastStateChange: Date.now() });
@@ -369,23 +459,15 @@ function setup(
     }
   };
   /** The agent's turn ends at its prompt. */
-  const settles = () => {
-    client.terminals.set(PANE, atPrompt(0));
-    for (const listener of stateListeners) {
-      listener({
-        terminalId: PANE,
-        state: "waiting",
-        previousState: "working",
-        waitingReason: "prompt",
-        timestamp: Date.now(),
-      });
-    }
-    signals_("settled");
-  };
+  const settles = () => settle(PANE, atPrompt(0));
   return {
     store,
     client,
     delivery,
+    launches,
+    launchSignals,
+    waits,
+    settle,
     principals,
     reports,
     relay,
@@ -924,5 +1006,277 @@ describe("AnswerDelivery", () => {
       await advance(1_000);
     }
     expect(pending.mock.calls.length - before).toBeGreaterThanOrEqual(5);
+  });
+
+  describe("resuming a gone run's session (#16019)", () => {
+    it.each(["claude", "codex"])(
+      "reopens a gone %s run's session, makes the resumed run the destination, then types the answer there",
+      async (kind) => {
+        const h = setup({ resume: {} });
+        const origin = { ...ORIGIN, agent_kind: kind, agent_session_id: `${kind}-session-9` };
+        await answered(h.store, Q1, 1, "approve", { origin });
+        h.client.terminals.delete(PANE);
+
+        h.delivery.start();
+        await until(() => h.client.submitted.length === 1);
+
+        expect(h.launches).toEqual([
+          {
+            projectId: "project-1",
+            worktreeId: "wt-1",
+            agentId: kind,
+            sessionId: `${kind}-session-9`,
+            cwd: "/repo/wt-1",
+          },
+        ]);
+        expect(h.waits).toEqual([RESUMED]);
+        expect(h.client.submitted[0].id).toBe(RESUMED);
+        expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
+        await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+        const row = (await h.question(Q1))!;
+        expect(row.origin).toEqual({
+          ...origin,
+          pane_id: RESUMED,
+          terminal_generation: 1,
+          ownership_principal: "principal-resumed",
+          agent_incarnation: "0",
+        });
+        expect(row.agent_resume_strategy).toBe(`adapter:${kind}`);
+        expect(row.error_code).toBeNull();
+
+        await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+        expect(h.client.submitted).toHaveLength(1);
+        await stopped(h.delivery);
+      }
+    );
+
+    it("resumes once for every question the gone run asked, and types them all there", async () => {
+      const h = setup({ resume: {} });
+      await answered(h.store, Q1, 1, "approve");
+      await answered(h.store, Q2, 2, "reject");
+      h.client.terminals.delete(PANE);
+
+      h.delivery.start();
+      await until(async () =>
+        [await h.question(Q1), await h.question(Q2)].every(
+          (row) => row?.delivery_status === "terminal-delivered"
+        )
+      );
+
+      expect(h.launches).toHaveLength(1);
+      expect(h.waits).toHaveLength(1);
+      expect(h.client.submitted.every((line) => line.id === RESUMED)).toBe(true);
+      expect(h.client.submitted.flatMap((line) => typedChoices(line.text))).toEqual([
+        "approve",
+        "reject",
+      ]);
+      await stopped(h.delivery);
+    });
+
+    it("takes a busy pane already holding the session as the destination, and types once it settles", async () => {
+      const h = setup({ resume: { existing: "pane-live" } });
+      h.client.terminals.set("pane-live", {
+        ...atPrompt(),
+        agentState: "working",
+        lastStateChange: Date.now(),
+        launchGeneration: 3,
+      });
+      h.client.generations.set("pane-live", 3);
+      h.principals.set("pane-live", "principal-live");
+      await answered(h.store, Q1, 1, "approve");
+      h.client.terminals.delete(PANE);
+
+      h.delivery.start();
+      await until(async () => (await h.question(Q1))?.origin.pane_id === "pane-live");
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.waits).toEqual([]);
+      expect(h.client.submitted).toEqual([]);
+      expect((await h.question(Q1))?.delivery_status).toBe("desktop-received");
+
+      h.settle("pane-live");
+      await until(() => h.client.submitted.length === 1);
+      expect(h.client.submitted[0].id).toBe("pane-live");
+      expect(h.launches).toHaveLength(1);
+      await stopped(h.delivery);
+    });
+
+    it("asks for attention, never reopening it, when the resumed run goes before the answer is typed", async () => {
+      const h = setup({ resume: {} });
+      await answered(h.store, Q1, 1, "approve");
+      h.client.terminals.delete(PANE);
+
+      h.delivery.start();
+      await until(async () => (await h.question(Q1))?.origin.pane_id === RESUMED);
+      // Closed inside its settle grace, before anything was typed.
+      h.client.terminals.delete(RESUMED);
+      h.client.generations.delete(RESUMED);
+
+      await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+      expect((await h.question(Q1))?.error_code).toBe("resume_ended");
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.launches).toHaveLength(1);
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    });
+
+    const gone = (h: ReturnType<typeof setup>) => h.client.terminals.delete(PANE);
+    const relaunched = (h: ReturnType<typeof setup>) => h.principals.set(PANE, "principal-2");
+    const timesOut = async (terminalId: string): Promise<AgentPromptWaitResult> => ({
+      terminalId,
+      outcome: "timeout",
+      state: "working",
+    });
+
+    it.each([
+      [
+        "it never reaches its prompt in time",
+        { wait: timesOut },
+        {},
+        gone,
+        "resume_timeout",
+        "pane_gone",
+        1,
+      ],
+      [
+        "the question named no session",
+        {},
+        { agent_session_id: null },
+        gone,
+        "resume_no_session",
+        "pane_gone",
+        0,
+      ],
+      [
+        "its worktree was deleted",
+        { directories: [] },
+        {},
+        gone,
+        "resume_worktree_gone",
+        "pane_gone",
+        0,
+      ],
+      [
+        "its agent's resume isn't proven",
+        {},
+        { agent_kind: "gemini" },
+        gone,
+        "resume_unsupported_agent",
+        "pane_gone",
+        0,
+      ],
+      [
+        "its pane was relaunched and no session was named",
+        {},
+        { agent_session_id: null },
+        relaunched,
+        "resume_no_session",
+        "relaunched",
+        0,
+      ],
+    ] as const)(
+      "keeps the answer and asks for attention with the reason when %s",
+      async (_label, resume, origin, change, reason, generic, launched) => {
+        const h = setup({ resume });
+        await answered(h.store, Q1, 1, "approve", { origin: { ...ORIGIN, ...origin } });
+        const before = (await h.question(Q1))!.answers_json;
+        change(h);
+
+        h.delivery.start();
+        await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+        const row = (await h.question(Q1))!;
+        expect(row.error_code).toBe(reason);
+        expect(row.answers_json).toBe(before);
+        expect(h.launches).toHaveLength(launched);
+        expect(h.client.submitted).toEqual([]);
+        // The phone hears the library's own code; the reason is kept here.
+        await until(() => h.failedReports().length === 1);
+        expect(h.failedReports()[0].body).toMatchObject({
+          question_id: Q1,
+          status: "needs-attention",
+          error_code: generic,
+        });
+
+        // A person decides from here: nothing launches or types on its own.
+        await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+        expect(h.launches).toHaveLength(launched);
+        expect(h.client.submitted).toEqual([]);
+        await stopped(h.delivery);
+      }
+    );
+
+    it("resumes afresh for a question from the same run in a later pass", async () => {
+      const h = setup({ resume: { wait: timesOut } });
+      await answered(h.store, Q1, 1, "approve");
+      h.client.terminals.delete(PANE);
+
+      h.delivery.start();
+      await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+      expect(h.launches).toHaveLength(1);
+
+      await answered(h.store, Q2, 2, "reject");
+      h.signal("appeared");
+      await until(async () => (await h.question(Q2))?.delivery_status === "needs-attention");
+      expect((await h.question(Q2))?.error_code).toBe("resume_timeout");
+      expect(h.launches).toHaveLength(2);
+      await stopped(h.delivery);
+    });
+
+    it("ends a resume still waiting when delivery stops, recording nothing for it", async () => {
+      let waitSignal: AbortSignal | undefined;
+      const h = setup({
+        resume: {
+          wait: (terminalId, signal) => {
+            waitSignal = signal;
+            return new Promise((resolve) =>
+              signal.addEventListener("abort", () => resolve({ terminalId, outcome: "aborted" }))
+            );
+          },
+        },
+      });
+      await answered(h.store, Q1, 1, "approve");
+      h.client.terminals.delete(PANE);
+
+      h.delivery.start();
+      await until(() => h.waits.length === 1);
+      let done = false;
+      void h.delivery.stop().then(() => {
+        done = true;
+      });
+      expect(waitSignal?.aborted).toBe(true);
+      // Ended by the abort, well inside the settle window a stuck attempt would get.
+      await advance(500);
+      expect(done).toBe(true);
+
+      const row = (await h.question(Q1))!;
+      expect(row.delivery_status).toBe("desktop-received");
+      expect(row.error_code).toBeNull();
+      expect(row.origin).toEqual(ORIGIN);
+      expect(h.failedReports()).toEqual([]);
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("never waits on, or records, a launch that finishes after delivery stopped", async () => {
+      let open!: () => void;
+      const launchGate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const h = setup({ resume: { launchGate } });
+      await answered(h.store, Q1, 1, "approve");
+      h.client.terminals.delete(PANE);
+
+      h.delivery.start();
+      await until(() => h.launches.length === 1);
+      await stopped(h.delivery);
+      expect(h.launchSignals[0]?.aborted).toBe(true);
+      open();
+      await advance(DELIVERY_CHECK_INTERVAL_MS, 5_000);
+
+      expect(h.waits).toEqual([]);
+      const row = (await h.question(Q1))!;
+      expect(row.delivery_status).toBe("desktop-received");
+      expect(row.origin).toEqual(ORIGIN);
+      expect(h.failedReports()).toEqual([]);
+      expect(h.client.submitted).toEqual([]);
+    });
   });
 });

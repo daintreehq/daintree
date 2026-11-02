@@ -14,6 +14,11 @@ import {
 } from "@daintreehq/decisions-client";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
 import type { LaneWake, OwnPane } from "../mcp-server/terminalNotify.js";
+import {
+  DaintreeResume,
+  withResumeReasons,
+  type SessionResumeDeps,
+} from "./daintreeResumeAdapter.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
 import { RetiredAttemptError, retireable } from "./relayTransport.js";
 
@@ -40,6 +45,11 @@ export interface AnswerDeliveryDeps extends Omit<DaintreeTerminalSinkDeps, "queu
   now?: () => number;
   /** How often to look for answers still waiting; one minute unless a test says otherwise. */
   checkIntervalMs?: number;
+  /**
+   * Reopens a gone pane's Claude or Codex session to deliver its answer
+   * (#16019). Without it, an answer whose run is gone needs a person.
+   */
+  resume?: SessionResumeDeps;
 }
 
 /** The store as delivery uses it: the library's, and its indexed read of whether anything waits. */
@@ -133,6 +143,9 @@ export class AnswerDelivery {
   private readonly sink: DaintreeTerminalSink;
   private readonly owner: DecisionsBridge;
   private readonly engine: DeliveryEngine;
+  private readonly resume: DaintreeResume | null;
+  /** Ends a resume in progress when delivery stops, before it can record anything. */
+  private readonly resumeAbort = new AbortController();
   private hold: DecisionWakeHold | null = null;
   private holding: Promise<DecisionWakeHold | null> | null = null;
   private started = false;
@@ -162,12 +175,22 @@ export class AnswerDelivery {
       queueWake: (pane, projectId, wake) => this.queueWake(pane, projectId, wake),
       ...(deps.now ? { now: deps.now } : {}),
     });
+    this.resume = deps.resume
+      ? new DaintreeResume({
+          ...deps.resume,
+          hostId: deps.hostId,
+          principalFor: deps.principalFor,
+          getPtyClient: deps.getPtyClient,
+          signal: this.resumeAbort.signal,
+        })
+      : null;
     this.owner = new DecisionsBridge({
       identity: options.identity,
       keyStore: this.keysFor(retireable(options.keys, () => this.retired)),
-      store: this.store,
+      store: this.resume ? withResumeReasons(this.store, this.resume) : this.store,
       sink: this.sink,
       client: options.client,
+      ...(this.resume ? { adapters: this.resume.adapters } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
     this.engine = this.owner.delivery;
@@ -215,6 +238,7 @@ export class AnswerDelivery {
     if (this.settled) return this.settled;
     this.stopped = true;
     this.engine.stopped = true;
+    this.resumeAbort.abort();
     this.offPanes?.();
     this.offPanes = null;
     if (this.timer) clearInterval(this.timer);
@@ -296,7 +320,11 @@ export class AnswerDelivery {
     }
     if (this.stopped) return;
     if (this.store.hasPendingDelivery && !(await this.store.hasPendingDelivery())) return;
-    await this.engine.drain();
+    try {
+      await this.engine.drain();
+    } finally {
+      this.resume?.endPass();
+    }
   }
 
   /**
@@ -502,6 +530,7 @@ export class AnswerDelivery {
     const unusable = () => {
       if (this.retired) return;
       this.retired = true;
+      this.resumeAbort.abort();
       this.o.onKeysUnusable();
     };
     return {

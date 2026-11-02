@@ -1237,6 +1237,28 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(spawnArgs.agentSessionId).toBe(SESSION);
     });
 
+    it("refuses an exact resume whose conversation was never written, spawning and minting nothing (#16019)", async () => {
+      findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+      await expect(
+        spawnClaude({ shell: "/usr/bin/nu", agentSessionId: SESSION, exactResume: true })
+      ).rejects.toThrow(/no Claude conversation to resume/);
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+      expect(claudeStoreMocks.rememberClaudePaneStore).not.toHaveBeenCalled();
+    });
+
+    it("spawns an exact resume whose conversation exists as asked", async () => {
+      const { spawnArgs } = await spawnClaude({
+        shell: "/usr/bin/nu",
+        agentSessionId: SESSION,
+        exactResume: true,
+      });
+
+      expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+      expect(spawnArgs.command).not.toContain("--session-id");
+    });
+
     it("still spawns the resume when the lookup throws", async () => {
       findUntouchedClaudeSessionMock.mockRejectedValueOnce(new Error("store unreadable"));
 
