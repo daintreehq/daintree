@@ -3,6 +3,7 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
 import { runAgentLaunch, spawnHostAssistant } from "../viewlessAgents.js";
+import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import {
   makeDeps,
   makeHosts,
@@ -580,8 +581,17 @@ describe("a schedule's Assistant spawned with no frontend (#16169)", () => {
     expect(payload.scheduledRun).toEqual(RUN);
     const code = payload.handbackCode;
     if (typeof code !== "string") throw new Error("no handback code");
-    expect(String(payload.command)).toContain(`DAINTREE-NEEDS-YOU-${code}`);
-    expect(String(payload.command)).toContain("Pick a host and run the nightly checks.");
+    const command = String(payload.command);
+    const instruction = buildHandbackInstruction(code, "run");
+    const count = (text: string, inText: string) => inText.split(text).length - 1;
+    // One complete run instruction, after the prompt as written.
+    for (const marker of [`DAINTREE-DONE-${code}`, `DAINTREE-NEEDS-YOU-${code}`, `END-${code}`]) {
+      expect(count(marker, command)).toBe(count(marker, instruction));
+    }
+    expect(count(`DAINTREE-DONE-${code}`, instruction)).toBe(1);
+    expect(command.indexOf("Pick a host and run the nightly checks.")).toBeLessThan(
+      command.indexOf(`DAINTREE-DONE-${code}`)
+    );
   });
 
   it("spawns an Assistant no schedule started with neither", async () => {
