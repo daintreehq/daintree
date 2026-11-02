@@ -624,6 +624,9 @@ interface HighlightPaint {
  * is supplemental, so it does not count as a paint here.
  */
 function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPaint[] {
+  // Tailwind finds classes in the raw text, so a file that never spells the
+  // paint can't paint it. Parsing all ~3,000 files is what timed out (#16154).
+  if (!source.includes("bg-overlay-highlight")) return [];
   const file = ts.createSourceFile(
     fileName,
     source,
