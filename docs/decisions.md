@@ -19,18 +19,18 @@ Everything is in **Settings → Integrations → Decisions**. It's one global se
 
 Turn on **Enable Decisions**. The first time, **Turn on Decisions?** lists what Decisions sends and where it goes (the same list is under **Data → What's sent, and where**). Nothing is sent until you connect a relay. Only **Turn on Decisions** turns it on; Cancel leaves everything as it was.
 
-With it on, the page shows Connection, Devices, Agents, Questions, Policy, Voice and Data.
+With it on, the page shows Connection, Devices, Questions, Policy, Voice and Data, and in a local window Agents.
 
 ### 2. Deploy or enter a relay
 
-If you already have a relay, enter its address in **Relay URL** (for example `https://decisions.example.workers.dev`) and press **Check**. Daintree reads the relay's `/health` and `/api/v1/info` and reports what it found: `<host> is ready to claim`, `<host> is claimed`, `<host> has no claim secret set`, `<host> speaks a protocol Daintree doesn't`, `<host> isn't a Decisions relay` or `Couldn't reach <host>`. Daintree only accepts `https://` addresses and never updates a deployed relay; when the relay and Daintree speak different protocol versions, the check says which side is behind.
+If you already have a relay, enter its address in **Relay URL** (for example `https://decisions.example.workers.dev`) and press **Check**. Daintree reads the relay's `/health` and `/api/v1/info` and reports what it found: `<host> is ready to claim`, `<host> is claimed`, `<host> has no claim secret set`, `<host> speaks a protocol Daintree doesn't`, `<host> isn't a Decisions relay`, `Couldn't reach <host>` or `<host> answered with an error`. The check accepts only `https://` addresses. It compares the relay's protocol and version with Daintree's, reports them incompatible when their protocol ranges don't overlap, and says which side to update when it can tell. Daintree never updates a deployed relay.
 
 If you don't have one, **Don't have a relay yet?** offers two ways to deploy one:
 
 - **Deploy to Cloudflare** opens Cloudflare's deploy page in your browser. It asks for one secret, `CLAIM_SECRET`: enter a long random string (such as the output of `openssl rand -hex 32`) and keep it, since you claim the relay with it. When Cloudflare has deployed the Worker, enter its URL in **Relay URL** and press **Check**.
 - **Guided deploy** opens a terminal titled **Deploy Decisions relay** in the active worktree and runs the Decisions CLI's `deploy` from your home folder, pinned to the version Daintree speaks, with a fresh `daintree-decisions-<8 hex>` Worker and bucket name. Wrangler signs you in to Cloudflare in your browser, and the terminal shows the Worker URL and claim secret once. Copy both: Daintree never saves that terminal's screen, so after a restart the pane comes back empty. Press **Connect relay…** on the pane's banner to go back to Settings with the relay URL field focused. Guided deploy needs a local project window; a Remote Hosts window's terminals run on the Host.
 
-Daintree never sees a Cloudflare token, and nothing reads the deploy terminal's output. The Decisions repository's [self-hosting guide](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/self-host.md) covers the same routes from the CLI, a manual deploy, custom domains and Cloudflare Access. Choose a custom domain before you pair phones: moving the relay to another address means pairing them again.
+Daintree never sees a Cloudflare token, and Decisions doesn't read the URL or secret from the deploy terminal: you copy them yourself. The Decisions repository's [self-hosting guide](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/self-host.md) covers the same routes from the CLI, a manual deploy, custom domains and Cloudflare Access. Choose a custom domain before you pair phones: moving the relay to another address means pairing them again.
 
 ### 3. Claim the relay, or restore your identity
 
@@ -55,11 +55,11 @@ Keep the kit somewhere other than this computer, such as a password manager. It'
 Under **Devices**, press **Pair a phone**.
 
 1. On your phone, open the camera and scan the QR code. It works once and lasts five minutes. **Copy link** gives the same invitation as a link, if you'd rather open it on the phone another way.
-2. The phone shows six digits, and Daintree shows the digits it computed from the phone's keys. Press **Approve** only if they match; otherwise press **Decline**. Closing the dialog before approving rejects the invitation on the relay.
+2. The phone shows six digits, and Daintree shows the digits it computed from the phone's keys. Press **Approve** only if they match; otherwise press **Decline**. Closing the dialog before approving forgets the invitation here and asks the relay to reject it; if that request doesn't get through, the invitation still expires.
 
-Each paired device can read and answer every question your agents ask. Device rows show when each was last seen and whether it has notifications on (**Notifications on** or **No notifications**). A relay holds at most twelve devices.
+Each paired device can read and answer every question your agents ask. Device rows show when the relay last saw each one and whether the relay holds a push subscription for it (**Notifications on** or **No notifications**), which doesn't by itself prove notifications appear. A relay holds at most twelve devices.
 
-**On iPhone and iPad**, open the link in Safari, tap Share → **Add to Home Screen**, and open Decisions from the Home Screen. iOS delivers notifications only to the Home Screen app. A device that hasn't allowed notifications shows **No notifications** under Devices. Notifications say only that a question needs you, never the question. Android Chrome offers its own install prompt.
+**On iPhone and iPad**, open the link in Safari, tap Share → **Add to Home Screen**, and open Decisions from the Home Screen. iOS delivers notifications only to the Home Screen app. Notifications say only that a question needs you, never the question. Android Chrome offers its own install prompt.
 
 ### 6. Run the setup check
 
@@ -70,11 +70,11 @@ Back in Connection, press **Check setup** on the **Setup check** row. It runs th
 | Relay health and protocol | The relay answers and is claimed |
 | Claim | The relay lists this computer as its owner, under the keys held here |
 | Socket with a fresh ticket | A new connection to the relay opens |
-| Push configuration | The relay has a push key, and at least one paired phone or tablet has notifications on |
-| Encrypted attachment round trip | A test image is encrypted, uploaded and downloaded back intact |
+| Push configuration | The relay has a push key, and holds a push subscription for at least one paired phone or tablet |
+| Encrypted attachment round trip | A test question goes out with a test image, which comes back from the relay intact |
 | Test question to your phones | Your answer reaches this computer and is typed into a terminal |
 
-The last step sends **Daintree setup check: did this question reach you?** to your paired phones, with one choice, **Received**. Answer it within five minutes. Your answer is typed into a diagnostic terminal shown in Connection, which runs no agent and no process, so nothing typed into it can run. Once a kit is verified and this check passes, the **Setup isn't finished** warning goes away. Press **Check again** whenever you want to rerun it; a failed run makes setup unfinished again.
+The test question, **Daintree setup check: did this question reach you?**, has one choice, **Received**. Answer it on your phone within five minutes. Your answer is typed into a diagnostic terminal shown in Connection, which runs no agent and no process, so nothing typed into it can run. Keep the Decisions page open until the check ends: leaving it cancels a check it started. Once a kit is verified and this check passes, the **Setup isn't finished** warning goes away. Press **Check again** whenever you want to rerun it; a failed run makes setup unfinished again.
 
 The check proves one round trip at the time it ran. It doesn't prove that every notification will appear on your lock screen.
 
@@ -110,7 +110,9 @@ Screenshots are given as paths relative to the folder the agent's terminal was l
 
 ### What gets typed
 
-Daintree types your answer only into the terminal that asked, and only into the same run: if the terminal was relaunched, Daintree restarted, or a different agent session is running there, the answer is not typed there. It waits until it sees that agent at its prompt, never while it's working, waiting on an approval or showing a question, and drops the trailing Enter if you type into the terminal meanwhile. Answers for one terminal arrive in the order its questions were asked.
+Daintree types your answer only into the run that asked, as Daintree observed it: the same terminal, the same launch, and the agent session it recorded. If the terminal was closed or relaunched, Daintree restarted, or a different agent session is seen there, the answer isn't typed there. For Claude and Codex, Daintree can then resume the recorded session, or find it already open in another terminal, and deliver there; otherwise the answer needs attention. Session changes made inside the agent, such as Claude's `/clear` or `/resume`, aren't always observed.
+
+Daintree waits until it sees the agent at its prompt, never while it's seen working, waiting on an approval, or showing a question or an error, and drops the trailing Enter if you type into the terminal meanwhile. When several answers are waiting for one terminal, they go in the order their questions were asked, possibly in one paste under one preface; an answered question doesn't wait for an earlier one that's still unanswered.
 
 What gets typed is a delimited, labelled block, preceded by Daintree's own line telling the agent it's data:
 
@@ -133,7 +135,7 @@ comment: Proceed with the compact sidebar.
 - `injection_id` and the `[decision-injection …]` line are how Daintree recognises its own typing if it stops partway through.
 - A correction you send from the phone arrives as a new revision with `note: This corrects an earlier answer. Reassess any work that depended on the earlier one.`
 - A question that expires unanswered is typed as `source: system`, `status: expired`, `authorised: no`, with a note that the agent isn't authorised to continue the gated step.
-- Answer text is treated as data: control and escape sequences are stripped, anything that looks like the block's delimiters is neutralised, and a comment is cut at 4,000 characters. That limits what an answer can do to the terminal; it can't stop an agent from being swayed by what you wrote.
+- Answer text is treated as data: control and escape sequences are stripped, and anything that looks like the block's delimiters or marker is neutralised. A comment is cut at 4,000 characters, or sooner to fit the block's size limit, ending in `…[truncated]`. That limits what an answer can do to the terminal; it can't stop an agent from being swayed by what you wrote.
 
 A question waits 7 days for an answer unless the agent asks for another time, at most 30 days. **Settings → Decisions → Questions** shows both.
 
@@ -143,29 +145,29 @@ An agent's pane header shows a Decisions chip while it has a question out or an 
 
 | Chip | Meaning |
 | --- | --- |
-| `q-4 queued` | Queued to send: the relay hasn't taken the question yet |
+| `q-4 queued` | Queued to send: Daintree hasn't yet seen the relay confirm it has the question |
 | `q-4` | Waiting for an answer |
 | `q-4 delivering` | Answer received, delivering when this terminal is idle (or, on a Remote Host, when this terminal's host is back) |
 | `q-4 expired` | Expired unanswered; Daintree tells the agent once this terminal is idle |
 | `q-4` with a warning triangle | Answer needs attention, or answer may or may not have been delivered |
-| `3 · 1 delivering` | Several questions, and how many answers are about to be typed in |
+| `3 · 1 delivering` | Several questions, and how many answers or expiry notices are waiting to be typed in on their own |
 
-The tooltip gives the whole breakdown, and the chip's popover lists each question, worst first, with the reason in plain words. Answers that need attention aren't typed in on their own. In Canopy, the run they belong to shows **Answer needs attention** in the needs-you tier.
+The tooltip gives the whole breakdown, and the chip's popover lists each question, worst first, with the reason in plain words. Answers that need attention aren't typed in on their own. In Canopy, they put their run in the needs-you tier with **Answer needs attention**, unless you parked, snoozed or archived it there.
 
 ### Answers that need attention
 
-Some answers can't be typed in on their own: the terminal that asked was closed, relaunched or restarted, a different agent session is running there now, a resume failed, or typing was interrupted. Open the list from the chip's popover (**Review answers**) or from **Settings → Decisions → Questions → Answers needing attention → Review**. The dialog lists each answer with its question, where it was asked, the reason and the answer, and offers:
+Some answers can't be typed in on their own: the terminal that asked was closed, relaunched or restarted, a different agent session is running there now, a resume failed, or typing was interrupted. Open the list from the chip's popover (**Review answers**) or from **Settings → Decisions → Questions → Answers needing attention → Review**. The dialog lists each answer with its question, where it was asked, the reason and, when this computer can read it, the answer. Which actions it offers depends on the answer:
 
-- **Copy answer** copies the same block Daintree would have typed, without its `injection_id` and marker lines, for you to paste where you choose. Copying doesn't mark it handled.
-- **Try resume** reopens the agent's session in its worktree and types the answer once it reaches its prompt. It's offered for Claude and Codex when a session was recorded and the worktree is still there, and can take up to a minute and a half.
-- **Choose destination** lists the agents running here, then confirms **Send `q-4`'s answer to …?**, naming both terminals. Daintree waits until it sees that agent at its prompt, types the answer in once, and records the move in the Decisions audit trail.
-- **Mark handled** takes the answer off the list, the chip and Canopy without typing it. A later correction from your phone needs you again.
+- **Copy answer**, when there's an answer to copy, copies the same block Daintree would have typed, without its `injection_id` and marker lines, for you to paste where you choose. Copying doesn't mark it handled.
+- **Try resume** reopens the agent's session in its worktree and types the answer once it reaches its prompt. It's offered for a question asked on this computer by Claude or Codex, when the run that asked is gone or a resume failed in a way a second try could change, a session was recorded and the worktree's folder is still there. It can take up to a minute and a half.
+- **Choose destination**, for a question asked on this computer, lists the agents running here, then confirms **Send `q-4`'s answer to …?**, naming both terminals. Daintree waits until it sees that agent at its prompt, types the answer in once, and records the move in the Decisions audit trail.
+- **Mark handled** is always offered. It takes the answer off the list, the chip and Canopy without typing it. A later correction from your phone needs you again.
 
 When Daintree stopped while typing an answer in and can't find its marker in the terminal, the answer **may or may not have been delivered**. Daintree never types it again on its own: look at the terminal, then **Copy answer** or **Mark handled**.
 
 ## Workflows: the `design-review/final` gate
 
-Daintree registers trusted workflow gates in its own code; an agent can name one but can't change it or ask for less. **Settings → Decisions → Policy** lists them. The one gate today is `design-review/final`: only you can answer, the answer is Approve or Reject and nothing else, and the question has to carry screenshots. Without a gate a question also needs your own answer, since no decision model is connected yet.
+Daintree registers trusted workflow gates in its own code; an agent can name one but can't change it or ask for less. **Settings → Decisions → Policy** lists them. The one gate today is `design-review/final`: only you can answer, the answer is Approve or Reject and nothing else, and the question has to carry screenshots. A question without a gate needs your own answer too, unless you turn on **Allow proxy answers** under Policy; no decision model is connected yet, so today nothing answers in your place either way.
 
 A workflow uses the gate from your own skill, command or runbook. Daintree installs nothing into `~/.claude`, `~/.codex` or any other agent config, so adding the step is up to you. A design-review step reads like this:
 
@@ -186,9 +188,9 @@ A workflow uses the gate from your own skill, command or runbook. Daintree insta
 
 ## Remote Hosts
 
-An agent running on a Remote Host asks and gets its answers on that Host, so it keeps working while this computer sleeps. Setup still happens once, here: while Decisions is connected, each Remote Host you connect to is enrolled as a device of yours, with keys of its own that it makes itself. Enrolled Hosts are listed under **Devices → Remote Hosts**. Turn off **Enroll Remote Hosts automatically** to enroll them one at a time with **Enroll**, for example when you connect to machines you don't own.
+An agent running on a Remote Host asks and gets its answers on that Host, so it keeps working while this computer sleeps. Setup still happens once, here: while Decisions is connected, Daintree enrolls each Remote Host you connect to as a device of yours, with keys the Host makes itself and seals with its own keychain. A Host with a Decisions setup of its own, or one enrolled with another relay, is left as it is. Enrolled Hosts are listed under **Devices → Remote Hosts**, which also shows an enrollment that failed. Turn off **Enroll Remote Hosts automatically** to enroll them one at a time with **Enroll**, for example when you connect to machines you don't own.
 
-Each enrolled Host can read every question and answer, as every paired device can. Revoking a Host works like revoking a phone, and a revoked Host isn't enrolled automatically again. Turning Decisions off here turns it off on each Host when this computer next connects to it. A Host's answers that need attention stay on that Host: the chip in a Remote Hosts window doesn't offer **Review answers**.
+Each enrolled Host can read your agents' questions and answers, as every paired device can. Revoking a Host works like revoking a phone, and a revoked Host isn't enrolled automatically again. Turning Decisions off here turns it off on each connected Host straight away, and on any other Host when this computer next connects to it. A Host's answers that need attention stay on that Host: the chip in a Remote Hosts window doesn't offer **Review answers**.
 
 ## Privacy
 
@@ -202,11 +204,11 @@ Only to the relay in your own Cloudflare account, and from there to your devices
 - **Readable by the relay:** routing details such as ids, timestamps, sizes, how many screenshots, and each question's requirement level, which says who may answer it. The Cloudflare network sees ordinary request metadata, such as IP addresses and when each device connects.
 - **Push endpoints:** each phone registers one with the relay. A push says only that a question needs you.
 
-A question carries only what the agent puts in it. Decisions never reads a terminal to send it. Once an answer is typed in, it's part of the agent's conversation and goes wherever that agent sends its prompts.
+A question's text, options and screenshots come from the agent; Daintree adds only where it was asked, and a gate's choices. Decisions never reads a terminal's screen to send a question. Once an answer is typed in, it's part of the agent's conversation and goes wherever that agent sends its prompts.
 
 ### Voice dictation
 
-Dictating an answer is a setting in the phone app, off until you turn it on there, and it **isn't end-to-end encrypted**. When you dictate, your voice goes through your relay to a speech provider, and the transcript, with the question and its options, goes to a correction provider (OpenAI, xAI or Anthropic, depending on the keys set on your Worker). Daintree on this computer sends nothing for it, and the answer you then send is encrypted like any other. The Decisions repository's [voice privacy page](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/voice-privacy.md) says who sees what.
+Dictating an answer is a setting in the phone app, off until you turn it on there, and it **isn't end-to-end encrypted**. When you dictate, your voice goes through your relay to a speech provider (xAI or OpenAI), and the transcript, with the question, its options and a few project terms, goes to a correction provider (Anthropic or OpenAI), depending on the keys set on your Worker. Daintree on this computer sends nothing for it, and the answer you then send is encrypted like any other. The Decisions repository's [voice privacy page](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/voice-privacy.md) says who sees what.
 
 ### Revoking a device
 
@@ -214,7 +216,7 @@ Each device row has **Revoke**. The relay stops accepting that device, and Daint
 
 ### What stays on this computer
 
-Questions, answers and their delivery records are stored in Daintree's local database, with question and answer text sealed under your keys. The keys are in one file, sealed with your system keychain. The claim secret, recovery passphrase and any Cloudflare token are never written to disk or logs.
+Questions, answers and their delivery records are stored in Daintree's local database, with question and answer text sealed under your keys. The keys are in one file, sealed with your system keychain, or with the weaker fixed key if you accepted that on Linux. Daintree never writes the claim secret or a recovery passphrase to disk or its logs, and never saves the guided deploy terminal's screen. It never sees a Cloudflare token: Wrangler keeps its own sign-in.
 
 ## Turning it off and removing data
 
@@ -223,7 +225,7 @@ Questions, answers and their delivery records are stored in Daintree's local dat
 | Turn off **Enable Decisions** | The connection, `ask_human` and delivery stop. Agents launched while it was on keep the server in their list, but its calls fail; their next launch comes without it. Keys and stored questions stay, and turning it on again carries on. |
 | **Disconnect relay** (Connection) | Removes this computer's Decisions keys and its record of the relay. The relay, everything on it and your paired phones stay as they are. Connecting again needs a recovery kit. |
 | **Export decision history** (Data) | Saves every question and answer stored here, with the audit log, to a file you pick, encrypted with a passphrase. |
-| **Delete relay data** (Data) | Permanently deletes the questions, answers and attachments the relay stores, after you type the relay's address. The Worker, its paired devices, this computer's history and anything already on your devices stay. |
+| **Delete relay data** (Data) | Permanently deletes the questions, answers and attachments the relay stores, after you type the relay's host name (such as `decisions.example.workers.dev`). The Worker, its paired devices, this computer's history and anything already on your devices stay. |
 | **Delete local data** (Data) | Deletes this computer's decision history, Decisions keys and record of the relay. Nothing on the relay changes, and paired devices stay paired. |
 
-Deleting local data doesn't scrub copies outside Decisions' own tables, such as the app database's rolling backup until its next refresh, filesystem snapshots or exports you made.
+Deleting local data isn't secure erasure. Deleted rows, sealed under keys that are gone, can remain in the database's free pages, its write-ahead log and the app database's rolling backup until those are rewritten, and filesystem snapshots and exports you made are untouched.
