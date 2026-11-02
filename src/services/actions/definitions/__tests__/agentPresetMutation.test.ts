@@ -387,7 +387,10 @@ describe("agent.updatePreset", () => {
       const mutation = plan(
         "agent.updatePreset",
         { agentId: "codex", presetId: WORK.id, accountId: "personal" },
-        sources({ accounts: [COMPANY, PERSONAL], customPresets: [{ ...WORK, accountId: "company" }] })
+        sources({
+          accounts: [COMPANY, PERSONAL],
+          customPresets: [{ ...WORK, accountId: "company" }],
+        })
       );
       expect(updated(mutation)).toEqual({ ...WORK, accountId: "personal" });
       expect(mutation.accountNames).toEqual({ company: "Company", personal: "Personal" });

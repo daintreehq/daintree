@@ -173,11 +173,7 @@ function presetContentLines(preset: AgentPreset, names: PreviewNames): string[] 
 }
 
 /** Each field and env entry an update changes, as `old → new`. */
-function presetChangeLines(
-  before: AgentPreset,
-  after: AgentPreset,
-  names: PreviewNames
-): string[] {
+function presetChangeLines(before: AgentPreset, after: AgentPreset, names: PreviewNames): string[] {
   const lines: string[] = [];
   if (before.name !== after.name) {
     lines.push(`Name: ${nameText(before.name)} → ${nameText(after.name)}`);

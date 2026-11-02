@@ -598,7 +598,9 @@ function presetProblems(
   // to would refuse every launch of the preset. Clearing a stale pin is fine.
   if (typeof patch.accountId === "string") {
     if (accounts === null) {
-      problems.push("accountId: this agent's CLI keeps one login, so a preset can't pin an account.");
+      problems.push(
+        "accountId: this agent's CLI keeps one login, so a preset can't pin an account."
+      );
     } else if (!accounts.some((account) => account.id === patch.accountId)) {
       problems.push("accountId: not one of this agent's saved accounts.");
     }

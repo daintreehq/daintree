@@ -58,7 +58,9 @@ describe("PresetAccountRow (#16133)", () => {
 
   it("keeps a pin whose account is gone visible, says launches are refused, and resets it", () => {
     const { onChange } = renderRow({ id: "work", name: "Work", accountId: "removed" }, []);
-    expect(screen.getByText(/launches with this preset are refused until this is reset/)).toBeTruthy();
+    expect(
+      screen.getByText(/launches with this preset are refused until this is reset/)
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Unpin the account" }));
     expect(onChange).toHaveBeenCalledWith(undefined);

@@ -191,9 +191,9 @@ export function getMergedPresets(
   const custom = presetBucket(customPresets) ?? [];
   const project = presetBucket(projectPresets) ?? [];
 
-  const sanitizedRegistry = (registryPresets.map(sanitizePreset).filter(Boolean) as AgentPreset[]).map(
-    withoutAccountPin
-  );
+  const sanitizedRegistry = (
+    registryPresets.map(sanitizePreset).filter(Boolean) as AgentPreset[]
+  ).map(withoutAccountPin);
   const sanitizedCustom = custom.map(sanitizePreset).filter(Boolean) as AgentPreset[];
   const sanitizedProject = (project.map(sanitizePreset).filter(Boolean) as AgentPreset[]).map(
     withoutAccountPin

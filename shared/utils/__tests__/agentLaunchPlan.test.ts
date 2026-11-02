@@ -623,7 +623,9 @@ describe("accounts (#16040)", () => {
       const worktree = await buildAgentLaunchPlan(input({ settings }));
       expect(worktree.account?.id).toBe("personal");
 
-      const defaultLogin = await buildAgentLaunchPlan(input({ settings, worktreeId: "/repo-wt/c" }));
+      const defaultLogin = await buildAgentLaunchPlan(
+        input({ settings, worktreeId: "/repo-wt/c" })
+      );
       expect(defaultLogin.account).toBeUndefined();
       // The preset's own env is all that remains: no account folder is laid over it.
       expect(defaultLogin.env).toEqual({ CLAUDE_CONFIG_DIR: "/legacy" });
