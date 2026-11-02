@@ -178,7 +178,10 @@ describe("highlighted-row language", () => {
       const rows = backdrops.filter((row) => row.label.startsWith("the highlighted row"));
       expect(rows.length, `${scheme.id}: no evaluable highlighted row`).toBeGreaterThan(0);
       // One highlighted backdrop per resting surface, so this reads the fill.
-      expect(rows.length * 2, `${scheme.id}: highlighted rows`).toBe(backdrops.length);
+      const resting = backdrops.filter((row) => !rows.includes(row));
+      expect(rows.map((row) => row.label)).toEqual(
+        resting.map((row) => `the highlighted row on ${row.label}`)
+      );
       for (const ink of ["text-primary", "text-secondary"] as const) {
         for (const row of rows) {
           const ratio = contrastRatio(scheme.tokens[ink], row.hex);
@@ -217,7 +220,7 @@ describe("highlighted-row language", () => {
       for (const paint of highlightPaints(source, rel)) {
         if (paint.hooked) continue;
         const own = OWN_TREATMENT[rel];
-        if (own?.treated(paint.classes, paint.states)) {
+        if (paint.states.length > 0 && own?.treated(paint.classes, paint.states)) {
           ownTreatment.set(rel, (ownTreatment.get(rel) ?? 0) + 1);
           continue;
         }
@@ -354,7 +357,8 @@ function selectionOutlineBorder(classes: string[], states: string[][]): boolean 
 }
 
 /** An outline utility that draws one: a width or a style, not an offset or a colour. */
-const VISIBLE_OUTLINE = /^outline(-solid|-dashed|-dotted|-double|-[1-9]\d*|-\[[1-9][^\]]*\])?$/;
+const VISIBLE_OUTLINE =
+  /^outline(-solid|-dashed|-dotted|-double|-[1-9]\d*|-\[(length:)?(\d*\.)?\d*[1-9]\d*[a-z]*\])?$/;
 
 /** Radix's item primitives, which carry a menu or option role of their own. */
 const RADIX_ITEM_TAGS = new Set(["Item", "CheckboxItem", "RadioItem", "SubTrigger"]);
@@ -377,10 +381,12 @@ function hasClass(
 /** Exact, but for the Radix rule, which the increased-contrast block scopes by role. */
 function matchesHook(selector: string, hook: string): boolean {
   if (selector === hook) return true;
+  const roles = selector.match(/^\[data-highlighted\]:is\(([^()]*)\)$/)?.[1]?.split(",");
   return (
     hook === "[data-highlighted]" &&
-    selector.startsWith("[data-highlighted]:is(") &&
-    [...RADIX_ITEM_ROLES].every((role) => selector.includes(`[role="${role}"]`))
+    roles !== undefined &&
+    roles.length === RADIX_ITEM_ROLES.size &&
+    [...RADIX_ITEM_ROLES].every((role) => roles.includes(`[role="${role}"]`))
   );
 }
 
@@ -483,7 +489,9 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
         const shared = names.has("PALETTE_ROW_CLASS") || names.has("LIST_DETAIL_ROW_CLASS");
         let hooked = false;
         let reason = "no outline hook";
-        if (states.every((state) => state.includes("data-[highlighted]"))) hooked = radixItem;
+        const radixOnly = states.every((state) => state.includes("data-[highlighted]"));
+        if (radixOnly && radixItem) hooked = true;
+        else if (radixOnly) hooked = outlinedIn("contrast-more") && outlinedIn("forced-colors");
         else if (shared || classes.includes("palette-row")) {
           hooked = attributes.has("aria-selected") || attributes.has("data-selected");
           reason = "`palette-row` without aria-selected or data-selected";
@@ -536,7 +544,7 @@ function mediaBlocks(css: string, query: string): string {
 function drawsOutline(body: string): boolean {
   const declared = (property: string) =>
     body.match(new RegExp(`(?:^|[;\\s])${property}\\s*:\\s*([^;]+)`))?.[1]?.trim();
-  const width = /^[1-9]\d*(\.\d+)?px$/;
+  const width = /^(\d*\.)?\d*[1-9]\d*px$/;
   const shorthand = declared("outline")?.split(/\s+/);
   if (shorthand) {
     return (
