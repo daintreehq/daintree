@@ -965,8 +965,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // limit, what it said, its reset and the pane and time it showed, with the
   // label that it isn't a live account reading. Assistant-only, so the
   // external ceiling does not move.
-  // 174_200 → 174_500 for #16040, measured at MEASURE_ME B: `agent.launch`'s
-  // `accountId`, carried in-app for the external⊆in-app subset invariant.
+  // 174_200 → 174_500 for #16040, measured at 174_428 B (+268 over develop's
+  // 174_160): `agent.launch`'s `accountId`, carried in-app for the
+  // external⊆in-app subset invariant.
   const MAX_COHORT_PAYLOAD_BYTES = 174_500;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
