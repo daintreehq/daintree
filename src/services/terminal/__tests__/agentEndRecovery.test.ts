@@ -396,6 +396,26 @@ describe("a preset switch that kept the conversation (#16045)", () => {
     expect(saveNormalized).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves a folder a move set while the refused restart checked it", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({
+        cwd: "/repo/company",
+        presetSwitchResume: { ...attempt, refused: true },
+      }),
+    };
+    store.state.restartTerminal.mockImplementation(async () => {
+      store.state.panelsById = {
+        "pane-a": { ...current(), cwd: "/moved", conversationCwd: "/repo" },
+      };
+    });
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
+
+    expect(current().agentPresetId).toBe("company");
+    expect(current().cwd).toBe("/moved");
+    expect(current().conversationCwd).toBe("/repo");
+  });
+
   it("holds the conversation for the whole restart, and lets it go after", async () => {
     store.state.panelsById = {
       "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),

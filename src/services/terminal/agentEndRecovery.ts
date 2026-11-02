@@ -255,9 +255,16 @@ export async function returnAfterRefusedSwitch(
         return current;
       }
       started = false;
+      // A move that landed while the restart checked the folder owns it now.
+      const movedSince = latest.cwd !== attempt.prior.cwd;
       const panelsById = {
         ...current.panelsById,
-        [panelId]: { ...latest, ...presetSwitchLaunchOf(refusedPane), presetSwitchResume: attempt },
+        [panelId]: {
+          ...latest,
+          ...presetSwitchLaunchOf(refusedPane),
+          ...(movedSince ? { cwd: latest.cwd, conversationCwd: latest.conversationCwd } : {}),
+          presetSwitchResume: attempt,
+        },
       };
       saveNormalized(panelsById, current.panelIds);
       return { panelsById };
