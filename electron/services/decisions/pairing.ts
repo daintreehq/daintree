@@ -159,6 +159,21 @@ export class OwnerDevices {
     }
   }
 
+  /**
+   * Runs an owner operation that seals the current key (enrolling a Host,
+   * #16021) as an approval does: alone among the lifetime's rotations, after
+   * settling one left pending, with the client on the keys as they then stand.
+   */
+  async withCurrentKeys<T>(
+    call: (client: RelayClient) => Promise<T>
+  ): Promise<T | DecisionsRelayRequestFailure> {
+    const session = await this.open();
+    if (isFailure(session)) return session;
+    return this.queued(session, () =>
+      this.options.rotations.withCurrentKeys(session.client, () => call(session.client))
+    );
+  }
+
   /** A one-time invitation for a phone, held here until it is approved, declined or lapses. */
   async invite(): Promise<DecisionsPairingStartResult> {
     const session = await this.open();

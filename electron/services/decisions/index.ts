@@ -187,8 +187,9 @@ function hostEnrollmentOwner(): HostEnrollerOwner | null {
     },
     enroll: async (request) => {
       const devices = await ownerDevicesForHosts();
+      // It seals the current key, so it takes its turn among key rotations (#16010).
       return devices instanceof OwnerDevices
-        ? devices.withClient(async (client) => ({
+        ? devices.withCurrentKeys(async (client) => ({
             response: (await enrollHost(client, request)).response,
           }))
         : devices;
