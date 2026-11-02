@@ -149,6 +149,11 @@ export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<Eras
     else await syncKeyDirectory(deps.keyFilePath);
     return "none";
   }
+  // The keys' marker goes last, so the model's markers left without it come
+  // from a deletion that had no keys: keys there now were sealed since.
+  const sealedSince =
+    superseded !== null ||
+    (!pending.includes(deps.keyFilePath) && (await exists(deps.keyFilePath)));
   const rows = await deps.openRows();
   if (rows.exist()) {
     // Not synced: a move back lost to a crash is made again, since the rows are still there.
@@ -156,13 +161,13 @@ export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<Eras
     if (superseded !== null) await durableUnlinkIfPresent(superseded);
     return "restored";
   }
-  if (superseded === null) deps.forgetIdentity();
+  if (!sealedSince) deps.forgetIdentity();
   // Before any marker goes: a model file left without one would be opened again.
   for (const file of deps.modelFiles ?? []) await durableUnlinkIfPresent(file);
   // The keys' marker last, so a crash partway still finds this deletion to finish.
   for (const file of [...pending].reverse()) await durableUnlinkIfPresent(erasingKeyFilePath(file));
   if (superseded !== null) await durableUnlinkIfPresent(superseded);
-  return superseded === null ? "finished" : "none";
+  return sealedSince ? "none" : "finished";
 }
 
 /**

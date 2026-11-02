@@ -436,6 +436,31 @@ describe("local Decisions data deletion", () => {
       expect(forgotten).toBe(0);
     });
 
+    it("keeps a relay set up after a deletion that had no keys, and a retry deletes it", async () => {
+      writeFileSync(history, HISTORY);
+      const { rows } = fakeRows();
+      fsFaults.unlink = (path) => path === erasingKeyFilePath(history);
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "incomplete",
+        erased: true,
+      });
+      expect(forgotten).toBe(1);
+      fsFaults.unlink = null;
+
+      // A relay is claimed while the store stays closed.
+      writeFileSync(keyFile, KEYS);
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("none");
+      expect(readdirSync(dir)).toEqual(["keys.bin"]);
+      expect(forgotten).toBe(1);
+
+      // Asked to delete again, it deletes what is there now.
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "deleted",
+      });
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(2);
+    });
+
     it("keeps a relay set up since, while dropping what the given-up deletion set aside", async () => {
       const newer = '{"v":1,"protection":"keychain","ciphertext":"newer"}';
       writeFileSync(erasingKeyFilePath(keyFile), KEYS);
