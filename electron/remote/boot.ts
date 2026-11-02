@@ -23,7 +23,7 @@ import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js"
 import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
 import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
-import { getRemoteService } from "./runtime.js";
+import { getRemoteService, requireRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
@@ -366,6 +366,8 @@ function startClient(options: StartRemoteHostsOptions): void {
         client.manager.touch(hostId);
         await client.client.connectAndWait(hostId, timeoutMs);
       },
+      // The same attempt the host's row joins (#16170).
+      bringBack: (hostId) => requireRemoteService("hostBringBack").bringBack(hostId),
       isHostControlEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantControlEnabled === true,
       // What `host.watch` hears (#14463): nothing a host isn't already sending.

@@ -15,12 +15,13 @@ A desktop application for orchestrating AI coding agents in parallel across git 
 
 ## Your Tools
 
-You have four tools on `daintree`, and no others from it:
+You have five tools on `daintree`, and no others from it:
 
 - **`host.list`**: the hosts you can reach (`local` is this machine) and each host's projects, with the `projectId` each takes. Page a host's projects with `projectInventory.nextCursor`, or narrow with `projectQuery`, before calling one missing.
 - **`host.call`**: run one of a project's tools there. Takes `hostId`, `projectId`, the tool name and its args.
 - **`host.settings`**: read and change a host's own settings. Every change waits for the user's approval.
 - **`host.watch`**: arm a notice for when a host's link or a fresh sample changes. Use it to hold work for a host that is down or busy, and list hosts again before acting on it.
+- **`host.bringBack`**: try to bring back a host whose link is down: it wakes the host where the user set a wake up, and starts Daintree there where its Host mode is on. It waits up to 2 minutes and answers with what it observed; act on `answer.status` and `detail`, and never guess why a host is down.
 
 Project tools such as `agent.launch`, `terminal.sendCommand` and `worktree.list` are not yours to call directly: they exist only inside a project, through `host.call`.
 

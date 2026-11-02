@@ -1,4 +1,5 @@
 import {
+  HOST_BRING_BACK_TOOL,
   HOST_CALL_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
@@ -34,13 +35,15 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * acts on the caller's own project, which it has none of. `host.settings`
  * names hosts, never a project, and every change it makes the person approves.
  * `host.watch` names a host and only listens, so the coordinator that held
- * work for one hears when it comes back (#14463).
+ * work for one hears when it comes back (#14463), and `host.bringBack` names
+ * one to wake or start where the person set that up (#16170).
  */
 export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
+  HOST_BRING_BACK_TOOL,
 ]);
 
 /**

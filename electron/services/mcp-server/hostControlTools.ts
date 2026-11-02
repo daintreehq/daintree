@@ -1,16 +1,20 @@
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import { HOST_THROWAWAY_TOOL_SIGNATURES } from "../../../shared/types/hostThrowaway.js";
 import {
+  HOST_BRING_BACK_TOOL,
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
+  HostBringBackArgsSchema,
   HostCallArgsSchema,
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
   HostSettingsArgsSchema,
   HostWatchArgsSchema,
+  type HostBringBackArgs,
+  type HostBringBackResult,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -56,6 +60,11 @@ export interface HostControlRuntimeHandle {
   ): Promise<HostControlOutcome<HostSettingsResult>>;
   /** Arms, cancels or lists the calling run's one-shot watches on a host's link or capacity (#14463). */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>>;
+  /** Tries to bring back a host whose link is down, waking and starting it where it can (#16170). */
+  bringBack(
+    helpSessionId: string,
+    args: HostBringBackArgs
+  ): Promise<HostControlOutcome<HostBringBackResult>>;
   /** The hosts and projects the global assistant starts knowing (#14547); never dials a host. */
   inventory?(): Promise<HostInventorySnapshot>;
 }
@@ -220,6 +229,10 @@ async function dispatch(
     case HOST_LIST_TOOL: {
       const parsed = HostListArgsSchema.safeParse(raw);
       return parsed.success ? runtime.list(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_BRING_BACK_TOOL: {
+      const parsed = HostBringBackArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.bringBack(helpSessionId, parsed.data) : invalidArgs();
     }
     default:
       return invalidArgs();

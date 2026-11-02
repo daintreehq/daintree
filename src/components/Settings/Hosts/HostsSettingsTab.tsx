@@ -15,6 +15,7 @@ import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
 import { HostsCopySettingsSection } from "./HostsCopySettingsSection";
 import { connectionLabel, platformLabel, removeHostOutcome } from "./hostLabels";
+import { bringBackMessage, canBringBack, useHostBringBacks, wakeLabel } from "./hostBringBack";
 import {
   onHostSettingsRequest,
   takePendingHostSettings,
@@ -47,6 +48,7 @@ export default function HostsSettingsTab() {
     connection: HostConnection;
   } | null>(null);
   const [forgetError, setForgetError] = useState<string | null>(null);
+  const bringBacks = useHostBringBacks();
   // Leaving a host's details puts focus back on the Details button it came
   // from (or, once removed, the list's Add host); entering from the keyboard
   // puts it on the header's way back.
@@ -226,7 +228,13 @@ export default function HostsSettingsTab() {
           ) : (
             [...hosts]
               .sort((a, b) => hostNameCollator.compare(a.descriptor.name, b.descriptor.name))
-              .map(({ descriptor, connection }) => (
+              .map(({ descriptor, connection }) => {
+                const wake = wakeLabel(descriptor);
+                const bringing = bringBacks.isPending(descriptor.id);
+                const said = bringing
+                  ? null
+                  : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor);
+                return (
                 <SettingsRow
                   key={descriptor.id}
                   label={descriptor.name}
@@ -238,10 +246,25 @@ export default function HostsSettingsTab() {
                         : "Not seen yet"}
                       <br />
                       {connectionLabel(connection)}
+                      {wake && <> · {wake}</>}
                     </>
                   }
+                  error={said ? <span role="alert">{said}</span> : undefined}
                   control={
                     <div className="flex items-center gap-1.5">
+                      {(bringing || canBringBack(connection)) && (
+                        // Wakes it where a wake is set up, then starts Daintree there if it can.
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          data-host-bring-back={descriptor.id}
+                          aria-label={`Bring back ${descriptor.name}`}
+                          loading={bringing}
+                          onClick={() => bringBacks.bringBack(descriptor.id)}
+                        >
+                          Bring back
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
@@ -277,7 +300,8 @@ export default function HostsSettingsTab() {
                     </div>
                   }
                 />
-              ))
+                );
+              })
           )}
         </SettingsGroup>
       </SettingsSection>

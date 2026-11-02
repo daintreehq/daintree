@@ -15,6 +15,8 @@ import {
 } from "../../../shared/config/mcpConfirmWindow.js";
 import {
   HOST_LIST_PROJECT_BYTES_MAX,
+  type HostBringBackArgs,
+  type HostBringBackResult,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -39,8 +41,10 @@ import {
   type HostThrowawayFailure,
   type HostThrowawayRefusal,
 } from "../../../shared/types/hostThrowaway.js";
+import type { HostBringBackAnswer } from "../../../shared/types/hostWake.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
 import { HostWatches, type HostWatchListener } from "./HostWatches.js";
+import { runHostBringBack } from "./hostBringBack.js";
 import { ThrowawaySession } from "./throwawaySession.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
@@ -221,6 +225,11 @@ export interface HostCallRuntimeDeps {
    * person disconnected is left alone.
    */
   connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
+  /**
+   * The Shell's one attempt per host to bring back a host whose link is down
+   * (#16170), joined by every caller. Absent, `host.bringBack` is unsupported.
+   */
+  bringBack?(hostId: HostId): Promise<HostBringBackAnswer>;
   /**
    * Puts a host's question about one of this Shell's relayed calls to the
    * person, in the window of the assistant that made it (#13501), showing the
@@ -1899,6 +1908,22 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** Arms, cancels or lists the calling run's own host watches (#14463). */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>> {
     return this.settle(helpSessionId, async (caller) => this.hostWatches.run(caller, args));
+  }
+
+  bringBack(
+    helpSessionId: string,
+    args: HostBringBackArgs
+  ): Promise<HostControlOutcome<HostBringBackResult>> {
+    return this.settle(helpSessionId, async () =>
+      runHostBringBack(
+        {
+          hostIds: () => this.deps.hosts().map((host) => host.hostId),
+          controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
+          ...(this.deps.bringBack ? { bringBack: this.deps.bringBack } : {}),
+        },
+        args
+      )
+    );
   }
 
   list(

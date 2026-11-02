@@ -18,6 +18,115 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
+      "Try to bring back a host whose link is down: a wake first where one is set up here, then Daintree started there if its Host mode is on. Never changes its settings. Waits up to 2 min; calls meanwhile join it. Answers with what was observed.",
+    enabled: true,
+    id: "host.bringBack",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        hostId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          description: "A host id from the host list.",
+        },
+      },
+      required: ["hostId"],
+    },
+    keywords: ["host", "remote", "wake", "start", "reconnect", "asleep"],
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    name: "host.bringBack",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        outcome: {
+          type: "string",
+          enum: [
+            "ok",
+            "ambiguous",
+            "opted_out",
+            "disconnected",
+            "unsupported",
+            "policy_rejected",
+            "expired",
+            "not_found",
+            "rate_limited",
+            "too_large",
+            "conflict",
+          ],
+        },
+        detail: {
+          type: ["string", "null"],
+        },
+        retryAfterMs: {
+          type: ["number", "null"],
+        },
+        answer: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                status: {
+                  type: "string",
+                  enum: [
+                    "connected",
+                    "woken",
+                    "started",
+                    "unreachable",
+                    "not_wakeable",
+                    "not_startable",
+                    "version_mismatch",
+                    "timed_out",
+                    "cancelled",
+                  ],
+                },
+                wake: {
+                  type: "string",
+                  enum: ["sent", "not_needed", "not_set_up", "not_on_lan", "failed"],
+                },
+                reached: {
+                  type: "boolean",
+                  description: "ssh got in during the attempt.",
+                },
+                startRequested: {
+                  type: "boolean",
+                },
+                observed: {
+                  description: "What was last seen: ssh's or the start's own words.",
+                  type: ["string", "null"],
+                },
+                elapsedMs: {
+                  type: "number",
+                },
+              },
+              required: ["status", "wake", "reached", "startRequested", "observed", "elapsedMs"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+      },
+      required: ["outcome", "detail", "retryAfterMs", "answer"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Bring back a host",
+  },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
       "Run a host's own Daintree tool in one of its projects (local reaches another project here) and get its result, such as starting its assistant. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
     enabled: true,
     id: "host.call",
