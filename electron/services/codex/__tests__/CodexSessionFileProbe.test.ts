@@ -139,9 +139,7 @@ describe("classifySessionMeta", () => {
 
   it("refuses a record that isn't this file's session_meta", () => {
     expect(classifySessionMeta(sessionMeta(OTHER_ROOT_ID), ROOT_ID)).toBe("invalid");
-    expect(classifySessionMeta(JSON.stringify({ type: "response_item" }), ROOT_ID)).toBe(
-      "invalid"
-    );
+    expect(classifySessionMeta(JSON.stringify({ type: "response_item" }), ROOT_ID)).toBe("invalid");
     expect(classifySessionMeta("{not json", ROOT_ID)).toBe("invalid");
   });
 });

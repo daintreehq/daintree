@@ -4,7 +4,10 @@ import type { IpcContext } from "../../types.js";
 
 const serviceMock = vi.hoisted(() => ({
   locateAgentSessionFile: vi.fn(
-    async (_terminalId: string, _senderWorkspaceId: string | null): Promise<AgentSessionFileResult> => ({
+    async (
+      _terminalId: string,
+      _senderWorkspaceId: string | null
+    ): Promise<AgentSessionFileResult> => ({
       status: "unknown",
       reason: "not-observed",
     })

@@ -193,7 +193,11 @@ export function classifySessionMeta(firstLine: string, fileSessionId: string): S
   if (!record || typeof record !== "object") return "invalid";
   const { type, payload } = record as { type?: unknown; payload?: unknown };
   if (type !== "session_meta" || !payload || typeof payload !== "object") return "invalid";
-  const { id, session_id: sessionId, source } = payload as {
+  const {
+    id,
+    session_id: sessionId,
+    source,
+  } = payload as {
     id?: unknown;
     session_id?: unknown;
     source?: unknown;

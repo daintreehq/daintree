@@ -40,9 +40,7 @@ function queries(
   const getTerminalInfo = vi
     .fn()
     .mockResolvedValue(
-      options.info === undefined
-        ? first && { ...first, ptyPid: 4242, hasPty: true }
-        : options.info
+      options.info === undefined ? first && { ...first, ptyPid: 4242, hasPty: true } : options.info
     );
   return { getTerminalAsync, getTerminalInfo } as unknown as NonNullable<
     AgentSessionFileDeps["ptyClient"]
