@@ -488,7 +488,8 @@ describe("CanopyTerminal", () => {
       fireEvent.mouseDown(document.body, { button: 0, buttons: 1 });
       await nextTask();
       fireEvent.mouseMove(inner, { buttons: 1 });
-      fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
+      await nextTask();
+      fireEvent.mouseUp(inner, { button: 0, buttons: 0 });
       expect(terminalInput).not.toHaveBeenCalled();
     });
 

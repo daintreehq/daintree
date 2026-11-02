@@ -96,8 +96,8 @@ const GESTURE_EVENTS = [
   "input",
   "compositionend",
   "paste",
+  // A release belongs to the press before it, so the drag follow takes it.
   "mousedown",
-  "mouseup",
   "wheel",
 ] as const;
 
