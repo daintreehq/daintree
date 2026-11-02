@@ -1,13 +1,14 @@
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   fitRunWhenClosed,
-  isRunWhenClosedOptedIn,
   runWhenClosedIssue,
+  runWhenClosedSchedules,
   scheduleOsJobMachine,
+  type ProjectSchedules,
   type ScheduleOsJobContext,
   type ScheduleOsJobKind,
 } from "../../../shared/utils/scheduleOsJob.js";
-import type { Schedule, ScheduleCadence } from "../../../shared/types/scheduledRuns.js";
+import type { ScheduleCadence } from "../../../shared/types/scheduledRuns.js";
 import type {
   ScheduleOsJobExclusion,
   ScheduleOsJobStatus,
@@ -64,21 +65,24 @@ function noZoneError(kind: ScheduleOsJobKind): string {
   return `Couldn't read this ${scheduleOsJobMachine(kind)}'s time zone, so the job that starts Daintree was left as it was`;
 }
 
-/** The sender's switched-on, opted-in schedules whose cadences the job can't start. */
+/**
+ * The sender's switched-on, opted-in schedules whose cadences the job can't
+ * start; none while the project's own switches leave the job out of it.
+ */
 export function excludedSchedules(
-  schedules: readonly Schedule[],
+  project: ProjectSchedules,
   context: ScheduleOsJobContext
 ): ScheduleOsJobExclusion[] {
-  return schedules.filter(isRunWhenClosedOptedIn).flatMap((schedule) => {
+  return runWhenClosedSchedules(project).flatMap((schedule) => {
     const reason = runWhenClosedIssue(schedule.cadence, context);
     return reason === null ? [] : [{ scheduleId: schedule.id, reason }];
   });
 }
 
 /**
- * Keeps the machine's one OS job matching every switched-on schedule, in every
- * local project, set to run when Daintree isn't running (#15990, #15991,
- * #15993). It reads each project's schedules once, follows every committed
+ * Keeps the machine's one OS job matching every switched-on schedule set to run
+ * when Daintree isn't running (#15990, #15991, #15993), in every local project
+ * whose own switches let Daintree start for its schedules (#16166). It reads each project's schedules once, follows every committed
  * change, and rewrites the job after each, one pass at a time: changes that
  * arrive during a pass are taken by the next, from the newest snapshots.
  *
@@ -114,7 +118,7 @@ export class ScheduleOsJobService {
     // job can't have heard of its schedules.
     if (!this.snapshots.has(projectId) && !this.unread.has(projectId)) {
       await this.read([projectId]);
-      if (this.snapshots.get(projectId)?.schedules.some(isRunWhenClosedOptedIn)) {
+      if (runWhenClosedSchedules(this.snapshots.get(projectId)).length > 0) {
         await this.request(false);
       }
     }
@@ -239,7 +243,7 @@ export class ScheduleOsJobService {
     }
   }
 
-  /** Every project's opted-in schedules, fitted to the one job together. */
+  /** Every project's opted-in schedules, where the project allows it, fitted to the one job together. */
   private fit(context: ScheduleOsJobContext) {
     return fitRunWhenClosed(this.snapshots.values(), context);
   }

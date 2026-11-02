@@ -1,4 +1,8 @@
-import type { Schedule, ScheduleCadence } from "../types/scheduledRuns.js";
+import type {
+  ProjectScheduleSwitches,
+  Schedule,
+  ScheduleCadence,
+} from "../types/scheduledRuns.js";
 import { launchdCalendarFor } from "./launchdCalendar.js";
 import { systemdCalendarFor } from "./systemdCalendar.js";
 import { fitTaskTriggers, taskSchedulerTriggersFor } from "./taskSchedulerTriggers.js";
@@ -48,6 +52,27 @@ export function scheduleOsJobMachine(kind: ScheduleOsJobKind): string {
 /** A switched-on schedule with the option on, whether or not the job can start it. */
 export function isRunWhenClosedOptedIn(schedule: Schedule): boolean {
   return schedule.enabled && schedule.policies.runWhenClosed;
+}
+
+/** A project's schedules, with its own switches for them (#16166). */
+export interface ProjectSchedules {
+  readonly switches: ProjectScheduleSwitches;
+  readonly schedules: readonly Schedule[];
+}
+
+/** Whether the project lets the OS job start Daintree for its schedules: both its switches on. */
+export function projectStartsDaintree(switches: ProjectScheduleSwitches): boolean {
+  return switches.schedulesOn && switches.startWhenClosed;
+}
+
+/**
+ * The project's schedules the OS job is asked to start Daintree for, whether
+ * or not it can: none while either project switch is off, whatever a
+ * schedule's own option says.
+ */
+export function runWhenClosedSchedules(project: ProjectSchedules | undefined): Schedule[] {
+  if (!project || !projectStartsDaintree(project.switches)) return [];
+  return project.schedules.filter(isRunWhenClosedOptedIn);
 }
 
 /**
@@ -112,21 +137,21 @@ export interface RunWhenClosedFit {
 }
 
 /**
- * Which opted-in schedules, across every project, the machine's one job
- * starts Daintree for. A schedule whose cadence the job can't hold is left
- * out with why. Windows' task also has room for only so many triggers, so
+ * Which opted-in schedules, across every project that lets it, the machine's
+ * one job starts Daintree for. A schedule whose cadence the job can't hold is
+ * left out with why. Windows' task also has room for only so many triggers, so
  * there the schedules are fitted oldest first, and one that would take it
  * past its limit is left out whole while a later one may still fit.
  */
 export function fitRunWhenClosed(
-  snapshots: Iterable<{ projectId: string; schedules: readonly Schedule[] }>,
+  snapshots: Iterable<ProjectSchedules & { readonly projectId: string }>,
   context: ScheduleOsJobContext
 ): RunWhenClosedFit {
   const excluded: RunWhenClosedExclusion[] = [];
   const eligible: { projectId: string; schedule: Schedule }[] = [];
-  for (const { projectId, schedules } of snapshots) {
-    for (const schedule of schedules) {
-      if (!isRunWhenClosedOptedIn(schedule)) continue;
+  for (const project of snapshots) {
+    const { projectId } = project;
+    for (const schedule of runWhenClosedSchedules(project)) {
       const reason = runWhenClosedIssue(schedule.cadence, context);
       if (reason === null) eligible.push({ projectId, schedule });
       else excluded.push({ projectId, scheduleId: schedule.id, reason });

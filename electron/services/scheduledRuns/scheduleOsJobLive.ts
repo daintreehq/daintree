@@ -137,16 +137,19 @@ export function startScheduleOsJob(): void {
     });
 }
 
-/** Where there's no job, every opted-in schedule of the project is listed with why. */
+/**
+ * Where there's no job, every opted-in schedule of the project is listed with
+ * why, while the project's switches ask for the job.
+ */
 async function statusWithoutJob(projectId: string): Promise<ScheduleOsJobStatus> {
   const context = scheduleOsJobContext();
-  const { schedules } = await projectStore.schedules.list(projectId);
+  const snapshot = await projectStore.schedules.list(projectId);
   return {
     context,
     unavailable: context.unavailable,
     state: "none",
     error: null,
-    excluded: excludedSchedules(schedules, context),
+    excluded: excludedSchedules(snapshot, context),
   };
 }
 

@@ -5,6 +5,7 @@ import type {
   ScheduleRunNowOverlapConfirmation,
 } from "../../../shared/types/ipc/schedules.js";
 import type {
+  ProjectScheduleSwitches,
   Schedule,
   ScheduledRun,
   ScheduledRunOrigin,
@@ -50,8 +51,14 @@ export class ScheduledLaunchUnansweredError extends Error {
 
 export interface ScheduledRunLauncherDeps<View> {
   getRecorder: () => Promise<ScheduledRunRecorder | null>;
-  /** Null when the schedule, or the project it belonged to, is gone. */
-  getSchedule: (projectId: string, scheduleId: string) => Promise<Schedule | null>;
+  /**
+   * The schedule with its project's switches (#16166), from one read. Null
+   * when the schedule, or the project it belonged to, is gone.
+   */
+  getSchedule: (
+    projectId: string,
+    scheduleId: string
+  ) => Promise<{ schedule: Schedule; switches: ProjectScheduleSwitches } | null>;
   getProject: (projectId: string) => Project | null;
   folderExists: (path: string) => Promise<boolean>;
   isProjectSleeping: (projectId: string) => boolean;
@@ -236,14 +243,23 @@ async function launchInScheduleTurn<View>(
       message: "The run history isn't available, so the run couldn't be recorded.",
     };
   }
-  const schedule = await deps.getSchedule(projectId, scheduleId).catch((error: unknown) => {
+  const found = await deps.getSchedule(projectId, scheduleId).catch((error: unknown) => {
     logWarn(`[ScheduledRuns] Couldn't read schedule ${scheduleId}:`, error);
     return null;
   });
-  if (!schedule) return { status: "not-found" };
+  if (!found) return { status: "not-found" };
+  const { schedule, switches } = found;
   // The scheduler decided on a schedule it read earlier: one switched off
-  // since fires nothing, and records nothing. Run now runs either way.
-  if (origin.trigger !== "run-now" && !schedule.enabled) return { status: "not-found" };
+  // since, or whose project's schedules went off since, fires nothing and
+  // records nothing. Run now runs either way: asking is the opt-in.
+  if (origin.trigger !== "run-now") {
+    if (!schedule.enabled || !switches.schedulesOn) return { status: "not-found" };
+    // Due while the project's schedules were off, found by a launch that
+    // waited out a switch-off and back on.
+    if (switches.schedulesOnSince !== null && origin.dueAt <= switches.schedulesOnSince) {
+      return { status: "not-found" };
+    }
+  }
   // Removing a project removes its schedules and their history with them.
   const project = deps.getProject(projectId);
   if (!project) return { status: "not-found" };
