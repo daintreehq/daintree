@@ -146,9 +146,11 @@ export const HOST_BRING_BACK_OBSERVED_MAX = 500;
 export const HostBringBackAnswerSchema = z.object({
   status: z.enum(HOST_BRING_BACK_STATUSES),
   wake: z.enum(HOST_WAKE_RESULTS),
-  reached: z.boolean().describe("ssh got in during the attempt."),
+  /** ssh got in during the attempt. */
+  reached: z.boolean(),
   startRequested: z.boolean(),
-  observed: z.string().nullable().describe("What was last seen: ssh's or the start's own words."),
+  /** What was last seen: ssh's or the start's own words, or why no start went. */
+  observed: z.string().nullable(),
   elapsedMs: z.number(),
 });
 export type HostBringBackAnswer = z.infer<typeof HostBringBackAnswerSchema>;

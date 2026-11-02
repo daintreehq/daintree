@@ -165,7 +165,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.bringBack",
     title: "Bring back a host",
     description:
-      "Try to bring back a host whose link is down: a wake first where one is set up here, then Daintree started there if its Host mode is on. Never changes its settings. Waits up to 2 min; calls meanwhile join it. Answers with what was observed.",
+      "Bring back a host whose link is down: wake it where a wake is set up here, then start Daintree there if its Host mode is on. Up to 2 min; repeat calls join. Answers with what was observed.",
     category: "help",
     kind: "command",
     danger: "safe",
