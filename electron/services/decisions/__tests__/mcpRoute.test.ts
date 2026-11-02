@@ -93,6 +93,7 @@ import {
 import type { ListenerRoute } from "../../mcp-server/listenerHold.js";
 import type { PaneBearer, PaneTerminalInfo, PaneTerminalReader } from "../paneAccess.js";
 import type { QuestionSource } from "../relayConnection.js";
+import { DecisionsAttachments, type QuestionAttachments } from "../attachmentSpool.js";
 import { DESIGN_REVIEW_FINAL_GATE_ID, createTrustedPolicy } from "../workflowGates.js";
 
 const API_KEY = "orchestration-api-key";
@@ -253,13 +254,14 @@ describe("/mcp/decisions (#16011)", () => {
   }
 
   /** The route as the Decisions service opens it, over a connection between attempts. */
-  async function openRoute(): Promise<number> {
+  async function openRoute(attachments?: QuestionAttachments): Promise<number> {
     const source: QuestionSource = {
       identity: () => loaded,
       live: () => null,
       store,
       // The policy a lifetime starts with: the trusted gates, no proxy allowlist.
       policy: createTrustedPolicy({ proxyAllowlisted: false }),
+      ...(attachments ? { attachments } : {}),
     };
     let held: number | null = null;
     questions = openDecisionsMcpRoute(source, {
@@ -381,6 +383,71 @@ describe("/mcp/decisions (#16011)", () => {
     expect(row.local_status).toBe("queued");
     expect((await store.outboxFor(row.question_id)).map((item) => item.kind)).toEqual(["create"]);
     expect(fetches).toBe(0);
+  });
+
+  it("attaches images from the pane's own launch directory, and tells the agent what was wrong with the rest", async () => {
+    const root = await fs.mkdtemp(`${testHomeDir}/attach-`);
+    try {
+      const worktree = `${root}/worktree`;
+      await fs.mkdir(`${worktree}/shots`, { recursive: true });
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+      await fs.writeFile(`${worktree}/shots/after.png`, png);
+      await fs.writeFile(`${root}/outside.png`, Buffer.concat([png, Buffer.from("SECRET")]));
+      await fs.symlink(`${root}/outside.png`, `${worktree}/shots/linked.png`);
+      await fs.writeFile(`${worktree}/fake.png`, "SECRET plain text");
+      const attachments = new DecisionsAttachments({
+        dir: `${root}/spool`,
+        referenced: async () =>
+          new Set(
+            (await store.dueOutbox(Number.MAX_SAFE_INTEGER, 1000)).flatMap((item) =>
+              item.kind === "create"
+                ? (item.payload as { attachments: { attachment_id: string }[] }).attachments.map(
+                    (a) => a.attachment_id
+                  )
+                : []
+            )
+          ),
+      });
+      await boot(false);
+      add(pane("pane-a", { cwd: worktree }));
+      const port = await openRoute(attachments);
+      const ask = (ids: string[]) =>
+        call(port, "pane-token-pane-a", "ask_human", {
+          question: "Does the redesign look right?",
+          attachments: ids.map((id) => ({ local_resource_id: id, role: "after" })),
+        });
+
+      const asked = await ask(["shots/after.png"]);
+      expect(asked.isError).toBeUndefined();
+      const [row] = await store.listQuestions();
+      expect(row.attachment_digests).toHaveLength(1);
+      expect(await fs.readdir(`${root}/spool`)).toHaveLength(1);
+
+      for (const [id, problem] of [
+        ["../outside.png", "is outside this terminal's worktree"],
+        ["shots/linked.png", "is outside this terminal's worktree"],
+        ["fake.png", "isn't a PNG, JPEG or WebP image"],
+        [`${worktree}/shots/after.png`, "must be a path relative to this terminal's worktree"],
+      ] as const) {
+        const refused = await ask(["shots/after.png", id]);
+        expect(refused.isError).toBe(true);
+        const text = refused.content[0].text;
+        expect(
+          text.startsWith(`attachment_error: attachment ${JSON.stringify(id)} ${problem}`)
+        ).toBe(true);
+        expect(refused.content[0].text).not.toContain("SECRET");
+      }
+      const nine = await ask(Array.from({ length: 9 }, () => "shots/after.png"));
+      expect(nine.isError).toBe(true);
+      expect(nine.content[0].text).toMatch(/^validation_error: attachments/);
+
+      // Only the question that was asked holds anything in the spool.
+      expect(await store.listQuestions()).toHaveLength(1);
+      expect(await fs.readdir(`${root}/spool`)).toHaveLength(1);
+      await attachments.close();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("refuses missing, API-key, help, foreign and revoked tokens, with the MCP server on as well", async () => {

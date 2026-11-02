@@ -253,6 +253,70 @@ describe("QuestionBridge", () => {
     expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId, pane);
   });
 
+  it("marks the create in place when the store can, never writing back a copy it read", async () => {
+    const marks: string[] = [];
+    const putOutbox = vi.spyOn(store, "putOutbox");
+    source = {
+      ...source,
+      store: Object.assign(store, {
+        markCreateMaybePublished: async (questionId: string) => {
+          marks.push(questionId);
+          return true;
+        },
+      }),
+    };
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Cancel me?" } });
+    live = liveBridge();
+    putOutbox.mockClear();
+
+    await b.cancelQuestion(asked.questionId, paneIdentityOf(ORIGIN));
+
+    expect(marks).toEqual([asked.questionId]);
+    expect(putOutbox).not.toHaveBeenCalled();
+    expect(live.cancelQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks through the lifetime's attachments: its gate, and its resolver and spool when offline", async () => {
+    const order: string[] = [];
+    const resolver = { resolve: vi.fn(async () => null) };
+    const spool = { put: vi.fn(), get: vi.fn(), delete: vi.fn() };
+    source = {
+      ...source,
+      attachments: {
+        resolver,
+        spool,
+        register: async <T>(ask: () => Promise<T>) => {
+          order.push("gate:start");
+          try {
+            return await ask();
+          } finally {
+            order.push("gate:end");
+          }
+        },
+      },
+    };
+    const b = bridge();
+    expect(b.ctx.resolver).toBe(resolver);
+    expect(b.ctx.spool).toBe(spool);
+
+    await b.registerQuestion({ origin: ORIGIN, input: { question: "Offline?" } });
+    live = liveBridge();
+    live.registerQuestion.mockImplementationOnce(async () => {
+      order.push("live");
+      return {
+        questionId: "q_live",
+        alias: 2,
+        requirement: "human-required" as const,
+        status: "queued" as const,
+        duplicate: false,
+      };
+    });
+    await b.registerQuestion({ origin: ORIGIN, input: { question: "Live?" } });
+
+    expect(order).toEqual(["gate:start", "gate:end", "gate:start", "live", "gate:end"]);
+  });
+
   it("touches nothing for a cancel the live attempt finds isn't the pane's", async () => {
     const b = bridge();
     const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Theirs?" } });

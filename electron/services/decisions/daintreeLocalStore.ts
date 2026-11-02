@@ -230,6 +230,18 @@ function assertNoLegacyContent(value: { legacy_content_json?: string | null }): 
 }
 
 /** A detached copy of a question patch, so a caller changing its object later can't change the write. */
+/**
+ * A question cancelled stays cancelled when a flush that read its create
+ * before the cancel dropped it then finds the ciphertext gone (#16014): the
+ * library would record the create as refused for good, `publish-failed`,
+ * though nothing was ever refused and the agent was told it was cancelled.
+ */
+function keepingCancelled(current: QuestionRow, patch: Partial<QuestionRow>): Partial<QuestionRow> {
+  if (current.local_status !== "cancelled" || patch.local_status !== "publish-failed") return patch;
+  const { local_status: _status, error_code: _code, ...rest } = patch;
+  return rest;
+}
+
 function copyQuestionPatch(patch: Partial<QuestionRow>): Partial<QuestionRow> {
   assertNoLegacyContent(patch);
   const { legacy_content_json: _legacy, ...rest } = patch;
@@ -261,6 +273,11 @@ function toOutboxRecord(i: OutboxItem): OutboxRecord {
     created_at: i.created_at,
     last_error: i.last_error,
   };
+}
+
+function isMarkedPublished(payload: string): boolean {
+  const parsed = JSON.parse(payload) as { maybePublished?: unknown } | null;
+  return parsed?.maybePublished === true;
 }
 
 function outboxFrom(r: OutboxRecord): OutboxItem {
@@ -377,6 +394,11 @@ export class DaintreeLocalStore implements LocalStore {
   private closed = false;
   private fault: DecisionsStoreUnavailableError | null = null;
   private readonly statements = new Map<string, Database.Statement>();
+  /**
+   * Creates this store deleted: published, cancelled before they ever were,
+   * or refused. A flush holding a copy of one must never write it back.
+   */
+  private readonly deletedCreates = new Set<string>();
   private readonly commitListeners = new Set<() => void>();
 
   constructor(private readonly sqlite: Database.Database) {}
@@ -480,10 +502,64 @@ export class DaintreeLocalStore implements LocalStore {
     });
   }
 
+  /**
+   * A create's `maybePublished` mark, once stored, stays (#16014): the
+   * publisher rewrites the create from its own copy after each attachment it
+   * uploads, and that copy predates a mark a cancel set meanwhile. A create
+   * deleted meanwhile is refused, never put back: a cancel that dropped it as
+   * never published while a starting attempt was uploading it would otherwise
+   * see it published after all. The refusal fails that flush before it sends
+   * the create.
+   */
   putOutbox(item: OutboxItem): Promise<void> {
     return this.enqueueWith("write", () => {
       const record = toOutboxRecord(item);
-      return () => this.writeOutbox(record);
+      return () =>
+        this.writeOutbox(record.kind === "create" ? this.keepingPublishedMark(record) : record);
+    });
+  }
+
+  /**
+   * Marks a question's pending create as possibly published, changing nothing
+   * else in it: not its upload progress, not its retry time. False when it has
+   * no create left, which is never put back.
+   */
+  markCreateMaybePublished(questionId: string): Promise<boolean> {
+    return this.enqueue("write", () => {
+      const r = this.st(
+        `UPDATE decisions_outbox SET payload = json_set(payload, '$.maybePublished', json('true'))
+         WHERE question_id = ? AND kind = 'create'`
+      ).run(questionId);
+      return r.changes > 0;
+    });
+  }
+
+  /**
+   * Every attachment id a pending create names, whatever its question's state,
+   * retry time or upload progress: the spool entries still owed to the relay.
+   * Throws on a create it can't read, so a sweep deletes nothing then.
+   */
+  referencedAttachmentIds(): Promise<Set<string>> {
+    return this.enqueue("read", () => {
+      const ids = new Set<string>();
+      const rows = this.st("SELECT payload FROM decisions_outbox WHERE kind = 'create'").all() as {
+        payload: string;
+      }[];
+      for (const { payload } of rows) {
+        const parsed = JSON.parse(payload) as { attachments?: unknown } | null;
+        // The library writes `attachments: []` on every create; one without is unreadable.
+        const attachments = typeof parsed === "object" ? parsed?.attachments : undefined;
+        if (!Array.isArray(attachments)) {
+          throw new Error("A pending create's attachments are unreadable");
+        }
+        for (const attachment of attachments as { attachment_id?: unknown }[]) {
+          if (typeof attachment?.attachment_id !== "string") {
+            throw new Error("A pending create names an unreadable attachment");
+          }
+          ids.add(attachment.attachment_id);
+        }
+      }
+      return ids;
     });
   }
 
@@ -509,7 +585,9 @@ export class DaintreeLocalStore implements LocalStore {
 
   deleteOutbox(id: string): Promise<void> {
     return this.enqueue("write", () => {
-      this.st("DELETE FROM decisions_outbox WHERE id = ?").run(id);
+      const r = this.st("DELETE FROM decisions_outbox WHERE id = ? RETURNING kind").get(id) as
+        { kind: string } | undefined;
+      if (r?.kind === "create") this.deletedCreates.add(id);
     });
   }
 
@@ -840,12 +918,24 @@ export class DaintreeLocalStore implements LocalStore {
     if (!current) return null;
     const next: QuestionRow = {
       ...current,
-      ...patch,
+      ...keepingCancelled(current, patch),
       question_id: current.question_id,
       origin: { ...current.origin, ...(patch.origin ?? {}) },
     };
     this.st(UPDATE_QUESTION).run(toRecord(next));
     return next;
+  }
+
+  private keepingPublishedMark(record: OutboxRecord): OutboxRecord {
+    const stored = this.st("SELECT payload FROM decisions_outbox WHERE id = ?").get(record.id) as
+      { payload: string } | undefined;
+    if (stored === undefined && this.deletedCreates.has(record.id)) {
+      throw new Error("This question's create is no longer queued, so it isn't written back");
+    }
+    if (stored === undefined || !isMarkedPublished(stored.payload)) return record;
+    if (isMarkedPublished(record.payload)) return record;
+    const payload = JSON.parse(record.payload) as Record<string, unknown>;
+    return { ...record, payload: JSON.stringify({ ...payload, maybePublished: true }) };
   }
 
   private writeOutbox(record: OutboxRecord): void {

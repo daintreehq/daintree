@@ -40,12 +40,14 @@ export class QuestionBridge extends DecisionsBridge {
   constructor(options: QuestionBridgeOptions) {
     const identity = options.source.identity();
     if (identity === null) throw new Error("The relay connection has ended");
+    const attachments = options.source.attachments;
     super({
       identity,
       store: options.source.store,
       policy: options.source.policy,
       sink: holdingTerminalSink,
       pumpIntervalMs: 0,
+      ...(attachments ? { resolver: attachments.resolver, spool: attachments.spool } : {}),
     });
     this.question = options;
     // Synchronous for a bridge that never started; from here `pump` does nothing.
@@ -56,10 +58,13 @@ export class QuestionBridge extends DecisionsBridge {
     origin: QuestionOrigin;
     input: unknown;
   }): Promise<RegisterResult> {
-    const run = this.asks.then(() => {
+    const ask = (): Promise<RegisterResult> => {
       const live = this.admit(paneIdentityOf(args.origin));
       return live ? live.registerQuestion(args) : super.registerQuestion(args);
-    });
+    };
+    const attachments = this.question.source.attachments;
+    // The lifetime's gate also holds the asks of a route this one replaced, and its spool sweeps.
+    const run = this.asks.then(() => (attachments ? attachments.register(ask) : ask()));
     this.asks = run.catch(() => {});
     return run;
   }
@@ -102,11 +107,17 @@ export class QuestionBridge extends DecisionsBridge {
    * and would send it even after the library's cancel drops it as never
    * published, bringing the question back. So a cancel while an attempt runs
    * keeps the create, marked as possibly published, and the library queues a
-   * real cancel to follow it. Attachment uploads (#16014) rewrite the create
-   * from the flush's own copy, so they will need this mark kept across them.
+   * real cancel to follow it. The mark is set in place: a flush uploading the
+   * question's attachments rewrites the create as it goes, and a copy read
+   * here and written back would undo its progress, or put back a create it
+   * had just finished. The store keeps the mark across those rewrites.
    */
   private async keepCreate(questionId: string): Promise<void> {
     const store = this.question.source.store;
+    if (store.markCreateMaybePublished) {
+      await store.markCreateMaybePublished(questionId);
+      return;
+    }
     const create = (await store.outboxFor(questionId)).find((item) => item.kind === "create");
     const payload = create?.payload;
     if (create === undefined || typeof payload !== "object" || payload === null) return;

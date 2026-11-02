@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -28,6 +36,7 @@ function fakeStore(): FakeStore & DaintreeLocalStore {
     close: vi.fn(async () => {}),
     onCommit: () => () => {},
     listQuestions: async () => [],
+    referencedAttachmentIds: vi.fn(async () => new Set<string>()),
   } as unknown as FakeStore & DaintreeLocalStore;
 }
 
@@ -686,6 +695,33 @@ describe("DecisionsService relay connection", () => {
     expect(service.getStatus()).toEqual({ state: "not-connected", problem: "keys" });
   });
 
+  it("hands the connection the open store's attachments, and lets an ask they hold finish before the store closes", async () => {
+    const { service, made, events } = connected();
+    await service.start(on(RELAY));
+    const attachments = made[0]!.options.attachments!;
+    expect(attachments.spool).toBeDefined();
+    let started = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const asking = attachments.register(async () => {
+      started = true;
+      await held;
+      events.push("ask settled");
+    });
+    await vi.waitFor(() => expect(started).toBe(true));
+
+    const stopping = service.stop();
+    await vi.waitFor(() => expect(events).toContain("stopped 1"));
+    expect(events).not.toContain("store closed");
+    release();
+    await Promise.all([asking, stopping]);
+
+    expect(events).toEqual(["started 1", "stopped 1", "ask settled", "store closed"]);
+    await expect(attachments.register(async () => "late")).rejects.toMatchObject({
+      code: "forbidden",
+    });
+  });
+
   it("hands every connection of a lifetime the same trusted policy, and changes it in place", async () => {
     const { service, made } = connected();
     await service.start(on(RELAY));
@@ -1213,6 +1249,28 @@ describe("DecisionsService deleting local data", () => {
       await service.stop();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sweeps from the spool what no create names, as a lifetime starts and once a deletion reopens the store", async () => {
+    const t = setup();
+    const spool = join(t.dir, "spool");
+    const plant = (name: string) => {
+      mkdirSync(spool, { recursive: true });
+      writeFileSync(join(spool, name), "ciphertext");
+    };
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      plant("left_by_a_crash");
+      await t.service.start(on(RELAY));
+      await vi.waitFor(() => expect(readdirSync(spool)).toEqual([]));
+
+      plant("queued_before_the_deletion");
+      await expect(t.service.eraseLocalData()).resolves.toEqual({ result: "deleted" });
+      await vi.waitFor(() => expect(readdirSync(spool)).toEqual([]));
+      expect(t.stores[1]!.referencedAttachmentIds).toHaveBeenCalled();
+    } finally {
+      t.cleanup();
     }
   });
 
