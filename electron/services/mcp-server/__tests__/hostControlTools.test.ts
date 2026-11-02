@@ -31,6 +31,9 @@ function fakeRuntime() {
         observed: null,
       })
     ),
+    bringBack: vi.fn(() =>
+      ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, answer: null })
+    ),
   } satisfies HostControlRuntimeHandle;
 }
 
@@ -227,6 +230,26 @@ describe("runHostControlTool (#13493)", () => {
     expect(runtime.settings).toHaveBeenCalledTimes(2);
     expect(runtime.settings).toHaveBeenCalledWith("hub", preview);
     for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
+  it("hands host.bringBack a host and nothing else (#16170)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    await runHostControlTool("host.bringBack", { hostId: "studio" }, access);
+    expect(runtime.bringBack).toHaveBeenCalledWith("hub", { hostId: "studio" });
+    for (const args of [{}, { hostId: "" }, { hostId: 7 }]) {
+      expect(await runHostControlTool("host.bringBack", args, access)).toMatchObject({
+        ok: false,
+        code: "INVALID_ARGS",
+      });
+    }
+    expect(runtime.bringBack).toHaveBeenCalledTimes(1);
+    // No assistant session, no attempt.
+    expect(await runHostControlTool("host.bringBack", { hostId: "studio" }, undefined)).toMatchObject(
+      { ok: false, code: "NOT_ELIGIBLE" }
+    );
+    uninstall();
   });
 
   it("hands host.watch one kind of condition to arm, and each operation only its own arguments (#14463)", async () => {

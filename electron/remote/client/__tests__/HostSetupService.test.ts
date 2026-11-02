@@ -435,6 +435,59 @@ describe("HostSetupService", () => {
       expect(started(quit.scripts)).toBe(false);
     });
 
+    it("starts a Daintree quit there on purpose when someone asks for the host back (#16170)", async () => {
+      const { run, scripts } = recording([MAC_QUIT(), MAC_QUIT(), MAC_STARTED()]);
+      const refusals: string[] = [];
+      await expect(
+        service("", { run }).setup.ensureHostRunning(studio, undefined, undefined, {
+          explicit: true,
+          onRefused: (refusal) => refusals.push(refusal),
+        })
+      ).resolves.toBe("started");
+      expect(started(scripts)).toBe(true);
+      expect(refusals).toEqual([]);
+      // Started as it was set up: nothing switched on or saved there.
+      expect(scripts.some((c) => c.includes("--enable-host-mode"))).toBe(false);
+    });
+
+    it("says why it started nothing, and never starts where Host mode is off even when asked", async () => {
+      const cases: Array<[string, string, boolean, string]> = [
+        ["quit, unasked", MAC_QUIT(), false, "quit"],
+        ["Host mode off, asked", MAC_STOPPED(false), true, "host-mode-off"],
+        ["never a host, asked", MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, ""), true, "host-mode-off"],
+        ["Linux service with Host mode off, asked", LINUX_OFF, true, "host-mode-off"],
+        ["not installed, asked", MAC_UNINSTALLED, true, "not-installed"],
+        ["probe cut short, asked", CUT_SHORT, true, "unreached"],
+      ];
+      for (const [why, output, explicit, refusal] of cases) {
+        const { run, scripts } = recording([output]);
+        const refusals: string[] = [];
+        await expect(
+          service("", { run }).setup.ensureHostRunning(studio, undefined, undefined, {
+            explicit,
+            onRefused: (r) => refusals.push(r),
+          }),
+          why
+        ).resolves.toBe("not-startable");
+        expect(refusals, why).toEqual([refusal]);
+        expect(started(scripts), why).toBe(false);
+      }
+    });
+
+    it("looks again past a held refusal when someone asks for the host back", async () => {
+      const { run, scripts } = recording([MAC_STOPPED(false)]);
+      const { setup } = service("", { run });
+      await setup.ensureHostRunning(studio);
+      const refusals: string[] = [];
+      await setup.ensureHostRunning(studio, undefined, undefined, {
+        onRefused: (r) => refusals.push(r),
+      });
+      expect(probes(scripts)).toBe(1);
+      expect(refusals).toEqual(["held"]);
+      await setup.ensureHostRunning(studio, undefined, undefined, { explicit: true });
+      expect(probes(scripts)).toBe(2);
+    });
+
     it("never installs: a host without Daintree is left as it is", async () => {
       const bare = recording(["@@dt:uname Darwin arm64\n@@dt:download yes\n@@dt:end"]);
       await expect(service("", { run: bare.run }).setup.ensureHostRunning(studio)).resolves.toBe(

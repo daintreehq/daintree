@@ -219,6 +219,32 @@ describe("HostsSettingsTab", () => {
     await waitFor(() => expect(remoteHosts.forget).toHaveBeenCalledWith({ hostId: "studio-03" }));
   });
 
+  it("says on a host's row whether it can be woken, and brings back a down host from it (#16170)", async () => {
+    const down = entry("studio-03", "studio-03");
+    down.descriptor.wake = { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" };
+    remoteHosts.list!.mockResolvedValue([down, entry("studio-04", "studio-04")]);
+    remoteHosts.bringBack = vi.fn(async () => ({
+      status: "not_startable",
+      wake: "sent",
+      reached: true,
+      startRequested: false,
+      observed: "ssh got in; Daintree isn't running there and its Host mode isn't on.",
+      elapsedMs: 9_000,
+    }));
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    expect(await screen.findByText(/Wakes over 192\.168\.1\.0\/24/)).toBeTruthy();
+    expect(screen.getByText(/No wake set up/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Bring back studio-03" }));
+    await waitFor(() => expect(remoteHosts.bringBack).toHaveBeenCalledWith({ hostId: "studio-03" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Daintree on studio-03 wasn't started: ssh got in; Daintree isn't running there and its Host mode isn't on."
+    );
+  });
+
   it("removes a host from its row, only after confirming", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     render(

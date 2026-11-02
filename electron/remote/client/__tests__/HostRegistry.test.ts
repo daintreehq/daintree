@@ -276,6 +276,63 @@ describe("HostRegistry", () => {
     expect(registry.list().map((host) => "ownerWorktreeId" in host)).toEqual([false, false]);
   });
 
+  it("keeps a host's wake setup normalized, across a reload and a rename (#16170)", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const host = registry.add({ name: "studio", connection: { kind: "ssh", target: "studio" } });
+    expect(host).not.toHaveProperty("wake");
+    const updated = registry.update({
+      hostId: host.id,
+      wake: { mac: "AA-BB-CC-DD-EE-F0", lan: "192.168.1.40/24" },
+    });
+    expect(updated.wake).toEqual({ mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" });
+    registry.update({ hostId: host.id, name: "studio 2" });
+    expect(new HostRegistry(store).get(host.id)?.wake).toEqual(updated.wake);
+    // null takes it away.
+    expect(registry.update({ hostId: host.id, wake: null })).not.toHaveProperty("wake");
+    expect(registry.get(host.id)).not.toHaveProperty("wake");
+  });
+
+  it("refuses a wake it couldn't send", () => {
+    const registry = new HostRegistry(memoryStore());
+    const host = registry.add({ name: "studio", connection: { kind: "ssh", target: "studio" } });
+    for (const wake of [
+      { mac: "ff:ff:ff:ff:ff:ff", lan: "192.168.1.0/24" },
+      { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/32" },
+      { mac: "aa:bb:cc:dd:ee:f0" },
+    ]) {
+      expect(() =>
+        registry.update({ hostId: host.id, wake: wake as { mac: string; lan: string } })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    }
+    expect(registry.get(host.id)).not.toHaveProperty("wake");
+  });
+
+  it("drops the wake when the host is pointed at another machine, and one a settings file mangled", () => {
+    const registry = new HostRegistry(
+      memoryStore({
+        hosts: [
+          {
+            id: "a",
+            name: "a",
+            connection: { kind: "ssh", target: "a" },
+            wake: { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" },
+          },
+          { id: "b", name: "b", connection: { kind: "ssh", target: "b" }, wake: { mac: "nope" } },
+          {
+            id: "c",
+            name: "c",
+            connection: { kind: "wsl", distro: "Ubuntu" },
+            wake: { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" },
+          },
+        ],
+      })
+    );
+    expect(registry.list().map((host) => "wake" in host)).toEqual([true, false, false]);
+    const moved = registry.update({ hostId: "a", connection: { kind: "ssh", target: "mini" } });
+    expect(moved).not.toHaveProperty("wake");
+  });
+
   it("forgets a host and reports changes", () => {
     const registry = new HostRegistry(memoryStore());
     const listener = vi.fn();
@@ -462,6 +519,19 @@ describe("HostRegistry", () => {
           userMessage: "Choose a WSL distribution installed on this PC.",
         })
       );
+    });
+
+    it("refuses a wake for a WSL distro: it is this PC (#16170)", () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const registry = new HostRegistry(memoryStore());
+      const distro = registry.add({ name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } });
+      expect(() =>
+        registry.update({
+          hostId: distro.id,
+          wake: { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" },
+        })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+      expect(registry.get(distro.id)).not.toHaveProperty("wake");
     });
 
     it("refuses a WSL distro anywhere but Windows", () => {

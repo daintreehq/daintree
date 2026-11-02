@@ -628,3 +628,37 @@ describe("host.watch audit (#14463)", () => {
     ).not.toContain("SENTINEL");
   });
 });
+
+describe("host.bringBack audit (#16170)", () => {
+  it("records how the attempt ended and what it did, never ssh's words or the host's network", () => {
+    const result = projectAuditResult("host.bringBack", {
+      outcome: "ok",
+      detail: "PROSE-SENTINEL",
+      retryAfterMs: null,
+      answer: {
+        status: "not_wakeable",
+        wake: "not_on_lan",
+        reached: false,
+        startRequested: false,
+        observed: "ssh: connect to host OBSERVED-SENTINEL port 22: Operation timed out",
+        elapsedMs: 10_250,
+      },
+    });
+    expect(result).toEqual({
+      outcome: "ok",
+      status: "not_wakeable",
+      wake: "not_on_lan",
+      reached: false,
+      startRequested: false,
+      elapsedMs: 10_250,
+    });
+    const args = projectAuditArgs("host.bringBack", { hostId: "studio-01", extra: "ARG-SENTINEL" });
+    expect(args).toEqual({ hostId: "studio-01" });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.bringBack", "nope")).toEqual({ status: "unrecognized" });
+    expect(
+      projectAuditResult("host.bringBack", { outcome: "ok", answer: { status: "STATUS-SENTINEL" } })
+    ).toMatchObject({ status: null, wake: null });
+  });
+});
