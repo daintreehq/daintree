@@ -4021,10 +4021,8 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
 
-    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
-      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
-    };
-    keybindingService.matchesEvent.mockImplementation(
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.matchesEvent).mockImplementation(
       (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Escape"
     );
     const { markDragCancelEscape } = await import("@/lib/dragCancelEscape");
