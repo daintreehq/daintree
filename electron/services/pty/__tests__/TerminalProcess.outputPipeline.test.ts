@@ -588,6 +588,24 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
     terminal.dispose();
   });
 
+  it("reads a footer warning in the frame Claude exits on", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(1);
+    // The agent and its PTY exit before the sample is taken; the exit path
+    // settles the last frame as it releases the mirror.
+    const info = (
+      terminal as unknown as { terminalInfo: { agentState?: string; isExited?: boolean } }
+    ).terminalInfo;
+    info.agentState = "exited";
+    info.isExited = true;
+    terminal.dispose();
+
+    expect(seen.map((payload) => payload.usedPercent)).toEqual([87]);
+  });
+
   it("ignores a Claude pane's prose about a limit", async () => {
     const seen = collect();
     const terminal = createTerminal({ launchAgentId: "claude" });

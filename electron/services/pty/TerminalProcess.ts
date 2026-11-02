@@ -1993,7 +1993,9 @@ export class TerminalProcess {
       return;
     }
     const visible = new Set<ClaudeUsageWindow>();
-    const cols = this.readPtyGeometry().cols ?? undefined;
+    // Read off the PTY itself: it keeps its width after exit, where the
+    // geometry read answers null, and the final frame is read after exit.
+    const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
     for (const message of scanClaudeUsageMessages(lines, cols)) {
       visible.add(message.window);
       const key = `${message.statement}|${message.usedPercent}|${message.resetText}`;

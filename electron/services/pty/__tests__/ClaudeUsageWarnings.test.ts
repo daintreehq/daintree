@@ -138,6 +138,15 @@ describe("scanClaudeUsageMessages", () => {
       "a table cell reaching the edge",
       footer("| Example |", "You've used 87% of your weekly limit · resets 3pm (UTC) |"),
     ],
+    [
+      "a code comment reaching the edge",
+      footer("  //", "You've used 87% of your weekly limit · resets 3pm (Australia/Sydney)"),
+    ],
+    ["a quoted banner", `  ⎿  You've hit your weekly limit · resets 3pm (UTC)",`],
+    [
+      "a gap followed by something other than the message",
+      footer("  ? for shortcuts", "- You've used 87% of your weekly limit · resets 3pm (UTC)"),
+    ],
   ])("ignores %s", (_name, row) => {
     expect(scan(row)).toEqual([]);
   });
@@ -202,6 +211,10 @@ describe("scanClaudeUsageMessages", () => {
       expect(wrapped("  ⎿  You've hit your weekly limit · resets", "     3pm (UTC)")).toBe(
         "3pm (UTC)"
       );
+    });
+
+    it("leaves a row that only looks like a zone out of it", () => {
+      expect(wrapped("  ⎿  You've hit your weekly limit · resets 3pm", "  (main)")).toBe("3pm");
     });
 
     it("leaves an unrelated row out of it", () => {
@@ -290,6 +303,14 @@ describe("resolveResetsAt", () => {
     expect(resolveResetsAt("1:30am (America/New_York)", Date.UTC(2026, 10, 1, 6, 0))).toBe(
       Date.UTC(2026, 10, 1, 6, 30)
     );
+  });
+
+  it("takes the showing still to come of a dated time the clock repeats", () => {
+    // 1:00-2:00am repeats in New York on 2026-11-01: EDT 05:30Z, then EST 06:30Z.
+    const reset = "Nov 1 at 1:30am (America/New_York)";
+    expect(resolveResetsAt(reset, Date.UTC(2026, 10, 1, 5, 0))).toBe(Date.UTC(2026, 10, 1, 5, 30));
+    expect(resolveResetsAt(reset, Date.UTC(2026, 10, 1, 6, 0))).toBe(Date.UTC(2026, 10, 1, 6, 30));
+    expect(resolveResetsAt(reset, Date.UTC(2026, 10, 1, 9, 0))).toBe(Date.UTC(2026, 10, 1, 6, 30));
   });
 
   it.each([

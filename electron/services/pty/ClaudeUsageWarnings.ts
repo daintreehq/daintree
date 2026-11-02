@@ -20,11 +20,10 @@ export interface ClaudeUsageMessage {
 const SCAN_LINES = 12;
 
 /**
- * How far short of the pane's right edge a footer warning may end. Claude
- * draws it flush right behind a column of padding, and a wide glyph elsewhere
- * on the row reads as one character for its two columns.
+ * How far short of the pane's right edge a footer warning may end: Claude
+ * draws it flush right behind a column of padding.
  */
-const RIGHT_EDGE_SLACK = 8;
+const RIGHT_EDGE_SLACK = 4;
 
 // The gutter, box and pointer glyphs banners sit behind, as RATE_LIMIT_PATTERNS
 // knows them.
@@ -37,10 +36,13 @@ const YOUVE = String.raw`you(?:['’]ve|\s+have)`;
 // anything else after the limit is a sentence about one.
 const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[·∙•]\s*(.*)$)`;
 const SEGMENT_SEPARATOR = /[·∙•]/;
-const TRAILING_BORDER_RUN = new RegExp(`${TRAILING_BORDER}$`, "u");
+const BORDER_GLYPHS = new Set("▔▁─━╮╯╗╝│┃");
 // Claude's own segments never quote; code holding a message as a string does.
 const CODE_DELIMITER = /["`]/;
 const MESSAGE_START = /^(?:you|over|approaching)\b/i;
+// What Claude's footer shows left of a warning: "? for shortcuts", "esc to
+// clear", "shift+tab to cycle", "Press Ctrl-C again to exit".
+const FOOTER_HINT = /\b(?:for|to)\s+[a-z]/i;
 
 interface Form {
   pattern: RegExp;
@@ -127,25 +129,33 @@ interface MessageStart {
 }
 
 /**
- * Where on a row a message may start: the row's own start, or, on a row that
- * reaches the pane's right edge, right after a column gap. That is where
- * Claude draws its warning, flush right in the prompt footer beside "? for
- * shortcuts" or a mode; a message after a gap anywhere else is someone's text.
+ * Where on a row a message may start: the row's own start, or right after a
+ * column gap on a row that reaches the pane's right edge with a key hint left
+ * of the gap. That is where Claude draws its warning, flush right in the
+ * prompt footer; a message after a gap anywhere else is someone's text.
  */
 function messageStarts(row: string, cols: number | undefined): MessageStart[] {
   const starts: MessageStart[] = [{ text: row, atGap: false }];
   if (cols === undefined || row.trimEnd().length < cols - RIGHT_EDGE_SLACK) return starts;
   for (const gap of row.matchAll(/\S {2,}(?=\S)/g)) {
-    const text = row.slice(gap.index + gap[0].length);
-    if (MESSAGE_START.test(text)) starts.push({ text, atGap: true });
+    const end = gap.index + gap[0].length;
+    const text = row.slice(end);
+    if (MESSAGE_START.test(text) && FOOTER_HINT.test(row.slice(0, end))) {
+      starts.push({ text, atGap: true });
+    }
   }
   return starts;
 }
 
+function withoutTrailingBorder(text: string): string {
+  let end = text.length;
+  while (end > 0 && (BORDER_GLYPHS.has(text[end - 1]!) || text[end - 1]!.trim() === "")) end--;
+  return text.slice(0, end);
+}
+
 function segmentsOf(rest: string | undefined): string[] {
   if (rest === undefined) return [];
-  return rest
-    .replace(TRAILING_BORDER_RUN, "")
+  return withoutTrailingBorder(rest)
     .split(SEGMENT_SEPARATOR)
     .map((segment) => segment.trim());
 }
@@ -163,7 +173,10 @@ function carriedReset(text: string, next: string): string | null {
   if (carried === "") return null;
   for (const joined of [`${text} ${carried}`.trim(), `${text}${carried}`]) {
     const parsed = parseResetText(joined);
-    if (parsed !== null && (own === null || parsed.zone !== undefined)) return joined;
+    if (parsed === null) continue;
+    // "(main)" under a bare time is a branch name, not the zone it lost.
+    if (parsed.zone !== undefined && zoneFormat(parsed.zone) === null) continue;
+    if (own === null || parsed.zone !== undefined) return joined;
   }
   return null;
 }
