@@ -28,7 +28,7 @@ function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
 }
 
 /** Where the keyboard is inside the pane: the reply composer, the live terminal, or neither. */
-function paneFocusOf(element: Element | null): CanopyPaneFocus {
+export function paneFocusOf(element: Element | null): CanopyPaneFocus {
   if (!element) return null;
   if (element.closest("[data-canopy-detail] .cm-editor")) return "composer";
   if (element.closest("[data-canopy-detail] [data-canopy-terminal]")) return "terminal";
@@ -97,6 +97,12 @@ export function useCanopyInboxKeyboard({
         null);
   // The pane's own run, assistant or worker: where a step from the search starts.
   const shownKey = selectedAssistant?.id ?? keyOfWorker(focusedItem?.runId);
+  // What the search's keys act on. An assistant in the pane, or no worker row
+  // ahead of the assistants: the assistant, never a worker the person can't see.
+  const searchAssistant =
+    selectedAssistant ??
+    (listed.length === 0 && shownAssistants.length > 0 ? shownAssistants[0]! : null);
+  const searchSelected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
   // Down off the bottom of the inbox, from the row with that key: on to the Trash.
   const pastEnd = (key: string | null, event: KeyboardEvent<HTMLElement>): boolean => {
     if (key === null || navigation[navigation.length - 1]?.key !== key) return false;
@@ -277,13 +283,8 @@ export function useCanopyInboxKeyboard({
       return;
     }
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-    // An assistant in the pane, or no worker row ahead of the assistants: the
-    // keys go to the assistant, never to a worker the person can't see.
-    const toAssistant =
-      selectedAssistant ??
-      (listed.length === 0 && shownAssistants.length > 0 ? shownAssistants[0]! : null);
-    if (plain && toAssistant !== null) {
-      const target = toAssistant;
+    if (plain && searchAssistant !== null) {
+      const target = searchAssistant;
       if (event.key === "Tab" || (event.key === "ArrowDown" && listed.length === 0)) {
         event.preventDefault();
         event.stopPropagation();
@@ -296,7 +297,7 @@ export function useCanopyInboxKeyboard({
         return;
       }
     }
-    const selected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
+    const selected = searchSelected;
     // Nothing in the inbox: down from the search is down into the Trash.
     if (plain && event.key === "ArrowDown" && navigation.length === 0 && onPastEnd?.()) {
       event.preventDefault();
@@ -334,5 +335,12 @@ export function useCanopyInboxKeyboard({
     }
   };
 
-  return { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown };
+  return {
+    onAssistantKeyDown,
+    onAgentStepKeyDownCapture,
+    onNavigationKeyDown,
+    onSearchKeyDown,
+    /** The run whose terminal Enter in the search goes to, if any. */
+    searchOpens: searchAssistant === null ? searchSelected : null,
+  };
 }

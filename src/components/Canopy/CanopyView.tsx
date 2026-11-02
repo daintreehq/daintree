@@ -40,7 +40,7 @@ import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { isWorkerEntry } from "./canopyInboxProjection";
-import { CanopyCard, canopyCardDomId } from "./CanopyCard";
+import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
@@ -65,6 +65,7 @@ import { useCanopyInboxFocus } from "./useCanopyInboxFocus";
 import { useCanopyInboxUndo } from "./useCanopyInboxUndo";
 import { useCanopyInboxActions } from "./useCanopyInboxActions";
 import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
+import { canopyCardKeys, useCanopyKeyboardPlace } from "./useCanopyKeyboardPlace";
 import {
   NO_CANOPY_REPLY,
   isCanopyReplyTarget,
@@ -547,6 +548,7 @@ function CanopyShortcuts() {
           label: "In a reply: send, then go to the next agent below that needs you or is unread",
         },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
+        { keys: [REPLY_GO_TO_TERMINAL], label: "In a reply: go to terminal" },
         { keys: ["Escape"], label: "Back to the list from a reply" },
         ...(paneClose
           ? [
@@ -1067,30 +1069,37 @@ function CanopyInbox({
     else focusAssistantNow(last.item.id);
   };
 
-  const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
-    useCanopyInboxKeyboard({
-      visible,
-      listed,
-      shownAssistants,
-      navigation: projection.navigation,
-      focusedIndex,
-      activeIndex,
-      focusedItem,
-      selectedAssistant,
-      searchRef,
-      detailRef,
-      selectNow,
-      focusCardNow,
-      openPaneNow,
-      focusAssistantNow,
-      selectAssistant,
-      openAssistant,
-      onOpen: handlers.onOpen,
-      askRename,
-      toggleRead,
-      markAllRead,
-      onPastEnd: () => trashRef.current?.focusHeader() ?? false,
-    });
+  const {
+    onAssistantKeyDown,
+    onAgentStepKeyDownCapture,
+    onNavigationKeyDown,
+    onSearchKeyDown,
+    searchOpens,
+  } = useCanopyInboxKeyboard({
+    visible,
+    listed,
+    shownAssistants,
+    navigation: projection.navigation,
+    focusedIndex,
+    activeIndex,
+    focusedItem,
+    selectedAssistant,
+    searchRef,
+    detailRef,
+    selectNow,
+    focusCardNow,
+    openPaneNow,
+    focusAssistantNow,
+    selectAssistant,
+    openAssistant,
+    onOpen: handlers.onOpen,
+    askRename,
+    toggleRead,
+    markAllRead,
+    onPastEnd: () => trashRef.current?.focusHeader() ?? false,
+  });
+  // The keys the open card names are the ones that act from where the keyboard is.
+  const keyboardAt = useCanopyKeyboardPlace(isOpen);
 
   // What the panel can say about another host before it has its agents.
   const hostSummary =
@@ -1710,6 +1719,7 @@ function CanopyInbox({
                   onChange={(event) => setQuery(event.target.value)}
                   onClear={() => setQuery("")}
                   onKeyDown={onSearchKeyDown}
+                  data-canopy-search=""
                   placeholder="Search agents and their terminals"
                   aria-label="Search agents"
                   role="combobox"
@@ -2150,6 +2160,11 @@ function CanopyInbox({
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}
+                      keysFrom={canopyCardKeys(
+                        keyboardAt,
+                        focusedItem.runId,
+                        searchOpens?.runId ?? null
+                      )}
                       reading={!readerOff}
                       reconnecting={
                         everyHost
