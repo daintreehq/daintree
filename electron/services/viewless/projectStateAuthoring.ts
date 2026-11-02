@@ -106,12 +106,18 @@ export async function backgroundViewlessTerminal(
   writer: ProjectStateWriter,
   projectId: string,
   terminalId: string,
-  /** Asked when the queued write runs: false leaves the layout as it is (#16171). */
-  isStillWanted: () => boolean = () => true
+  /**
+   * Asked when the queued write runs: false leaves the layout and the
+   * host-started record as they are (#16171). Without it both change at once.
+   */
+  isStillWanted?: () => boolean
 ): Promise<void> {
-  noteHostStartedTerminalBackgrounded(projectId, terminalId);
+  if (!isStillWanted) noteHostStartedTerminalBackgrounded(projectId, terminalId);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
-    if (!isStillWanted()) return null;
+    if (isStillWanted) {
+      if (!isStillWanted()) return null;
+      noteHostStartedTerminalBackgrounded(projectId, terminalId);
+    }
     if (!existing || !Array.isArray(existing.terminals)) return null;
     const restoreLocation = existing.terminals.find(
       (terminal) => terminal.id === terminalId
@@ -146,12 +152,18 @@ export async function forgetViewlessTerminal(
   writer: ProjectStateWriter,
   projectId: string,
   terminalId: string,
-  /** Asked when the queued write runs: false leaves the layout as it is (#16171). */
-  isStillWanted: () => boolean = () => true
+  /**
+   * Asked when the queued write runs: false leaves the layout and the
+   * host-started record as they are (#16171). Without it both change at once.
+   */
+  isStillWanted?: () => boolean
 ): Promise<void> {
-  forgetHostStartedTerminals(projectId, [terminalId]);
+  if (!isStillWanted) forgetHostStartedTerminals(projectId, [terminalId]);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
-    if (!isStillWanted()) return null;
+    if (isStillWanted) {
+      if (!isStillWanted()) return null;
+      forgetHostStartedTerminals(projectId, [terminalId]);
+    }
     if (!existing || !Array.isArray(existing.terminals)) return null;
     if (!existing.terminals.some((terminal) => terminal.id === terminalId)) return null;
     const tabGroups = withoutGroupMember(existing.tabGroups, terminalId);

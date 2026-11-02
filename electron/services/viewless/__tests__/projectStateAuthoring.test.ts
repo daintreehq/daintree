@@ -190,6 +190,9 @@ describe("backgroundViewlessTerminal (#15982)", () => {
       },
     };
 
+    await recordViewlessTerminal(writerOver(saved).writer, "proj-1", SNAPSHOT);
+    const recorded = structuredClone(hostStartedTerminals("proj-1"));
+
     const backgrounding = backgroundViewlessTerminal(writer, "proj-1", "t-1", () => wanted);
     const forgetting = forgetViewlessTerminal(writer, "proj-1", "t-1", () => wanted);
     wanted = false;
@@ -197,5 +200,7 @@ describe("backgroundViewlessTerminal (#15982)", () => {
     await Promise.all([backgrounding, forgetting]);
 
     expect(state).toBe(saved);
+    expect(hostStartedTerminals("proj-1")).toEqual(recorded);
+    expect(startedIds("proj-1")).toEqual(["t-1"]);
   });
 });
