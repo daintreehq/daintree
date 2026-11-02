@@ -8,7 +8,7 @@ import type {
   ScheduledRunOrigin,
 } from "../../../../shared/types/scheduledRuns.js";
 import { createSchedule, occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
-import { SCHEDULE_ASSISTANT_AGENT_ID } from "../../../../shared/config/scheduleAssistant.js";
+import { SCHEDULE_ASSISTANT_AGENT_ID } from "../../../../shared/utils/scheduledRuns.js";
 import {
   launchScheduledRun,
   ScheduledLaunchUnansweredError,

@@ -219,7 +219,6 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       terminalId: "terminal-reserved",
       prompt: "Pick a host and run the nightly checks.",
       scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
-      handbackCode: "k7f3qa",
     };
     // At its prompt, working on the run's prompt rather than answering a greeting.
     screens = [
@@ -243,7 +242,6 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       terminalId: "terminal-reserved",
       prompt: scheduled.prompt,
       scheduledRun: scheduled.scheduledRun,
-      handbackCode: "k7f3qa",
     });
   });
 

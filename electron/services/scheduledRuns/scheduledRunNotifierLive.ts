@@ -9,7 +9,7 @@ import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
 import {
   isScheduleAssistantAgentId,
   SCHEDULE_ASSISTANT_NAME,
-} from "../../../shared/config/scheduleAssistant.js";
+} from "../../../shared/utils/scheduledRuns.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import {
   describeScheduledRunAttention,

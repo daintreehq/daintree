@@ -14,7 +14,7 @@ import type {
 import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { pathComparisonKey } from "../../../shared/utils/path.js";
-import { isScheduleAssistantAgentId } from "../../../shared/config/scheduleAssistant.js";
+import { isScheduleAssistantAgentId } from "../../../shared/utils/scheduledRuns.js";
 import type { ScheduledRunRecorder } from "./ScheduledRunRecorder.js";
 import { reserveScheduledLaunch } from "./scheduledRunAdmission.js";
 import type { ArmedScheduledRun } from "./ScheduledRunDonePolicy.js";

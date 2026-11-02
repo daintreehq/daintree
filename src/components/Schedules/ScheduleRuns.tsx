@@ -12,7 +12,7 @@ import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { machineTimeZone } from "@shared/utils/cron";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
-import { SCHEDULE_ASSISTANT_NAME } from "@shared/config/scheduleAssistant";
+import { SCHEDULE_ASSISTANT_NAME } from "@shared/utils/scheduledRuns";
 import { AgentMark } from "./ScheduleList";
 import { RunGlyph } from "./RunGlyph";
 import { lastRunWords } from "./lastRunWords";

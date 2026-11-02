@@ -31,15 +31,14 @@ export interface AssistantLaunchRequest {
   agentId?: string;
   startedBy: HelpSessionStartedBy;
   /**
-   * A schedule's run (#16169): its reserved terminal id, and its prompt with
-   * the run's handback instruction, in place of the hub's greeting. The spawn
-   * carries the run so the spawn handler registers it.
+   * A schedule's run (#16169): its reserved terminal id, and its prompt in
+   * place of the hub's greeting. The spawn adds the run's handback instruction
+   * and carries the run, so the spawn handler registers it.
    */
   scheduled?: {
     terminalId: string;
     prompt: string;
     scheduledRun: ScheduledRunRef;
-    handbackCode: string;
   };
 }
 
@@ -102,8 +101,8 @@ export interface AssistantLaunchDeps {
       env: Record<string, string>;
       prompt: string;
       agentLaunchFlags: string[];
+      /** A schedule's run, whose handback instruction the spawn adds to `prompt`. */
       scheduledRun?: ScheduledRunRef;
-      handbackCode?: string;
     }
   ): Promise<boolean>;
   /** Whether the session is still the one running in its lane. */
@@ -199,9 +198,7 @@ export async function startAssistantWithoutView(
       env,
       prompt: scheduled?.prompt ?? HUB_STARTED_ASSISTANT_GREETING,
       agentLaunchFlags: await deps.launchFlags(agentId).catch(() => []),
-      ...(scheduled
-        ? { scheduledRun: scheduled.scheduledRun, handbackCode: scheduled.handbackCode }
-        : {}),
+      ...(scheduled ? { scheduledRun: scheduled.scheduledRun } : {}),
     })
     .catch(() => false);
   if (!spawned) {

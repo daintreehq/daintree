@@ -9,7 +9,6 @@ import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import type { ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 import type { ScheduledRunRecorder, ScheduledRunsChange } from "./ScheduledRunRecorder.js";
 import { scheduledRunAttention } from "./scheduledRunAttention.js";
-import { setAssistantWorkerSink, workerLaunchesIn } from "./assistantWorkerLaunches.js";
 
 /** The parts of `PtyClient` the run history follows. */
 export interface ScheduledRunFactSource {
@@ -94,10 +93,14 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
  */
 async function followAssistantWorkers(history: ScheduledRunRecorder): Promise<void> {
   try {
-    const [{ helpSessionService }, { projectStore }] = await Promise.all([
-      import("../HelpSessionService.js"),
-      import("../ProjectStore.js"),
-    ]);
+    // Loaded here, never at boot: a new static import from this module would
+    // change how the main bundle's eagerly loaded chunks are grouped.
+    const [{ setAssistantWorkerSink, workerLaunchesIn }, { helpSessionService }, { projectStore }] =
+      await Promise.all([
+        import("./assistantWorkerLaunches.js"),
+        import("../HelpSessionService.js"),
+        import("../ProjectStore.js"),
+      ]);
     setAssistantWorkerSink((answer) => {
       const runId =
         answer.runId ?? helpSessionService.getScheduledRunOf(answer.helpSessionId)?.runId;
@@ -307,5 +310,4 @@ function pushScheduledRunsChanged(change: ScheduledRunsChange): void {
 export function _resetScheduledRunRecorderForTest(): void {
   recorder = null;
   creating = null;
-  setAssistantWorkerSink(null);
 }

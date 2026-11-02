@@ -14,7 +14,7 @@ import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { isScheduleAssistantAgentId } from "@shared/config/scheduleAssistant";
+import { isScheduleAssistantAgentId } from "@shared/utils/scheduledRuns";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
 import type { ProjectSchedulesState } from "./useProjectSchedules";
 import type { LastRunsState } from "./useLastRuns";

@@ -1,6 +1,6 @@
 import type { ScheduledRunInboxItem } from "@shared/types/ipc/scheduledRuns";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { SCHEDULE_ASSISTANT_NAME } from "@shared/config/scheduleAssistant";
+import { SCHEDULE_ASSISTANT_NAME } from "@shared/utils/scheduledRuns";
 import { machineTimeZone } from "@shared/utils/cron";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { lastRunWords } from "./lastRunWords";

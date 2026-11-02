@@ -3,7 +3,7 @@ import { createSchedule } from "../scheduledRuns.js";
 import { scheduleIssues } from "../scheduleValidation.js";
 import { parseCron } from "../cron.js";
 import type { Schedule } from "../../types/scheduledRuns.js";
-import { SCHEDULE_ASSISTANT_AGENT_ID } from "../../config/scheduleAssistant.js";
+import { SCHEDULE_ASSISTANT_AGENT_ID } from "../scheduledRuns.js";
 
 const NOW = Date.UTC(2026, 10, 1, 12);
 

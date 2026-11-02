@@ -1,6 +1,5 @@
-// Import-free on purpose: the boot graph reaches it through the run history,
-// and the MCP server's modules reach it too, so an import here would tie the
-// two together at load.
+// Import-free on purpose: the MCP server, host control and the run history
+// share it, and it must tie none of them to another in the main bundle.
 
 /**
  * The tools whose answer names an agent it launched, in a `terminalId`. A

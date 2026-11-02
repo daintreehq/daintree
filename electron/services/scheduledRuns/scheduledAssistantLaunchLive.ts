@@ -1,5 +1,4 @@
 import type { Project } from "../../../shared/types/project.js";
-import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import type {
   ScheduledAssistantLaunchRequest,
   ScheduledAssistantLaunchResult,
@@ -28,7 +27,6 @@ export async function launchScheduledAssistantLive(
       import("../HelpSessionService.js"),
     ]);
   const deps = await liveAssistantLaunchDeps();
-  const handbackCode = mintHandbackCode();
   const { scheduleId, runId } = request.scheduledRun;
   const result = await startAssistantWithoutView(
     {
@@ -36,9 +34,8 @@ export async function launchScheduledAssistantLive(
       startedBy: { kind: "schedule", scheduleId, runId },
       scheduled: {
         terminalId: request.terminalId,
-        prompt: appendHandbackInstruction(request.prompt, handbackCode, "run"),
+        prompt: request.prompt,
         scheduledRun: request.scheduledRun,
-        handbackCode,
       },
     },
     {

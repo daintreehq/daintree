@@ -32,7 +32,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | The macOS LaunchAgent, keeping it current, its status and repair (`window.electron.schedules.osJobStatus`, `repairOsJob`) | `electron/services/scheduledRuns/launchAgentScheduleJob.ts`, `ScheduleOsJobService.ts`, `scheduleOsJobLive.ts`, `src/components/Schedules/ScheduleOsJobStatus.tsx`, `useScheduleOsJob.ts` |
 | The Linux `systemd --user` timer, its launcher and Daintree's unit | `electron/services/scheduledRuns/systemdScheduleJob.ts`, `electron/utils/systemdUnit.ts` (shared with Host mode's unit) |
 | The Windows Task Scheduler task | `electron/services/scheduledRuns/taskSchedulerScheduleJob.ts` |
-| A schedule that runs the Daintree Assistant: its id, its start in main, the workers it launches | `shared/config/scheduleAssistant.ts`, `electron/services/scheduledRuns/scheduledAssistantLaunchLive.ts`, `electron/services/assistants/assistantLaunch.ts`, `electron/services/scheduledRuns/assistantWorkerLaunches.ts` |
+| A schedule that runs the Daintree Assistant: its id, its start in main, the workers it launches | `shared/utils/scheduledRuns.ts`, `electron/services/scheduledRuns/scheduledAssistantLaunchLive.ts`, `electron/services/assistants/assistantLaunch.ts`, `electron/services/scheduledRuns/assistantWorkerLaunches.ts` |
 
 ## Boundaries
 

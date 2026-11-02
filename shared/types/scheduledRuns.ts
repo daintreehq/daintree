@@ -2,11 +2,11 @@ import { z } from "zod";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "./handback.js";
 import { parseCron, validateTimeZone } from "../utils/cron.js";
 import {
+  isScheduleAssistantAgentId,
   occurrenceKeyFor,
   outcomeForEvidence,
   SCHEDULED_RUN_WORKERS_MAX,
 } from "../utils/scheduledRuns.js";
-import { isScheduleAssistantAgentId } from "../config/scheduleAssistant.js";
 
 // The contract for scheduled agent runs (#15973). docs/architecture/scheduled-runs.md
 // says which child writes each part; records are complete on disk, and defaults

@@ -540,14 +540,16 @@ export async function spawnHostAssistant(
     agentLaunchFlags: string[];
     /** Reopen this exact conversation instead of starting one (#14159); never "the latest". */
     resumeAgentSessionId?: string;
-    /** A schedule's run (#16169), which the spawn handler registers from this spawn. */
+    /**
+     * A schedule's run (#16169): the prompt gets the run's handback
+     * instruction, and the spawn handler registers the run from this spawn.
+     */
     scheduledRun?: ScheduledRunRef;
-    /** The run's handback code, already in `prompt` with the run's instruction. */
-    handbackCode?: string;
   },
   deps: ViewlessDeps
 ): Promise<boolean> {
   const { agentId } = spec;
+  const handbackCode = spec.scheduledRun !== undefined ? mintHandbackCode() : undefined;
   const { settings, ccrPresets, projectPresets, presetInventory } = await readPresetSources(
     agentId,
     project.path,
@@ -564,7 +566,10 @@ export async function spawnHostAssistant(
     presetInventory,
     options: {
       env: spec.env,
-      prompt: spec.prompt,
+      prompt:
+        handbackCode !== undefined
+          ? appendHandbackInstruction(spec.prompt, handbackCode, "run")
+          : spec.prompt,
       ...(spec.agentLaunchFlags.length > 0 ? { agentLaunchFlags: spec.agentLaunchFlags } : {}),
     },
     shellDialect: deps.hostPlatform.shellDialect,
@@ -622,7 +627,7 @@ export async function spawnHostAssistant(
         agentPresetId: plan.preset?.id,
         agentPresetColor: plan.preset?.color,
         originalAgentPresetId: plan.preset?.id,
-        ...(spec.handbackCode !== undefined ? { handbackCode: spec.handbackCode } : {}),
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
         ...(spec.scheduledRun !== undefined ? { scheduledRun: spec.scheduledRun } : {}),
       },
     ]);

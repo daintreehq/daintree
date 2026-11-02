@@ -20,7 +20,7 @@ import {
   isScheduleAssistantAgentId,
   SCHEDULE_ASSISTANT_AGENT_ID,
   SCHEDULE_ASSISTANT_NAME,
-} from "@shared/config/scheduleAssistant";
+} from "@shared/utils/scheduledRuns";
 import { machineTimeZone, nextCronOccurrences } from "@shared/utils/cron";
 import { describeParsedCron } from "@shared/utils/cronDescription";
 import { createSchedule, validateCadence } from "@shared/utils/scheduledRuns";

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
 import type { Schedule } from "@shared/types/scheduledRuns";
-import { SCHEDULE_ASSISTANT_AGENT_ID } from "@shared/config/scheduleAssistant";
+import { SCHEDULE_ASSISTANT_AGENT_ID } from "@shared/utils/scheduledRuns";
 
 // No jest-dom in this repo — plain DOM reads only.
 
