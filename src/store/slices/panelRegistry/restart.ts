@@ -1994,9 +1994,7 @@ async function respawnAgentOnPreset(
         baseCommand
       );
       if (!resumeCommand) {
-        throw new Error(
-          `Couldn't build the command to reopen the conversation on ${keptOnName}.`
-        );
+        throw new Error(`Couldn't build the command to reopen the conversation on ${keptOnName}.`);
       }
       spawnCommand = resumeCommand;
     }
