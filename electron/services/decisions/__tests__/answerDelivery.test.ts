@@ -1029,7 +1029,13 @@ describe("AnswerDelivery", () => {
       ],
       ["the question named no session", {}, { agent_session_id: null }, "resume_no_session", 0],
       ["its worktree was deleted", { directories: [] }, {}, "resume_worktree_gone", 0],
-      ["its agent's resume isn't proven", {}, { agent_kind: "gemini" }, "resume_unsupported_agent", 0],
+      [
+        "its agent's resume isn't proven",
+        {},
+        { agent_kind: "gemini" },
+        "resume_unsupported_agent",
+        0,
+      ],
     ] as const)(
       "keeps the answer and asks for attention with the reason when %s",
       async (_label, resume, origin, reason, launched) => {
@@ -1041,7 +1047,10 @@ describe("AnswerDelivery", () => {
         await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
         const row = (await h.question(Q1))!;
         expect(row.error_code).toBe(reason);
-        expect(parseAnswers(row.answers_json)[0]).toMatchObject({ deliver: true, delivered: false });
+        expect(parseAnswers(row.answers_json)[0]).toMatchObject({
+          deliver: true,
+          delivered: false,
+        });
         expect(h.launches).toHaveLength(launched);
         expect(h.client.submitted).toEqual([]);
         // The phone hears the library's own code; the reason is kept here.

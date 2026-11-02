@@ -5,7 +5,10 @@ import {
   type QuestionOrigin,
   type TerminalTarget,
 } from "@daintreehq/decisions-client";
-import { getEffectiveAgentConfig, getEffectiveAgentIds } from "../../../shared/config/agentRegistry.js";
+import {
+  getEffectiveAgentConfig,
+  getEffectiveAgentIds,
+} from "../../../shared/config/agentRegistry.js";
 import type { NotifyTerminalInfo } from "../mcp-server/terminalNotify.js";
 import type { AgentPromptWaitResult } from "../viewless/agentPromptWait.js";
 import type {
@@ -271,7 +274,9 @@ export class DaintreeResume {
     return there ? null : "resume_worktree_gone";
   }
 
-  private async resume(origin: QuestionOrigin): Promise<{ target: TerminalTarget; ready: boolean }> {
+  private async resume(
+    origin: QuestionOrigin
+  ): Promise<{ target: TerminalTarget; ready: boolean }> {
     this.throwIfStopped();
     const key = originKey(origin);
     let attempt = this.attempts.get(key);
@@ -444,7 +449,8 @@ export function withResumeReasons<T extends LocalStore>(store: T, resume: Daintr
     ) {
       const row = await store.getQuestion(questionId);
       const reason = row ? resume.reasonFor(row.origin) : null;
-      if (reason !== null) return store.updateQuestion(questionId, { ...patch, error_code: reason });
+      if (reason !== null)
+        return store.updateQuestion(questionId, { ...patch, error_code: reason });
     }
     return store.updateQuestion(questionId, patch);
   };

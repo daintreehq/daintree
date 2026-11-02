@@ -405,9 +405,15 @@ describe("withResumeReasons", () => {
     const wrapped = withResumeReasons(store, h.resume);
     await h.tryResume(ORIGIN);
 
-    await wrapped.updateQuestion("q1", { delivery_status: "needs-attention", error_code: "pane_gone" });
+    await wrapped.updateQuestion("q1", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
     // Nothing refused this run's resume, so its generic code stands.
-    await wrapped.updateQuestion("q2", { delivery_status: "needs-attention", error_code: "relaunched" });
+    await wrapped.updateQuestion("q2", {
+      delivery_status: "needs-attention",
+      error_code: "relaunched",
+    });
     // Codes a resume didn't decide are never touched.
     await wrapped.updateQuestion("q1", {
       delivery_status: "needs-attention",
@@ -433,7 +439,10 @@ describe("withResumeReasons", () => {
     await h.tryResume(ORIGIN);
     h.resume.endPass();
 
-    await wrapped.updateQuestion("q1", { delivery_status: "needs-attention", error_code: "pane_gone" });
+    await wrapped.updateQuestion("q1", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
     expect(updates).toEqual([
       ["q1", { delivery_status: "needs-attention", error_code: "pane_gone" }],
     ]);
