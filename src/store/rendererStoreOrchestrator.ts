@@ -21,6 +21,7 @@ import { subscribeRecentDictationsSync } from "@/services/recentDictations";
 import { forgetComposerSurfacePane, trackComposerSurface } from "@/lib/composerSurface";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
+import { observePanelFailures, usePanelFailureStore } from "./panelFailureStore";
 import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
@@ -435,6 +436,20 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
+  // 2b. Failure occurrences for the red pane edge (#16140): every panel record
+  //     write is read for the failures it shows, here rather than in the pane,
+  //     so a failure that ends and comes back on an unmounted tab still counts
+  //     as new. Seeded with what the store already holds.
+  observePanelFailures(usePanelStore.getState().panelsById);
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.panelsById,
+        (panelsById, prevPanelsById) => observePanelFailures(panelsById, prevPanelsById)
+      )
+    )
+  );
+
   // 3. Terminal-removal cleanup: when terminals are removed, clean up
   //    input store, console capture store, and worktree focus tracking.
   //    Selector pulls both `panelIds` (for diff) and `panelsById` (to read
@@ -470,6 +485,8 @@ export function initStoreOrchestrator(): () => void {
             usePluginPanelBadgeStore.getState().removePanel(removedId);
             // Activity reports and their seen marks, keyed the same way (#13820).
             usePluginPanelActivityStore.getState().removePanel(removedId);
+            // Its failure occurrences and their seen marks (#16140).
+            usePanelFailureStore.getState().removePanel(removedId);
             // A park or snooze on its attention row (#13821).
             usePluginPanelAttentionStore.getState().removePanel(removedId);
             // Header button states are keyed the same way and leak the same way.

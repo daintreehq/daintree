@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { terminalClient } from "@/clients";
+import { usePanelFailureStore } from "@/store/panelFailureStore";
 import type { TerminalSubmitStatusState } from "@shared/types";
 
 /** What the pane is currently showing about its submit lane. `null` is the
@@ -38,6 +39,9 @@ export function useTerminalSubmitStatus(
   useEffect(() => {
     return terminalClient.onSubmitStatus((payload) => {
       if (payload.id !== terminalId) return;
+      // Each failed payload is its own submit, so its own failure for the
+      // pane's red edge (#16140), even straight after another.
+      if (payload.state === "failed") usePanelFailureStore.getState().noteSubmitFailure(terminalId);
       setTagged(
         payload.state === "settled"
           ? null
