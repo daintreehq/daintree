@@ -3,6 +3,10 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
+import {
+  GridGroupAttentionContext,
+  type GridGroupAttention,
+} from "@/components/Panel/gridGroupAttention";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import {
@@ -109,6 +113,8 @@ type DevServerState = {
   stop: ReturnType<typeof vi.fn>;
   restart: ReturnType<typeof vi.fn>;
   isRestarting: boolean;
+  phaseLabel?: "Compiling";
+  stuckTier?: number;
 };
 
 const {
@@ -304,26 +310,37 @@ function latestToolbarProps(): MockToolbarProps {
 const headerContentPointerDownSpy = vi.hoisted(() => vi.fn());
 const contentPanelPropsSpy = vi.hoisted(() => vi.fn());
 
-vi.mock("@/components/Panel", () => ({
-  ContentPanel: (props: {
-    children: React.ReactNode;
-    headerContent?: React.ReactNode;
-    showRestoreControl?: boolean;
-  }) => {
-    contentPanelPropsSpy(props);
-    const { children, headerContent } = props;
-    return (
-      <div data-testid="content-panel">
-        {headerContent && (
-          <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
-            {headerContent}
-          </div>
-        )}
-        {children}
-      </div>
-    );
-  },
-}));
+vi.mock("@/components/Panel", async () => {
+  // Reads its tab group's edge the way the real ContentPanel does.
+  const { useGridGroupAttention } = await import("@/components/Panel/gridGroupAttention");
+  return {
+    ContentPanel: (props: {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      children: React.ReactNode;
+      headerContent?: React.ReactNode;
+      showRestoreControl?: boolean;
+    }) => {
+      contentPanelPropsSpy(props);
+      const attention = useGridGroupAttention(props.id, props.location ?? "grid");
+      const { children, headerContent } = props;
+      return (
+        <div
+          data-testid="content-panel"
+          data-group-ambient={attention?.ambientAgentState}
+          data-group-failed={attention?.hiddenTabFailed || undefined}
+        >
+          {headerContent && (
+            <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
+              {headerContent}
+            </div>
+          )}
+          {children}
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -721,6 +738,73 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.stop).not.toHaveBeenCalled();
     expect(devServerStateRef.current.restart).toHaveBeenCalledTimes(1);
     expect(terminalStoreState.setBrowserUrl).toHaveBeenCalledWith("dev-preview-panel-1", "");
+  });
+
+  describe("tab group edges (#16151)", () => {
+    const inGroup = (attention: Partial<GridGroupAttention>, props = {}) => (
+      <GridGroupAttentionContext.Provider
+        value={{
+          panelId: baseProps.id,
+          ambientAgentState: undefined,
+          hiddenTabFailed: false,
+          ...attention,
+        }}
+      >
+        <DevPreviewPane {...baseProps} {...props} />
+      </GridGroupAttentionContext.Provider>
+    );
+    const panel = () => screen.getByTestId("content-panel");
+    const frameClass = () => contentPanelPropsSpy.mock.lastCall?.[0].className;
+
+    it("draws a hidden tab's ask and failure while it shows", () => {
+      render(inGroup({ ambientAgentState: "waiting", hiddenTabFailed: true }));
+      expect(panel().getAttribute("data-group-ambient")).toBe("waiting");
+      expect(panel().getAttribute("data-group-failed")).toBe("true");
+    });
+
+    it("takes no edge meant for another tab", () => {
+      render(
+        <GridGroupAttentionContext.Provider
+          value={{ panelId: "other", ambientAgentState: "waiting", hiddenTabFailed: true }}
+        >
+          <DevPreviewPane {...baseProps} />
+        </GridGroupAttentionContext.Provider>
+      );
+      expect(panel().hasAttribute("data-group-ambient")).toBe(false);
+      expect(panel().hasAttribute("data-group-failed")).toBe(false);
+    });
+
+    it("holds back its own compiling or stuck frame while the group's amber or red edge shows", () => {
+      for (const own of [
+        { phaseLabel: "Compiling" as const, frame: "panel-state-compiling" },
+        { stuckTier: 1, frame: "panel-state-working" },
+      ]) {
+        devServerStateRef.current = { ...devServerStateRef.current, status: "starting", ...own };
+        for (const [attention, kept] of [
+          [{ ambientAgentState: "waiting" }, false],
+          [{ hiddenTabFailed: true }, false],
+          [{ ambientAgentState: "working" }, true],
+          [{}, true],
+        ] as const) {
+          const { unmount } = render(inGroup(attention));
+          expect(frameClass(), JSON.stringify({ own, attention })).toBe(
+            kept ? own.frame : undefined
+          );
+          unmount();
+        }
+        // Where the group draws no edge, the preview's own frame stays.
+        for (const props of [{ isMaximized: true }, { isMultiPanelGrid: false }]) {
+          const { unmount } = render(inGroup({ hiddenTabFailed: true }, props));
+          expect(frameClass(), JSON.stringify(props)).toBe(own.frame);
+          unmount();
+        }
+        devServerStateRef.current = {
+          ...devServerStateRef.current,
+          phaseLabel: undefined,
+          stuckTier: 0,
+        };
+      }
+    });
   });
 
   describe("viewport device emulation", () => {

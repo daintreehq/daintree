@@ -12,14 +12,31 @@ import type { DiffChangeSetEntry } from "@shared/types/git";
 
 // A fragment, so the toolbar stays a sibling of the keydown host rather than
 // wrapping it — the stepping shortcuts bubble through the same subtree as before.
-vi.mock("@/components/Panel/ContentPanel", () => ({
-  ContentPanel: (props: { toolbar?: ReactNode; children?: ReactNode }) => (
-    <>
-      {props.toolbar}
-      {props.children}
-    </>
-  ),
-}));
+// It reads its tab group's edge the way the real ContentPanel does.
+vi.mock("@/components/Panel/ContentPanel", async () => {
+  const { useGridGroupAttention } = await import("@/components/Panel/gridGroupAttention");
+  return {
+    ContentPanel: (props: {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      toolbar?: ReactNode;
+      children?: ReactNode;
+    }) => {
+      const attention = useGridGroupAttention(props.id, props.location ?? "grid");
+      return (
+        <>
+          <span
+            data-testid="group-edge"
+            data-group-ambient={attention?.ambientAgentState}
+            data-group-failed={attention?.hiddenTabFailed || undefined}
+          />
+          {props.toolbar}
+          {props.children}
+        </>
+      );
+    },
+  };
+});
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -178,6 +195,7 @@ function sourceEnabledCalls(): boolean[] {
 }
 
 import { DiffPane } from "../DiffPane";
+import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
 import { actionService } from "@/services/ActionService";
 
 const PANEL_ID = "diff-1";
@@ -497,6 +515,38 @@ describe("DiffPane — file stepping", () => {
       "modified",
       narrow[0]!.viewedKey
     );
+  });
+});
+
+describe("DiffPane — tab group edges (#16151)", () => {
+  function inGroup(panelId: string) {
+    return (
+      <GridGroupAttentionContext.Provider
+        value={{ panelId, ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <DiffPane
+          id={PANEL_ID}
+          title="pane"
+          isFocused={false}
+          location="grid"
+          worktreeId={WORKTREE_ID}
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </GridGroupAttentionContext.Provider>
+    );
+  }
+
+  it("draws its tab group's edge for a hidden tab's ask and failure", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    const { rerender } = render(inGroup(PANEL_ID));
+    const edge = () => screen.getByTestId("group-edge");
+    expect(edge().getAttribute("data-group-ambient")).toBe("waiting");
+    expect(edge().getAttribute("data-group-failed")).toBe("true");
+
+    rerender(inGroup("other"));
+    expect(edge().hasAttribute("data-group-ambient")).toBe(false);
+    expect(edge().hasAttribute("data-group-failed")).toBe(false);
   });
 });
 
