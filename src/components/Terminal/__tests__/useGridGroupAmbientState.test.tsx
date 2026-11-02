@@ -261,7 +261,7 @@ describe("useGridGroupHiddenFailure", () => {
       const working = (id: string) => tab(id, { agentState: "working" });
       const rendered: boolean[] = [];
       let panels: PanelInstance[] = [browser, working("a"), working("b")];
-      const { rerender } = renderHook(
+      const { rerender, unmount } = renderHook(
         ({ tabs }) => {
           const shown = useGridGroupHiddenFailure(tabs, "shown");
           rendered.push(shown);
@@ -292,6 +292,23 @@ describe("useGridGroupHiddenFailure", () => {
       rendered.length = 0;
       write([browser, working("a"), working("b")], 0);
       expect(rendered).not.toContain(true);
+
+      // A tab joining keeps the first one's clock; one coming back starts over.
+      write([browser, erroring("a"), working("b")], 600);
+      write([browser, erroring("a"), erroring("b")], 250);
+      expect(rendered.at(-1)).toBe(true);
+      write([browser, working("a"), working("b")], 0);
+      write([browser, erroring("a"), working("b")], 700);
+      expect(rendered.at(-1)).toBe(false);
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(rendered.at(-1)).toBe(true);
+
+      // Unmounting with b's clock still running leaves nothing behind.
+      write([browser, erroring("a"), erroring("b")], 0);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
