@@ -101,21 +101,8 @@ export function setupIdentityListeners(): DisposableStore {
         // events are already dropped above by the host's last observation, so following
         // the host is the safer of the two ways to be wrong: a count that
         // disagrees refuses the delivery, a count that lies permits it.
-        const observedIncarnation = data.agentIncarnation;
-        if (
-          observedIncarnation !== undefined &&
-          observedIncarnation !== terminal.agentIncarnation
-        ) {
-          usePanelStore.setState((st) => {
-            const panel = st.panelsById[terminalId];
-            if (!panel || !isPtyPanel(panel)) return st;
-            return {
-              panelsById: {
-                ...st.panelsById,
-                [terminalId]: { ...panel, agentIncarnation: observedIncarnation },
-              },
-            };
-          });
+        if (data.agentIncarnation !== undefined) {
+          usePanelStore.getState().setAgentIncarnation(terminalId, data.agentIncarnation);
         }
 
         withTerminalService((service) => service.setAgentState(terminalId, state), terminalId);

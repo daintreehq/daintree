@@ -121,6 +121,7 @@ export const createCorePanelActions = (
   | "updateLastObservedTitle"
   | "updateAgentState"
   | "noteAgentObservation"
+  | "setAgentIncarnation"
   | "updateActivity"
   | "updateLastCommand"
   | "updateVisibility"
@@ -484,6 +485,17 @@ export const createCorePanelActions = (
       if (isHydrationBatchActive()) deferPersistToBatchEnd();
       else saveNormalized(panelsById, state.panelIds);
       return { panelsById };
+    });
+  },
+
+  setAgentIncarnation: (id, agentIncarnation) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      if (terminal.agentIncarnation === agentIncarnation) return state;
+      return {
+        panelsById: { ...state.panelsById, [id]: { ...terminal, agentIncarnation } },
+      };
     });
   },
 
