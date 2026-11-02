@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type {
-  DecisionsModelState,
-  SetDecisionsModelPayload,
-} from "@shared/types/decisionsModel";
+import type { DecisionsModelState, SetDecisionsModelPayload } from "@shared/types/decisionsModel";
 
 /** What was asked of main, so the failure that comes back says which. */
-export type DecisionsModelAction = "learning" | "adapter" | "evaluate" | "cancel" | "threshold" | "clear";
+export type DecisionsModelAction =
+  "learning" | "adapter" | "evaluate" | "cancel" | "threshold" | "clear";
 
 export interface DecisionsModelFailure {
   action: DecisionsModelAction;

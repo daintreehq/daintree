@@ -159,7 +159,9 @@ export function DecisionsModelSection({
           onChange={toggleLearning}
           disabled={locked}
           isModified={model?.learning === true}
-          onReset={() => void read.setPreferences({ learning: false, adapter: savedAdapter }, "learning")}
+          onReset={() =>
+            void read.setPreferences({ learning: false, adapter: savedAdapter }, "learning")
+          }
         />
         <SettingsDependents disabled={!learning} reason="Turn on learning to choose an agent CLI">
           <SettingsChoicebox
@@ -187,7 +189,9 @@ export function DecisionsModelSection({
           <SettingsRow
             id="decisions-model-evaluate"
             label="Evaluate against your answers"
-            description={running ? runText(running, clockTime(running.startedAt)) : evaluateDescription}
+            description={
+              running ? runText(running, clockTime(running.startedAt)) : evaluateDescription
+            }
             disabled={savedAdapter === null || history?.state !== "open"}
             disabledReason={savedAdapter === null ? "Choose an agent CLI first" : undefined}
             control={({ descriptionId, disabled }) =>
@@ -278,7 +282,9 @@ export function DecisionsModelSection({
         <SettingsRow
           id="decisions-model-history"
           label="Clear history"
-          description={history === null ? "What the model learned on this computer" : historyText(history)}
+          description={
+            history === null ? "What the model learned on this computer" : historyText(history)
+          }
           disabled={locked || !stored}
           control={({ descriptionId, disabled }) => (
             <Button

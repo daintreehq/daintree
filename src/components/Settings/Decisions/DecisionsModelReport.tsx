@@ -27,7 +27,9 @@ export function DecisionsModelReport({ report }: { report: Report }) {
       <p>{reportSummary(report)}</p>
       {report.buckets.length > 0 && (
         <table className="w-full table-fixed text-xs">
-          <caption className="sr-only">Matches with your answers, by the model's confidence</caption>
+          <caption className="sr-only">
+            Matches with your answers, by the model's confidence
+          </caption>
           <thead>
             <tr className="border-b border-border-subtle">
               <th scope="col" className={cn(TH, "text-left pr-2")}>

@@ -212,7 +212,9 @@ describe("Decisions → Decision model", () => {
   });
 
   it("offers no CLI or evaluation while learning is off, and says why", async () => {
-    getModel.mockResolvedValue(state({ consentedAt: 5, history: { state: "closed", stored: true } }));
+    getModel.mockResolvedValue(
+      state({ consentedAt: 5, history: { state: "closed", stored: true } })
+    );
     await renderSection();
 
     const choices = screen.getByRole("radiogroup");
@@ -272,7 +274,9 @@ describe("Decisions → Decision model", () => {
     unmount();
 
     await renderSection({ proxyAllowlisted: true });
-    expect(row("decisions-model-answering").textContent).not.toContain("Allow proxy answers is off");
+    expect(row("decisions-model-answering").textContent).not.toContain(
+      "Allow proxy answers is off"
+    );
   });
 
   it("starts an evaluation, and cancels the run it shows", async () => {
@@ -306,9 +310,9 @@ describe("Decisions → Decision model", () => {
       state({ learning: true, consentedAt: 5, history: { state: "open", count: 4 } })
     );
     await renderSection();
-    expect(
-      (screen.getByRole("button", { name: "Evaluate" }) as HTMLButtonElement).disabled
-    ).toBe(true);
+    expect((screen.getByRole("button", { name: "Evaluate" }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
     expect(row("decisions-model-evaluate").textContent).toContain("Choose an agent CLI first");
   });
 

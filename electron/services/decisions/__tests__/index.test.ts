@@ -904,7 +904,10 @@ describe("Decisions entry", () => {
       expect(getDecisionsModel().history).toEqual({ state: "closed", stored: true });
 
       const cleared = await clearDecisionsModelHistory();
-      expect(cleared).toMatchObject({ learning: false, history: { state: "closed", stored: false } });
+      expect(cleared).toMatchObject({
+        learning: false,
+        history: { state: "closed", stored: false },
+      });
       expect(readdirSync(modelDir()).filter((name) => name.startsWith("model-"))).toEqual([]);
       // Learning stays off, and its agreement stays.
       expect(saved.value).toMatchObject({ modelLearning: false });

@@ -32,9 +32,7 @@ describe("decision model copy", () => {
     expect(bucketRangeText({ lo: 0.5, hi: 0.6, answered: 1, matched: 1 }, false)).toBe(
       "0.50 to under 0.60"
     );
-    expect(bucketRangeText({ lo: 0.9, hi: 1, answered: 1, matched: 1 }, true)).toBe(
-      "0.90 to 1.00"
-    );
+    expect(bucketRangeText({ lo: 0.9, hi: 1, answered: 1, matched: 1 }, true)).toBe("0.90 to 1.00");
   });
 
   it("states each threshold with its evidence", () => {

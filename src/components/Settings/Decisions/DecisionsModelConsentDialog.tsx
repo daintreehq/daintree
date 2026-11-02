@@ -40,10 +40,10 @@ export function DecisionsModelConsentDialog({
             Kept on this computer, not encrypted.
           </span>{" "}
           Each question you answer from your phone, with its context and options, your answer and
-          any note, its project and when it was asked and answered, stored beside the Decisions
-          keys with the model&apos;s latest evaluation. Credentials in common formats (API keys,
-          tokens, private keys, passwords in settings lines) are removed before anything is kept;
-          other sensitive text stays.
+          any note, its project and when it was asked and answered, stored beside the Decisions keys
+          with the model&apos;s latest evaluation. Credentials in common formats (API keys, tokens,
+          private keys, passwords in settings lines) are removed before anything is kept; other
+          sensitive text stays.
         </li>
         <li>
           <span className="font-medium text-text-primary">
@@ -55,14 +55,12 @@ export function DecisionsModelConsentDialog({
           answered, one request at a time.
         </li>
         <li>
-          <span className="font-medium text-text-primary">Answers only once you allow it.</span>{" "}
-          It answers in your place only after you&apos;ve seen its evaluation and chosen the
-          confidence it answers from, and only questions that allow a proxy answer. Its answers are
-          labelled as a proxy&apos;s.
+          <span className="font-medium text-text-primary">Answers only once you allow it.</span> It
+          answers in your place only after you&apos;ve seen its evaluation and chosen the confidence
+          it answers from, and only questions that allow a proxy answer. Its answers are labelled as
+          a proxy&apos;s.
         </li>
-        <li>
-          Turning learning off keeps what it learned. Clear history deletes it.
-        </li>
+        <li>Turning learning off keeps what it learned. Clear history deletes it.</li>
       </ul>
     </ConfirmDialog>
   );

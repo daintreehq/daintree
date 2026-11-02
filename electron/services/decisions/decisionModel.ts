@@ -616,7 +616,9 @@ export class DecisionModelRuntime {
         throw new Error("A threshold is a confidence from 0 to 1");
       }
       if (threshold !== null && !thresholdSupported(evaluation.report.calibration, threshold)) {
-        throw new Error("The evaluation doesn't support answering automatically from that confidence");
+        throw new Error(
+          "The evaluation doesn't support answering automatically from that confidence"
+        );
       }
       const next: DecisionModelEvaluation = { ...evaluation, autoAnswerThreshold: threshold };
       await writeEvaluation(this.files.evaluation, next);
