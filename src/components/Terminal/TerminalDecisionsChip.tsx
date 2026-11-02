@@ -3,8 +3,11 @@ import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { Button } from "@/components/ui/button";
 import { decisionsClient } from "@/clients/decisionsClient";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsOn } from "@/hooks/useDecisionsOn";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
 import {
   HEADER_CHIP_CLASS,
@@ -96,6 +99,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const on = useDecisionsOn();
   const state = usePaneDecisionState(terminalId, on);
   const headingId = useId();
+  const [open, setOpen] = useState(false);
+  const openAttention = useDecisionsAttentionStore((s) => s.open);
 
   if (state === null) return null;
   const items = decisionItems(state);
@@ -106,7 +111,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const label = chipLabel(items);
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       {/* Selecting the pane would close the popover this opens. */}
       <span className="contents" onClick={holdPaneSelection}>
         {/* Several questions make a sentence too long to read in the usual
@@ -158,7 +163,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
         className="w-96 p-0"
         aria-labelledby={headingId}
         data-testid="terminal-decisions-popover"
-        // Nothing in it acts, and a click here must not select the pane underneath.
+        // A click here must not select the pane underneath.
         onClick={(event) => event.preventDefault()}
       >
         <div className={POPOVER_HEADER_CLASS}>
@@ -177,6 +182,24 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
             <p key={note}>{note}</p>
           ))}
         </div>
+        {/* The list reads this computer's answers; a Remote Host keeps its own panes'. */}
+        {attention && !isRemoteWindow() && (
+          <div className="flex justify-end border-t border-divider px-3 py-2">
+            {/* The answers that need a person are acted on in the list, which
+                also holds those whose pane is gone. */}
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => {
+                setOpen(false);
+                openAttention(terminalId);
+              }}
+              data-testid="terminal-decisions-review"
+            >
+              Review answers
+            </Button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );

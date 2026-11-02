@@ -51,6 +51,13 @@ import type {
   DecisionsHostsResult,
   EnrollDecisionsHostPayload,
 } from "../../../shared/types/decisionsHosts.js";
+import type {
+  DecisionsAnswerDestinations,
+  DecisionsAnswerOutcome,
+  DecisionsAttentionList,
+  MarkDecisionsAnswerHandledPayload,
+  ReassignDecisionsAnswerPayload,
+} from "../../../shared/types/decisionsAttention.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -201,6 +208,15 @@ const enrollHostSchema = z.object({ hostId: z.string().min(1).max(256) }).strict
 
 // A run id main minted (a UUID); a cancel names the run it means to end.
 const cancelSetupCheckSchema = z.object({ runId: z.string().min(1).max(64) }).strict();
+
+// A question id as the library mints it.
+const questionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
+
+const reassignAnswerSchema = z
+  .object({ questionId: questionIdSchema, terminalId: z.string().min(1).max(256) })
+  .strict();
+
+const markAnswerHandledSchema = z.object({ questionId: questionIdSchema }).strict();
 
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
@@ -541,6 +557,68 @@ export const decisionsNamespace = defineIpcNamespace({
         if (!decisionsOn()) return null;
         const decisions = await loadDecisions();
         return decisions ? decisions.cancelSetupCheck(payload) : null;
+      }
+    ),
+    // Answers that need a person (#16020), read and acted on through the
+    // running lifetime's delivery: nothing here starts one. Choose destination
+    // is confirmed in the renderer, naming both panes, before it is sent.
+    listAttention: op(
+      CHANNELS.DECISIONS_LIST_ATTENTION,
+      async (): Promise<DecisionsAttentionList> => {
+        refuseWhileOff("list answers that need attention");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.listDecisionsAttention();
+      }
+    ),
+    copyAnswer: opValidated(
+      CHANNELS.DECISIONS_COPY_ANSWER,
+      questionIdSchema,
+      async (questionId: string): Promise<string> => {
+        refuseWhileOff("copy an answer");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.copyDecisionsAnswer(questionId);
+      }
+    ),
+    resumeAnswer: opValidated(
+      CHANNELS.DECISIONS_RESUME_ANSWER,
+      questionIdSchema,
+      async (questionId: string): Promise<DecisionsAnswerOutcome> => {
+        refuseWhileOff("resume an agent for an answer");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.resumeDecisionsAnswer(questionId);
+      }
+    ),
+    listAnswerDestinations: opValidated(
+      CHANNELS.DECISIONS_LIST_ANSWER_DESTINATIONS,
+      questionIdSchema,
+      async (questionId: string): Promise<DecisionsAnswerDestinations> => {
+        refuseWhileOff("choose where an answer goes");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.listDecisionsAnswerDestinations(questionId);
+      }
+    ),
+    reassignAnswer: opValidated(
+      CHANNELS.DECISIONS_REASSIGN_ANSWER,
+      reassignAnswerSchema,
+      async (payload: ReassignDecisionsAnswerPayload): Promise<DecisionsAnswerOutcome> => {
+        refuseWhileOff("send an answer to another terminal");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.reassignDecisionsAnswer(payload);
+      }
+    ),
+    markAnswerHandled: opValidated(
+      CHANNELS.DECISIONS_MARK_ANSWER_HANDLED,
+      markAnswerHandledSchema,
+      async (payload: MarkDecisionsAnswerHandledPayload): Promise<DecisionsAnswerOutcome> => {
+        refuseWhileOff("mark an answer handled");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.markDecisionsAnswerHandled(payload);
       }
     ),
   },
