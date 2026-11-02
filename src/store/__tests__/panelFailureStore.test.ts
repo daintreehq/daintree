@@ -24,9 +24,9 @@ function recorder() {
 }
 
 const tokenOf = (source: string, id = "t-1") =>
-  (usePanelFailureStore.getState().occurrences[id] as Record<string, { token: number }> | undefined)?.[
-    source
-  ]?.token;
+  (
+    usePanelFailureStore.getState().occurrences[id] as Record<string, { token: number }> | undefined
+  )?.[source]?.token;
 
 const ERROR_WAIT = { agentState: "waiting", waitingReason: "error" };
 const FAILED_EXIT = { runtimeStatus: "exited", exitCode: 1 };
@@ -43,7 +43,12 @@ describe("panelFailureStore", () => {
     expect(first).toBeDefined();
 
     write({
-      "t-1": { ...ERROR_WAIT, lastStateChange: 2, error: "overloaded", stateChangeTrigger: "output" },
+      "t-1": {
+        ...ERROR_WAIT,
+        lastStateChange: 2,
+        error: "overloaded",
+        stateChangeTrigger: "output",
+      },
     });
     expect(tokenOf("wait")).toBe(first);
   });

@@ -316,9 +316,21 @@ describe("ContentPanel red edge look", () => {
   });
 
   it.each([
-    ["Canopy is open over it", () => useCanopyStore.setState({ isOpen: true }), () => useCanopyStore.setState({ isOpen: false })],
-    ["Home covers the grid", () => useProjectHomeStore.setState({ presented: true }), () => useProjectHomeStore.setState({ presented: false })],
-    ["focus is on another pane", () => usePanelStore.setState({ focusedId: "t-2" }), () => usePanelStore.setState({ focusedId: "t-1" })],
+    [
+      "Canopy is open over it",
+      () => useCanopyStore.setState({ isOpen: true }),
+      () => useCanopyStore.setState({ isOpen: false }),
+    ],
+    [
+      "Home covers the grid",
+      () => useProjectHomeStore.setState({ presented: true }),
+      () => useProjectHomeStore.setState({ presented: false }),
+    ],
+    [
+      "focus is on another pane",
+      () => usePanelStore.setState({ focusedId: "t-2" }),
+      () => usePanelStore.setState({ focusedId: "t-1" }),
+    ],
   ])("counts no look while %s", (_label, cover, uncover) => {
     setStoreFocus("t-1");
     act(cover);
