@@ -624,8 +624,9 @@ interface HighlightPaint {
  * is supplemental, so it does not count as a paint here.
  */
 function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPaint[] {
-  // Tailwind finds classes in the raw text, so a file that never spells the
-  // paint can't paint it. Parsing all ~3,000 files is what timed out (#16154).
+  // Parsing all ~3,000 files timed out under load (#16154). A paint the raw text
+  // doesn't name has to be escape-spelled (`"bg\x2doverlay-highlight"`); catching
+  // those means parsing every file with a backslash, a third of the old cost.
   if (!source.includes("bg-overlay-highlight")) return [];
   const file = ts.createSourceFile(
     fileName,
