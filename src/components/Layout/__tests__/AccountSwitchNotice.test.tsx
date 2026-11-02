@@ -117,12 +117,21 @@ describe("AccountSwitchDialog (#16136)", () => {
     paneIds: ["a", "b", "c"],
   };
 
-  function renderDialog(onClose = vi.fn(), overrides: Record<string, PaneOverrides> = {}) {
-    seed([
-      pane({ id: "a", title: "Parser", ...overrides.a }),
-      pane({ id: "b", title: "Docs", ...overrides.b }),
-      pane({ id: "c", title: "Release", ...overrides.c }),
-    ]);
+  let seeded: PtyPanelData[] = [];
+
+  /** Changes one seeded pane in place, with the dialog already open. */
+  function reseed(id: string, overrides: PaneOverrides) {
+    seeded = seeded.map((p) => (p.id === id ? { ...p, ...overrides } : p));
+    act(() => seed(seeded));
+  }
+
+  function renderDialog(onClose = vi.fn()) {
+    seeded = [
+      pane({ id: "a", title: "Parser" }),
+      pane({ id: "b", title: "Docs" }),
+      pane({ id: "c", title: "Release" }),
+    ];
+    seed(seeded);
     // The host still remembers each pane's limit when the confirm asks again.
     getInfoMock.mockImplementation(async (id: string) => ({
       id,
@@ -190,13 +199,43 @@ describe("AccountSwitchDialog (#16136)", () => {
   });
 
   it("warns about the checked agents at work, as they are now", () => {
-    renderDialog(vi.fn(), { b: { agentState: "working" } });
-    expect(screen.getByText(/1 agent is working and will be interrupted/)).toBeTruthy();
+    renderDialog();
+    expect(screen.queryByText(/will be interrupted/)).toBeNull();
 
+    reseed("b", { agentState: "working" });
+    expect(screen.getByText(/1 agent is working and will be interrupted/)).toBeTruthy();
     act(() => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
     });
     expect(screen.queryByText(/will be interrupted/)).toBeNull();
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
+    });
+    reseed("b", { agentState: "waiting" });
+    expect(screen.queryByText(/will be interrupted/)).toBeNull();
+  });
+
+  it("restarts no pane trashed while the host was asked again", async () => {
+    renderDialog();
+    let answer: () => void = () => {};
+    getInfoMock.mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          answer = () => resolve({ id, hasPty: true, usageLimitObservedAt: 1 });
+        })
+    );
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Parser" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Release" }));
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart pane" }));
+    });
+
+    reseed("b", { location: "trash" });
+    await act(async () => answer());
+
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("switches nothing with every pane unchecked", () => {

@@ -82,11 +82,11 @@ function isLifecycleEvent(event: AgentEvent): boolean {
 }
 
 /**
- * How long an agent must have been at work after a usage-limit banner before
- * a settle says the pane works again (#16136). Canopy's turn hold, for the
- * same reason: a local command such as `/usage` on a spent account, or a
- * flicker of output, is gone again in under this, and is no sign the account
- * took a turn.
+ * How long the screen must have kept changing after a usage-limit banner, in
+ * the turn that settles, before the pane counts as working again (#16136).
+ * Canopy's turn hold, for the same reason: a local command such as `/usage`
+ * on a spent account draws once and stops, however long the monitor takes to
+ * call the turn over, and is no sign the account took a turn.
  */
 export const USAGE_LIMIT_WORK_HOLD_MS = 3_000;
 
@@ -95,24 +95,25 @@ export const USAGE_LIMIT_WORK_HOLD_MS = 3_000;
  * read at each settle out of `working`. A settle on an error is how the
  * classifier reads a limit banner in the transcript: the user's "continue" on
  * a spent account hits it again, often with the old banner still in view. Any
- * other settle clears the memory once the agent worked past the hold after
+ * other settle clears the memory once the visible content (spinners and
+ * tickers aside, `lastOutputChangeAt`) went on changing past the hold after
  * both the turn's start and the banner, so a limit retried and lifted within
- * one turn counts as well. A new session in the pane runs on the same
- * account, so it keeps the memory.
+ * one turn counts too. An exit, or a new session in the pane, runs on the
+ * same account and keeps it.
  */
 function noteUsageLimitProgress(
   terminal: TerminalInfo,
   previousState: AgentState,
   workingSince: number | undefined,
-  newState: AgentState,
-  timestamp: number,
-  waitingReason: WaitingReason | undefined
+  newState: AgentState
 ): void {
   const observedAt = terminal.usageLimitObservedAt;
-  if (observedAt === undefined || previousState !== "working" || newState === "working") return;
-  if (newState === "waiting" && waitingReason === "error") return;
+  if (observedAt === undefined || previousState !== "working") return;
+  if (newState === "working" || newState === "exited") return;
+  if (newState === "waiting" && terminal.waitingReason === "error") return;
   const workedFrom = Math.max(workingSince ?? observedAt, observedAt);
-  if (timestamp - workedFrom < USAGE_LIMIT_WORK_HOLD_MS) return;
+  const changedAt = terminal.lastOutputChangeAt;
+  if (changedAt === undefined || changedAt - workedFrom < USAGE_LIMIT_WORK_HOLD_MS) return;
   terminal.usageLimitObservedAt = undefined;
 }
 
@@ -490,14 +491,7 @@ export class AgentStateService {
       terminal.waitingReason = undefined;
     }
 
-    noteUsageLimitProgress(
-      terminal,
-      previousState,
-      previousStateChange,
-      newState,
-      timestamp,
-      waitingReason
-    );
+    noteUsageLimitProgress(terminal, previousState, previousStateChange, newState);
 
     events.emit("agent:state-changed", validatedStateChange.data);
     this.emitTerminalActivity(terminal);

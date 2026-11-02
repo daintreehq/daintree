@@ -77,7 +77,12 @@ export async function readUsageLimitedPaneIds(
       }
     })
   );
-  return limited.filter((id): id is string => id !== null);
+  // Read again after the host answered: a pane trashed or restarted while it
+  // was asked is no longer one to move.
+  const current = usePanelStore.getState().panelsById;
+  return limited.filter(
+    (id): id is string => id !== null && isAccountSwitchCandidate(current[id], agentId, accountId)
+  );
 }
 
 /** The notice's panes that can still be moved: one closed or restarted since drops out. */
