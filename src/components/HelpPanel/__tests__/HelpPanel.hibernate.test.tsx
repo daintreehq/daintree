@@ -89,6 +89,7 @@ const {
     // above project this same flat object as that lane.
     activeSlot: 0,
     sessions: {} as Record<number, unknown>,
+    globalSelected: false,
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -286,6 +287,8 @@ vi.mock("@/utils/safeFireAndForget", () => ({
   safeFireAndForget: (promise: Promise<unknown>) => promise,
 }));
 
+vi.mock("../GlobalAssistantPane", () => ({ GlobalAssistantPane: () => null }));
+
 vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (state: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
@@ -472,6 +475,7 @@ function agentIconMarkerIn(container: Element | null): string | null {
 }
 
 function resetState() {
+  helpPanelState.globalSelected = false;
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
@@ -1322,6 +1326,57 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     // The panel actually opens; re-render reflects the new store state and the
     // gated effect now fires the resume.
     helpPanelState.isOpen = true;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123" })
+    );
+  });
+
+  it("resumes a lane only once it is the one on screen, never behind Global (#16099)", async () => {
+    // A cold view a project switch opened with Global on screen: the lane's
+    // captured session waits until the person turns to that lane.
+    helpPanelState.globalSelected = true;
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
+    });
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+
+    helpPanelState.globalSelected = false;
     await act(async () => {
       view!.rerender(<HelpPanel width={380} />);
     });

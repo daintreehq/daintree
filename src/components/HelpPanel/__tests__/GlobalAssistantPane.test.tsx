@@ -238,7 +238,13 @@ describe("GlobalAssistantPane (#14454)", () => {
     composer.props = null;
     stream.state = { watchId: 1, ended: false, secretPrompt: false };
     apis.length = 0;
-    useHelpPanelStore.setState({ isOpen: true, globalSelected: true, globalTarget: null });
+    useHelpPanelStore.setState({
+      isOpen: true,
+      globalSelected: true,
+      globalTarget: null,
+      focusRequest: 0,
+      globalFocusHandledThrough: -1,
+    });
   });
 
   afterEach(() => {
@@ -256,6 +262,30 @@ describe("GlobalAssistantPane (#14454)", () => {
     await flush();
     expect(help.ensureGlobalAssistant).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g1");
+  });
+
+  it("takes the keyboard when shown, unless a project switch brought it back (#16099)", async () => {
+    const frames = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+    installHelp(viewOf());
+    const shownByHand = renderPane();
+    await flush();
+    await frames();
+    expect(document.activeElement).toBe(screen.getByTestId("help-global-start"));
+    shownByHand.unmount();
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    // As `applyWindowGlobalPanel` leaves it: the request it found counts as served.
+    useHelpPanelStore.setState({ globalFocusHandledThrough: 0 });
+    installHelp(viewOf());
+    renderPane();
+    await flush();
+    await frames();
+    expect(document.activeElement).toBe(document.body);
+
+    // A request made after it still brings the keyboard here.
+    act(() => useHelpPanelStore.getState().requestFocus());
+    await frames();
+    expect(document.activeElement).toBe(screen.getByTestId("help-global-start"));
   });
 
   it("lets its reader go when hidden or unmounted, and never ends the run", async () => {
