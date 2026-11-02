@@ -461,6 +461,64 @@ export class AgentStateService {
   }
 
   /**
+   * A waiting agent's reason re-read off its settled screen while it stayed
+   * idle (#16093). The FSM drops a same-state event before it looks at the
+   * reason, so this is its own path: no transition, published as a
+   * `waiting → waiting` change carrying the new reason. The monitor sends one
+   * only for a screen showing the agent's input row empty, so `observedAt` is
+   * a settle at the prompt like any other, and the send gate measures typing
+   * from it; input that landed after it still holds a send. Refused unless the
+   * agent is waiting, the reason differs, and nothing has settled it since.
+   */
+  updateWaitingReason(
+    terminal: TerminalInfo,
+    waitingReason: WaitingReason,
+    observedAt: number
+  ): boolean {
+    if (terminal.agentState !== "waiting" || terminal.waitingReason === waitingReason) {
+      return false;
+    }
+    if (terminal.lastStateChange !== undefined && observedAt <= terminal.lastStateChange) {
+      return false;
+    }
+
+    const confidence = this.normalizeConfidence(0.9);
+    const payload = {
+      agentId: terminal.detectedAgentId ?? terminal.launchAgentId,
+      state: "waiting" as const,
+      previousState: "waiting" as const,
+      timestamp: observedAt,
+      agentIncarnation: terminal.agentIncarnation ?? 0,
+      traceId: terminal.traceId,
+      terminalId: terminal.id,
+      cwd: terminal.cwd,
+      trigger: "heuristic" as const,
+      confidence,
+      waitingReason,
+    };
+    const validated = AgentStateChangedSchema.safeParse(payload);
+    if (!validated.success) {
+      this.emitTransitionDropped(terminal, {
+        outcome: "schema-invalid",
+        currentState: "waiting",
+        attemptedState: "waiting",
+        trigger: "heuristic",
+        confidence,
+        cwd: terminal.cwd,
+        reason: "waiting-reason update failed Zod validation",
+        validationErrors: z.prettifyError(validated.error).split("\n"),
+      });
+      return false;
+    }
+
+    terminal.waitingReason = waitingReason;
+    terminal.lastStateChange = observedAt;
+    events.emit("agent:state-changed", validated.data);
+    this.emitTerminalActivity(terminal);
+    return true;
+  }
+
+  /**
    * Parse the recent semantic buffer for a test/lint/build summary as the agent
    * settles out of "working" (issue #10682). Pure read — the caller stores the
    * result post-validation. Returns it ONLY when it differs from the stored
@@ -638,6 +696,7 @@ export class AgentStateService {
       sessionCost?: number;
       sessionTokens?: number;
       temperature?: AgentActivityObservationResult;
+      rereadAt?: number;
     }
   ): void {
     // The ActivityMonitor emits a synthetic `idle` observation with
@@ -659,6 +718,13 @@ export class AgentStateService {
         currentState: terminal.agentState || "idle",
         reason: "dispose observation suppressed at teardown",
       });
+      return;
+    }
+
+    if (metadata?.rereadAt !== undefined) {
+      if (activity === "idle" && metadata.waitingReason !== undefined) {
+        this.updateWaitingReason(terminal, metadata.waitingReason, metadata.rereadAt);
+      }
       return;
     }
 

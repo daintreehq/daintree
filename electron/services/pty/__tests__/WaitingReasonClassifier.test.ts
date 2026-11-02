@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { classifyWaitingReason, hasRateLimitMessage } from "../WaitingReasonClassifier.js";
+import { findEmptyComposerRow } from "../PromptDetector.js";
 
 describe("classifyWaitingReason", () => {
   describe("prompt detection", () => {
@@ -370,6 +371,142 @@ describe("classifyWaitingReason", () => {
       const lines = ["  ", "  ", "  "];
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
     });
+  });
+});
+
+describe("classifyWaitingReason with the input row known (#16093)", () => {
+  const RULE = "─".repeat(60);
+  const CLAUDE_PROMPT = [/^\s*>\s*/, /^\s*❯\s*/];
+  const classify = (lines: string[]) =>
+    classifyWaitingReason(lines, true, undefined, findEmptyComposerRow(lines, CLAUDE_PROMPT));
+
+  it("reads a limit banner above the input row as an error", () => {
+    const lines = [
+      "● Refactoring the parser.",
+      "  ⎿  You've hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)",
+      "     /upgrade to increase your usage limit.",
+      "",
+      RULE,
+      "❯ ",
+      RULE,
+      "  ⏵⏵ accept edits on (shift+tab to cycle)",
+    ];
+    expect(classify(lines)).toBe("error");
+  });
+
+  it("keeps the banner an error after Escape cancels the auto-continue", () => {
+    // Cancelling the wait doesn't bring the quota back.
+    const lines = [
+      "  ⎿  You've hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)",
+      "     /upgrade to increase your usage limit.",
+      "",
+      "  ⎿  Automatic continue cancelled · /rate-limit-options to re-arm",
+      "",
+      RULE,
+      "❯ ",
+      RULE,
+      "  ⏵⏵ accept edits on (shift+tab to cycle)",
+    ];
+    expect(classify(lines)).toBe("error");
+  });
+
+  it("reads a banner a narrow pane wrapped over several rows", () => {
+    const lines = [
+      "● Refactoring the parser.",
+      "  ⎿  You've hit your weekly limit · resets",
+      "     Oct 2 at 9pm (Europe/Lisbon)",
+      "     /upgrade to increase your usage",
+      "     limit.",
+      "",
+      RULE,
+      "❯ ",
+      RULE,
+      "  ⏵⏵ accept edits on",
+    ];
+    expect(classify(lines)).toBe("error");
+  });
+
+  it("keeps a footer below the input row out of a finished turn", () => {
+    const lines = [
+      "● The parser now handles empty input, and its tests pass.",
+      "",
+      RULE,
+      "❯ ",
+      RULE,
+      "  Usage limit reached · continuing automatically at 10am · esc to cancel",
+    ];
+    expect(classify(lines)).toBe("prompt");
+    // The same screen with no input row found reads as it always has.
+    expect(classifyWaitingReason(lines, true)).toBe("error");
+  });
+
+  it.each([
+    "API Error: Rate limit reached",
+    "Claude usage limit reached. Your limit will reset at 5pm.",
+  ])("still reads %s in the transcript as an error", (banner) => {
+    expect(
+      classify(["● Working.", `  ⎿  ${banner}`, "", RULE, "❯ ", RULE, "  ? for shortcuts"])
+    ).toBe("error");
+  });
+
+  it.each([
+    ["names an error code", ["● Added retry handling for ECONNRESET and ETIMEDOUT."]],
+    [
+      "follows a recovered failure",
+      [
+        "  ⎿  Error: connect ECONNREFUSED 127.0.0.1:5432",
+        "● Started Postgres; the tests pass now.",
+      ],
+    ],
+    ["mentions an auth failure", ["● The 401 now reads as unauthorized instead of crashing."]],
+  ])("reads a finished turn that %s as a prompt wait", (_label, transcript) => {
+    const lines = [...transcript, "", RULE, "❯ ", RULE, "  ⏵⏵ accept edits on"];
+    expect(classify(lines)).toBe("prompt");
+  });
+
+  it("reads a boxed input row the same way", () => {
+    const box = (inner: string) => `│ ${inner.padEnd(58)} │`;
+    const lines = [
+      "● Done.",
+      "",
+      `╭${"─".repeat(60)}╮`,
+      box(">"),
+      `╰${"─".repeat(60)}╯`,
+      "  Usage limit reached · continuing automatically at 10am",
+    ];
+    expect(classify(lines)).toBe("prompt");
+  });
+
+  it("leaves approval and question detection to the whole tail", () => {
+    expect(
+      classify([
+        "Do you want to make this edit to parser.ts?",
+        "❯ 1. Yes",
+        "  2. No",
+        "",
+        RULE,
+        "❯ ",
+        RULE,
+      ])
+    ).toBe("approval");
+    expect(classify(["Should I also update the docs?", "", RULE, "❯ ", RULE])).toBe("question");
+  });
+
+  it("reads a dialog drawn below the input row", () => {
+    expect(
+      classify([
+        "● Done.",
+        RULE,
+        "❯ ",
+        RULE,
+        "Do you want to make this edit to parser.ts?",
+        "❯ 1. Yes",
+        "  2. No",
+      ])
+    ).toBe("approval");
+    expect(classify(["● Done.", RULE, "❯ ", RULE, "Should I also update the docs?"])).toBe(
+      "question"
+    );
   });
 });
 

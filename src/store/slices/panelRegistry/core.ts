@@ -402,11 +402,16 @@ export const createCorePanelActions = (
       // Only the host's own reports carry its timestamp: the input controller's
       // `directing`, its optimistic `working` and the exit fallback pass none,
       // and none of those is something the host saw (#14017). A report of the
-      // state already observed keeps the time that state began.
+      // state already observed keeps the time that state began, unless it
+      // re-read a waiting agent's reason (#16093): the host then dates the wait
+      // from that read, and a resync record from before it must not undo it.
+      const priorObservation = terminal.lastAgentObservation;
       const observation =
         lastStateChange !== undefined &&
         agentState !== "directing" &&
-        terminal.lastAgentObservation?.agentState !== agentState
+        (priorObservation?.agentState !== agentState ||
+          (nextWaitingReason !== terminal.waitingReason &&
+            lastStateChange > (priorObservation.at ?? 0)))
           ? { agentState, at: lastStateChange }
           : undefined;
       // Written as it is observed, since nothing else saves while an agent works
