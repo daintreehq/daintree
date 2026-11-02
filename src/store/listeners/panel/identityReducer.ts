@@ -72,6 +72,10 @@ export function reduceAgentDetected(
   // previous run's conversation has been answered (#13226).
   const needsResumeOfferClear =
     nextDetectedAgentId !== undefined && terminal.agentResumeOffer !== undefined;
+  // Likewise the offer a refused preset switch left (#16045). A switch still
+  // waiting on its run stays: that run is the one detected first.
+  const needsRefusedSwitchClear =
+    nextDetectedAgentId !== undefined && terminal.presetSwitchResume?.refused === true;
   const shouldSeedAgentState =
     nextDetectedAgentId !== undefined &&
     (terminal.agentState === undefined || terminal.agentState === "exited");
@@ -98,7 +102,8 @@ export function reduceAgentDetected(
     !shouldSeedAgentState &&
     !needsTitleUpdate &&
     !needsIncarnationUpdate &&
-    !needsResumeOfferClear
+    !needsResumeOfferClear &&
+    !needsRefusedSwitchClear
   ) {
     return null;
   }
@@ -118,6 +123,7 @@ export function reduceAgentDetected(
     }),
     ...(needsTitleUpdate && { title: computedTitle }),
     ...(needsResumeOfferClear && { agentResumeOffer: undefined }),
+    ...(needsRefusedSwitchClear && { presetSwitchResume: undefined }),
   };
 
   // Runtime detection still applies the in-process agent policies

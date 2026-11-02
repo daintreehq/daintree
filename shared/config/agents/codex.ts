@@ -160,6 +160,10 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["resume", sessionId, "-C", "."],
     crossDirectoryResume: true,
     sessionIdPattern: "codex resume ([\\w-]+)",
+    // `codex resume <id> -C .` against a config folder that can't see the
+    // conversation prints the first form and exits 1; `codex exec resume`
+    // prints the second. Verified against `codex-cli 0.166.0`.
+    refusalPattern: "No saved session found with ID [\\w-]+|no rollout found for thread id",
     resumeLatestArgs: ["resume", "--last"],
     // Codex takes a gated Ctrl-C instead of `/quit` (#11851). Writing the slash
     // command left `/quit` sitting in the user's own transcript and in Codex's

@@ -151,6 +151,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     displayTitle: sanitizeDisplayTitle(preset.displayTitle),
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
+    keepConversationOnRateLimit: preset.keepConversationOnRateLimit === true ? true : undefined,
   };
 }
 

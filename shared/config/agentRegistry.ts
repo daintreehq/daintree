@@ -216,6 +216,13 @@ export interface AgentPreset {
    * on the next preset, so turning this on is the consent for that.
    */
   fallbackOnRateLimit?: boolean;
+  /**
+   * On a usage-limit hop, ask the next preset's CLI to reopen the same
+   * conversation instead of starting a new one (#16045). Read with
+   * `fallbackOnRateLimit`, from the user's own presets alone; a refusal stops
+   * on an offer in the pane rather than walking on.
+   */
+  keepConversationOnRateLimit?: boolean;
 }
 
 /** Max fallback presets that can be chained after the primary. */
@@ -405,6 +412,15 @@ interface AgentSessionIdResumeBase {
    * nothing, or prompt, instead.
    */
   crossDirectoryResume?: true;
+  /**
+   * Regex for what the CLI prints when `args(id)` names a conversation it
+   * can't find from where it was launched, matched against the last lines the
+   * run printed before it ended. Declared from the interactive launch Daintree
+   * runs, not the headless form, whose wording can differ. A switch that keeps
+   * the conversation (#16045) offers the user a way out on a match; an agent
+   * without one is never offered that switch.
+   */
+  refusalPattern?: string;
 }
 
 /**

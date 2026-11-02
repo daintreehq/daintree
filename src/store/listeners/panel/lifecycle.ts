@@ -43,6 +43,7 @@ import {
 } from "@/store/panelStatusBuffer";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { getMergedPresets } from "@/config/agents";
+import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -100,16 +101,22 @@ export async function handleFallbackTriggered(data: {
   // (#14370): a hop ends a live conversation, which a team-shared project file
   // can't agree to for them. Nothing is said otherwise, or once the chain runs
   // out, because the pane's rate-limit chip already shows the limit.
+  let keepConversation = false;
   if (reason === "rate-limit") {
     // Resolved like any other preset (sanitized, first id wins), from the
     // user's own presets alone.
-    const optedIn =
-      getMergedPresets(agentId, entry.customPresets, [], []).find((p) => p.id === originalPresetId)
-        ?.fallbackOnRateLimit === true;
+    const ownOriginal = getMergedPresets(agentId, entry.customPresets, [], []).find(
+      (p) => p.id === originalPresetId
+    );
+    const optedIn = ownOriginal?.fallbackOnRateLimit === true;
     if (!optedIn || !nextPresetId) {
       fallbackInFlight.delete(terminalId);
       return;
     }
+    // The same consent boundary for keeping the conversation (#16045).
+    keepConversation =
+      ownOriginal?.keepConversationOnRateLimit === true &&
+      supportsConversationKeepingSwitch(agentId);
   }
 
   const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
@@ -192,9 +199,10 @@ export async function handleFallbackTriggered(data: {
       reason,
     });
 
-    const result = await usePanelStore
-      .getState()
-      .activateFallbackPreset(terminalId, nextPresetId, originalPresetId);
+    const activate = usePanelStore.getState().activateFallbackPreset;
+    const result = keepConversation
+      ? await activate(terminalId, nextPresetId, originalPresetId, { keepConversation: true })
+      : await activate(terminalId, nextPresetId, originalPresetId);
 
     if (result.success) {
       notify({
@@ -207,7 +215,9 @@ export async function handleFallbackTriggered(data: {
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
             : reason === "rate-limit"
-              ? `${fromName} hit its usage limit — now running "${nextPreset.name}" in a new conversation.`
+              ? result.resumedSessionId
+                ? `${fromName} hit its usage limit — now reopening this conversation on "${nextPreset.name}".`
+                : `${fromName} hit its usage limit — now running "${nextPreset.name}" in a new conversation.`
               : `${fromName} unreachable — now running "${nextPreset.name}".`,
         supersedeKey: fallbackSupersedeKey,
         context: { ...fallbackAddress },

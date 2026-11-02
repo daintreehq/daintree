@@ -358,19 +358,24 @@ export const terminalLifecycleActionRuns = {
     ctx: ActionContext,
     focusedAtDispatch: string | null
   ) => {
-    const { terminalId, presetId } = RestartOnPresetArgsSchema.parse(args);
+    const { terminalId, presetId, keepConversation } = RestartOnPresetArgsSchema.parse(args);
     requireExplicitTerminalIdForAgentDispatch("terminal.restartOnPreset", terminalId, ctx);
     // Unlike terminal.restart, this asks whatever the agent is doing: the
-    // conversation can't follow the pane to another preset's home, and a
-    // rate-limited agent is rarely `working` (#13746).
+    // conversation follows the pane to another preset's home only when asked
+    // to and when that home can find it (#16045), and a rate-limited agent is
+    // rarely `working` (#13746).
     if (!isConfirmed(args, ctx)) {
-      throw new Error("Restarting on another preset ends the conversation; pass confirmed: true");
+      throw new Error(
+        "Restarting on another preset interrupts the agent and discards its scrollback; pass confirmed: true"
+      );
     }
     const state = usePanelStore.getState();
     const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) throw new Error("No terminal to restart on that preset");
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
-    const result = await state.restartTerminalOnPreset(targetId, presetId);
+    const result = await state.restartTerminalOnPreset(targetId, presetId, {
+      keepConversation: keepConversation === true,
+    });
     if (!result.success) {
       throw new Error(result.error ?? "Couldn't restart the terminal on that preset");
     }
@@ -385,7 +390,9 @@ export const terminalLifecycleActionRuns = {
       terminalId: targetId,
       agentPresetId:
         (restarted && isPtyPanel(restarted) ? restarted.agentPresetId : undefined) ?? presetId,
-      agentSessionIdCleared: true as const,
+      // What was launched, not whether the CLI took it: a refusal is a later
+      // observation the pane reports.
+      agentSessionIdCleared: result.resumedSessionId === undefined,
     };
   },
   "terminal.redraw": async (

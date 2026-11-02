@@ -218,6 +218,11 @@ export interface AgentEndObservation {
   resumeHintSeen: boolean;
   /** The agent's own updater reported success as the last thing it printed. */
   selfUpdateSucceeded: boolean;
+  /**
+   * The run printed its CLI's "no such conversation" refusal
+   * (`resume.refusalPattern`) as the last thing before it ended (#16045).
+   */
+  resumeRefused: boolean;
 }
 
 /**

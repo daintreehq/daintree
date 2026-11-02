@@ -221,6 +221,7 @@ export const AGENT_PRESET_PORTABLE_FIELDS = [
   "color",
   "fallbacks",
   "fallbackOnRateLimit",
+  "keepConversationOnRateLimit",
 ] as const;
 
 /** An agent's own permission-bypass fields. */

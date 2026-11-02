@@ -1,6 +1,7 @@
-import { useCallback } from "react";
+import { useCallback, useId, useState } from "react";
 import { RotateCw } from "lucide-react";
 import { BrandMark } from "@/components/icons";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ContextMenuItem,
@@ -12,7 +13,10 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { getAgentConfig } from "@/config/agents";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { actionService } from "@/services/ActionService";
+import { usePanelStore } from "@/store/panelStore";
 import type { ActionSource } from "@shared/types/actions";
+import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
+import { isPtyPanel } from "@shared/types/panel";
 import {
   DestructiveConsequence,
   type DestructiveConfirmCopy,
@@ -28,19 +32,22 @@ function quoted(name: string | undefined, fallback: string): string {
 }
 
 /**
- * Asked every time, working or not (#13746): the conversation can't follow the
- * pane to another preset's home, and a rate-limited agent is rarely working.
+ * Asked every time, working or not (#13746): the conversation doesn't follow
+ * the pane to another preset's home unless the user asks it to (#16045), and a
+ * rate-limited agent is rarely working.
  */
 export function buildRestartOnPresetCopy(
   terminalTitle: string | undefined,
   presetName: string,
-  agentWorking: boolean
+  agentWorking: boolean,
+  keepConversation = false
 ): DestructiveConfirmCopy {
   return {
     title: `Restart ${quoted(terminalTitle, "terminal")} on ${quoted(presetName, "another preset")}?`,
     lead: agentWorking ? "Its agent is working and will be interrupted." : undefined,
-    description:
-      "The agent starts a new conversation on that preset, and the scrollback is discarded.",
+    description: keepConversation
+      ? "The agent reopens this conversation with that preset's settings, and the scrollback is discarded. If it can't find the conversation there, the pane offers a new one or the way back."
+      : "The agent starts a new conversation on that preset, and the scrollback is discarded.",
     confirmLabel: "Restart on preset",
   };
 }
@@ -122,19 +129,43 @@ export interface RestartOnPresetRequest {
   preset: RestartPresetChoice;
 }
 
-/** Confirms and dispatches `terminal.restartOnPreset`. */
-export function RestartOnPresetConfirmDialog({
-  request,
-  onClose,
-  sourceRef,
-}: {
+interface RestartOnPresetConfirmDialogProps {
   request: RestartOnPresetRequest | null;
   onClose: () => void;
   /** Read at confirm time: the menu records how it was opened as it opens. */
   sourceRef: { readonly current: ActionSource };
-}) {
+}
+
+/** Confirms and dispatches `terminal.restartOnPreset`. */
+export function RestartOnPresetConfirmDialog({
+  request,
+  ...rest
+}: RestartOnPresetConfirmDialogProps) {
+  // Mounted per request, so the opt-in starts unchecked on every opening.
+  if (!request) return null;
+  return <RestartOnPresetConfirm request={request} {...rest} />;
+}
+
+function RestartOnPresetConfirm({
+  request,
+  onClose,
+  sourceRef,
+}: RestartOnPresetConfirmDialogProps & { request: RestartOnPresetRequest }) {
+  const keepId = useId();
+  const [keepConversation, setKeepConversation] = useState(false);
+  // Offered only where a refusal can be recognised (#16045), never on whether
+  // the pane holds an id yet: a running Codex learns its id at the teardown.
+  const canKeep = usePanelStore((state) => {
+    const panel = state.panelsById[request.terminalId];
+    return (
+      panel !== undefined &&
+      isPtyPanel(panel) &&
+      supportsConversationKeepingSwitch(panel.launchAgentId)
+    );
+  });
+  const keep = canKeep && keepConversation;
+
   const handleConfirm = useCallback(() => {
-    if (!request) return;
     const source = sourceRef.current;
     onClose();
     void restartPanesOnPreset(
@@ -143,18 +174,23 @@ export function RestartOnPresetConfirmDialog({
       (pane) =>
         actionService.dispatch(
           "terminal.restartOnPreset",
-          { terminalId: pane.id, presetId: request.preset.id, confirmed: true },
+          {
+            terminalId: pane.id,
+            presetId: request.preset.id,
+            confirmed: true,
+            ...(keep ? { keepConversation: true } : {}),
+          },
           { source }
         ),
       () => `Restarting on ${request.preset.name}`
     );
-  }, [request, onClose, sourceRef]);
+  }, [request, onClose, sourceRef, keep]);
 
-  if (!request) return null;
   const copy = buildRestartOnPresetCopy(
     request.terminalTitle,
     request.preset.name,
-    request.agentWorking
+    request.agentWorking,
+    keep
   );
   return (
     <ConfirmDialog
@@ -165,6 +201,17 @@ export function RestartOnPresetConfirmDialog({
       confirmLabel={copy.confirmLabel}
       variant="destructive"
       onConfirm={handleConfirm}
-    />
+    >
+      {canKeep && (
+        <label htmlFor={keepId} className="flex items-center gap-2 text-sm text-text-primary">
+          <Checkbox
+            id={keepId}
+            checked={keepConversation}
+            onCheckedChange={(checked) => setKeepConversation(checked === true)}
+          />
+          Keep this conversation
+        </label>
+      )}
+    </ConfirmDialog>
   );
 }

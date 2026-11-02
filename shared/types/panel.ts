@@ -400,6 +400,58 @@ export interface AgentResumeOffer {
   sessionId?: string;
 }
 
+/**
+ * The launch a pane ran before a preset switch that kept its conversation,
+ * which "Back" puts back to reopen the conversation where it was.
+ */
+export type PresetSwitchPriorLaunch = Pick<
+  PtyPanelData,
+  | "agentPresetId"
+  | "agentPresetColor"
+  | "originalPresetId"
+  | "isUsingFallback"
+  | "fallbackChainIndex"
+  | "command"
+  | "agentLaunchFlags"
+  | "callerLaunchFlags"
+  | "agentModelId"
+  | "env"
+  | "conversationCwd"
+> & { cwd: string };
+
+/** The launch fields of `panel` a preset switch replaces, in the shape "Back" restores. */
+export function presetSwitchLaunchOf(panel: PtyPanelData): PresetSwitchPriorLaunch {
+  return {
+    agentPresetId: panel.agentPresetId,
+    agentPresetColor: panel.agentPresetColor,
+    originalPresetId: panel.originalPresetId,
+    isUsingFallback: panel.isUsingFallback,
+    fallbackChainIndex: panel.fallbackChainIndex,
+    command: panel.command,
+    agentLaunchFlags: panel.agentLaunchFlags,
+    callerLaunchFlags: panel.callerLaunchFlags,
+    agentModelId: panel.agentModelId,
+    env: panel.env,
+    conversationCwd: panel.conversationCwd,
+    cwd: panel.cwd,
+  };
+}
+
+/**
+ * A preset switch that asked the CLI to reopen the pane's conversation
+ * (#16045), held while the run it launched lives so the CLI's own refusal can
+ * be told apart from any other end. Transient like `agentResumeOffer`.
+ */
+export interface PresetSwitchResume {
+  agentId: string;
+  sessionId: string;
+  /** The preset the switch moved the pane onto. */
+  presetId: string;
+  prior: PresetSwitchPriorLaunch;
+  /** The run printed its CLI's refusal; the pane offers a way out either side. */
+  refused?: true;
+}
+
 export interface PanelWorktreeMoveNotice {
   /** Worktree the panel was filed under by the move that raised this notice. */
   destinationWorktreeId: string;
@@ -837,6 +889,13 @@ export interface PtyPanelData extends BasePanelData {
    * `sessionLostOnRestore`.
    */
   agentResumeOffer?: AgentResumeOffer;
+  /**
+   * Live-only: a preset switch kept this pane's conversation and the run it
+   * launched hasn't ended yet, or ended on its CLI's refusal (#16045). Cleared
+   * by any other end of that run, by a restart, by a new agent starting in the
+   * pane, and by dismissal. Never serialized.
+   */
+  presetSwitchResume?: PresetSwitchResume;
   /**
    * Directory this pane's conversation began in, recorded only once the pane
    * runs somewhere else (#12434) — a pane moved onto another worktree resumes

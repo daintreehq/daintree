@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import type {
   AgentState,
   AgentStateChangePayload,
@@ -79,6 +80,9 @@ vi.mock("@/store/createWorktreeStore", () => ({
     };
   },
 }));
+
+const handleAgentEndMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/agentEndRecovery", () => ({ handleAgentEnd: handleAgentEndMock }));
 
 import { setupIdentityListeners, _resetChangedFileBaseline } from "../identity";
 import { notify } from "@/lib/notify";
@@ -644,4 +648,40 @@ describe("identity listener — a host whose clock runs behind this machine's (#
     });
     d.dispose();
   });
+});
+
+describe("identity listener — a launched run's end (#16045)", () => {
+  it.each([
+    ["a pane never restarted", undefined, 0],
+    ["a restarted pane", 3, 3],
+  ])(
+    "hands recovery the restart count the run ended on, for %s",
+    async (_label, restartKey, expected) => {
+      handleAgentEndMock.mockClear();
+      setupPanel({ launchAgentId: "codex", detectedAgentId: "codex", restartKey });
+      const d = setupIdentityListeners();
+
+      const payload = {
+        terminalId: "term-1",
+        agentType: "codex",
+        timestamp: nextTimestamp(),
+        exitKind: "subcommand",
+        agentEnd: {
+          launchedRun: true,
+          resumeHintSeen: false,
+          selfUpdateSucceeded: false,
+          resumeRefused: true,
+        },
+      };
+      for (const cb of onAgentExitedHandlers) cb(payload);
+      // A switch lands while recovery loads.
+      const panel = usePanelStore.getState().panelsById["term-1"];
+      if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+      usePanelStore.setState({ panelsById: { "term-1": { ...panel, restartKey: expected + 1 } } });
+
+      await vi.waitFor(() => expect(handleAgentEndMock).toHaveBeenCalledTimes(1));
+      expect(handleAgentEndMock).toHaveBeenCalledWith(payload, expected);
+      d.dispose();
+    }
+  );
 });

@@ -2289,6 +2289,232 @@ describe("restartTerminalOnPreset", () => {
     // A hop keeps the title: the fallback indicator says what it's running on.
     expect(pane().title).toBe("Claude [Personal]");
   });
+  describe("keeping the conversation (#16045)", () => {
+    async function resumeBuilds(): Promise<void> {
+      const { buildResumeCommand } = await import("@shared/types");
+      vi.mocked(buildResumeCommand).mockImplementation(
+        (_agentId: string, sessionId: string) => `claude --resume ${sessionId}`
+      );
+    }
+
+    it("reopens the conversation the teardown captured, on the new preset's env", async () => {
+      seed({ command: "claude --persisted-flag" });
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result).toEqual({ success: true, resumedSessionId: "sess-captured" });
+      expect(mockGracefulKill).toHaveBeenCalledWith("test-1", { forRestart: true });
+      expect(mockKill).not.toHaveBeenCalled();
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("claude --resume sess-captured");
+      expect(payload.agentSessionId).toBe("sess-captured");
+      expect(payload.env.CODEX_HOME).toBe("/home/me/.codex-2");
+      expect(pane().agentSessionId).toBe("sess-captured");
+      expect(pane().env).toEqual({ CODEX_HOME: "/home/me/.codex-2" });
+      // The resume is transient: a later plain restart rebuilds from the fresh command.
+      expect(pane().command).not.toContain("--resume");
+      expect(pane().presetSwitchResume).toMatchObject({
+        agentId: "claude",
+        sessionId: "sess-captured",
+        presetId: "work",
+        prior: {
+          agentPresetId: "personal",
+          env: { CODEX_HOME: "/home/me/.codex", STALE_ONLY_ON_OLD: "1" },
+          cwd: "/some/path",
+        },
+      });
+    });
+
+    it("falls back to the pane's own id when the capture came from another agent", async () => {
+      seed({ detectedAgentId: "codex" });
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("codex-thread-id");
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --resume sess-personal");
+    });
+
+    it("starts nothing when no id turns up, rather than a new conversation", async () => {
+      seed({ agentSessionId: undefined });
+      await resumeBuilds();
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentPresetId).toBe("personal");
+      expect(pane().presetSwitchResume).toBeUndefined();
+      expect(pane().restartError?.context?.phase).toBe("preset-switch");
+    });
+
+    it("refuses an agent whose refusal it can't recognise before touching the process", async () => {
+      seed({ launchAgentId: "gemini" });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentPresetId).toBe("personal");
+    });
+
+    it("starts Claude where the conversation began", async () => {
+      seed({ conversationCwd: "/where/it/began" });
+      await resumeBuilds();
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(mockSpawn.mock.calls[0]![0].cwd).toBe("/where/it/began");
+      expect(pane().cwd).toBe("/where/it/began");
+      expect(pane().conversationCwd).toBeUndefined();
+    });
+
+    it("keeps the run's first prompt, which a new conversation drops", async () => {
+      const firstPrompt = { via: "launch" as const, text: "fix the build", at: 1 };
+      seed({ firstPrompt });
+      await resumeBuilds();
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(pane().firstPrompt).toEqual(firstPrompt);
+      expect(mockSpawn.mock.calls[0]![0].hasFirstPrompt).toBe(true);
+    });
+
+    it("keeps the captured id through a failed spawn, with nothing left to watch", async () => {
+      seed();
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+      mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(pane().agentPresetId).toBe("personal");
+      expect(pane().agentSessionId).toBe("sess-captured");
+      expect(pane().presetSwitchResume).toBeUndefined();
+    });
+
+    it("never lets a resume selector in the new preset's flags pick the conversation", async () => {
+      buildAgentLaunchFlagsMock.mockReturnValue(["--verbose", "--continue"]);
+      seed();
+      await resumeBuilds();
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      const { buildResumeCommand } = await import("@shared/types");
+      const flags = vi.mocked(buildResumeCommand).mock.calls[0]![2];
+      expect(flags).toContain("--verbose");
+      expect(flags).not.toContain("--continue");
+    });
+
+    it("puts the folder back with the conversation when the spawn fails", async () => {
+      // Codex reopens anywhere, so the launch moves to the filed folder and the
+      // origin is recorded; a failure must undo both or the id is misfiled.
+      const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-a", "/repo/.worktrees/a"],
+            ["wt-b", "/repo/.worktrees/b"],
+          ])
+      );
+      try {
+        seed({ launchAgentId: "codex", cwd: "/repo/.worktrees/a", worktreeId: "wt-b" });
+        await resumeBuilds();
+        mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+        expect(mockSpawn.mock.calls[0]![0].cwd).toBe("/repo/.worktrees/b");
+        expect(pane().cwd).toBe("/repo/.worktrees/a");
+        expect(pane().conversationCwd).toBeUndefined();
+      } finally {
+        setWorktreePathIndexAccessor(() => null);
+      }
+    });
+
+    it("files the conversation against a folder a move set while the spawn failed", async () => {
+      const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-a", "/repo/.worktrees/a"],
+            ["wt-b", "/repo/.worktrees/b"],
+          ])
+      );
+      try {
+        seed({ launchAgentId: "codex", cwd: "/repo/.worktrees/a", worktreeId: "wt-b" });
+        await resumeBuilds();
+        mockSpawn.mockImplementationOnce(async () => {
+          // What a live move writes while the spawn is out.
+          const moved = pane();
+          usePanelStore.setState({
+            panelsById: {
+              "test-1": { ...moved, cwd: "/elsewhere", conversationCwd: "/repo/.worktrees/a" },
+            },
+          });
+          throw new Error("spawn failed");
+        });
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+        expect(pane().cwd).toBe("/elsewhere");
+        expect(pane().conversationCwd).toBe("/repo/.worktrees/a");
+      } finally {
+        setWorktreePathIndexAccessor(() => null);
+      }
+    });
+
+    it("drops the switch's watch on the next restart", async () => {
+      seed();
+      await resumeBuilds();
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+      expect(pane().presetSwitchResume).toBeDefined();
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      expect(pane().presetSwitchResume).toBeUndefined();
+    });
+
+    it("asks for the conversation on a fallback hop when the caller does", async () => {
+      seed();
+      await resumeBuilds();
+
+      const result = await usePanelStore
+        .getState()
+        .activateFallbackPreset("test-1", "work", "personal", { keepConversation: true });
+
+      expect(result.resumedSessionId).toBe("sess-personal");
+      expect(pane().isUsingFallback).toBe(true);
+      expect(pane().agentSessionId).toBe("sess-personal");
+    });
+  });
 });
 
 describe("restartTerminal and the run's first prompt (#14592)", () => {

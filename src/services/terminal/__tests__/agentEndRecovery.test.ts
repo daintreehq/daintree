@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentExitedPayload } from "@shared/types";
 import type { AgentEndObservation } from "@shared/types/ipc/agent";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import type { PanelInstance, PresetSwitchResume, PtyPanelData } from "@shared/types/panel";
 
 const store = vi.hoisted(() => {
   const state = {
     panelsById: {} as Record<string, PanelInstance>,
+    panelIds: ["pane-a"] as string[],
     restartTerminal: vi.fn(async () => {}),
+    restartTerminalOnPreset: vi.fn(async () => ({ success: true })),
   };
   return {
     state,
@@ -22,6 +24,9 @@ vi.mock("@/store/panelStore", () => ({
 }));
 
 vi.mock("@/utils/logger", () => ({ logInfo: vi.fn(), logError: vi.fn() }));
+
+const saveNormalized = vi.hoisted(() => vi.fn());
+vi.mock("@/store/slices/panelRegistry/persistence", () => ({ saveNormalized }));
 
 vi.mock("@/services/agentResume", () => ({ reconcileResumeLaunchFlags: () => [] }));
 
@@ -39,6 +44,9 @@ const {
   handleAgentEnd,
   resumeFromAgentEndOffer,
   dismissAgentResumeOffer,
+  startNewAfterRefusedSwitch,
+  returnAfterRefusedSwitch,
+  dismissRefusedPresetSwitch,
   _resetAgentEndRecoveryForTests,
 } = await import("../agentEndRecovery");
 
@@ -73,6 +81,7 @@ function exited(
       launchedRun: true,
       resumeHintSeen: false,
       selfUpdateSucceeded: false,
+      resumeRefused: false,
       ...agentEnd,
     },
     ...overrides,
@@ -88,6 +97,9 @@ beforeEach(() => {
   store.state.panelsById = { "pane-a": pane() };
   store.state.restartTerminal.mockReset();
   store.state.restartTerminal.mockImplementation(async () => {});
+  store.state.restartTerminalOnPreset.mockReset();
+  store.state.restartTerminalOnPreset.mockImplementation(async () => ({ success: true }));
+  saveNormalized.mockReset();
 });
 
 describe("handleAgentEnd", () => {
@@ -235,5 +247,243 @@ describe("resume offer actions", () => {
     };
     dismissAgentResumeOffer("pane-a");
     expect(current().agentResumeOffer).toBeUndefined();
+  });
+});
+
+describe("a preset switch that kept the conversation (#16045)", () => {
+  const attempt: PresetSwitchResume = {
+    agentId: "codex",
+    sessionId: LAUNCH_ID,
+    presetId: "company",
+    prior: {
+      agentPresetId: "personal",
+      env: { CODEX_HOME: "/home/me/.codex" },
+      agentLaunchFlags: ["--yolo"],
+      cwd: "/repo",
+    },
+  };
+
+  function switched(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
+    return pane({
+      agentPresetId: "company",
+      env: { CODEX_HOME: "/home/me/.codex-company" },
+      restartKey: 3,
+      presetSwitchResume: attempt,
+      ...overrides,
+    });
+  }
+
+  it("turns the CLI's refusal into the pane's offer, ahead of the generic one", () => {
+    store.state.panelsById = { "pane-a": switched() };
+
+    // The echoed `codex resume <id>` reads as a hint; the refusal still wins.
+    handleAgentEnd(exited({ resumeRefused: true, resumeHintSeen: true }), 3);
+
+    expect(current().presetSwitchResume).toEqual({ ...attempt, refused: true });
+    expect(current().agentResumeOffer).toBeUndefined();
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+    expect(store.state.restartTerminalOnPreset).not.toHaveBeenCalled();
+  });
+
+  it("takes a refusal at a PTY exit too", () => {
+    store.state.panelsById = { "pane-a": switched() };
+
+    handleAgentEnd(exited({ resumeRefused: true }, { exitKind: "terminal" }), 3);
+
+    expect(current().presetSwitchResume?.refused).toBe(true);
+  });
+
+  it("leaves any other end to the handling every launched run gets", () => {
+    store.state.panelsById = { "pane-a": switched() };
+
+    handleAgentEnd(exited({}), 3);
+
+    expect(current().presetSwitchResume?.refused).toBeUndefined();
+    expect(current().agentResumeOffer).toEqual({ agentId: "codex", sessionId: LAUNCH_ID });
+  });
+
+  it.each([
+    ["a restart since the event arrived", switched(), 2],
+    ["a pane since moved to another preset", switched({ agentPresetId: "backup" }), 3],
+    ["a pane with no switch to answer", pane({ restartKey: 3 }), 3],
+  ])("ignores a refusal for %s", (_label, panel, restartKey) => {
+    store.state.panelsById = { "pane-a": panel };
+
+    handleAgentEnd(exited({ resumeRefused: true }), restartKey);
+
+    expect(current().presetSwitchResume?.refused).toBeUndefined();
+  });
+
+  it("starts a new conversation on the refusing preset when asked", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+
+    await startNewAfterRefusedSwitch("pane-a");
+
+    expect(store.state.restartTerminalOnPreset).toHaveBeenCalledWith("pane-a", "company");
+  });
+
+  /** A restart that spawned: the store bumps the pane's restart count. */
+  function restartSpawns(): void {
+    store.state.restartTerminal.mockImplementation(async () => {
+      const panel = current();
+      store.state.panelsById = {
+        "pane-a": { ...panel, restartKey: (panel.restartKey ?? 0) + 1 },
+      };
+    });
+  }
+
+  it("goes back to the launch it left, persisted, and reopens the conversation there", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+    restartSpawns();
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("launched");
+
+    expect(current().agentPresetId).toBe("personal");
+    expect(current().env).toEqual({ CODEX_HOME: "/home/me/.codex" });
+    expect(current().presetSwitchResume).toBeUndefined();
+    expect(saveNormalized).toHaveBeenCalledTimes(1);
+    expect(store.state.restartTerminal).toHaveBeenCalledWith("pane-a", {
+      resumeSessionId: LAUNCH_ID,
+    });
+  });
+
+  it("goes back nowhere while another pane holds the conversation", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+      "pane-b": pane({ id: "pane-b", agentState: "working" }),
+    };
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("held-elsewhere");
+
+    expect(current().agentPresetId).toBe("company");
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+  });
+
+  it("keeps the offer, and the pane as it is, while another reopen holds the conversation", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+    const { reserveResumeSession } = await import("../restoreRecoveryLaunch");
+    const release = reserveResumeSession("codex", LAUNCH_ID);
+    try {
+      await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("held-elsewhere");
+    } finally {
+      release?.();
+    }
+
+    expect(current().agentPresetId).toBe("company");
+    expect(current().presetSwitchResume?.refused).toBe(true);
+    expect(saveNormalized).not.toHaveBeenCalled();
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+  });
+
+  it("puts the pane back on the refusing preset, offer and all, when the restart started nothing", async () => {
+    // The restart refused before its spawn: the count never moved.
+    store.state.panelsById = {
+      "pane-a": switched({
+        cwd: "/repo/company",
+        conversationCwd: "/repo/origin",
+        presetSwitchResume: { ...attempt, refused: true },
+      }),
+    };
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
+
+    expect(store.state.restartTerminal).toHaveBeenCalledTimes(1);
+    expect(current().agentPresetId).toBe("company");
+    expect(current().env).toEqual({ CODEX_HOME: "/home/me/.codex-company" });
+    expect(current().presetSwitchResume).toEqual({ ...attempt, refused: true });
+    expect(current().cwd).toBe("/repo/company");
+    expect(current().conversationCwd).toBe("/repo/origin");
+    expect(saveNormalized).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a folder a move set while the refused restart checked it", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({
+        cwd: "/repo/company",
+        presetSwitchResume: { ...attempt, refused: true },
+      }),
+    };
+    store.state.restartTerminal.mockImplementation(async () => {
+      store.state.panelsById = {
+        "pane-a": { ...current(), cwd: "/moved", conversationCwd: "/repo" },
+      };
+    });
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
+
+    expect(current().agentPresetId).toBe("company");
+    expect(current().cwd).toBe("/moved");
+    expect(current().conversationCwd).toBe("/repo");
+  });
+
+  it("holds the conversation for the whole restart, and lets it go after", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+    const { isResumeSessionReserved } = await import("../restoreRecoveryLaunch");
+    let finish: () => void = () => {};
+    store.state.restartTerminal.mockImplementation(
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
+
+    const back = returnAfterRefusedSwitch("pane-a");
+    await Promise.resolve();
+    expect(isResumeSessionReserved("codex", LAUNCH_ID)).toBe(true);
+
+    finish();
+    await back;
+    expect(isResumeSessionReserved("codex", LAUNCH_ID)).toBe(false);
+  });
+
+  it("reads a pane that never restarted as a restart count of zero", () => {
+    store.state.panelsById = { "pane-a": switched({ restartKey: undefined }) };
+
+    // An event read before a switch that has since bumped the count to one.
+    handleAgentEnd(exited({ resumeRefused: true }), 0);
+    expect(current().presetSwitchResume?.refused).toBe(true);
+
+    store.state.panelsById = { "pane-a": switched({ restartKey: 1 }) };
+    handleAgentEnd(exited({ resumeRefused: true }), 0);
+    expect(current().presetSwitchResume?.refused).toBeUndefined();
+  });
+
+  it("acts on neither choice once the shell has moved on", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({
+        presetSwitchResume: { ...attempt, refused: true },
+        detectedProcessId: "npm",
+      }),
+    };
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
+    await expect(startNewAfterRefusedSwitch("pane-a")).resolves.toEqual({
+      success: false,
+      error: "unavailable",
+    });
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+    expect(store.state.restartTerminalOnPreset).not.toHaveBeenCalled();
+  });
+
+  it("acts on neither choice before the CLI refused", async () => {
+    store.state.panelsById = { "pane-a": switched() };
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+  });
+
+  it("clears the offer on dismissal", () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+
+    dismissRefusedPresetSwitch("pane-a");
+
+    expect(current().presetSwitchResume).toBeUndefined();
   });
 });

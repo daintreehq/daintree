@@ -50,6 +50,7 @@ describe("formatAgentPresetPreviewLines", () => {
           color: "#3b82f6",
           fallbacks: ["user-fast"],
           fallbackOnRateLimit: true,
+          keepConversationOnRateLimit: true,
         },
         { "user-fast": "Fast" }
       )
@@ -68,6 +69,7 @@ describe("formatAgentPresetPreviewLines", () => {
       'Colour: "#3b82f6"',
       'Fallback presets: "Fast" (user-fast)',
       "Fall back on usage limits: On",
+      "Keep the conversation on usage limits: On",
       "Codex's default preset stays as it is.",
     ]);
   });
@@ -105,6 +107,22 @@ describe("formatAgentPresetPreviewLines", () => {
     expect(text).toContain("Skip permissions: the agent's setting → On");
     expect(text).not.toContain("KEEP");
     expect(text).not.toContain("Colour");
+  });
+
+  it("shows the usage-limit settings changing apart from each other", () => {
+    const text = formatAgentPresetPreviewLines(
+      update(
+        { id: "user-work", name: "Work", fallbackOnRateLimit: true },
+        {
+          id: "user-work",
+          name: "Work",
+          fallbackOnRateLimit: true,
+          keepConversationOnRateLimit: true,
+        }
+      )
+    ).join("\n");
+    expect(text).toContain("Keep the conversation on usage limits: Off → On");
+    expect(text).not.toContain("Fall back on usage limits");
   });
 
   it("shows a fallback swap between two presets sharing a name", () => {

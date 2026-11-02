@@ -427,8 +427,12 @@ export function setupIdentityListeners(): DisposableStore {
         // Loaded on demand: only a launched run's end needs it, and it pulls in
         // the restart and resume machinery this listener otherwise never touches.
         if (data.agentEnd?.launchedRun) {
+          // Read now: a restart while the module loads starts a run this end
+          // isn't about.
+          const ended = usePanelStore.getState().panelsById[terminalId];
+          const restartKey = ended && isPtyPanel(ended) ? (ended.restartKey ?? 0) : undefined;
           void import("@/services/terminal/agentEndRecovery")
-            .then(({ handleAgentEnd }) => handleAgentEnd(data))
+            .then(({ handleAgentEnd }) => handleAgentEnd(data, restartKey))
             .catch((error: unknown) => {
               logWarn("[IdentityListener] Agent end recovery failed", { terminalId, error });
             });

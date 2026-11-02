@@ -2321,9 +2321,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "confirm",
     dangerRationale:
-      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+      "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
     description:
-      "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+      "Move a panel this session launched (not a handed one) to another preset once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
     enabled: true,
     id: "terminal.restartOnPresetOwned",
     inputSchema: {
@@ -2339,6 +2339,10 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description: "A preset `id` of the panel's own agent.",
+        },
+        keepConversation: {
+          description: "Keep the conversation by id.",
+          type: "boolean",
         },
       },
       required: ["terminalId", "presetId"],
@@ -2360,8 +2364,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         agentSessionIdCleared: {
           type: "boolean",
-          const: true,
-          description: "A new conversation started: re-send anything the agent still needs.",
+          description: "false: asked to reopen it; true: re-send the brief.",
         },
       },
       required: ["terminalId", "agentPresetId", "agentSessionIdCleared"],

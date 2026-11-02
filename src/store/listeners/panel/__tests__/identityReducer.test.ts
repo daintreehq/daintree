@@ -44,6 +44,32 @@ describe("reduceAgentDetected", () => {
     expect(result?.patch ?? {}).not.toHaveProperty("agentResumeOffer");
   });
 
+  it("answers a refused preset switch's offer once a new agent starts (#16045)", () => {
+    const attempt = {
+      agentId: "codex",
+      sessionId: "s1",
+      presetId: "company",
+      prior: { cwd: "/repo" },
+    };
+    const detected = {
+      nextDetectedAgentId: "codex",
+      nextDetectedProcessId: "codex",
+      nextEverDetectedAgent: true,
+      nextAgentIncarnation: 1,
+      timestamp: 1000,
+    } as const;
+
+    const refused = reduceAgentDetected(
+      makeTerminal({ presetSwitchResume: { ...attempt, refused: true } }),
+      detected
+    );
+    expect(refused?.patch).toHaveProperty("presetSwitchResume", undefined);
+
+    // Still waiting on its run, which is the agent detected first.
+    const pending = reduceAgentDetected(makeTerminal({ presetSwitchResume: attempt }), detected);
+    expect(pending?.patch ?? {}).not.toHaveProperty("presetSwitchResume");
+  });
+
   it("returns null when nothing changes", () => {
     const terminal = makeTerminal({
       detectedProcessId: "npm",

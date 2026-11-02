@@ -2,6 +2,7 @@ import { useId, useMemo } from "react";
 import { ArrowDown, ArrowUp, X as XIcon } from "lucide-react";
 import { FALLBACK_CHAIN_MAX } from "../../../../shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
+import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { Button } from "@/components/ui/button";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -17,6 +18,8 @@ import { SETTINGS_CONTROL_WIDTH, SettingsDependents, SettingsRow } from "../Sett
 import { SettingsSwitch } from "../SettingsSwitch";
 
 interface FallbackChainEditorProps {
+  /** Gates the conversation-keeping option to agents whose refusal is recognised. */
+  agentId?: string;
   selectedPreset: AgentPreset;
   allPresets: AgentPreset[];
   onUpdatePreset: (presetId: string, patch: Partial<AgentPreset>) => void;
@@ -32,6 +35,7 @@ export function moveFallback(chain: string[], from: number, to: number): string[
 }
 
 export function FallbackChainEditor({
+  agentId,
   selectedPreset,
   allPresets,
   onUpdatePreset,
@@ -220,7 +224,11 @@ export function FallbackChainEditor({
       {chain.length > 0 && (
         <SettingsRow
           label="Fall back on usage limits"
-          description="When the agent stops at a plan or rate limit, its conversation ends and a new one starts on the next fallback preset"
+          description={
+            supportsConversationKeepingSwitch(agentId)
+              ? "When the agent stops at a plan or rate limit, it restarts on the next fallback preset, in a new conversation unless you keep it"
+              : "When the agent stops at a plan or rate limit, its conversation ends and a new one starts on the next fallback preset"
+          }
           control={({ labelId, descriptionId, disabled }) => (
             <SettingsSwitch
               checked={selectedPreset.fallbackOnRateLimit === true}
@@ -236,6 +244,29 @@ export function FallbackChainEditor({
           )}
         />
       )}
+      {chain.length > 0 &&
+        selectedPreset.fallbackOnRateLimit === true &&
+        supportsConversationKeepingSwitch(agentId) && (
+          <SettingsDependents>
+            <SettingsRow
+              label="Keep the conversation"
+              description="On a usage limit, the next fallback preset reopens the same conversation instead of starting a new one. If it can't find it there, the pane offers a new one or the way back"
+              control={({ labelId, descriptionId, disabled }) => (
+                <SettingsSwitch
+                  checked={selectedPreset.keepConversationOnRateLimit === true}
+                  onCheckedChange={(checked) =>
+                    onUpdatePreset(selectedPreset.id, {
+                      keepConversationOnRateLimit: checked ? true : undefined,
+                    })
+                  }
+                  disabled={disabled}
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                />
+              )}
+            />
+          </SettingsDependents>
+        )}
     </>
   );
 }

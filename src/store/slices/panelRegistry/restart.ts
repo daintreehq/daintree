@@ -1,5 +1,10 @@
 import type { PanelLocation } from "@/types";
-import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type {
+  PanelRegistryStoreApi,
+  PanelRegistrySlice,
+  PresetRespawnOptions,
+  PresetRespawnResult,
+} from "./types";
 import {
   terminalClient,
   agentSettingsClient,
@@ -27,6 +32,7 @@ import {
   agentClipboardDirectory,
   dropRetiredAgentModel,
   dropUnselectedAgentModel,
+  supportsConversationKeepingSwitch,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
 import { notifyRetiredModelDropped } from "@/services/terminal/retiredModelNotice";
@@ -55,6 +61,7 @@ import {
   isPtyPanel,
   type PanelInstance,
   type PanelTitleMode,
+  type PresetSwitchPriorLaunch,
   type PtyPanelData,
 } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
@@ -1116,6 +1123,7 @@ export const createRestartActions = (
           // Answered only once the replacement is actually spawning, so a
           // restart that fails validation leaves the offer to try again.
           agentResumeOffer: undefined,
+          presetSwitchResume: undefined,
           exitCode: undefined,
           sessionPreservingExit: undefined,
           // Drop the prior session's parsed check result (#10682) — a fresh
@@ -1665,11 +1673,18 @@ export const createRestartActions = (
     });
   },
 
-  activateFallbackPreset: (id, nextPresetId, originalPresetId) =>
-    respawnAgentOnPreset(set, get, id, nextPresetId, { kind: "fallback", originalPresetId }),
+  activateFallbackPreset: (id, nextPresetId, originalPresetId, options) =>
+    respawnAgentOnPreset(
+      set,
+      get,
+      id,
+      nextPresetId,
+      { kind: "fallback", originalPresetId },
+      options
+    ),
 
-  restartTerminalOnPreset: (id, presetId) =>
-    respawnAgentOnPreset(set, get, id, presetId, { kind: "switch" }),
+  restartTerminalOnPreset: (id, presetId, options) =>
+    respawnAgentOnPreset(set, get, id, presetId, { kind: "switch" }, options),
 });
 
 /**
@@ -1707,8 +1722,9 @@ async function respawnAgentOnPreset(
   get: Get,
   id: string,
   nextPresetId: string,
-  mode: PresetRespawnMode
-): Promise<{ success: boolean; error?: string }> {
+  mode: PresetRespawnMode,
+  options?: PresetRespawnOptions
+): Promise<PresetRespawnResult> {
   const livePanel = get().panelsById[id];
   if (!livePanel) {
     return { success: false, error: "terminal not found" };
@@ -1737,6 +1753,12 @@ async function respawnAgentOnPreset(
   // Held for recovery (#12434): nothing ran, so nothing failed over.
   if (terminal.restoreRecovery) {
     return { success: false, error: "panel is held for recovery" };
+  }
+  // Refused before the teardown: an agent whose refusal Daintree can't read
+  // would leave a failed resume looking like any other exit (#16045).
+  const keepConversation = options?.keepConversation === true;
+  if (keepConversation && !supportsConversationKeepingSwitch(effectiveAgentId)) {
+    return { success: false, error: "agent can't keep its conversation on another preset" };
   }
 
   markTerminalRestarting(id);
@@ -1772,6 +1794,9 @@ async function respawnAgentOnPreset(
   // stamp it replaced — unless the user renamed it in the meantime.
   let switchedTitle: { title: string; titleMode?: PanelTitleMode } | undefined;
   let launchCwd = terminal.cwd;
+  // The conversation a keeping switch resolved, kept through a rollback: the
+  // teardown may have captured a newer id than the pane held.
+  let resumedSessionId: string | undefined;
 
   try {
     const [agentSettings, tmpDir] = await Promise.all([
@@ -1817,9 +1842,10 @@ async function respawnAgentOnPreset(
       terminal.agentLaunchFlags,
       terminal.callerLaunchFlags
     );
-    // A switch promises a new conversation, and so does a hop that moves the
-    // pane into its worktree (#14954), so a caller's own resume selector
-    // (`--continue`, `resume --last`) can't ride along into the new home.
+    // A switch starts a new conversation, or reopens the pane's own by its id
+    // (#16045), and so does a hop that moves the pane into its worktree
+    // (#14954), so a caller's own resume selector (`--continue`,
+    // `resume --last`) can't ride along into the new home.
     const keptCallerFlags =
       mode.kind === "switch" || filedLaunchCwd(get, id, terminal) !== terminal.cwd
         ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
@@ -1865,20 +1891,74 @@ async function respawnAgentOnPreset(
       spawnRows = managedInstance.terminal.rows || spawnRows;
     }
 
+    // Read before the teardown clears it: the quit reaches whichever agent is
+    // live, so its answer belongs to this pane's conversation only when that
+    // agent is the one the pane launched (as in `restartTerminal`).
+    const captureTrusted =
+      livePanel.detectedAgentId === undefined || livePanel.detectedAgentId === effectiveAgentId;
+
     peekTerminalService()?.destroy(id);
     withTerminalService((service) => service.suppressNextExit(id, 10000), id);
+    let capturedSessionId: string | null = null;
     try {
-      await terminalClient.kill(id, { forRestart: true });
+      // Only the graceful channel hands back the id the quit captured; the
+      // bare kill goes through the same quit in main and discards it.
+      if (keepConversation) {
+        capturedSessionId = await terminalClient.gracefulKill(id, { forRestart: true });
+      } else {
+        await terminalClient.kill(id, { forRestart: true });
+      }
     } catch (error) {
       logWarn("[TerminalStore] kill failed during preset respawn; continuing", {
         id,
         error,
       });
+      if (keepConversation) {
+        await terminalClient.kill(id, { forRestart: true }).catch(() => {});
+      }
     }
 
     const nextChainIndex = (terminal.fallbackChainIndex ?? 0) + 1;
-    // Always a new conversation, so nothing ties it to the folder it left.
-    launchCwd = filedLaunchCwd(get, id, terminal);
+    // A new conversation starts where the pane is filed. A kept one opens
+    // there too for an agent that resumes across folders; the rest can only
+    // reopen it where it began.
+    const conversationHome = terminal.conversationCwd || terminal.cwd;
+    launchCwd =
+      keepConversation && !supportsCrossDirectoryResume(effectiveAgentId)
+        ? conversationHome
+        : filedLaunchCwd(get, id, terminal);
+
+    let spawnCommand = commandToRun;
+    if (keepConversation) {
+      resumedSessionId =
+        (captureTrusted ? capturedSessionId : null) ?? terminal.agentSessionId ?? undefined;
+      if (!resumedSessionId) {
+        throw new Error(
+          `The conversation's id didn't turn up, so nothing was started on ${nextPreset.name}.`
+        );
+      }
+      // Never degraded to resume-latest or a new conversation: the switch
+      // promised this one.
+      const resumeCommand = buildResumeCommand(
+        effectiveAgentId,
+        resumedSessionId,
+        stripConversationSelectorFlags(nextLaunchFlags, effectiveAgentId),
+        baseCommand
+      );
+      if (!resumeCommand) {
+        throw new Error(
+          `Couldn't build the command to reopen the conversation on ${nextPreset.name}.`
+        );
+      }
+      spawnCommand = resumeCommand;
+    }
+    const keptSessionId = keepConversation ? resumedSessionId : undefined;
+    const keptConversationCwd =
+      keptSessionId && conversationHome && conversationHome !== launchCwd
+        ? conversationHome
+        : undefined;
+    // What "Back" puts back if the CLI refuses the conversation here.
+    const priorLaunch: PresetSwitchPriorLaunch = { ...priorSnapshot, cwd: terminal.cwd };
 
     set((state) => {
       const t = state.panelsById[id];
@@ -1906,11 +1986,22 @@ async function respawnAgentOnPreset(
         agentLaunchFlags: nextLaunchFlags,
         agentModelId: terminal.agentModelId,
         callerLaunchFlags: callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
-        agentSessionId: undefined,
-        // The fallback starts a new conversation where the pane runs, and is
-        // never handed the prompt the last one launched with (#14592).
-        conversationCwd: undefined,
-        firstPrompt: undefined,
+        // A new conversation starts where the pane runs, and is never handed
+        // the prompt the last one launched with (#14592). A kept one is still
+        // the conversation that prompt began, filed where it began (#16045).
+        agentSessionId: keptSessionId,
+        conversationCwd: keptConversationCwd,
+        firstPrompt: keptSessionId ? t.firstPrompt : undefined,
+        presetSwitchResume: keptSessionId
+          ? {
+              agentId: effectiveAgentId,
+              sessionId: keptSessionId,
+              presetId: nextPreset.id,
+              prior: priorLaunch,
+            }
+          : undefined,
+        // About the run this respawn replaces.
+        agentResumeOffer: undefined,
         isRestarting: true,
         restartError: undefined,
         exitCode: undefined,
@@ -2021,7 +2112,7 @@ async function respawnAgentOnPreset(
       // unaccompanied re-stamps as "default" and the next detection sweep
       // overwrites the user's rename (#10794).
       ...fallbackTitle,
-      command: commandToRun,
+      command: spawnCommand,
       restore: false,
       env: restartEnv,
       agentLaunchFlags: nextLaunchFlags,
@@ -2034,6 +2125,10 @@ async function respawnAgentOnPreset(
       agentPresetId: nextPreset.id,
       agentPresetColor: nextPreset.color,
       originalAgentPresetId: nextOriginalPresetId,
+      // On the record as the PTY starts, so the kept conversation is the
+      // pane's from its first moment (#11782).
+      agentSessionId: keptSessionId,
+      ...(keptSessionId && terminal.firstPrompt && { hasFirstPrompt: true }),
       requiredPluginTools: terminal.requiredPluginTools,
       actionContext: buildAgentLaunchContext({
         launchAgentId: terminal.launchAgentId,
@@ -2056,7 +2151,7 @@ async function respawnAgentOnPreset(
 
     unmarkTerminalRestarting(id);
     set((state) => updateTerminal(state, id, respawned));
-    return { success: true };
+    return keptSessionId ? { success: true, resumedSessionId: keptSessionId } : { success: true };
   } catch (error) {
     const appError = isClientAppError(error) ? error : null;
     const errorMessage =
@@ -2076,6 +2171,15 @@ async function respawnAgentOnPreset(
         // rollback, any subsequent fallback trigger would jump past this
         // preset even though the PTY never started.
         ...priorSnapshot,
+        // The folder goes back with `conversationCwd`, or a kept id would be
+        // filed under the one the failed launch moved to. A move that landed
+        // since owns the folder, and the conversation is filed against it.
+        ...(isPtyPanel(t) && t.cwd !== launchCwd
+          ? conversationOriginPatch(terminal, t.cwd)
+          : { cwd: terminal.cwd }),
+        // Nothing runs to watch, and the conversation stays reachable.
+        presetSwitchResume: undefined,
+        ...(resumedSessionId ? { agentSessionId: resumedSessionId } : {}),
         // Only the stamp this switch wrote: a rename since then, even one that
         // happens to spell the same title, now belongs to the user.
         ...(switchedTitle &&

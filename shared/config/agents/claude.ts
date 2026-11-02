@@ -170,6 +170,8 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["--resume", sessionId],
     quitCommand: "/quit",
     sessionIdPattern: "claude --resume ([\\w-]+)",
+    // Interactive and `-p` alike, then exit 1. Verified against Claude Code 2.1.316.
+    refusalPattern: "No conversation found with session ID",
     resumeLatestArgs: ["--continue"],
     // #11782: Claude Code accepts the session id up front, so we mint it at
     // launch instead of scraping it back out at teardown. `--resume` reuses

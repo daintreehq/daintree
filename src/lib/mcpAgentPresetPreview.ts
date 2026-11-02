@@ -112,6 +112,11 @@ const PRESET_FIELDS: readonly PresetField[] = [
     read: (p) => (p.fallbackOnRateLimit === true ? "On" : undefined),
     unset: "Off",
   },
+  {
+    label: "Keep the conversation on usage limits",
+    read: (p) => (p.keepConversationOnRateLimit === true ? "On" : undefined),
+    unset: "Off",
+  },
 ];
 
 function envEntries(preset: AgentPreset): Map<string, string> {

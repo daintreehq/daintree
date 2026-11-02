@@ -4,13 +4,19 @@ import {
   TerminalKillBatchIdsSchema,
 } from "@shared/types/terminalKillBatch";
 
+export const KeepConversationArgSchema = z
+  .boolean()
+  .optional()
+  .describe("Keep the conversation by id.");
+
 export const RestartOnPresetArgsSchema = z.object({
   terminalId: z.string().optional(),
   presetId: z.string().min(1).describe("Preset of the terminal's own agent to respawn on."),
+  keepConversation: KeepConversationArgSchema,
   confirmed: z
     .boolean()
     .optional()
-    .describe("Confirms ending the conversation. Without it the terminal is left alone."),
+    .describe("Confirms interrupting the agent. Without it the terminal is left alone."),
 });
 
 export const TerminalKillBatchArgsSchema = z.object({

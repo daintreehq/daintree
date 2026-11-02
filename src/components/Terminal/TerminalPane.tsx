@@ -54,6 +54,7 @@ import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
 import { useContextInjection } from "@/hooks/useContextInjection";
 import { getRestartBannerVariant } from "./restartStatus";
+import { PresetSwitchRefusedBanner } from "./PresetSwitchRefusedBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
@@ -519,6 +520,10 @@ function TerminalPaneComponent({
   const agentResumeOffer = usePanelStore((state) => {
     const panel = state.panelsById[id];
     return panel && isPtyPanel(panel) ? panel.agentResumeOffer : undefined;
+  });
+  const presetSwitchRefused = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    return panel !== undefined && isPtyPanel(panel) && panel.presetSwitchResume?.refused === true;
   });
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
@@ -1686,6 +1691,11 @@ function TerminalPaneComponent({
               isRestarting={isRestarting}
             />
           )}
+        </BannerSlot>
+
+        {/* A choice the pane waits on (#16045): no agent runs until it's made. */}
+        <BannerSlot visible={presetSwitchRefused && !isRestarting}>
+          <PresetSwitchRefusedBanner panelId={id} />
         </BannerSlot>
 
         <BannerSlot visible={showRestartStatus && !isAdvisoryRestartBanner}>

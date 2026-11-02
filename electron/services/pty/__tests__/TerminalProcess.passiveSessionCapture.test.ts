@@ -774,6 +774,7 @@ describe("passive agent session capture", () => {
           launchedRun: true,
           resumeHintSeen: false,
           selfUpdateSucceeded: true,
+          resumeRefused: false,
         });
         expect(captured).toHaveLength(1);
         expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
@@ -801,6 +802,7 @@ describe("passive agent session capture", () => {
         expect(exited[0].agentEnd).toMatchObject({
           resumeHintSeen: true,
           selfUpdateSucceeded: false,
+          resumeRefused: false,
         });
       } finally {
         off();
@@ -820,6 +822,7 @@ describe("passive agent session capture", () => {
           launchedRun: true,
           resumeHintSeen: false,
           selfUpdateSucceeded: false,
+          resumeRefused: false,
         });
         // Still reachable from history.
         expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
@@ -847,6 +850,7 @@ describe("passive agent session capture", () => {
           launchedRun: false,
           resumeHintSeen: false,
           selfUpdateSucceeded: false,
+          resumeRefused: false,
         });
         // Only the launched run journaled the launch id.
         expect(captured).toHaveLength(1);
@@ -882,6 +886,116 @@ describe("passive agent session capture", () => {
         await flushCapture();
         expect(captured).toHaveLength(0);
         expect(exited[0].agentEnd).toMatchObject({ launchedRun: true, selfUpdateSucceeded: true });
+      } finally {
+        off();
+      }
+    });
+  });
+
+  describe("a resume the CLI refused (#16045)", () => {
+    const LAUNCH_ID = "7f3c9a12-4b6e-4d1a-9c2f-0e8b5a6d1f34";
+
+    /** The refusal as each CLI prints it interactively, checked against the registry. */
+    function refusal(agentId: "codex" | "claude", line: string): string {
+      const resume = getAgentConfig(agentId)?.resume;
+      if (resume?.kind !== "session-id" || !resume.refusalPattern) {
+        throw new Error(`${agentId} must declare a refusalPattern`);
+      }
+      if (!new RegExp(resume.refusalPattern).test(line)) {
+        throw new Error(`fixture no longer matches ${agentId}'s declared refusalPattern`);
+      }
+      return line;
+    }
+
+    function captureExited(): {
+      exited: DaintreeEventMap["agent:exited"][];
+      off: () => void;
+    } {
+      const exited: DaintreeEventMap["agent:exited"][] = [];
+      const off = events.on("agent:exited", (payload) => exited.push(payload));
+      return { exited, off };
+    }
+
+    it("reports Codex's interactive refusal as the run's last words", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(
+          [
+            `$ codex resume ${LAUNCH_ID} -C .`,
+            "\x1b[?1049h  >_ OpenAI Codex (v0.166.0)  Resuming session…\x1b[?1049l",
+            refusal(
+              "codex",
+              `ERROR: No saved session found with ID ${LAUNCH_ID}. Run \`codex resume\` without an ID to choose from existing sessions.`
+            ),
+            "user@host project % ",
+          ].join("\r\n")
+        );
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toMatchObject({ launchedRun: true, resumeRefused: true });
+      } finally {
+        off();
+      }
+    });
+
+    it("reports Claude's refusal on a PTY exit too", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(
+          createTerminal({ launchAgentId: "claude", agentSessionId: LAUNCH_ID })
+        );
+        detect(terminal, makeAgentResult({ agentType: "claude", processIconId: "claude" }));
+        mockPty(terminal).__emitData(
+          `${refusal("claude", `No conversation found with session ID: ${LAUNCH_ID}`)}\r\r\n`
+        );
+        mockPty(terminal).__emitExit(1);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toMatchObject({ launchedRun: true, resumeRefused: true });
+      } finally {
+        off();
+      }
+    });
+
+    it.each([
+      // Short lines: only the line bound keeps the refusal out of the window.
+      ["more lines than the window", Array.from({ length: 12 }, (_, i) => `ok ${i}`).join("\n")],
+      // One long line: only the character bound does.
+      ["more characters than the window", "x".repeat(500)],
+    ])("leaves a refusal followed by %s unreported", async (_label, after) => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(
+          [`ERROR: No saved session found with ID ${LAUNCH_ID}.`, after, "$ "].join("\n")
+        );
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toMatchObject({ resumeRefused: false });
+      } finally {
+        off();
+      }
+    });
+
+    it("leaves a later run in the same shell unreported", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData("goodbye\n$ ");
+        demote(terminal);
+        terminal.getInfo().agentIncarnation = 1;
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(`ERROR: No saved session found with ID ${LAUNCH_ID}.\n$ `);
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[1].agentEnd).toMatchObject({ launchedRun: false, resumeRefused: false });
       } finally {
         off();
       }

@@ -335,6 +335,25 @@ describe("Preset fallback chain sanitization", () => {
     ]);
   });
 
+  it("keeps the usage-limit conversation opt-in only when it is exactly true (#16045)", () => {
+    const stringy = { id: "string", name: "String" };
+    Reflect.set(stringy, "keepConversationOnRateLimit", "true");
+    const result = getMergedPresets("codex", [
+      { id: "on", name: "On", keepConversationOnRateLimit: true },
+      stringy,
+      { id: "off", name: "Off", keepConversationOnRateLimit: false },
+    ]);
+    expect(
+      result
+        .filter((p) => ["on", "string", "off"].includes(p.id))
+        .map((p) => [p.id, p.keepConversationOnRateLimit])
+    ).toEqual([
+      ["on", true],
+      ["string", undefined],
+      ["off", undefined],
+    ]);
+  });
+
   it("strips self-references from fallbacks", () => {
     const bad = [
       { id: "me", name: "Me", fallbacks: ["me", "other"] },

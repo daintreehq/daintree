@@ -494,6 +494,142 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
   });
 });
 
+describe("handleFallbackTriggered — keeping the conversation on a usage limit (#16045)", () => {
+  const original = usePanelStore.getState().activateFallbackPreset;
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  function setupCodexChain(
+    primary: Record<string, unknown>,
+    result: Record<string, unknown> = { success: true, resumedSessionId: "thread-1" }
+  ): ReturnType<typeof vi.fn> {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          codex: {
+            customPresets: [
+              { id: "preset-1", name: "Personal", fallbacks: ["preset-2"], ...primary },
+              { id: "preset-2", name: "Company" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ launchAgentId: "codex" });
+    const activate = vi.fn().mockResolvedValue(result);
+    usePanelStore.setState({ activateFallbackPreset: activate });
+    return activate;
+  }
+
+  function trigger(reason: "rate-limit" | "connection" = "rate-limit") {
+    return handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "codex",
+      fromPresetId: "preset-1",
+      reason,
+    });
+  }
+
+  it("asks the next preset to reopen the conversation when the user's preset says so", async () => {
+    const activate = setupCodexChain({
+      fallbackOnRateLimit: true,
+      keepConversationOnRateLimit: true,
+    });
+
+    await trigger();
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1", {
+      keepConversation: true,
+    });
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("reopening this conversation") })
+    );
+  });
+
+  it("starts a new conversation on a hop the preset didn't ask to keep", async () => {
+    const activate = setupCodexChain({ fallbackOnRateLimit: true }, { success: true });
+
+    await trigger();
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("in a new conversation") })
+    );
+  });
+
+  it("keeps the connection fallback a new conversation whatever the preset says", async () => {
+    const activate = setupCodexChain(
+      { fallbackOnRateLimit: true, keepConversationOnRateLimit: true },
+      { success: true }
+    );
+
+    await trigger("connection");
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+  });
+
+  it("takes no consent from a team-shared project preset", async () => {
+    const activate = setupCodexChain({}, { success: true });
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { customPresets: [{ id: "preset-2", name: "Company" }] } } },
+    });
+    useProjectPresetsStore.setState({
+      presetsByAgent: {
+        codex: [
+          {
+            id: "preset-1",
+            name: "Shared",
+            fallbacks: ["preset-2"],
+            fallbackOnRateLimit: true,
+            keepConversationOnRateLimit: true,
+          },
+        ],
+      },
+    });
+    try {
+      await trigger();
+    } finally {
+      useProjectPresetsStore.setState({ presetsByAgent: {} });
+    }
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("starts a new conversation for an agent whose refusal isn't recognised", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              {
+                id: "preset-1",
+                name: "Primary",
+                fallbacks: ["preset-2"],
+                fallbackOnRateLimit: true,
+                keepConversationOnRateLimit: true,
+              },
+              { id: "preset-2", name: "Second account" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel();
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+  });
+});
+
 describe("handleFallbackTriggered — guard clauses", () => {
   it("returns early when panel is not found", async () => {
     await handleFallbackTriggered({
