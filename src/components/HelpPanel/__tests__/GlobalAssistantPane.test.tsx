@@ -366,6 +366,52 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
   });
 
+  it("attaches again as it can type now, not as it could when it let go", async () => {
+    canopy.isOpen = true;
+    installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
+    const { rerenderVisible } = renderPane();
+    await flush();
+    rerenderVisible(false);
+    await flush();
+    canopy.isOpen = false;
+    rerenderVisible(true);
+    await flush();
+    expect(help.attachGlobalAssistant.mock.calls).toEqual([[false], [true]]);
+    expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
+  });
+
+  it("tells main nothing when hidden in the same moment it could type again", async () => {
+    canopy.isOpen = true;
+    installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
+    const { rerenderVisible } = renderPane();
+    await flush();
+    canopy.isOpen = false;
+    rerenderVisible(false);
+    await flush();
+    expect(help.detachGlobalAssistant).toHaveBeenCalledWith("a1");
+    expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
+  });
+
+  it("tells main nothing when a change made during the attach is undone before it answers", async () => {
+    canopy.isOpen = true;
+    installHelp(running());
+    let answer!: (value: { attachmentId: string; state: GlobalAssistantView }) => void;
+    help.attachGlobalAssistant.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    const { rerenderVisible } = renderPane();
+    await flush();
+    canopy.isOpen = false;
+    rerenderVisible(true);
+    await flush();
+    canopy.isOpen = true;
+    rerenderVisible(true);
+    await flush();
+    await act(async () => answer({ attachmentId: "a1", state: running() }));
+    await flush();
+    expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
+  });
+
   it("keeps one stream while input moves between other windows", async () => {
     installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
     renderPane();
@@ -384,8 +430,10 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(screen.queryByTestId("global-terminal")).toBeNull();
     expect(screen.getByTestId("help-global-show-current")).not.toBeNull();
     expect(help.ensureGlobalAssistant).not.toHaveBeenCalled();
-    // It can't type to the successor it hides, so input nobody holds passes it over.
-    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", false);
+    // It can't type to the successor it hides, so input nobody holds passes it
+    // over, from the attach on: the chosen run isn't known to be running yet.
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
+    expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("help-global-show-current"));
     await flush();
@@ -437,6 +485,9 @@ describe("GlobalAssistantPane (#14454)", () => {
     renderPane();
     await flush();
     expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g1");
+    // Seen running, the chosen run can take input nobody holds.
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
   });
 
   it("attaches nothing from a window bound to another host", async () => {

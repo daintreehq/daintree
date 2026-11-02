@@ -64,6 +64,19 @@ function chosenRunEnded(
 }
 
 /**
+ * Whether the pane could type to the run `view` shows: not behind Canopy, and
+ * showing the run "Open in Assistant" chose only once that run is seen running.
+ */
+function canTypeTo(
+  canopyOpen: boolean,
+  target: AgentDirectorySubject | null,
+  view: GlobalAssistantView | null
+): boolean {
+  if (canopyOpen) return false;
+  return target === null || isSameAssistantRun(runningSubject(view), target);
+}
+
+/**
  * The installation's one global Daintree Assistant, in the Assistant panel
  * (#14454). Main owns its run; this view attaches to read it while the pane is
  * on screen and lets go when it isn't, which never ends the run. Nothing here
@@ -105,7 +118,7 @@ export function GlobalAssistantPane({
   // nobody holds passes it over.
   const { view, attachmentId, error, start, claimInput, restart, discard } = useGlobalAssistant(
     active,
-    (shown) => !canopyOpen && !chosenRunEnded(target, shown)
+    (shown) => canTypeTo(canopyOpen, target, shown)
   );
   const [pendingConfirm, setPendingConfirm] = useState<{
     kind: "restart" | "discard";

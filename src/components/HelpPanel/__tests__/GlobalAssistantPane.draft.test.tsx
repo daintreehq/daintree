@@ -156,7 +156,9 @@ describe("GlobalAssistantPane draft across input handovers", () => {
       </TooltipProvider>
     );
     // The composer is lazy: let its chunk and the attach settle.
-    await vi.waitFor(() => expect(result.container.querySelector(".cm-editor")).not.toBeNull());
+    await vi.waitFor(() => expect(result.container.querySelector(".cm-editor")).not.toBeNull(), {
+      timeout: 10_000,
+    });
     const editor = () =>
       EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
     const push = async (state: GlobalAssistantView) => {

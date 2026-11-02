@@ -319,8 +319,13 @@ describe("GlobalAssistantService", () => {
       const a = service.attach(10, 1);
       const b = service.attach(20, 2);
       const epochBefore = service.getState().inputEpoch;
+      const owners: Array<string | null> = [];
+      service.onChange((state) => owners.push(state.inputOwner));
       service.detach(a, 10);
       expect(service.getState().inputOwner).toBe(b);
+      // One handover, never a published moment with nobody holding it.
+      expect(service.getState().inputEpoch).toBe(epochBefore + 1);
+      expect(owners).toEqual([b]);
       expect(service.canWrite(a, epochBefore)).toBe(false);
       expect(service.canWrite(b, epochBefore)).toBe(false);
       expect(service.canWrite(b, service.getState().inputEpoch)).toBe(true);
@@ -349,6 +354,29 @@ describe("GlobalAssistantService", () => {
       expect(service.getState().inputOwner).toBe(inFour);
       service.detach(inFour, 40);
       expect(service.getState().inputOwner).toBe(inThree);
+    });
+
+    it("ranks two remaining windows by focus, not by when they attached", () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const owner = service.attach(10, 1);
+      const earlier = service.attach(20, 2);
+      service.attach(30, 3);
+      deps.focusedWindows.mockReturnValue([2, 3, 1]);
+      service.detach(owner, 10);
+      expect(service.getState().inputOwner).toBe(earlier);
+    });
+
+    it("passes over a reader that stopped being able to type", () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const owner = service.attach(10, 1);
+      const behindCanopy = service.attach(20, 2);
+      const free = service.attach(30, 3);
+      deps.focusedWindows.mockReturnValue([2, 3, 1]);
+      service.setEligible(behindCanopy, 20, false);
+      service.detach(owner, 10);
+      expect(service.getState().inputOwner).toBe(free);
     });
 
     it("prefers the later of two attachments in the same focused window", async () => {

@@ -204,6 +204,15 @@ describe("global assistant IPC handlers", () => {
     });
   });
 
+  it("passes over a view that said it can no longer type", async () => {
+    const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    const c = await handlers.handleAttachGlobalAssistant(ctx(30, 3));
+    await handlers.handleSetGlobalAssistantInputEligible(ctx(30, 3), c.attachmentId, false);
+    await handlers.handleDetachGlobalAssistant(ctx(10, 1), a.attachmentId);
+    expect((await handlers.handleGetGlobalAssistantState()).inputOwner).toBe(b.attachmentId);
+  });
+
   it("tells every window when a departing owner's input moves to another", async () => {
     const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
     const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));

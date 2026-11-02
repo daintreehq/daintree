@@ -42,7 +42,8 @@ function messageOf(error: unknown, fallback: string): string {
  *
  * `canType` says whether the pane, showing `view`, could type to the run.
  * Main is told on attach and at every change, so input nobody holds is only
- * ever handed to a view that can use it (#16098).
+ * ever handed to a view that can use it (#16098). An attach asks as for a
+ * view not seen yet (`null`): what was shown before it may since have changed.
  */
 export function useGlobalAssistant(
   active: boolean,
@@ -54,10 +55,10 @@ export function useGlobalAssistant(
   const eligible = canType(view);
   // Read by the attach below without re-attaching when it changes; kept
   // current ahead of it, since effects run in the order they are declared.
-  const eligibleRef = useRef(eligible);
+  const canTypeRef = useRef(canType);
   useEffect(() => {
-    eligibleRef.current = eligible;
-  }, [eligible]);
+    canTypeRef.current = canType;
+  }, [canType]);
   /** What main was last told of an attachment's eligibility. */
   const reportedRef = useRef<{ attachmentId: string; eligible: boolean } | null>(null);
 
@@ -66,7 +67,7 @@ export function useGlobalAssistant(
     const help = window.electron.help;
     let disposed = false;
     let attached: string | null = null;
-    const asked = eligibleRef.current;
+    const asked = canTypeRef.current(null);
     // Subscribed before attaching: the attach answer is newer than any change
     // sent before it, and every change after it arrives here.
     const off = help.onGlobalAssistantChanged((state) => {
@@ -100,18 +101,23 @@ export function useGlobalAssistant(
     };
   }, [active]);
 
-  // A change while the attach was on its way is told once it has answered.
+  // A change while the attach was on its way is told once it has answered;
+  // an attachment being let go in this same commit is told nothing.
   useEffect(() => {
-    if (attachmentId === null) return;
+    if (!active || attachmentId === null) return;
     const reported = reportedRef.current;
     if (reported?.attachmentId === attachmentId && reported.eligible === eligible) return;
     reportedRef.current = { attachmentId, eligible };
+    let current = true;
     window.electron.help
       .setGlobalAssistantInputEligible(attachmentId, eligible)
       .catch((err: unknown) => {
-        logWarn("[GlobalAssistant] input eligibility update failed", { error: err });
+        if (current) logWarn("[GlobalAssistant] input eligibility update failed", { error: err });
       });
-  }, [attachmentId, eligible]);
+    return () => {
+      current = false;
+    };
+  }, [active, attachmentId, eligible]);
 
   const run = useCallback(
     async (action: () => Promise<GlobalAssistantView>, fallback: string): Promise<boolean> => {
