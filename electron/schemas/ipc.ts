@@ -443,6 +443,8 @@ export const TerminalSpawnOptionsSchema = z.object({
   // Handback code for the initial prompt (#12488). Listed or zod strips it, and
   // held to the marker grammar because the pty-host searches for it literally.
   handbackCode: z.string().regex(HANDBACK_CODE_PATTERN).optional(),
+  // A recipe step's When done (#16172), armed on this launch alone. Listed or zod strips it.
+  whenDone: z.enum(["background", "close"]).optional(),
   // Listed or zod strips it, and every send to a run that has its first prompt
   // would be offered as that record again (#15521).
   hasFirstPrompt: z.boolean().optional(),

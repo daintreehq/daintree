@@ -315,6 +315,13 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
 const { mockResolveSettingTemplate } = vi.hoisted(() => ({
   mockResolveSettingTemplate: vi.fn<(pluginId: string, settingId: string) => Promise<string>>(),
 }));
+const { mockArmWhenDoneLaunch } = vi.hoisted(() => ({
+  mockArmWhenDoneLaunch: vi.fn(() => true),
+}));
+vi.mock("../../../../services/terminalWhenDone/terminalWhenDoneLive.js", () => ({
+  armWhenDoneLaunch: mockArmWhenDoneLaunch,
+}));
+
 vi.mock("../../../../services/PluginService.js", () => ({
   pluginService: {
     resolveSettingTemplate: (pluginId: string, settingId: string) =>
@@ -336,6 +343,11 @@ import {
   _resetScheduledRunAdmissionForTest,
   reserveScheduledLaunch,
 } from "../../../../services/scheduledRuns/scheduledRunAdmission.js";
+import {
+  disposeLifecycleLedger,
+  getLifecycleLedger,
+  ledgerFactsFromSpawnOptions,
+} from "../../../../services/pty/lifecycleLedger.js";
 
 function getSpawnHandler() {
   const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
@@ -3642,5 +3654,139 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
 
     await expect(agentSpawn("restored", { restore: true })).resolves.toBe("restored");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal spawn handler - a recipe step's When done (#16172)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    disposeLifecycleLedger();
+    // Records the launch as PtyClient.spawn does, minting the generation.
+    ptyClient = {
+      spawn: vi.fn((id: string, options: Parameters<typeof ledgerFactsFromSpawnOptions>[0]) => {
+        getLifecycleLedger().recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      }),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockIsHelpTerminal.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    disposeLifecycleLedger();
+    _resetScheduledRunAdmissionForTest();
+  });
+
+  const recipeSpawn = async (overrides: Record<string, unknown> = {}) => {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    return handler({} as Electron.IpcMainInvokeEvent, {
+      id: "terminal-review",
+      projectId: "project-1",
+      cwd: os.homedir(),
+      cols: 80,
+      rows: 24,
+      launchAgentId: "claude",
+      command: "claude 'Review'",
+      handbackCode: "k7f3qa",
+      whenDone: "close",
+      ...overrides,
+    });
+  };
+
+  it("arms a fresh agent launch with its code, after the spawn the host reports for", async () => {
+    await recipeSpawn();
+
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    expect(mockArmWhenDoneLaunch).toHaveBeenCalledWith({
+      terminalId: "terminal-review",
+      projectId: "project-1",
+      launchGeneration: getLifecycleLedger().currentGeneration("terminal-review"),
+      choice: "close",
+      code: "k7f3qa",
+    });
+  });
+
+  it("never arms a respawn under an id that already ran, as a restart is", async () => {
+    await recipeSpawn();
+    mockArmWhenDoneLaunch.mockClear();
+
+    await recipeSpawn();
+
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[1]?.[1]).not.toHaveProperty("handbackInstruction");
+  });
+
+  it("arms the choice it was given", async () => {
+    await recipeSpawn({ whenDone: "background" });
+
+    expect(mockArmWhenDoneLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ choice: "background" })
+    );
+  });
+
+  it("never arms a restore, a launch with no code, a shell, or an agent with no command", async () => {
+    await recipeSpawn({ id: "restored", restore: true });
+    await recipeSpawn({ id: "no-code", handbackCode: undefined });
+    await recipeSpawn({ id: "shell", launchAgentId: undefined });
+    await recipeSpawn({ id: "bare-agent", command: "" });
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(4);
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+    for (const call of ptyClient.spawn.mock.calls) {
+      expect(call[1]).not.toHaveProperty("handbackInstruction");
+    }
+  });
+
+  it("leaves a scheduled run's launch to its own done policy", async () => {
+    const reserved = reserveScheduledLaunch({
+      runId: "run-1",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      terminalId: "terminal-review",
+      agentId: "claude",
+      admit: vi.fn(),
+    });
+
+    await recipeSpawn({ scheduledRun: { scheduleId: "schedule-1", runId: "run-1" } });
+
+    expect(reserved.state()).toEqual({ kind: "registered" });
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+    // The run's own report still goes out for its code.
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({ handbackInstruction: "run" });
+  });
+
+  it("never arms the Assistant's own terminal", async () => {
+    mockIsHelpTerminal.mockReturnValue(true);
+
+    await recipeSpawn();
+
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+  });
+
+  it("arms nothing when PtyClient refuses the spawn before sending it", async () => {
+    ptyClient.spawn.mockImplementation(() => {});
+
+    await recipeSpawn();
+
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a value other than background or close", async () => {
+    await expect(recipeSpawn({ whenDone: "keep" })).rejects.toThrow(/validation/i);
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 });

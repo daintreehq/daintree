@@ -33,6 +33,33 @@ export interface ArmedTerminal extends WhenDoneIncarnation {
   revision: number;
 }
 
+/**
+ * A fresh agent launch whose first prompt already carries the instruction for
+ * `code` (#16172): a recipe step's When done.
+ */
+export interface WhenDoneLaunch {
+  readonly terminalId: string;
+  readonly projectId: string;
+  /** The generation main gave the spawn. */
+  readonly launchGeneration: number;
+  readonly choice: ArmedChoice;
+  readonly code: string;
+}
+
+/** The host's answer to a spawn, as far as a launch armed on it needs. */
+export interface WhenDoneSpawnResult {
+  readonly success: boolean;
+  readonly launchGeneration?: number;
+  readonly spawnedAt?: number;
+}
+
+/**
+ * An armed terminal as the service holds it. A launch armed before its spawn
+ * is confirmed has no `spawnedAt` yet: nothing can act for it, and it isn't
+ * shown as armed, until the host names its incarnation.
+ */
+type HeldTerminal = Omit<ArmedTerminal, "spawnedAt"> & { spawnedAt: number | null };
+
 /** A submission to an armed terminal, carrying its own fresh code. */
 export interface ArmedSubmission {
   readonly text: string;
@@ -49,6 +76,13 @@ export interface WhenDoneReport {
 }
 
 export type WhenDoneOutcome = "applied" | "in-use" | "not-applied";
+
+/**
+ * How long a launch armed before its spawn waits for the host to confirm it.
+ * A spawn queued for a host that never takes it, or killed before delivery,
+ * sends no answer and no exit, so the choice is dropped rather than held.
+ */
+export const LAUNCH_CONFIRMATION_TIMEOUT_MS = 120_000;
 
 export interface TerminalWhenDoneDeps {
   /** The terminal's live agent incarnation, or null when it has none that can be armed. */
@@ -69,6 +103,7 @@ export interface TerminalWhenDoneDeps {
   onActiveChange?: (active: boolean) => void;
   mintCode?: () => string;
   logWarn?: (message: string, error?: unknown) => void;
+  launchConfirmationTimeoutMs?: number;
 }
 
 export class TerminalWhenDoneError extends Error {
@@ -95,10 +130,12 @@ export class TerminalWhenDoneError extends Error {
  * nothing ever acts on a code minted for an agent that is no longer there.
  */
 export class TerminalWhenDone {
-  private readonly armed = new Map<string, ArmedTerminal>();
+  private readonly armed = new Map<string, HeldTerminal>();
   /** The latest `set` asked for each terminal, so an older one answering later commits nothing. */
   private readonly setSeq = new Map<string, number>();
   private nextSetSeq = 0;
+  /** Launches still waiting on their spawn's confirmation, each with its bound. */
+  private readonly pendingLaunches = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly mintCode: () => string;
   private readonly logWarn: (message: string, error?: unknown) => void;
 
@@ -152,6 +189,7 @@ export class TerminalWhenDone {
     }
     const code = this.mintCode();
     const wasActive = this.armed.size > 0;
+    this.settleLaunch(terminalId);
     this.armed.set(terminalId, {
       terminalId,
       projectId: incarnation.projectId,
@@ -164,6 +202,62 @@ export class TerminalWhenDone {
     if (!wasActive) this.deps.onActiveChange?.(true);
     this.deps.notify(projectId, { terminalId, choice });
     this.deps.submitInstruction(terminalId, buildHandbackInstruction(code, "run"), code);
+  }
+
+  /**
+   * Arms a fresh agent launch with the choice a recipe step asked for
+   * (#16172). Nothing is sent: the launch's own prompt carries the instruction
+   * and is the outstanding request. It counts as armed once the host confirms
+   * the spawn ({@link handleSpawnResult}). False, arming nothing, when the id
+   * already holds a choice or has been respawned since.
+   */
+  armLaunch(launch: WhenDoneLaunch): boolean {
+    const { terminalId } = launch;
+    if (this.armed.has(terminalId)) return false;
+    if (this.deps.currentGeneration(terminalId) !== launch.launchGeneration) return false;
+    const wasActive = this.armed.size > 0;
+    const entry: HeldTerminal = {
+      terminalId,
+      projectId: launch.projectId,
+      spawnedAt: null,
+      launchGeneration: launch.launchGeneration,
+      choice: launch.choice,
+      outstanding: launch.code,
+      revision: 0,
+    };
+    this.armed.set(terminalId, entry);
+    const timer = setTimeout(() => {
+      this.pendingLaunches.delete(terminalId);
+      if (this.armed.get(terminalId) === entry && entry.spawnedAt === null) {
+        this.disarm(terminalId);
+      }
+    }, this.deps.launchConfirmationTimeoutMs ?? LAUNCH_CONFIRMATION_TIMEOUT_MS);
+    timer.unref?.();
+    this.pendingLaunches.set(terminalId, timer);
+    if (!wasActive) this.deps.onActiveChange?.(true);
+    return true;
+  }
+
+  /**
+   * The host answered a spawn. A launch armed on it is confirmed with the
+   * incarnation the host names, or dropped when the spawn failed.
+   */
+  handleSpawnResult(terminalId: string, result: WhenDoneSpawnResult): void {
+    const armed = this.armed.get(terminalId);
+    if (!armed || armed.spawnedAt !== null) return;
+    const generation = result.launchGeneration ?? this.deps.currentGeneration(terminalId);
+    if (generation !== armed.launchGeneration) return;
+    if (
+      !result.success ||
+      result.spawnedAt === undefined ||
+      this.deps.currentGeneration(terminalId) !== armed.launchGeneration
+    ) {
+      this.disarm(terminalId);
+      return;
+    }
+    this.settleLaunch(terminalId);
+    armed.spawnedAt = result.spawnedAt;
+    this.deps.notify(armed.projectId, { terminalId, choice: armed.choice });
   }
 
   /**
@@ -201,7 +295,7 @@ export class TerminalWhenDone {
   /** A marker retired its code on the host. Acts only for the outstanding request, once. */
   handleReport(report: WhenDoneReport): void {
     const armed = this.armed.get(report.terminalId);
-    if (!armed || armed.spawnedAt !== report.spawnedAt) return;
+    if (!armed || armed.spawnedAt === null || armed.spawnedAt !== report.spawnedAt) return;
     if (armed.outstanding === null || armed.outstanding !== report.code) return;
     armed.outstanding = null;
     if (report.report !== "done") return;
@@ -218,7 +312,7 @@ export class TerminalWhenDone {
       this.deps.currentGeneration(armed.terminalId) === armed.launchGeneration &&
       !this.deps.isShuttingDown();
     void this.deps
-      .apply({ ...armed }, stillCurrent)
+      .apply({ ...armed, spawnedAt: report.spawnedAt }, stillCurrent)
       .then((outcome) => {
         if (outcome === "applied" && armed.choice === "close") this.disarmIf(armed);
       })
@@ -234,7 +328,10 @@ export class TerminalWhenDone {
   handleExit(terminalId: string, spawnedAt?: number): void {
     const armed = this.armed.get(terminalId);
     if (!armed) return;
-    if (spawnedAt !== undefined && armed.spawnedAt !== spawnedAt) return;
+    // A launch not yet confirmed has no other incarnation an exit could be.
+    if (spawnedAt !== undefined && armed.spawnedAt !== null && armed.spawnedAt !== spawnedAt) {
+      return;
+    }
     this.disarm(terminalId);
   }
 
@@ -250,6 +347,8 @@ export class TerminalWhenDone {
     const entries: TerminalWhenDoneEntry[] = [];
     for (const armed of this.armed.values()) {
       if (armed.projectId !== projectId) continue;
+      // A launch the host hasn't confirmed isn't armed yet.
+      if (armed.spawnedAt === null) continue;
       // A restart the lifecycle events haven't reported yet still isn't armed.
       if (this.deps.currentGeneration(armed.terminalId) !== armed.launchGeneration) continue;
       entries.push({ terminalId: armed.terminalId, choice: armed.choice });
@@ -258,19 +357,30 @@ export class TerminalWhenDone {
   }
 
   /** @internal Tests only. */
-  peek(terminalId: string): Readonly<ArmedTerminal> | undefined {
+  peek(terminalId: string): Readonly<HeldTerminal> | undefined {
     return this.armed.get(terminalId);
   }
 
-  private disarmIf(armed: ArmedTerminal): void {
+  private disarmIf(armed: HeldTerminal): void {
     if (this.armed.get(armed.terminalId) === armed) this.disarm(armed.terminalId);
+  }
+
+  private settleLaunch(terminalId: string): void {
+    const timer = this.pendingLaunches.get(terminalId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.pendingLaunches.delete(terminalId);
   }
 
   private disarm(terminalId: string): void {
     const armed = this.armed.get(terminalId);
     if (!armed) return;
+    this.settleLaunch(terminalId);
     this.armed.delete(terminalId);
-    this.deps.notify(armed.projectId, { terminalId, choice: "keep" });
+    // A launch dropped before its spawn was confirmed was never shown as armed.
+    if (armed.spawnedAt !== null) {
+      this.deps.notify(armed.projectId, { terminalId, choice: "keep" });
+    }
     if (this.armed.size === 0) this.deps.onActiveChange?.(false);
   }
 }

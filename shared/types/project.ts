@@ -25,6 +25,7 @@ import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "./ipc/api.js";
+import type { TerminalWhenDone } from "./ipc/terminalWhenDone.js";
 
 /**
  * Project lifecycle status:
@@ -535,6 +536,26 @@ export function isAgentRecipeType(type: string): boolean {
   return type !== "terminal" && type !== "dev-preview" && type !== "plugin-panel";
 }
 
+/**
+ * Whether a launch prompt can carry the When done instruction (#16172): text
+ * for the agent to work on. An empty prompt asks nothing, and an agent CLI's
+ * slash command would take the instruction as its arguments, so neither is
+ * armed, as a send of either isn't (#16171).
+ */
+export function promptCarriesWhenDone(prompt: string | undefined): boolean {
+  const trimmed = prompt?.trim() ?? "";
+  return trimmed !== "" && !trimmed.startsWith("/");
+}
+
+/**
+ * Whether a recipe prompt opens with a variable, so only the filled-in prompt
+ * says whether {@link promptCarriesWhenDone} holds: it may fill in empty, or
+ * as a path that reads as a slash command.
+ */
+export function promptStartsWithVariable(prompt: string | undefined): boolean {
+  return prompt?.trimStart().startsWith("{{") ?? false;
+}
+
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
   /** Type of terminal to spawn */
@@ -562,6 +583,12 @@ export interface RecipeTerminal {
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely (optional, defaults to "keep") */
   exitBehavior?: PanelExitBehavior;
+  /**
+   * What an agent step's terminal does once its agent reports `done` (#16172):
+   * the When done choice of #16171, armed on the terminal this recipe launches
+   * and on no other. Absent means keep, which is never stored. Agent types only.
+   */
+  whenDone?: Exclude<TerminalWhenDone, "keep">;
   /** Per-panel model override captured at launch (agent types only). Transient — stripped before disk persistence. */
   agentModelId?: string;
   /** Process-level launch flags captured at launch (agent types only). Transient — stripped before disk persistence. */

@@ -1,4 +1,9 @@
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types";
+import {
+  isAgentRecipeType,
+  promptCarriesWhenDone,
+  promptStartsWithVariable,
+} from "@shared/types/project";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { pluralize } from "@/lib/pluralize";
@@ -66,6 +71,20 @@ export function describeTerminal(
   }
   if (terminal.systemPrompt) {
     lines.push(`system prompt: ${fragment(terminal.systemPrompt)}`);
+  }
+  // Only a launch whose prompt can carry the instruction is armed (#16172).
+  if (promptCarriesWhenDone(terminal.initialPrompt) && isAgentRecipeType(terminal.type)) {
+    const choice =
+      terminal.whenDone === "background"
+        ? "move to background"
+        : terminal.whenDone === "close"
+          ? "close, keeping the session"
+          : null;
+    // Only the filled-in prompt says whether a variable-led one is armed.
+    const condition = promptStartsWithVariable(terminal.initialPrompt)
+      ? " (if the filled-in prompt isn't empty or a slash command)"
+      : "";
+    if (choice) lines.push(`when done: ${choice}${condition}`);
   }
   const envKeys = Object.keys(terminal.env ?? {}).sort();
   if (envKeys.length > 0) {

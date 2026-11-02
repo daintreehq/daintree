@@ -15,6 +15,7 @@
 import { BUILT_IN_AGENT_IDS } from "../config/agentIds.js";
 import { isAgentRecipeType } from "../types/project.js";
 import type { RecipeTerminal, RecipeTerminalType } from "../types/project.js";
+import { TERMINAL_WHEN_DONE_CHOICES } from "../types/ipc/terminalWhenDone.js";
 
 /**
  * Maximum number of terminals a single recipe may spawn. Enforced at every
@@ -105,6 +106,10 @@ function copyPanelArgs(raw: unknown): Record<string, unknown> | null {
 // editor normalizes it away), so it is intentionally excluded here.
 const ALLOWED_EXIT_BEHAVIORS: ReadonlySet<string> = new Set<string>(["keep", "trash", "remove"]);
 
+// "keep" (and an empty string) is accepted and read as no setting: keep is the
+// default and is never stored (#16172).
+const ALLOWED_WHEN_DONE: ReadonlySet<string> = new Set<string>(["", ...TERMINAL_WHEN_DONE_CHOICES]);
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -118,6 +123,7 @@ export type RecipeTerminalField =
   | "devCommand"
   | "env"
   | "exitBehavior"
+  | "whenDone"
   | "panelKindId"
   | "panelArgs";
 
@@ -216,6 +222,10 @@ function checkRecipeTerminal(raw: unknown, options?: RecipeSanitizeOptions): Ter
     return reject({ kind: "unsupported-value", field: "exitBehavior" });
   }
 
+  if (typeof raw.whenDone === "string" && !ALLOWED_WHEN_DONE.has(raw.whenDone)) {
+    return reject({ kind: "unsupported-value", field: "whenDone" });
+  }
+
   const recipeType = type as RecipeTerminalType;
   const isAgent = isAgentRecipeType(recipeType);
   const systemPrompt =
@@ -246,6 +256,9 @@ function checkRecipeTerminal(raw: unknown, options?: RecipeSanitizeOptions): Ter
         typeof raw.exitBehavior === "string" && ALLOWED_EXIT_BEHAVIORS.has(raw.exitBehavior)
           ? (raw.exitBehavior as "keep" | "trash" | "remove")
           : undefined,
+      ...(isAgent && (raw.whenDone === "background" || raw.whenDone === "close")
+        ? { whenDone: raw.whenDone }
+        : {}),
     },
   };
 }

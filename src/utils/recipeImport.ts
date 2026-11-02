@@ -68,6 +68,8 @@ function describeRejection(rejection: RecipeTerminalRejection): string {
       switch (rejection.field) {
         case "exitBehavior":
           return '"exitBehavior" must be keep, trash or remove';
+        case "whenDone":
+          return '"whenDone" must be keep, background or close';
         case "panelArgs":
           return `"panelArgs" must be a JSON object under ${RECIPE_PANEL_ARGS_MAX_BYTES / 1024} KB`;
         case "panelKindId":

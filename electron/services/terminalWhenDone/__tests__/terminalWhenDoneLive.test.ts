@@ -66,6 +66,7 @@ import {
 import {
   IN_USE_ANSWER_TIMEOUT_MS,
   _resetTerminalWhenDoneForTest,
+  armWhenDoneLaunch,
   getTerminalWhenDone,
   isTerminalPaneInUse,
 } from "../terminalWhenDoneLive.js";
@@ -470,5 +471,56 @@ describe("getTerminalWhenDone live wiring", () => {
     await getTerminalWhenDone().set(TERMINAL, "close", PROJECT);
     state.ptyClient.emit("terminal-lost", TERMINAL);
     expect(getTerminalWhenDone().peek(TERMINAL)).toBeUndefined();
+  });
+});
+
+describe("a recipe step's launch armed with When done (#16172)", () => {
+  const launch = {
+    terminalId: TERMINAL,
+    projectId: PROJECT,
+    launchGeneration: 4,
+    choice: "close" as const,
+    code: "launch",
+  };
+
+  it("is confirmed by the host's spawn result and closes on its prompt's done, sending nothing", async () => {
+    const wc = view(1, false);
+    state.views = [wc];
+    expect(armWhenDoneLaunch(launch)).toBe(true);
+
+    state.ptyClient.emit("spawn-result", TERMINAL, {
+      success: true,
+      id: TERMINAL,
+      launchGeneration: 4,
+      spawnedAt: SPAWNED_AT,
+    });
+    expect(state.broadcast).toHaveBeenCalledWith(PROJECT, CHANNELS.TERMINAL_WHEN_DONE_CHANGED, {
+      terminalId: TERMINAL,
+      choice: "close",
+    });
+
+    reportDone("launch");
+    await settle();
+
+    expect(state.ptyClient.submit).not.toHaveBeenCalled();
+    expect(state.ptyClient.gracefulKill).toHaveBeenCalledTimes(1);
+    expect(finishRequests(wc)).toEqual([{ terminalId: TERMINAL, action: "remove" }]);
+  });
+
+  it("stops listening when its spawn fails", () => {
+    armWhenDoneLaunch(launch);
+    expect(state.ptyClient.listenerCount("spawn-result")).toBe(1);
+
+    state.ptyClient.emit("spawn-result", TERMINAL, {
+      success: false,
+      id: TERMINAL,
+      launchGeneration: 4,
+      spawnedAt: SPAWNED_AT,
+    });
+
+    expect(getTerminalWhenDone().peek(TERMINAL)).toBeUndefined();
+    expect(state.ptyClient.listenerCount("spawn-result")).toBe(0);
+    expect(installedDecorator()).toBeNull();
+    expect(state.broadcast).not.toHaveBeenCalled();
   });
 });

@@ -17,6 +17,7 @@ import {
   type PanePluginServer,
 } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
   findUntouchedClaudeSession,
@@ -97,6 +98,12 @@ interface RecipeSpawnBatchAdmission {
 }
 
 const recipeSpawnBatchAdmissions = new Map<string, RecipeSpawnBatchAdmission>();
+
+/** Whether the sender still drives the project, as a submit to it requires. */
+function isProjectDriver(ctx: IpcContext, projectId: string): boolean {
+  const lease = peekDriveLeaseService();
+  return !lease || !ctx.endpoint || lease.isDriving(projectId, ctx.endpoint);
+}
 
 function claimRecipeSpawnBatchAdmission(
   options: ValidatedTerminalSpawnOptions
@@ -1279,6 +1286,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
+    // Loaded only for a launch that asks, so every other spawn pays nothing.
+    const whenDoneLive =
+      validatedOptions.whenDone !== undefined
+        ? await import("../../../services/terminalWhenDone/terminalWhenDoneLive.js")
+        : null;
+
     try {
       // Inside the try: a failed resolution throws here, and the catch below is
       // what releases the pane config and help binding made above.
@@ -1325,6 +1338,25 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentSessionId: spawnAgentSessionId,
         handbackCode: validatedOptions.handbackCode,
       });
+      // A recipe step's When done (#16172) arms only a fresh agent launch whose
+      // prompt carries the instruction for its code, asked for by the
+      // project's driver: never the Assistant, a scheduled run, a restore, or
+      // an id main has a launch on record for, which a restart or a resume
+      // would be. A live id is refused by the host, which drops the arming.
+      const whenDone =
+        whenDoneLive !== null &&
+        validatedOptions.handbackCode !== undefined &&
+        projectId !== undefined &&
+        typeof launchAgentId === "string" &&
+        safeCommand.length > 0 &&
+        !isHelpLaunch &&
+        !helpSessionService.isHelpTerminal(id) &&
+        validatedOptions.scheduledRun === undefined &&
+        validatedOptions.restore !== true &&
+        getLifecycleLedger().currentGeneration(id) === undefined &&
+        isProjectDriver(ctx, projectId)
+          ? validatedOptions.whenDone
+          : undefined;
       if (pluginToolsLaunchProjectId !== null) {
         recordPluginToolsLaunch(id, pluginToolsLaunchProjectId);
       }
@@ -1372,8 +1404,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
         handbackCode: validatedOptions.handbackCode,
-        // Only the spawn that registered a scheduled run reports for it (#15982).
-        ...(scheduledLaunch && validatedOptions.handbackCode !== undefined
+        // Only the spawn that registered a scheduled run reports for it
+        // (#15982), and a launch armed with When done reports for its code.
+        ...((scheduledLaunch || whenDone !== undefined) &&
+        validatedOptions.handbackCode !== undefined
           ? { handbackInstruction: "run" as const }
           : {}),
         hasFirstPrompt: validatedOptions.hasFirstPrompt,
@@ -1386,6 +1420,19 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // natural exit left on the pane survives it — once the host confirms the
       // spawn (#12433).
       noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
+      if (whenDone !== undefined && whenDoneLive && validatedOptions.handbackCode !== undefined) {
+        // No generation means PtyClient refused the spawn without sending it.
+        const launchGeneration = getLifecycleLedger().currentGeneration(id);
+        if (launchGeneration !== undefined && projectId !== undefined) {
+          whenDoneLive.armWhenDoneLaunch({
+            terminalId: id,
+            projectId,
+            launchGeneration,
+            choice: whenDone,
+            code: validatedOptions.handbackCode,
+          });
+        }
+      }
       // The assistant lane's durable resume pointer, written the moment its
       // conversation exists so a quit or a main-process crash can't lose it
       // (#13205). Memory-first, so it is current before any later capture.
