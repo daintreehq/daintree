@@ -275,6 +275,7 @@ describe("createSessionServerDeps", () => {
         prompt: vi.fn(async () => `${tag}:prompt`),
         keys: vi.fn(async () => `${tag}:keys`),
         interrupt: vi.fn(async () => `${tag}:interrupt`),
+        reveal: vi.fn(async () => `${tag}:reveal`),
       });
       const bind = (steer: ReturnType<typeof steerOf> | undefined) => {
         state.binding = {
@@ -285,29 +286,34 @@ describe("createSessionServerDeps", () => {
       };
       const prompt = { command: "go", handback: false, machineName: "m" };
       const keys = { keys: ["Enter"] };
+      const show = vi.fn(async () => "shown");
       const steer = sessionDeps.globalSteer!;
       const callAll = () =>
         Promise.all([
           steer.prompt(target, prompt),
           steer.keys(target, keys),
           steer.interrupt(target),
+          steer.reveal(target, show),
         ]);
 
       // Unbound, every call is refused, never run some other way.
       await expect(steer.prompt(target, prompt)).rejects.toMatchObject(refused);
       await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
       await expect(steer.interrupt(target)).rejects.toMatchObject(refused);
+      await expect(steer.reveal(target, show)).rejects.toMatchObject(refused);
+      expect(show).not.toHaveBeenCalled();
 
       const first = steerOf("a");
       bind(first);
-      await expect(callAll()).resolves.toEqual(["a:prompt", "a:keys", "a:interrupt"]);
+      await expect(callAll()).resolves.toEqual(["a:prompt", "a:keys", "a:interrupt", "a:reveal"]);
       expect(first.prompt).toHaveBeenCalledWith(target, prompt);
       expect(first.keys).toHaveBeenCalledWith(target, keys);
       expect(first.interrupt).toHaveBeenCalledWith(target);
+      expect(first.reveal).toHaveBeenCalledWith(target, show);
 
       // Replaced, then gone: each call reads the binding as it finds it.
       bind(steerOf("b"));
-      await expect(callAll()).resolves.toEqual(["b:prompt", "b:keys", "b:interrupt"]);
+      await expect(callAll()).resolves.toEqual(["b:prompt", "b:keys", "b:interrupt", "b:reveal"]);
       bind(undefined);
       await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
     }

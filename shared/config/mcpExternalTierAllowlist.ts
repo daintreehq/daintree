@@ -158,6 +158,12 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // only be taken to a panel it created, which is no escalation over having
   // created it — and the ledger is server-authoritative, written from trusted
   // dispatch results, so the id cannot be claimed into it.
+  //
+  // The global Assistant alone reaches past the ledger here (#16096), keyed on
+  // the relay caller its Shell's runtime named, never on arguments: it may
+  // already prompt any agent worker in the project it calls into (#14551), and
+  // showing the person that panel is strictly less. The target passes the
+  // steer's own checks, so a reveal and a prompt reach the same runs.
   "terminal.revealOwned",
   // Where an owned panel sits, without taking the user there (#13662). An
   // orchestrator parks idle seats in the background and brings them back to

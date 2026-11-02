@@ -150,6 +150,7 @@ import {
   type AssistantCaller,
   type AssistantTarget,
 } from "../assistants/AssistantTerminalControl.js";
+import type { WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 import { createSessionContext } from "./sessionContext.js";
 import {
@@ -285,15 +286,19 @@ const ASSISTANT_TARGET_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
 ]);
+/** Shown by the global Assistant through the steer's gate, on the owned reveal's own dispatch (#16096). */
+const GLOBAL_REVEAL_TOOL = "terminal.revealOwned";
 /**
  * The input tools the global Assistant may point at a worker it neither
- * launched nor was handed (#14551), and nothing else: closes, restarts and
- * injections keep the ownership ledger.
+ * launched nor was handed (#14551), and the reveal that shows the person that
+ * worker's panel (#16096), and nothing else: closes, restarts and injections
+ * keep the ownership ledger.
  */
 const GLOBAL_STEER_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommandOwned",
   "terminal.sendKeysOwned",
   "terminal.interruptOwned",
+  GLOBAL_REVEAL_TOOL,
 ]);
 /** The closes whose answer carries what the host saw of each closed panel's process (#14474). */
 const CLOSE_TOOLS: ReadonlySet<string> = new Set([
@@ -937,29 +942,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(target);
       return control.close(caller, target);
     };
-    // The global Assistant steering a worker it didn't launch (#14551), in
-    // the project this session is bound to and no other. Every argument the
-    // delegate would have validated is validated here, since none reaches it.
-    const runGlobalSteer = async (terminalId: string): Promise<unknown> => {
-      const steer = deps.globalSteer!;
+    const callArgs =
+      typeof args === "object" && args !== null && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
+    // The run a global Assistant's call names (#14551, #16096), in the
+    // project this session is bound to and no other.
+    const globalSteerTarget = (terminalId: string): WorkerSteerTarget => {
       const projectId = sessionStore.sessionWorkspaceMap.get(sessionId);
       if (projectId === undefined) {
         throw new AssistantTargetError(
           WORKER_STEER_REFUSALS.notFound,
-          "This call isn't bound to a project, so it can't reach a terminal. Nothing was sent."
+          "This call isn't bound to a project, so it can't reach a terminal. Nothing was done."
         );
       }
-      const record =
-        typeof args === "object" && args !== null && !Array.isArray(args)
-          ? (args as Record<string, unknown>)
-          : {};
       const generation =
-        typeof record.generation === "number" &&
-        Number.isInteger(record.generation) &&
-        record.generation >= 0
-          ? record.generation
+        typeof callArgs.generation === "number" &&
+        Number.isInteger(callArgs.generation) &&
+        callArgs.generation >= 0
+          ? callArgs.generation
           : undefined;
-      const target = {
+      return {
         projectId,
         terminalId,
         generation,
@@ -971,14 +974,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
         },
       };
+    };
+    // The global Assistant steering a worker it didn't launch (#14551). Every
+    // argument the delegate would have validated is validated here, since
+    // none reaches it.
+    const runGlobalSteer = async (terminalId: string): Promise<unknown> => {
+      const steer = deps.globalSteer!;
+      const target = globalSteerTarget(terminalId);
       if (actionId === "terminal.sendCommandOwned") {
-        const command = typeof record.command === "string" ? record.command : "";
+        const command = typeof callArgs.command === "string" ? callArgs.command : "";
         if (command.trim().length === 0) {
           throw new AssistantTargetError("VALIDATION_ERROR", "A send needs a non-empty `command`.");
         }
         return steer.prompt(target, {
           command,
-          handback: record.handback === true,
+          handback: callArgs.handback === true,
           machineName: deps.relay?.shellName ?? "another machine",
         });
       }
@@ -1110,6 +1120,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // accidentally rewrite an action id or drop an ownership record (#11909).
     const ownedResource = OWNED_RESOURCE_TOOLS[actionId];
     let ownedResourceId: string | undefined;
+    // A worker the global Assistant shows the person without owning it
+    // (#16096), set by the gate; it is `ownedResourceId` too, so the answer
+    // names it, but no ledger record or hand-over admitted it.
+    let globalRevealTerminalId: string | undefined;
     // The record the gate accepted. A release drops only this record, so a
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
@@ -1491,6 +1505,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           adoptedRecordFor(ownedResource!.resourceKind, steerTerminalId) === undefined
             ? steerTerminalId
             : undefined;
+        // A reveal is no write: it goes out on the owned reveal's own dispatch
+        // below, once the steer's gate has let it (#16096).
+        if (globalSteerTerminalId !== undefined && actionId === GLOBAL_REVEAL_TOOL) {
+          globalRevealTerminalId = globalSteerTerminalId;
+          ownedResourceId = globalSteerTerminalId;
+        }
 
         if (
           ownedResource !== undefined &&
@@ -3018,7 +3038,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         let assistantEnvelope: DispatchEnvelope | undefined;
         if (
           (assistantTarget !== undefined && assistantCaller !== null && assistantControl) ||
-          globalSteerTerminalId !== undefined
+          (globalSteerTerminalId !== undefined && globalRevealTerminalId === undefined)
         ) {
           try {
             const result =
@@ -3308,16 +3328,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // where the public tool takes `terminalId` (#12315).
           // `raised` answers the second half of a reveal — whether a window
           // actually came forward — and is vacuously true for everything else.
+          // A global Assistant's reveal of a worker it didn't launch (#16096)
+          // is the owned reveal's dispatch, sent only once the steer's gate
+          // has let the run it names through, and answered the same way.
           const { envelope: dispatched, raised } = assistantEnvelope
             ? { envelope: assistantEnvelope, raised: true }
-            : listPaging || ownedResource?.executor !== "renderer" || ownedResourceId === undefined
-              ? {
-                  envelope: listPaging
-                    ? await collectListPages()
-                    : await dispatchToRenderer(actionId, dispatchArgs),
-                  raised: true,
-                }
-              : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
+            : globalRevealTerminalId !== undefined
+              ? await deps.globalSteer!.reveal(globalSteerTarget(globalRevealTerminalId), () =>
+                  dispatchOwnedResourceAction(
+                    ownedResource as RendererOwnedResourceTool,
+                    globalRevealTerminalId!
+                  )
+                )
+              : listPaging ||
+                  ownedResource?.executor !== "renderer" ||
+                  ownedResourceId === undefined
+                ? {
+                    envelope: listPaging
+                      ? await collectListPages()
+                      : await dispatchToRenderer(actionId, dispatchArgs),
+                    raised: true,
+                  }
+                : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
           // A close trashes the panel and its process runs on through the
           // grace, so the answer says what the host saw of each one (#14474).
           // Every route a close takes ends here: renderer, viewless, owned,
@@ -3433,6 +3465,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({ code: "EXECUTION_ERROR", message });
           }
         } catch (err) {
+          // The steer's gate refusing a reveal (#16096): its own words, as a
+          // refused steer's are.
+          if (globalRevealTerminalId !== undefined && err instanceof AssistantTargetError) {
+            outcome = {
+              kind: "result",
+              value: {
+                ok: false,
+                error: { code: auditCodeForAssistantRefusal(err.code), message: err.message },
+              },
+            };
+            return buildToolError({ code: err.code, message: err.message });
+          }
           outcome = { kind: "throw", error: err };
           const failure = dispatchFailure(err);
           // A retirement that already closed panes says so whatever the

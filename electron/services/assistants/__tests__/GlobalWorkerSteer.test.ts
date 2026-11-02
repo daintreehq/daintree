@@ -560,6 +560,19 @@ describe("GlobalWorkerSteer (#14551)", () => {
       expect(show).not.toHaveBeenCalled();
     });
 
+    it("asks whether it may still act once the run is read, and shows nothing when it may not", async () => {
+      const show = shown();
+      const authorize = vi.fn(() => {
+        throw new AssistantTargetError("DRIVEN_ELSEWHERE", "Another machine drives it.");
+      });
+
+      expect((await refusal(steer.reveal(target({ authorize }), show))).code).toBe(
+        "DRIVEN_ELSEWHERE"
+      );
+      expect(authorize).toHaveBeenCalledTimes(1);
+      expect(show).not.toHaveBeenCalled();
+    });
+
     it("answers with the reveal's own failure, untouched", async () => {
       const failure = new Error("no view");
       await expect(steer.reveal(target(), async () => Promise.reject(failure))).rejects.toBe(

@@ -76,8 +76,9 @@ export interface WorkerSteerTarget {
   terminalId: string;
   generation: number | undefined;
   /**
-   * Asked right before every write: throws while the call may no longer
-   * write here (the drive rule, a session gone), so nothing more goes out.
+   * Asked right before every write, and before a reveal: throws while the call
+   * may no longer act here (the drive rule, a session gone), so nothing more
+   * goes out.
    */
   authorize(): void;
 }
@@ -354,11 +355,11 @@ export class GlobalWorkerSteer {
 
   /**
    * Run `show`, the reveal, once the run passes the gate, right after its
-   * last read of it; never on a refusal. No `authorize`: the reveal goes out
-   * on the view's own dispatch, which answers to the drive rule itself.
+   * last read of it and the caller's `authorize`; never on a refusal.
    */
   async reveal<T>(target: WorkerSteerTarget, show: () => Promise<T>): Promise<T> {
     await this.requireWorker(target, SHOWING);
+    target.authorize();
     return show();
   }
 

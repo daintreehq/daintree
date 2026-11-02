@@ -326,7 +326,7 @@ function boundSteer(
   if (steer === undefined) {
     throw new AssistantTargetError(
       WORKER_STEER_REFUSALS.notFound,
-      "This host can't steer its agents for you right now. Nothing was sent."
+      "This host can't reach its agents for you right now. Nothing was done."
     );
   }
   return steer;
@@ -1195,6 +1195,7 @@ export function createSessionServerDeps(
             prompt: async (...args) => boundSteer(host).prompt(...args),
             keys: async (...args) => boundSteer(host).keys(...args),
             interrupt: async (...args) => boundSteer(host).interrupt(...args),
+            reveal: async (target, show) => boundSteer(host).reveal(target, show),
           },
         }
       : {}),
