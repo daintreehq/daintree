@@ -1,5 +1,8 @@
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "@shared/types";
-import type { AddAgentAccountRequest, AddAgentAccountResult } from "@shared/types/ipc/agentAccounts";
+import type {
+  AddAgentAccountRequest,
+  AddAgentAccountResult,
+} from "@shared/types/ipc/agentAccounts";
 
 // Value cache + singleflight on get(): burst paths (bulk restart, duplicate,
 // recipe spawns) coalesce concurrent reads into one IPC round-trip, and later

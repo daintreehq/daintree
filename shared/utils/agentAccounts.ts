@@ -164,6 +164,10 @@ export function accountFolderName(defaultDir: string, accountName: string): stri
     .slice(0, 40)
     .replace(/-+$/g, "");
   if (!slug) return undefined;
-  const base = defaultDir.replace(/[\\/]+$/g, "").split(/[\\/]/).pop() ?? defaultDir;
+  const base =
+    defaultDir
+      .replace(/[\\/]+$/g, "")
+      .split(/[\\/]/)
+      .pop() ?? defaultDir;
   return `${base}-${slug}`;
 }

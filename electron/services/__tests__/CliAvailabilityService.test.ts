@@ -160,7 +160,8 @@ describe("CliAvailabilityService", () => {
         const envVars = !envVar ? [] : Array.isArray(envVar) ? envVar : [envVar];
         // A relocated config root moves every probed path, so a developer's
         // own KIMI_CODE_HOME (and the like) must not leak in either.
-        const homeVar = config?.account?.kind === "config-folder" ? config.account.envVar : undefined;
+        const homeVar =
+          config?.account?.kind === "config-folder" ? config.account.envVar : undefined;
         return homeVar ? [...envVars, homeVar] : envVars;
       })
     ),

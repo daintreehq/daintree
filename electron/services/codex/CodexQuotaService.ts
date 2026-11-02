@@ -380,10 +380,7 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
     if (sameAccount) {
       mergePresets(sameAccount.labels, target);
       sameAccount.profile.presetNames = sameAccount.labels.presetNames;
-      const accountNames = mergeAccountNames(
-        sameAccount.profile.accountNames,
-        target.accountNames
-      );
+      const accountNames = mergeAccountNames(sameAccount.profile.accountNames, target.accountNames);
       if (accountNames?.length) sameAccount.profile.accountNames = accountNames;
       sameAccount.profile.isDefault ||= profile.isDefault;
       if (result.fetchedAt > sameAccount.profile.result.fetchedAt) {

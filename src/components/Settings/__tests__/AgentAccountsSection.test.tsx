@@ -13,7 +13,10 @@ const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-c
 
 function renderSection(
   entry: AgentSettingsEntry,
-  options: { agentId?: string; onClose?: (afterClose?: (closed: boolean) => void) => Promise<boolean> } = {}
+  options: {
+    agentId?: string;
+    onClose?: (afterClose?: (closed: boolean) => void) => Promise<boolean>;
+  } = {}
 ) {
   return render(
     <AgentAccountsSection

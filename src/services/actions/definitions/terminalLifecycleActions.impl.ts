@@ -442,7 +442,8 @@ export const terminalLifecycleActionRuns = {
     const restarted = usePanelStore.getState().panelsById[targetId];
     return {
       terminalId: targetId,
-      agentAccountId: (restarted && isPtyPanel(restarted) ? restarted.agentAccountId : null) ?? null,
+      agentAccountId:
+        (restarted && isPtyPanel(restarted) ? restarted.agentAccountId : null) ?? null,
       agentSessionIdCleared: true as const,
     };
   },

@@ -54,7 +54,10 @@ function folderAccount(agentId: unknown) {
   return { agentId, declaration };
 }
 
-function readSettings(): { root: Record<string, unknown>; agents: Record<string, AgentSettingsEntry> } {
+function readSettings(): {
+  root: Record<string, unknown>;
+  agents: Record<string, AgentSettingsEntry>;
+} {
   const raw = store.get("agentSettings", DEFAULT_AGENT_SETTINGS) as unknown;
   const root = isPlainRecord(raw) ? { ...raw } : {};
   const agents: Record<string, AgentSettingsEntry> = {};

@@ -2581,13 +2581,11 @@ describe("accounts on restart and switch (#16040)", () => {
   it("switches only the account: same preset, a new conversation, the folder saved for restore", async () => {
     seed({ title: "Claude [Z.ai]", titleMode: "custom" });
 
-    const result = await usePanelStore
-      .getState()
-      .restartTerminalOnAccount("test-1", {
-        id: "personal",
-        envVar: "CLAUDE_CONFIG_DIR",
-        configDir: PERSONAL,
-      });
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
 
     expect(result).toEqual({ success: true });
     const payload = mockSpawn.mock.calls[0]![0];
@@ -2618,13 +2616,11 @@ describe("accounts on restart and switch (#16040)", () => {
   it("switches the account of a pane with no preset", async () => {
     seed({ agentPresetId: undefined, originalPresetId: undefined, env: undefined });
 
-    const result = await usePanelStore
-      .getState()
-      .restartTerminalOnAccount("test-1", {
-        id: "personal",
-        envVar: "CLAUDE_CONFIG_DIR",
-        configDir: PERSONAL,
-      });
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
 
     expect(result).toEqual({ success: true });
     expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
@@ -2635,13 +2631,11 @@ describe("accounts on restart and switch (#16040)", () => {
     seed();
     mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
 
-    const result = await usePanelStore
-      .getState()
-      .restartTerminalOnAccount("test-1", {
-        id: "personal",
-        envVar: "CLAUDE_CONFIG_DIR",
-        configDir: PERSONAL,
-      });
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
 
     expect(result.success).toBe(false);
     expect(pane().agentAccountId).toBe("company");
