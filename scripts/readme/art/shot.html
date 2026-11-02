@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="@shots" />
+    <meta
+      name="narrow"
+      content="pilot-fiordland review-hub-hokkaido worktree-overview-arashiyama"
+    />
+    <meta name="format" content="webp" />
+    <link rel="stylesheet" href="base.css" />
+    <style>
+      /* Every real-app capture gets the same window: rounded, one hairline edge
+     that reads on GitHub light and dark, nothing painted over the app. */
+      #art {
+        width: 896px;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid rgba(128, 128, 128, 0.32);
+        position: relative;
+        line-height: 0;
+      }
+      #art img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      #art.cropped img {
+        position: absolute;
+        width: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art"><img id="shot" /></div>
+    <script>
+      const { shots, scheme: variant } = window.__ART__;
+      const narrow = variant.endsWith("--narrow");
+      const name = narrow ? variant.slice(0, -"--narrow".length) : variant;
+      // Crops in CSS pixels of the 1600x1000 capture, for features that read
+      // better closer in. A crop fills the frame's width and scales to fit.
+      const CROPS = {
+        // Both are palettes over a dimmed workspace: frame the palette, keep a
+        // margin of the app around it so it still reads as the app.
+        "pilot-fiordland": { x: 300, y: 128, w: 1000, h: 372 },
+        "worktree-overview-arashiyama": { x: 318, y: 112, w: 964, h: 610 },
+        // Review Hub reads at the same scale as the palettes once the sidebar,
+        // already shown in the hero, is cropped away.
+        "review-hub-hokkaido": { x: 352, y: 0, w: 1248, h: 1000 },
+      };
+      // Phones get the part of each feature that carries it, near 1:1.
+      const NARROW_CROPS = {
+        "pilot-fiordland": { x: 466, y: 262, w: 668, h: 214 },
+        "worktree-overview-arashiyama": { x: 362, y: 262, w: 560, h: 380 },
+        "review-hub-hokkaido": { x: 976, y: 54, w: 624, h: 560 },
+      };
+      const crop = (narrow ? NARROW_CROPS : CROPS)[name];
+      const src = shots[name];
+      if (!src) throw new Error(`no capture named ${name}`);
+      if (narrow && !crop) throw new Error(`no phone crop for ${name}`);
+      const width = narrow ? 400 : 896;
+      const art = document.getElementById("art");
+      art.style.width = `${width}px`;
+      const img = document.getElementById("shot");
+      img.src = src;
+      img.decode().then(() => {
+        if (crop) {
+          const scale = width / crop.w;
+          art.classList.add("cropped");
+          art.style.height = `${crop.h * scale}px`;
+          img.style.width = `${1600 * scale}px`;
+          img.style.left = `${-crop.x * scale}px`;
+          img.style.top = `${-crop.y * scale}px`;
+        }
+        window.__artReady = true;
+      });
+    </script>
+  </body>
+</html>

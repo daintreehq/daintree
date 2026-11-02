@@ -1,0 +1,299 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="wide narrow" />
+    <meta name="format" content="webp-lossless" />
+    <link rel="stylesheet" href="base.css" />
+    <style>
+      #art {
+        width: 896px;
+        padding: 40px 36px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        position: relative;
+      }
+      .stage {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .chat {
+        width: 404px;
+        background: var(--bg-grid);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+        z-index: 1;
+      }
+      .chat header {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        font: 400 12.5px/1 var(--mono);
+        color: var(--text-ter);
+      }
+      .chat header .mark {
+        width: 16px;
+        height: 12px;
+        color: var(--accent);
+      }
+      .chat .body {
+        padding: 18px 18px 20px;
+        font: 400 14px/1.8 var(--mono);
+        color: var(--text);
+        display: grid;
+        grid-template-columns: auto 1fr;
+        column-gap: 10px;
+      }
+      .chat .body > .lead {
+        color: var(--accent);
+      }
+      .chat .body > .warn {
+        color: var(--warning);
+      }
+      .chat .body > .gap {
+        height: 10px;
+        grid-column: 1 / -1;
+      }
+      .you {
+        font-weight: 500;
+      }
+      .step::before {
+        content: "▸";
+        color: var(--accent);
+        margin-right: 10px;
+      }
+      .ask {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+      }
+      .ask .warn {
+        color: var(--warning);
+      }
+      .chip {
+        background: var(--bg-elevated);
+        border-radius: 4px;
+        padding: 1px 6px;
+        font-size: 12.5px;
+      }
+      .muted {
+        color: var(--text-sec);
+      }
+
+      .fleet {
+        width: 330px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        position: relative;
+        z-index: 1;
+      }
+      .pane {
+        height: 46px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 14px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+      }
+      .pane .mark {
+        width: 18px;
+        height: 18px;
+        flex: none;
+      }
+      .pane .branch {
+        font: 400 14.5px/1 var(--mono);
+        color: var(--text);
+        flex: 1;
+      }
+      .pane .state {
+        font: 400 13.5px/1 var(--sans);
+        color: var(--text-ter);
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .ring {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        border: 1.75px solid currentColor;
+        display: inline-block;
+      }
+      .working .ring {
+        color: var(--accent);
+        border-right-color: transparent;
+        transform: rotate(-45deg);
+      }
+      .ring.wait {
+        color: var(--warning);
+        width: 10px;
+        height: 10px;
+        vertical-align: -1px;
+      }
+      .waiting {
+        border-color: rgba(197, 154, 78, 0.55);
+      }
+      .waiting .state {
+        color: var(--warning);
+      }
+      .waiting .ring {
+        color: var(--warning);
+      }
+
+      svg.stems {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      /* Phone: the chat above, the fleet below it on one stem. */
+      body[data-layout="narrow"] #art {
+        width: 400px;
+        padding: 18px 16px 20px;
+      }
+      body[data-layout="narrow"] .stage {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      body[data-layout="narrow"] .chat {
+        width: 100%;
+      }
+      body[data-layout="narrow"] .chat .body {
+        font-size: 13px;
+        padding: 14px 14px 16px;
+      }
+      body[data-layout="narrow"] .fleet {
+        width: auto;
+        margin: 22px 0 0 36px;
+        gap: 8px;
+      }
+      body[data-layout="narrow"] .pane {
+        height: 42px;
+        padding: 0 12px;
+      }
+      body[data-layout="narrow"] .pane .branch {
+        font-size: 13px;
+      }
+      body[data-layout="narrow"] .pane .state {
+        font-size: 12.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art">
+      <div class="stage" id="stage">
+        <svg class="stems" id="stems"></svg>
+        <div class="chat" id="chat">
+          <header><span class="mark" id="mark"></span>Daintree Assistant</header>
+          <div class="body">
+            <span class="lead you">you</span><span>ship the auth fix to all five worktrees</span>
+            <span class="gap"></span>
+            <span class="lead">▸</span><span>Spawned 5 agents, one per worktree</span>
+            <span class="lead">▸</span><span>Watching their terminals</span>
+            <span class="warn"><span class="ring wait"></span></span
+            ><span><span class="chip">feat/billing</span> is asking you:</span> <span></span
+            ><span>“Overwrite migration 0009?”</span> <span></span
+            ><span class="muted">The other four are still working.</span>
+          </div>
+        </div>
+        <div class="fleet" id="fleet"></div>
+      </div>
+    </div>
+    <script>
+      const { data, scheme: layout } = window.__ART__;
+      document.body.dataset.layout = layout;
+      document.getElementById("mark").innerHTML = data.daintreeMark;
+      const byId = new Map(data.agents.map((a) => [a.id, a]));
+      const FLEET = [
+        ["claude", "fix/auth-session", "working"],
+        ["codex", "fix/auth-refresh", "working"],
+        ["antigravity", "feat/billing", "waiting"],
+        ["opencode", "fix/auth-mobile", "working"],
+        ["copilot", "test/auth-e2e", "working"],
+      ];
+      const fleet = document.getElementById("fleet");
+      for (const [id, branch, state] of FLEET) {
+        const a = byId.get(id);
+        const row = document.createElement("div");
+        row.className = `pane ${state}`;
+        row.innerHTML =
+          `<span class="mark" style="color:${a.ink}">${a.svg}</span><span class="branch">${branch}</span>` +
+          `<span class="state"><span class="ring"></span>${state === "waiting" ? "waiting on you" : "working"}</span>`;
+        fleet.append(row);
+      }
+
+      // One stem leaves the Assistant, splits at a node, and feeds every pane:
+      // single stroke weight, nodes at the origin and at each container.
+      const stage = document.getElementById("stage").getBoundingClientRect();
+      const chat = document.getElementById("chat").getBoundingClientRect();
+      const panes = [...fleet.children].map((el) => el.getBoundingClientRect());
+      const rel = (x, y) => [x - stage.left, y - stage.top];
+      const [sx, sy] = rel(chat.right, chat.top + chat.height / 2);
+      const splitX = sx + 34;
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.getElementById("stems");
+      const line = (d, color) => {
+        const p = document.createElementNS(ns, "path");
+        p.setAttribute("d", d);
+        p.setAttribute("fill", "none");
+        p.setAttribute("stroke", color);
+        p.setAttribute("stroke-width", "1.5");
+        p.setAttribute("stroke-linecap", "round");
+        svg.append(p);
+      };
+      const node = (x, y, color, fill) => {
+        const c = document.createElementNS(ns, "circle");
+        c.setAttribute("cx", x);
+        c.setAttribute("cy", y);
+        c.setAttribute("r", "4");
+        c.setAttribute("fill", fill);
+        c.setAttribute("stroke", color);
+        c.setAttribute("stroke-width", "1.5");
+        svg.append(c);
+      };
+      const STEM = "#4a4846";
+      const WAIT = "#c59a4e";
+      if (layout === "narrow") {
+        // A trunk drops from under the chat and feeds each pane from the left.
+        const tx = chat.left - stage.left + 18;
+        const top = chat.bottom - stage.top;
+        const ys = panes.map((r) => r.top - stage.top + r.height / 2);
+        line(`M ${tx} ${top} V ${ys[ys.length - 1]}`, STEM);
+        panes.forEach((r, i) => {
+          const color = FLEET[i][2] === "waiting" ? WAIT : STEM;
+          const ex = r.left - stage.left;
+          line(`M ${tx} ${ys[i]} H ${ex - 6}`, color);
+          node(ex - 6, ys[i], color, "#1a1918");
+        });
+        node(tx, top + 4, STEM, "#1a1918");
+      } else {
+        line(`M ${sx + 9} ${sy} H ${splitX}`, STEM);
+        panes.forEach((r, i) => {
+          const [ex, ey] = rel(r.left, r.top + r.height / 2);
+          const color = FLEET[i][2] === "waiting" ? WAIT : STEM;
+          const bend = (ex - splitX) * 0.55;
+          line(
+            `M ${splitX} ${sy} C ${splitX + bend} ${sy}, ${ex - bend} ${ey}, ${ex - 6} ${ey}`,
+            color
+          );
+          node(ex - 6, ey, color, "#1a1918");
+        });
+        node(sx + 4, sy, STEM, "#1a1918");
+        node(splitX, sy, STEM, "#1a1918");
+      }
+      window.__artReady = true;
+    </script>
+  </body>
+</html>

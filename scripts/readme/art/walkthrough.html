@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="dark light" />
+    <meta name="format" content="png" />
+    <link rel="stylesheet" href="base.css" />
+    <script src="glyphs.js"></script>
+    <style>
+      /* daintree.org's secondary action, beside the primary download. */
+      #art {
+        height: 44px;
+        padding: 0 18px 0 16px;
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        border-radius: var(--radius-control);
+        border: 1px solid;
+      }
+      body[data-scheme="dark"] #art {
+        background: var(--bg-card);
+        border-color: var(--border-strong);
+        color: var(--text);
+      }
+      body[data-scheme="light"] #art {
+        background: #ffffff;
+        border-color: #d6d3cf;
+        color: #1f1d1b;
+      }
+      .play {
+        width: 12px;
+        height: 12px;
+        display: inline-flex;
+        opacity: 0.8;
+      }
+      .label {
+        font: 500 16px/1 var(--sans);
+      }
+      .meta {
+        font: 400 14px/1 var(--sans);
+      }
+      body[data-scheme="dark"] .meta {
+        color: var(--text-ter);
+      }
+      body[data-scheme="light"] .meta {
+        color: #6f6a64;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art">
+      <span class="play" data-glyph="play"></span>
+      <span class="label">Watch the walkthrough</span>
+      <span class="meta">5 min</span>
+    </div>
+    <script>
+      document.body.dataset.scheme = window.__ART__.scheme;
+      for (const el of document.querySelectorAll("[data-glyph]"))
+        el.innerHTML = window.GLYPHS[el.dataset.glyph];
+      window.__artReady = true;
+    </script>
+  </body>
+</html>
