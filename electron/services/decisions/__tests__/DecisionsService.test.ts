@@ -1979,6 +1979,85 @@ describe("DecisionsService decision model (#16026)", () => {
     }
   });
 
+  it("clears what the model learned with learning off and no model running, keeping Decisions' own data", async () => {
+    const onModelChanged = vi.fn();
+    const t = modelled(undefined, { onModelChanged });
+    try {
+      const names = [
+        "model-history.sqlite",
+        "model-history.sqlite-journal",
+        "model-history.sqlite-wal",
+        "model-history.sqlite-shm",
+        "model-evaluation.json",
+      ];
+      for (const name of names) writeFileSync(join(t.dir, name), "learned before");
+      writeFileSync(join(t.dir, "keys.bin"), "sealed keys");
+      await t.service.start(on(RELAY));
+      expect(t.service.getDecisionModel()).toBeNull();
+
+      await t.service.clearModelHistory();
+
+      expect(readdirSync(t.dir)).toEqual(["keys.bin"]);
+      expect(t.service.getDecisionModel()).toBeNull();
+      expect(t.histories).toHaveLength(0);
+      expect(onModelChanged).toHaveBeenCalled();
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("clears through the running model with learning on, which opens an empty history after", async () => {
+    const t = modelled((path) => new SqliteHistoryStore(path));
+    try {
+      await t.service.start(on({ ...RELAY, modelLearning: true }));
+      const history = join(t.dir, "model-history.sqlite");
+      await vi.waitFor(() => expect(existsSync(history)).toBe(true));
+      const model = t.service.getDecisionModel()!;
+      await t.made[0]!.options.model!.learner.learn(decision(1));
+      expect(model.snapshot().historyCount).toBe(1);
+
+      await t.service.clearModelHistory();
+
+      expect(t.service.getDecisionModel()).toBe(model);
+      expect(model.snapshot().historyCount).toBe(0);
+      // The same learner the connection holds keeps learning into the new history.
+      await t.made[0]!.options.model!.learner.learn(decision(2));
+      expect(model.snapshot().historyCount).toBe(1);
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("refuses to clear the model's history in a Host's lifetime, or while stopped", async () => {
+    const t = modelled();
+    try {
+      await expect(t.service.clearModelHistory()).rejects.toThrow(/owner/);
+      await t.service.start(on({ ...RELAY, modelLearning: true }), "host");
+      await expect(t.service.clearModelHistory()).rejects.toThrow(/owner/);
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("says the model changed when it opens its history and when it closes", async () => {
+    const onModelChanged = vi.fn();
+    const t = modelled(undefined, { onModelChanged });
+    try {
+      await t.service.start(on({ ...RELAY, modelLearning: true }));
+      await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+      const opened = onModelChanged.mock.calls.length;
+      expect(opened).toBeGreaterThan(0);
+
+      await t.service.stop();
+      expect(onModelChanged.mock.calls.length).toBeGreaterThan(opened);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it("deletes what the model learned with local data, and starts it again empty", async () => {
     const t = modelled((path) => new SqliteHistoryStore(path), {
       openRows: async () => ({ erase: () => {}, exist: () => false }),

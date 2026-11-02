@@ -1927,6 +1927,7 @@ export function _resetDecisionsForTesting(): void {
   statusRevision = 0;
   statusPushes = Promise.resolve();
   policyRevision = 0;
+  modelRevision = 0;
   hostEnroller.dispose();
   hostEnroller = makeHostEnroller();
   hostRecords = null;

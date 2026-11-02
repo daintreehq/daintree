@@ -167,7 +167,7 @@ When Daintree stopped while typing an answer in and can't find its marker in the
 
 ## Workflows: the `design-review/final` gate
 
-Daintree registers trusted workflow gates in its own code; an agent can name one but can't change it or ask for less. **Settings → Decisions → Policy** lists them. The one gate today is `design-review/final`: only you can answer, the answer is Approve or Reject and nothing else, and the question has to carry screenshots. A question without a gate needs your own answer too, unless you turn on **Allow proxy answers** under Policy. Even then, the decision model on your computer answers in your place only after you've turned on its learning, chosen an agent CLI for it and evaluated it against your own past answers, and Settings doesn't offer those yet, so today nothing answers in your place either way. When it does answer, the answer is labelled as a proxy's in your terminal, in the audit trail and on your phone.
+Daintree registers trusted workflow gates in its own code; an agent can name one but can't change it or ask for less. **Settings → Decisions → Policy** lists them. The one gate today is `design-review/final`: only you can answer, the answer is Approve or Reject and nothing else, and the question has to carry screenshots. A question without a gate needs your own answer too, unless you turn on **Allow proxy answers** under Policy. Even then, the decision model on your computer answers in your place only after you've turned on its learning, chosen an agent CLI for it, evaluated it against your own past answers and chosen when it may answer (see [The decision model](#the-decision-model)). When it does answer, the answer is labelled as a proxy's in your terminal, in the audit trail and on your phone.
 
 A workflow uses the gate from your own skill, command or runbook. Daintree installs nothing into `~/.claude`, `~/.codex` or any other agent config, so adding the step is up to you. A design-review step reads like this:
 
@@ -192,6 +192,17 @@ An agent running on a Remote Host asks and gets its answers on that Host, so it 
 
 Each enrolled Host can read your agents' questions and answers, as every paired device can. Revoking a Host works like revoking a phone, and a revoked Host isn't enrolled automatically again. Turning Decisions off here turns it off on each connected Host straight away, and on any other Host when this computer next connects to it. A Host's answers that need attention stay on that Host: the chip in a Remote Hosts window doesn't offer **Review answers**.
 
+## The decision model
+
+The decision model learns how you answer, so it can answer some questions in your place. It's off until you turn it on, and **Settings → Decisions → Decision model** holds all of it.
+
+1. **Learn from your answers** keeps each question you answer from your phone on this computer: the question with its context and options, your answer and any note, its project and when it was asked and answered. The first time you turn it on, Settings shows what is kept and what is sent, and learning stays off unless you choose **Turn on learning**. Credentials in common formats (API keys, tokens, private keys, passwords in settings lines) are removed before anything is kept; other sensitive text stays, and the history isn't encrypted. Turning learning off keeps what it learned.
+2. **Agent CLI** chooses what the model runs: **Claude Code** (sends to Anthropic), **Codex CLI** (OpenAI) or **Gemini CLI** (Google), each the command already installed and signed in on this computer, or **None**, which keeps learning and sends nothing. The CLI runs only when the model is evaluated or asked a question, and then sends that question, its context and options, and your past answers like it to its provider.
+3. **Evaluate** replays your past answers through the CLI: each past question is predicted from only the answers you gave before it was asked, one request each, so an evaluation can take many minutes. It keeps running if you close Settings, and **Cancel** stops it. The report says how often the model answered and how often it matched your own answer, overall and by the model's confidence.
+4. **Answer automatically** offers only the confidences the report supports: at least 30 replayed answers at or above it, and 90% of them matching yours. Until you choose one, the model answers nothing. Evaluating again stops automatic answers until you choose again, and choosing another CLI stops them while it's chosen, since a report is about the CLI it ran.
+
+Even then it answers only a question that allows a proxy answer: a question without a workflow gate needs **Allow proxy answers** on under Policy, and `design-review/final` or any other gate that needs you is never answered for you. Its answers are labelled as a proxy's. **Clear history** deletes what the model learned and its latest evaluation, after you confirm, and stops automatic answers.
+
 ## Privacy
 
 The Decisions repository's [security claims](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/security-claims.md) say exactly what its encryption protects and what it doesn't, including a compromised Cloudflare account and plaintext on your own devices. This section covers what Daintree adds to that.
@@ -203,6 +214,8 @@ Only to the relay in your own Cloudflare account, and from there to your devices
 - **End-to-end encrypted:** each question, its context, options and screenshots, and your answers. Each question also carries, inside the encryption, where it was asked: the agent, the worktree's folder path, and identifiers for the project and this computer. Your paired phones and enrolled Remote Hosts can read all of it; the relay and Cloudflare can't.
 - **Readable by the relay:** routing details such as ids, timestamps, sizes, how many screenshots, and each question's requirement level, which says who may answer it. The Cloudflare network sees ordinary request metadata, such as IP addresses and when each device connects.
 - **Push endpoints:** each phone registers one with the relay. A push says only that a question needs you.
+
+The decision model is the one exception, and only if you turn on its learning and choose an agent CLI for it: that CLI sends a question and your past answers like it to its own provider (Anthropic, OpenAI or Google), as [The decision model](#the-decision-model) describes.
 
 A question's text, options and screenshots come from the agent; Daintree adds only where it was asked, and a gate's choices. Decisions never reads a terminal's screen to send a question. Once an answer is typed in, it's part of the agent's conversation and goes wherever that agent sends its prompts.
 
@@ -216,7 +229,7 @@ Each device row has **Revoke**. The relay stops accepting that device, and Daint
 
 ### What stays on this computer
 
-Questions, answers and their delivery records are stored in Daintree's local database, with question and answer text sealed under your keys. The keys are in one file, sealed with your system keychain, or with the weaker fixed key if you accepted that on Linux. Daintree never writes the claim secret or a recovery passphrase to disk or its logs, and never saves the guided deploy terminal's screen. It never sees a Cloudflare token: Wrangler keeps its own sign-in.
+Questions, answers and their delivery records are stored in Daintree's local database, with question and answer text sealed under your keys. The decision model's history, while you keep one, is the exception: it holds the questions you answered and your answers in clear, beside the keys, with its latest evaluation. The keys are in one file, sealed with your system keychain, or with the weaker fixed key if you accepted that on Linux. Daintree never writes the claim secret or a recovery passphrase to disk or its logs, and never saves the guided deploy terminal's screen. It never sees a Cloudflare token: Wrangler keeps its own sign-in.
 
 ## Turning it off and removing data
 
@@ -224,6 +237,8 @@ Questions, answers and their delivery records are stored in Daintree's local dat
 | --- | --- |
 | Turn off **Enable Decisions** | The connection, `ask_human` and delivery stop. Agents launched while it was on keep the server in their list, but its calls fail; their next launch comes without it. Keys and stored questions stay, and turning it on again carries on. |
 | **Disconnect relay** (Connection) | Removes this computer's Decisions keys and its record of the relay. The relay, everything on it and your paired phones stay as they are. Connecting again needs a recovery kit. |
+| Turn off **Learn from your answers** (Decision model) | Nothing new is kept and the model answers nothing. What it learned and its evaluation stay, and turning learning on again carries on from them. |
+| **Clear history** (Decision model) | Deletes what the decision model learned and its latest evaluation, after you confirm, so it answers nothing until it's evaluated again. Learning stays as it was, and Decisions' own history doesn't change. |
 | **Export decision history** (Data) | Saves every question and answer stored here, with the audit log, to a file you pick, encrypted with a passphrase. |
 | **Delete relay data** (Data) | Permanently deletes the questions, answers and attachments the relay stores, after you type the relay's host name (such as `decisions.example.workers.dev`). The Worker, its paired devices, this computer's history and anything already on your devices stay. |
 | **Delete local data** (Data) | Deletes this computer's decision history (what the decision model learned included), Decisions keys and record of the relay. Nothing on the relay changes, and paired devices stay paired. |

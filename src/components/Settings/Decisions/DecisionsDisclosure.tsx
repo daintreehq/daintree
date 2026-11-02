@@ -6,7 +6,9 @@ import { cn } from "@/lib/utils";
  * later can't drift apart. Hosts are enrolled when they connect (Remote Hosts in
  * docs/architecture/decisions.md). The voice item follows the relay protocol: audio
  * streams through the relay to a speech provider, and correction sends the
- * transcript with the question and its options to a model provider.
+ * transcript with the question and its options to a model provider. The
+ * decision model's item is #16027's: its CLI sends from this computer, under
+ * learning's own consent.
  */
 export function DecisionsDisclosure({ className }: { className?: string }) {
   return (
@@ -38,6 +40,14 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         transcript and the question you&apos;re answering go through your relay to a speech and a
         correction provider (OpenAI, xAI or Anthropic). The answer you then send is encrypted like
         any other.
+      </li>
+      <li>
+        <span className="font-medium text-text-primary">
+          The decision model, only if you turn it on.
+        </span>{" "}
+        Its learning is off unless you turn it on under Decision model, which asks first. The agent
+        CLI you then choose for it sends a question and your past answers like it to that
+        CLI&apos;s own provider (Anthropic, OpenAI or Google).
       </li>
     </ul>
   );
