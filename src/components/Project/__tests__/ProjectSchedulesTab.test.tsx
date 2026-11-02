@@ -256,6 +256,36 @@ describe("ProjectSchedulesTab — landing on a request", () => {
 });
 
 describe("ProjectSchedulesTab — the editor", () => {
+  it("hands focus to Project settings when the page it was opened from is hidden", async () => {
+    /** Settings keeps a page it moved away from mounted, hidden. */
+    function SettingsShell({ hidden }: { hidden: boolean }) {
+      return (
+        <>
+          <div role="dialog" aria-modal="true">
+            <div tabIndex={-1} data-testid="settings-surface">
+              <div hidden={hidden}>
+                <ProjectSchedulesTab isOpen isActive={!hidden} />
+              </div>
+            </div>
+          </div>
+          <ScheduleEditorHost />
+        </>
+      );
+    }
+    const { rerender } = render(<SettingsShell hidden={false} />);
+    const edit = await screen.findByRole("button", { name: "Edit schedule Nightly audit" });
+    edit.focus();
+    fireEvent.click(edit);
+    await screen.findByDisplayValue("Nightly audit");
+
+    rerender(<SettingsShell hidden />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(editor()).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId("settings-surface"))
+    );
+  });
+
   it("never replaces an open draft with another opening", async () => {
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));

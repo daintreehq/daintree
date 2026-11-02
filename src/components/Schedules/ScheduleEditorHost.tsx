@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import { useWallClock } from "@/hooks/useWallClock";
+import { isVisibleTabbableElement } from "@/lib/accessibility";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
@@ -92,11 +93,16 @@ export function ScheduleEditorHost() {
     if (request.seq <= landedSeq) open(null);
   };
 
-  /** A target named for after a save or delete, else the opener, else whatever modal is left. */
+  /**
+   * A target named for after a save or delete, else the opener, else whatever
+   * modal is left. Either can still be in the document but hidden: Settings
+   * keeps a page it moved away from mounted under `display: none`.
+   */
   const restoreTarget = (): HTMLElement | null => {
     const named = focusAfterRef.current?.();
-    if (named) return named;
-    if (openerRef.current?.isConnected) return null;
+    if (named && isVisibleTabbableElement(named)) return named;
+    const opener = openerRef.current;
+    if (opener?.isConnected && isVisibleTabbableElement(opener)) return null;
     return topmostOtherDialog();
   };
 
