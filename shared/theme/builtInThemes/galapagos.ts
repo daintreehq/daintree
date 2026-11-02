@@ -112,6 +112,9 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#5BB5D9",
     "search-selected-result-border": "#5BB5D9",
     "search-selected-result-icon": "#5BB5D9",
+    // Derived would be text-primary @42%, which measures 2.92:1 against the
+    // highlighted row on a panel surface, under the 3:1 its outline owes.
+    "selection-outline": "rgba(220,230,227,0.45)",
     // Tight contact shadows, high alpha, no spread — matches the crisp strategy.
     "shadow-ambient": "0 1px 2px rgba(6,12,10,0.50), 0 1px 1px rgba(6,12,10,0.35)",
     "shadow-color": "rgba(6,12,10,0.60)",

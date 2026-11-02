@@ -479,6 +479,91 @@ describe("getThemeContrastWarnings", () => {
     expect(failures).toHaveLength(1);
   });
 
+  const outlineMessages = (scheme: AppColorScheme) =>
+    getThemeContrastWarnings(scheme)
+      .filter((w) => w.message.includes("selection-outline against"))
+      .map((w) => w.message);
+
+  it.each(["surface-panel", "surface-panel-elevated"] as const)(
+    "holds the outline on a highlighted row on %s, which the palette surfaces barely see",
+    (panel) => {
+      // The dark palette admits only 6% of a panel behind it, so a bright panel
+      // leaves every palette pair passing while the 6% highlight over that panel
+      // lifts to within 2.70:1 of the outline.
+      const scheme = makeFlatDarkScheme({
+        ...({ [panel]: "#2A2A2A" } as Partial<AppColorSchemeTokens>),
+        "overlay-highlight":
+          "rgba(255, 255, 255, 0.06)" as AppColorSchemeTokens["overlay-highlight"],
+        "selection-outline": "#787878" as AppColorSchemeTokens["selection-outline"],
+      });
+      const messages = outlineMessages(scheme);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain(`against the highlight fill on ${panel} is 2.70:1`);
+    }
+  );
+
+  it("holds the outline against the panel around a highlighted row on light themes too", () => {
+    const light = BUILT_IN_APP_SCHEMES.find((s) => s.type === "light")!;
+    const scheme: AppColorScheme = {
+      ...light,
+      id: "test-light",
+      builtin: false,
+      tokens: {
+        ...light.tokens,
+        "surface-panel": "#C8C8C8" as AppColorSchemeTokens["surface-panel"],
+      },
+    };
+    expect(outlineMessages(scheme)).toEqual([
+      expect.stringContaining("against surface-panel around a highlighted row is 2.45:1"),
+    ]);
+  });
+
+  it("does not score a light panel twice when the palette already floats on it", () => {
+    // Light palettes sit on `surface-panel-elevated` itself, so a failing outline
+    // there is already the palette's pair; a panel copy would repeat one pixel.
+    const light = BUILT_IN_APP_SCHEMES.find((s) => s.type === "light")!;
+    const scheme: AppColorScheme = {
+      ...light,
+      id: "test-light",
+      builtin: false,
+      tokens: {
+        ...light.tokens,
+        "selection-outline": "rgba(28, 32, 40, 0.30)" as AppColorSchemeTokens["selection-outline"],
+      },
+    };
+    const messages = outlineMessages(scheme);
+    expect(messages.some((m) => m.includes("the highlighted row fill"))).toBe(true);
+    expect(messages.some((m) => m.includes("surface-panel-elevated"))).toBe(false);
+
+    // The same pixel spelled another way is still the palette's surface.
+    const respelled: AppColorScheme = {
+      ...scheme,
+      tokens: {
+        ...scheme.tokens,
+        "surface-panel-elevated": "#FFFFFF" as AppColorSchemeTokens["surface-panel-elevated"],
+        "surface-panel": "#fff" as AppColorSchemeTokens["surface-panel"],
+      },
+    };
+    const respelledMessages = outlineMessages(respelled);
+    expect(respelledMessages.some((m) => m.includes("the highlighted row fill"))).toBe(true);
+    expect(respelledMessages.some((m) => m.includes("surface-panel"))).toBe(false);
+  });
+
+  it("reports a panel surface it cannot composite as unevaluable", () => {
+    const scheme = makeScheme({
+      "surface-panel":
+        "color-mix(in oklab, #000 50%, #fff)" as AppColorSchemeTokens["surface-panel"],
+    });
+    expect(
+      getThemeContrastWarnings(scheme).some(
+        (w) =>
+          w.kind === "unevaluable" &&
+          w.message.includes("Cannot evaluate panel row selection contrast") &&
+          w.message.includes("surface-panel=")
+      )
+    ).toBe(true);
+  });
+
   it("reports the palette selection check as unevaluable when the outline token is not hex or rgba", () => {
     const scheme = makeScheme({
       "selection-outline":

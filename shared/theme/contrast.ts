@@ -679,6 +679,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   // The outline drawn on a highlighted row (focus ring, increased-contrast
   // outline) against the highlight fill and the surface around it.
   warnings.push(...getPaletteSelectionWarnings(scheme));
+  warnings.push(...getPanelRowSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
   warnings.push(...getDestructiveButtonWarnings(scheme));
   warnings.push(...getDiffTextContrastWarnings(scheme));
@@ -1123,6 +1124,58 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
     warnings.push({ kind: "unevaluable", message: unevaluableDanger });
   }
 
+  return warnings;
+}
+
+// The same outline on a highlighted row that sits on a panel rather than the
+// palette: list-detail rows, the file lists and the worktree overview paint the
+// one fill and take the one increased-contrast outline. Dark panels are lighter
+// than the sidebar the palette is scored on, so the fill and the outline close
+// in on each other there. A panel surface the palette check already scored
+// (light themes float the palette on `surface-panel-elevated`) is skipped, so
+// one pair of pixels never reports twice.
+const PANEL_ROW_SURFACES = ["surface-panel", "surface-panel-elevated"] as const;
+
+function getPanelRowSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const outlineToken = scheme.tokens["selection-outline"];
+  const fillToken = scheme.tokens["overlay-highlight"];
+  // Compared as pixels, so `#FFFFFF` and `#fff` are the one surface they paint.
+  const pixel = (hex: string) => `${hexToRgb(hex).join(",")}/${splitHexAlpha(hex)?.opacity ?? 1}`;
+  const scored = new Set((resolvePaletteSurfaces(scheme) ?? []).map(pixel));
+
+  for (const key of PANEL_ROW_SURFACES) {
+    const surface = scheme.tokens[key];
+    if (!isHexColor(surface)) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate panel row selection contrast: ${key}="${surface}" is not a hex color`,
+      });
+      continue;
+    }
+    if (scored.has(pixel(surface))) continue;
+    const fill = resolveOverBackdrop(fillToken, surface);
+    const outline = fill === null ? null : resolveOverBackdrop(outlineToken, fill);
+    if (fill === null || outline === null) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate panel row selection contrast on ${key}: overlay-highlight="${fillToken}" or selection-outline="${outlineToken}" is neither hex nor rgba()`,
+      });
+      continue;
+    }
+    for (const [label, against] of [
+      [`the highlight fill on ${key}`, fill],
+      [`${key} around a highlighted row`, surface],
+    ] as const) {
+      const ratio = contrastRatio(outline, against);
+      if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
+        warnings.push({
+          kind: "low-contrast",
+          message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+        });
+      }
+    }
+  }
   return warnings;
 }
 

@@ -112,7 +112,7 @@ export function RecipeRunnerItem({
                   // `contrast-more:` inks the resting frame the way every other
                   // control on the canvas home is framed in that mode; the
                   // keyboard cursor's selection-outline still differs from it.
-                  "group flex-col items-start gap-1.5 contrast-more:border-text-secondary group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+                  "group flex-col items-start gap-1.5 contrast-more:border-text-secondary group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
                 )}
               >
                 <div className="flex items-center gap-2 w-full">
@@ -213,7 +213,7 @@ export function RecipeRunnerItem({
                 choiceCardVariants({ padding: "sm" }),
                 // Single-line rows take the palette and search field's radius;
                 // the card family's larger one is for the multi-line grid cards.
-                "rounded-[var(--radius-md)] contrast-more:border-text-secondary group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+                "rounded-[var(--radius-md)] contrast-more:border-text-secondary group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
               )}
             >
               <Play

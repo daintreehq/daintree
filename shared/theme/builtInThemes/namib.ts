@@ -110,6 +110,9 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-background": "rgba(62,145,218,0.16)",
     "search-selected-result-border": "rgba(62,145,218,0.35)",
     "search-selected-result-icon": "#3E91DA",
+    // Derived would be text-primary @42%, which measures 2.98:1 against the
+    // highlighted row on a panel surface, under the 3:1 its outline owes.
+    "selection-outline": "rgba(232,226,217,0.44)",
     "shadow-ambient": "0 1px 2px rgba(16,11,6,0.40), 0 1px 1px rgba(16,11,6,0.25)",
     "shadow-color": "rgba(16,11,6,0.45)",
     "shadow-dialog": "0 4px 12px rgba(16,11,6,0.50), 0 16px 40px rgba(16,11,6,0.28)",

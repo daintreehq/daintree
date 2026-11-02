@@ -365,13 +365,15 @@
      and the engine paints that transparent outline in CanvasText. Every row of
      every menu came out boxed, so the highlighted one was the only row that did
      NOT look different. Canvas gives back the invisibility on the rows that are
-     not highlighted; the rule below outlines the one that is. */
+     not highlighted; the rule below outlines the one that is. An open submenu's
+     parent row is exempt too: once focus moves into the submenu it is no longer
+     highlighted, and this rule outranks its own `Highlight` outline below. */
   :is(
       [role="menuitem"],
       [role="menuitemcheckbox"],
       [role="menuitemradio"],
       [role="option"]
-    ).outline-hidden:not([data-highlighted]):not(:focus-visible) {
+    ).outline-hidden:not([data-highlighted]):not([data-state="open"]):not(:focus-visible) {
     outline-color: Canvas;
   }
 

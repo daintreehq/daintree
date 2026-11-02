@@ -101,6 +101,9 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#C8964B",
     "search-selected-result-border": "rgba(200,150,75,0.35)",
     "search-selected-result-icon": "#C8964B",
+    // Derived would be text-primary @42%, which measures 2.65:1 against the
+    // highlighted row on a panel surface, under the 3:1 its outline owes.
+    "selection-outline": "rgba(220,212,203,0.50)",
     // Shadow and scrim ink share the green-black rgb(8,12,8) family.
     "shadow-ambient": "0 1px 3px rgba(8,12,8,0.35), 0 1px 2px rgba(8,12,8,0.25)",
     "shadow-color": "rgba(8,12,8,0.45)",
