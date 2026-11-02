@@ -104,18 +104,21 @@ describe("isUnseenAskPane", () => {
     );
   });
 
-  it("holds an observed ask only while the pane still shows the approval or question wait", () => {
+  it("holds an observed ask until the pane shows a different stop", () => {
     for (const waitingReason of ["approval", "question"] as const) {
       expect(isUnseenAskPane("observed", { agentState: "waiting", waitingReason })).toBe(true);
     }
+    // A wait the pane holds no reason for (a directing spell drops it), or no
+    // observation at all, is still the fleet's to call.
+    expect(isUnseenAskPane("observed", { agentState: "waiting" })).toBe(true);
+    expect(isUnseenAskPane("observed", {})).toBe(true);
     for (const pane of [
       { agentState: "waiting", waitingReason: "prompt" },
-      { agentState: "waiting" },
       { agentState: "completed" },
       { agentState: "idle" },
-      {},
     ] as const) {
       expect(isUnseenAskPane("observed", pane), JSON.stringify(pane)).toBe(false);
+      expect(isUnseenAskPane("canopy", pane), JSON.stringify(pane)).toBe(true);
     }
   });
 

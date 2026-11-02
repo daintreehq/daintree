@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { shallow } from "zustand/shallow";
 import {
   ATTENTION_FILTER_BANDS,
   bandForRun,
@@ -11,11 +12,10 @@ import {
   fleetBandForRun,
   fleetBandRunKey,
   fleetUnseenAskForRun,
-  fleetUnseenAskKey,
+  fleetUnseenAsks,
   isAttentionBand,
   isDemandBand,
   NEEDS_YOU_BANDS,
-  parseUnseenAskKey,
   runUnseenAsk,
   UNREAD_FILTER_BANDS,
 } from "../fleetAttention";
@@ -701,10 +701,10 @@ describe("fleetBandRunKey", () => {
   });
 
   it("holds Canopy's unread asks and unseen observed waits for the pane edge, by whose", () => {
-    expect(fleetUnseenAskKey(fleet).split("\n")).toEqual([
-      "approval\tobserved",
-      "canopy-approval\tcanopy",
-      "canopy-ask\tcanopy",
+    expect([...fleetUnseenAsks(fleet)].sort()).toEqual([
+      ["approval", "observed"],
+      ["canopy-approval", "canopy"],
+      ["canopy-ask", "canopy"],
     ]);
     expect(fleetUnseenAskForRun(fleet, "approval")).toBe("observed");
     expect(fleetUnseenAskForRun(fleet, "canopy-ask")).toBe("canopy");
@@ -712,18 +712,15 @@ describe("fleetBandRunKey", () => {
       expect(fleetUnseenAskForRun(fleet, id), id).toBeUndefined();
     }
     for (const r of fleet.runs) expect(fleetUnseenAskForRun(fleet, r.runId)).toBe(runUnseenAsk(r));
-    expect([...parseUnseenAskKey(fleetUnseenAskKey(fleet))]).toEqual([
-      ["approval", "observed"],
-      ["canopy-approval", "canopy"],
-      ["canopy-ask", "canopy"],
-    ]);
   });
 
   it("holds no unseen ask before the first snapshot, and the same asks in any order", () => {
-    expect(fleetUnseenAskKey(null)).toBe("");
+    expect(fleetUnseenAsks(null).size).toBe(0);
     expect(fleetUnseenAskForRun(null, "approval")).toBeUndefined();
-    expect(parseUnseenAskKey("").size).toBe(0);
-    expect(fleetUnseenAskKey(snapshot([...fleet.runs].reverse()))).toBe(fleetUnseenAskKey(fleet));
+    expect(fleetUnseenAsks(snapshot([])).size).toBe(0);
+    expect(
+      shallow(fleetUnseenAsks(snapshot([...fleet.runs].reverse())), fleetUnseenAsks(fleet))
+    ).toBe(true);
   });
 
   it("reads each snapshot afresh, even when it shares rows with an earlier one", () => {
@@ -732,10 +729,21 @@ describe("fleetBandRunKey", () => {
     const looked = { ...asking, wait: seen };
     const before = snapshot([first, asking]);
     const after = snapshot([first, looked]);
-    expect(fleetUnseenAskKey(before)).toBe("a\tobserved\nb\tobserved");
-    expect(fleetUnseenAskKey(after)).toBe("a\tobserved");
+    expect([...fleetUnseenAsks(before)]).toEqual([
+      ["a", "observed"],
+      ["b", "observed"],
+    ]);
+    expect([...fleetUnseenAsks(after)]).toEqual([["a", "observed"]]);
     expect(fleetUnseenAskForRun(after, "b")).toBeUndefined();
     expect(fleetUnseenAskForRun(before, "b")).toBe("observed");
+  });
+
+  it("keys asks by run id whatever characters the id holds", () => {
+    const odd = "run\twith\nbreaks";
+    const asks = fleetUnseenAsks(
+      snapshot([run({ runId: odd, agentState: "waiting", waitingReason: "approval" })])
+    );
+    expect([...asks]).toEqual([[odd, "observed"]]);
   });
 
   it("holds nobody before the first snapshot", () => {

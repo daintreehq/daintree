@@ -1,11 +1,11 @@
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import {
   fleetBandForRun,
   fleetBandRunKey,
   fleetUnseenAskForRun,
-  fleetUnseenAskKey,
-  parseUnseenAskKey,
+  fleetUnseenAsks,
   type FleetBand,
   type UnseenAsk,
 } from "@/lib/fleetAttention";
@@ -38,10 +38,7 @@ export function useRunUnseenAsk(terminalId: string): UnseenAsk | undefined {
   return useFleetSnapshotStore((s) => fleetUnseenAskForRun(s.snapshot, terminalId));
 }
 
-const EMPTY_ASKS: ReadonlyMap<string, UnseenAsk> = new Map();
-
-/** Every run asking unseen, by run id, stable across pushes that leave the asks alone. */
+/** Every run asking unseen, by run id, the same map across pushes that leave the asks alone. */
 export function useUnseenAsks(): ReadonlyMap<string, UnseenAsk> {
-  const key = useFleetSnapshotStore((s) => fleetUnseenAskKey(s.snapshot));
-  return useMemo(() => (key === "" ? EMPTY_ASKS : parseUnseenAskKey(key)), [key]);
+  return useFleetSnapshotStore(useShallow((s) => fleetUnseenAsks(s.snapshot)));
 }

@@ -99,45 +99,26 @@ export function fleetBandRunKey(
  */
 export const NEEDS_YOU_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["needs-you"]);
 
-interface UnseenAsks {
-  byRun: ReadonlyMap<string, UnseenAsk>;
-  key: string;
-}
+const NO_UNSEEN_ASKS: ReadonlyMap<string, UnseenAsk> = new Map();
+const unseenAskCache = new WeakMap<FleetSnapshot, ReadonlyMap<string, UnseenAsk>>();
 
-const unseenAskCache = new WeakMap<FleetSnapshot, UnseenAsks>();
-
-function unseenAsks(snapshot: FleetSnapshot): UnseenAsks {
-  let entry = unseenAskCache.get(snapshot);
-  if (entry === undefined) {
+/**
+ * Every run whose current stop is an ask the user hasn't seen, by run id (the
+ * terminal id), with whose ask it is: what the pane edge draws amber for.
+ * Cached per snapshot and empty before the first one. Each snapshot reads a
+ * new map, so a selector over it compares shallowly.
+ */
+export function fleetUnseenAsks(snapshot: FleetSnapshot | null): ReadonlyMap<string, UnseenAsk> {
+  if (snapshot === null) return NO_UNSEEN_ASKS;
+  let asks = unseenAskCache.get(snapshot);
+  if (asks === undefined) {
     const byRun = new Map<string, UnseenAsk>();
     for (const run of snapshot.runs) {
       const ask = runUnseenAsk(run);
       if (ask !== undefined) byRun.set(run.runId, ask);
     }
-    const lines = [...byRun].map(([runId, ask]) => `${runId}\t${ask}`);
-    entry = { byRun, key: lines.sort().join("\n") };
-    unseenAskCache.set(snapshot, entry);
-  }
-  return entry;
-}
-
-/**
- * Every run whose current stop is an ask the user hasn't seen, and whose ask
- * it is, as one sorted string of `runId<TAB>kind` lines: what the pane edge
- * draws amber for. Like {@link fleetBandRunKey}, a primitive cached per
- * snapshot, and nobody before the first snapshot. {@link parseUnseenAskKey}
- * reads it back.
- */
-export function fleetUnseenAskKey(snapshot: FleetSnapshot | null): string {
-  return snapshot === null ? "" : unseenAsks(snapshot).key;
-}
-
-export function parseUnseenAskKey(key: string): ReadonlyMap<string, UnseenAsk> {
-  const asks = new Map<string, UnseenAsk>();
-  if (key === "") return asks;
-  for (const line of key.split("\n")) {
-    const tab = line.lastIndexOf("\t");
-    asks.set(line.slice(0, tab), line.slice(tab + 1) === "observed" ? "observed" : "canopy");
+    asks = byRun.size === 0 ? NO_UNSEEN_ASKS : byRun;
+    unseenAskCache.set(snapshot, asks);
   }
   return asks;
 }
@@ -147,7 +128,7 @@ export function fleetUnseenAskForRun(
   snapshot: FleetSnapshot | null,
   runId: string
 ): UnseenAsk | undefined {
-  return snapshot === null ? undefined : unseenAsks(snapshot).byRun.get(runId);
+  return fleetUnseenAsks(snapshot).get(runId);
 }
 
 const bandIndexCache = new WeakMap<FleetSnapshot, Map<string, FleetBand>>();

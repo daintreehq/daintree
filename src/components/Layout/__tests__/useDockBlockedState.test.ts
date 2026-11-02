@@ -183,6 +183,10 @@ describe("getGroupAmbientAgentState", () => {
       ];
       expect(getGroupAmbientAgentState(panels, observed, "shown"), waitingReason).toBe("waiting");
     }
+    // A wait the pane holds no reason for is still the fleet's to call.
+    expect(
+      getGroupAmbientAgentState([{ id: "asking", agentState: "waiting" as const }], observed)
+    ).toBe("waiting");
     // The fleet is a poll behind a pane that has since reached its prompt or finished.
     for (const stopped of [
       { id: "asking", agentState: "waiting" as const, waitingReason: "prompt" as const },

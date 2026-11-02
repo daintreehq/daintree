@@ -305,6 +305,16 @@ describe("ContentPanel amber from the fleet band", () => {
     expect(hasEdge(container, "waiting")).toBe(true);
   });
 
+  it("keeps an observed ask's edge when the pane's wait has lost its reason", () => {
+    // The input controller's directing spell hands the wait back with no
+    // reason; main still holds the approval, and the fleet says so.
+    observe("waiting");
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
   it("draws no edge once the header has stopped showing the agent as waiting", () => {
     // An exit code on record retires the display state before the exit itself
     // lands; the edge goes with it.

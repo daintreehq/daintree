@@ -1,5 +1,4 @@
 import type { AgentState, WaitingReason } from "@shared/types/agent";
-import { isObservedAskWait } from "@shared/utils/runHandBack";
 import type { FleetBand, UnseenAsk } from "@/lib/fleetAttention";
 
 /**
@@ -58,13 +57,16 @@ export function isNeedsYouPane(
  *
  * Canopy's reading holds for the turn it read, whatever stop the pane has
  * slid to since, so it only needs the run still stopped. An observed ask is
- * the wait itself: once the pane shows anything but an approval or question
- * wait, the fleet is a poll behind and the ask is over.
+ * the wait itself: a pane that has since shown a different stop — finished,
+ * idle, or at a plain prompt — is a poll ahead of the fleet, and the ask is
+ * over. A wait the pane holds no reason for is still the fleet's to call: the
+ * input controller's directing spell hands the wait back without one.
  */
 export function isUnseenAskPane(ask: UnseenAsk | undefined, pane: PaneObservation): boolean {
   if (ask === undefined || !isStillStopped(pane)) return false;
   if (ask === "canopy") return true;
-  return pane.agentState !== undefined && isObservedAskWait(pane.agentState, pane.waitingReason);
+  const { agentState } = pane;
+  return agentState !== "completed" && agentState !== "idle" && pane.waitingReason !== "prompt";
 }
 
 /**
