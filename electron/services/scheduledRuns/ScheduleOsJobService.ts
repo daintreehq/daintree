@@ -248,6 +248,19 @@ export class ScheduleOsJobService {
     return fitRunWhenClosed(this.snapshots.values(), context);
   }
 
+  /**
+   * The zone to write or read the job in. One that couldn't be read leaves the
+   * job alone while any schedule asks for it; with none asking, the job is
+   * only removed, and no cadence is read in the zone.
+   */
+  private jobZone(context: ScheduleOsJobContext): string | null {
+    if (context.systemTimeZone !== null) return context.systemTimeZone;
+    for (const project of this.snapshots.values()) {
+      if (runWhenClosedSchedules(project).length > 0) return null;
+    }
+    return "UTC";
+  }
+
   private async pass(reload: boolean): Promise<void> {
     const { adapter } = this.deps;
     if (adapter.unavailable !== null) return;
@@ -257,12 +270,13 @@ export class ScheduleOsJobService {
       return;
     }
     const context = this.deps.context();
-    if (context.systemTimeZone === null) {
+    const zone = this.jobZone(context);
+    if (zone === null) {
       this.lastError = noZoneError(adapter.kind);
       return;
     }
     try {
-      await adapter.sync(this.fit(context).included, context.systemTimeZone, { reload });
+      await adapter.sync(this.fit(context).included, zone, { reload });
       this.lastError = null;
     } catch (error) {
       this.lastError = formatErrorMessage(error, "Couldn't update the job that starts Daintree");
@@ -287,12 +301,13 @@ export class ScheduleOsJobService {
     });
     const base = { context, unavailable: adapter.unavailable, error: this.lastError, excluded };
     if (adapter.unavailable !== null) return { ...base, state: "none", error: null };
-    if (context.systemTimeZone === null || this.unread.size > 0) return { ...base, state: "stale" };
+    const zone = this.jobZone(context);
+    if (zone === null || this.unread.size > 0) return { ...base, state: "stale" };
 
     const cadences = fit.included;
     let seen: ScheduleOsJobObservation;
     try {
-      seen = await adapter.observe(cadences, context.systemTimeZone);
+      seen = await adapter.observe(cadences, zone);
     } catch (error) {
       return {
         ...base,

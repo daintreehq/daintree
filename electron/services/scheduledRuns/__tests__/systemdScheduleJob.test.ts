@@ -20,6 +20,7 @@ import {
   type SystemdScheduleTarget,
   type SystemdScheduleTargetResult,
 } from "../systemdScheduleJob.js";
+import { itFollowsProjectSwitches } from "./helpers/projectSwitchTransitions.js";
 
 const HOME = "/home/someone";
 const USER_DATA = "/home/someone/.config/Daintree";
@@ -893,5 +894,23 @@ describe("DISPLAY_WAIT_SCRIPT", () => {
       DISPLAY_WAIT_SCRIPT
     );
     expect(execFileSync("/bin/sh", ["-n", "-c", DISPLAY_WAIT_SCRIPT]).toString()).toBe("");
+  });
+});
+
+describe("the systemd timer behind ScheduleOsJobService", () => {
+  itFollowsProjectSwitches(() => {
+    const files = memoryFs();
+    const systemd = fakeSystemd(files.files);
+    return {
+      adapter: job({ files, systemd }),
+      context: { kind: "systemd-timer", systemTimeZone: "Europe/London", unavailable: null },
+      live: () => files.files.has(TIMER_FILE) && files.files.has(WANTS_LINK) && systemd.isActive(),
+      hours: () =>
+        [
+          ...new Set(
+            [...(files.files.get(TIMER_FILE) ?? "").matchAll(/^OnCalendar=\*-\*-\* (\d\d):00:00/gm)].map((match) => Number(match[1]))
+          ),
+        ].sort((a, b) => a - b),
+    };
   });
 });

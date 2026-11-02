@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSchedule } from "../../../../shared/utils/scheduledRuns.js";
-import type { Schedule } from "../../../../shared/types/scheduledRuns.js";
+import type {
+  ProjectScheduleSwitches,
+  Schedule,
+} from "../../../../shared/types/scheduledRuns.js";
 import type { SchedulesSnapshot } from "../../../../shared/types/ipc/schedules.js";
 import type { ScheduleOsJobContext } from "../../../../shared/utils/scheduleOsJob.js";
 import {
@@ -11,6 +14,12 @@ import {
 
 const ZONE = "Europe/London";
 const MAC: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: ZONE, unavailable: null };
+/** A project that lets the job start Daintree for its schedules (#16166). */
+const STARTS: ProjectScheduleSwitches = {
+  schedulesOn: true,
+  startWhenClosed: true,
+  schedulesOnSince: 1,
+};
 
 function schedule(
   id: string,
@@ -108,14 +117,24 @@ function fakeAdapter(
   };
 }
 
-function fakeStore(initial: Record<string, Schedule[]>) {
+function fakeStore(
+  initial: Record<string, Schedule[]>,
+  initialSwitches: Record<string, ProjectScheduleSwitches> = {}
+) {
   let revision = 0;
   const current = new Map(Object.entries(initial));
+  const switchesOf = new Map(Object.entries(initialSwitches));
+  const switches = (projectId: string) => switchesOf.get(projectId) ?? STARTS;
   const listeners = new Set<(snapshot: SchedulesSnapshot) => void>();
   const failing = new Set<string>();
   const list = vi.fn(async (projectId: string): Promise<SchedulesSnapshot> => {
     if (failing.has(projectId)) throw new Error("EACCES");
-    return { projectId, schedules: current.get(projectId) ?? [], revision };
+    return {
+      projectId,
+      switches: switches(projectId),
+      schedules: current.get(projectId) ?? [],
+      revision,
+    };
   });
   return {
     listProjectIds: () => [...current.keys()],
@@ -124,10 +143,15 @@ function fakeStore(initial: Record<string, Schedule[]>) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    commit(projectId: string, schedules: Schedule[]) {
+    commit(projectId: string, schedules: Schedule[], next?: ProjectScheduleSwitches) {
       revision += 1;
       current.set(projectId, schedules);
-      for (const listener of listeners) listener({ projectId, schedules, revision });
+      if (next) switchesOf.set(projectId, next);
+      const snapshot = { projectId, switches: switches(projectId), schedules, revision };
+      for (const listener of listeners) listener(snapshot);
+    },
+    setSwitches(projectId: string, next: Partial<ProjectScheduleSwitches>) {
+      this.commit(projectId, current.get(projectId) ?? [], { ...switches(projectId), ...next });
     },
     failReads(projectId: string, fails: boolean) {
       if (fails) failing.add(projectId);
@@ -228,7 +252,12 @@ describe("ScheduleOsJobService", () => {
     const started = svc.start();
 
     store.commit("a", []);
-    read.resolve({ projectId: "a", schedules: [schedule("a1", "a")], revision: 0 });
+    read.resolve({
+      projectId: "a",
+      switches: STARTS,
+      schedules: [schedule("a1", "a")],
+      revision: 0,
+    });
     await started;
 
     expect(job.syncs).toEqual([{ crons: [], reload: false }]);
@@ -401,7 +430,7 @@ describe("ScheduleOsJobService", () => {
     const store = fakeStore({ a: [], b: [] });
     const slow = deferred<SchedulesSnapshot>();
     store.list.mockImplementation(async (projectId: string) =>
-      projectId === "b" ? slow.promise : { projectId, schedules: [], revision: 0 }
+      projectId === "b" ? slow.promise : { projectId, switches: STARTS, schedules: [], revision: 0 }
     );
     const job = fakeAdapter();
     const svc = service(store, job.adapter);
@@ -412,12 +441,85 @@ describe("ScheduleOsJobService", () => {
     const disposing = svc.dispose().then(() => job.events.push("disposed"));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(job.events).toEqual([]);
-    slow.resolve({ projectId: "b", schedules: [], revision: 0 });
+    slow.resolve({ projectId: "b", switches: STARTS, schedules: [], revision: 0 });
     await disposing;
 
     expect(job.syncs).toEqual([{ crons: ["0 9 * * *"], reload: false }]);
     expect(job.events).toEqual(["synced", "disposed"]);
     await started;
+  });
+  describe("the project's switches (#16166)", () => {
+    it("covers a project's opted-in schedules only while both its switches are on", async () => {
+      const store = fakeStore(
+        { a: [schedule("a1", "a")], b: [schedule("b1", "b", { cron: "0 18 * * *" })] },
+        { a: { ...STARTS, schedulesOn: false } }
+      );
+      const job = fakeAdapter();
+      const svc = service(store, job.adapter);
+      await svc.start();
+      expect(job.syncs.at(-1)?.crons).toEqual(["0 18 * * *"]);
+
+      store.setSwitches("a", { schedulesOn: true });
+      expect(await svc.status("a")).toMatchObject({ state: "current" });
+      store.setSwitches("a", { startWhenClosed: false });
+      await svc.status("a");
+      store.setSwitches("a", { startWhenClosed: true });
+      await svc.status("a");
+      store.setSwitches("a", { schedulesOn: false });
+      await svc.status("a");
+
+      expect(job.syncs.map((sync) => sync.crons)).toEqual([
+        ["0 18 * * *"],
+        ["0 18 * * *", "0 9 * * *"],
+        ["0 18 * * *"],
+        ["0 18 * * *", "0 9 * * *"],
+        ["0 18 * * *"],
+      ]);
+    });
+
+    it("removes the job when the last project asking for it turns either switch off, or is removed", async () => {
+      const store = fakeStore({ a: [schedule("a1", "a")], b: [schedule("b1", "b")] });
+      const job = fakeAdapter();
+      const svc = service(store, job.adapter);
+      await svc.start();
+
+      store.setSwitches("a", { startWhenClosed: false });
+      expect(await svc.status("a")).toMatchObject({ state: "current" });
+      // Project b removed: the store hears it as no schedules, both switches off.
+      store.commit("b", [], { schedulesOn: false, startWhenClosed: false, schedulesOnSince: null });
+
+      expect(await svc.status("a")).toMatchObject({ state: "none", excluded: [] });
+      expect(job.syncs.at(-1)).toEqual({ crons: [], reload: false });
+    });
+
+    it("names none of a project's schedules as left out while it doesn't ask for the job", async () => {
+      const store = fakeStore(
+        { a: [schedule("a1", "a", { timeZone: "Asia/Tokyo" })] },
+        { a: { ...STARTS, startWhenClosed: false } }
+      );
+      const svc = service(store, fakeAdapter().adapter);
+
+      expect((await svc.status("a")).excluded).toEqual([]);
+      store.setSwitches("a", { startWhenClosed: true });
+      expect((await svc.status("a")).excluded).toEqual([
+        { scheduleId: "a1", reason: expect.stringMatching(/this Mac's time/) },
+      ]);
+    });
+
+    it("removes the job with the zone unread once nothing asks for it", async () => {
+      const store = fakeStore({ a: [schedule("a1", "a")] });
+      const job = fakeAdapter();
+      let context = MAC;
+      const svc = service(store, job.adapter, () => context);
+      await svc.start();
+      expect(await svc.status("a")).toMatchObject({ state: "current" });
+
+      context = { ...MAC, systemTimeZone: null };
+      store.setSwitches("a", { schedulesOn: false });
+
+      expect(await svc.status("a")).toMatchObject({ state: "none", error: null });
+      expect(job.syncs.at(-1)).toEqual({ crons: [], reload: false });
+    });
   });
 });
 
