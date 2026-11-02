@@ -10,10 +10,7 @@ import {
 import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
-import {
-  helpOwnershipPrincipal,
-  principalOwnerKey,
-} from "../../mcp-server/resourceOwnership.js";
+import { helpOwnershipPrincipal, principalOwnerKey } from "../../mcp-server/resourceOwnership.js";
 
 const PROJECT = "proj-1";
 const LOCAL: AssistantCaller = {

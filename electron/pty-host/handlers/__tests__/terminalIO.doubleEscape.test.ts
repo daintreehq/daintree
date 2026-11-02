@@ -24,7 +24,11 @@ describe("batch-double-escape", () => {
     return {
       ptyManager,
       escape: (inputOwner?: string) =>
-        handler({ type: "batch-double-escape", ids: ["t1"], ...(inputOwner ? { inputOwner } : {}) }),
+        handler({
+          type: "batch-double-escape",
+          ids: ["t1"],
+          ...(inputOwner ? { inputOwner } : {}),
+        }),
       restart: () => {
         spawnedAt = 200;
       },

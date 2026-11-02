@@ -67,9 +67,7 @@ describe("typed-input provenance (#16094)", () => {
     expect(typedSinceSettle(own, A)).toBe("own-keys");
     expect(typedSinceSettle(own, B)).toBe("someone");
     expect(typedSinceSettle({ ...written([A]), lastStateChange: 2 }, A)).toBe("nothing");
-    expect(typedSinceSettle({ ...written([A, undefined]), lastStateChange: 1 }, A)).toBe(
-      "someone"
-    );
+    expect(typedSinceSettle({ ...written([A, undefined]), lastStateChange: 1 }, A)).toBe("someone");
   });
 
   it("counts everything ever typed as since the settle when none was seen", () => {

@@ -516,7 +516,8 @@ export function liveGlobalWorkerSteer(deps: {
           undefined,
           promptAsWritten
         ),
-    write: (terminalId, data, inputOwner) => deps.pty()?.write(terminalId, data, undefined, inputOwner),
+    write: (terminalId, data, inputOwner) =>
+      deps.pty()?.write(terminalId, data, undefined, inputOwner),
     doubleEscape: (terminalId, inputOwner) =>
       deps.pty()?.batchDoubleEscape([terminalId], inputOwner),
   });

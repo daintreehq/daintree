@@ -697,7 +697,13 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
     });
 
     await steer.prompt(
-      { projectId: PROJECT, terminalId: WORKER, generation: 4, inputOwner: OWNER, authorize: () => {} },
+      {
+        projectId: PROJECT,
+        terminalId: WORKER,
+        generation: 4,
+        inputOwner: OWNER,
+        authorize: () => {},
+      },
       { command: "go", handback: false, machineName: "m" }
     );
 
@@ -775,7 +781,13 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
     });
 
     await steer.prompt(
-      { projectId: PROJECT, terminalId: WORKER, generation: 4, inputOwner: OWNER, authorize: () => {} },
+      {
+        projectId: PROJECT,
+        terminalId: WORKER,
+        generation: 4,
+        inputOwner: OWNER,
+        authorize: () => {},
+      },
       { command: "/goal resume", handback: false, machineName: "m" }
     );
 
