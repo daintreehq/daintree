@@ -95,6 +95,7 @@ import type { PaneBearer, PaneTerminalInfo, PaneTerminalReader } from "../paneAc
 import type { QuestionSource } from "../relayConnection.js";
 import { DecisionsAttachments, type QuestionAttachments } from "../attachmentSpool.js";
 import { DESIGN_REVIEW_FINAL_GATE_ID, createTrustedPolicy } from "../workflowGates.js";
+import { defaultDecisionsSettings } from "../decisionsSettings.js";
 
 const API_KEY = "orchestration-api-key";
 const HELP_TOKEN = "help-session-token";
@@ -260,7 +261,7 @@ describe("/mcp/decisions (#16011)", () => {
       live: () => null,
       store,
       // The policy a lifetime starts with: the trusted gates, no proxy allowlist.
-      policy: createTrustedPolicy({ proxyAllowlisted: false }),
+      policy: createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }),
       ...(attachments ? { attachments } : {}),
     };
     let held: number | null = null;

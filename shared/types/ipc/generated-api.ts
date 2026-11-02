@@ -384,6 +384,9 @@ export interface GeneratedElectronAPI {
     setAutoEnrollHosts(
       ...args: IpcInvokeMap["decisions:set-auto-enroll-hosts"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-auto-enroll-hosts"]["result"]>;
+    setDefaultQuestionExpiry(
+      ...args: IpcInvokeMap["decisions:set-default-question-expiry"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-default-question-expiry"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;

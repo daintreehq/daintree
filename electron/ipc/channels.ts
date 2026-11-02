@@ -1538,9 +1538,11 @@ export const CHANNELS = {
   DECISIONS_EXPORT_DATA: "decisions:export-data",
   DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
   DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
-  // The trusted workflow gates, read-only, and the proxy allowlist (#16013).
+  // The trusted workflow gates, read-only, the proxy allowlist (#16013) and
+  // the default question expiry (#16122).
   DECISIONS_GET_POLICY: "decisions:get-policy",
   DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
+  DECISIONS_SET_DEFAULT_QUESTION_EXPIRY: "decisions:set-default-question-expiry",
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
   DECISIONS_EXPORT_RECOVERY_KIT: "decisions:export-recovery-kit",
   DECISIONS_VERIFY_RECOVERY_KIT: "decisions:verify-recovery-kit",

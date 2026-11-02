@@ -1,6 +1,7 @@
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { pluralize } from "@/lib/pluralize";
@@ -24,31 +25,61 @@ function attentionDescription(attention: DecisionsAttentionCount): string {
       return "Answers Daintree won't type in on its own are listed here";
   }
 }
-import { questionExpiryText } from "./policyCopy";
+import {
+  DEFAULT_QUESTION_EXPIRY_MS,
+  QUESTION_EXPIRY_CHOICES,
+} from "@shared/config/decisionsQuestionExpiry";
+import { questionExpiryLabel, questionExpiryText } from "./policyCopy";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
 
+const NEVER = "never";
+
+/** A default expiry as a select value: null ("never") needs a string of its own. */
+function expiryValue(ms: number | null): string {
+  return ms === null ? NEVER : String(ms);
+}
+
+const EXPIRY_OPTIONS = QUESTION_EXPIRY_CHOICES.map((ms) => ({
+  value: expiryValue(ms),
+  label: questionExpiryLabel(ms),
+}));
+
 /**
- * Questions: how long one waits, as the client library sets it (#16013), and
- * the answers that couldn't be typed in on their own (#16020). The wait isn't
- * a setting yet: the library gives Daintree no way to change it, so this says
- * what it is rather than offering a choice it couldn't honour.
+ * Questions: how long one waits when its agent sets no expiry (#16122), as
+ * the library applies the saved choice, and the answers that couldn't be
+ * typed in on their own (#16020). The description follows what main has
+ * saved, not a choice still being saved.
  */
 export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisionsPolicyResult }) {
-  const { policy, loadError, reload } = read;
+  const { policy, loadError, reload, pendingExpiry, expirySaveFailure, setDefaultQuestionExpiry } =
+    read;
+  const shownExpiry = pendingExpiry ?? (policy ? { ms: policy.defaultQuestionExpiryMs } : null);
   const attention = useDecisionsAttentionCount();
   const openAttention = useDecisionsAttentionStore((state) => state.open);
   const noneToReview = attention.state === "counted" && attention.count === 0;
   return (
     <SettingsSection title="Questions" id="decisions-questions">
       <SettingsGroup>
-        <SettingsRow
+        <SettingsSelect
           id="decisions-questions-expiry"
-          label="Expiry"
+          label="Default expiry"
           description={
             policy === null
               ? "An expired question authorises nothing, and the agent is told so"
               : questionExpiryText(policy)
           }
+          value={shownExpiry === null ? "" : expiryValue(shownExpiry.ms)}
+          placeholder="Loading…"
+          onValueChange={(value) =>
+            void setDefaultQuestionExpiry(value === NEVER ? null : Number(value))
+          }
+          options={EXPIRY_OPTIONS}
+          disabled={policy === null || pendingExpiry !== null}
+          isModified={
+            policy !== null && policy.defaultQuestionExpiryMs !== DEFAULT_QUESTION_EXPIRY_MS
+          }
+          onReset={() => void setDefaultQuestionExpiry(DEFAULT_QUESTION_EXPIRY_MS)}
+          resetAriaLabel="Reset default expiry"
         />
         <SettingsRow
           id="decisions-questions-attention"
@@ -78,6 +109,13 @@ export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisio
           title="Couldn't read how long questions wait"
           message={loadError}
           onRetry={() => void reload()}
+        />
+      )}
+      {expirySaveFailure && (
+        <SettingsLoadErrorBanner
+          title="Couldn't change the default expiry"
+          message={expirySaveFailure.message}
+          onRetry={() => void setDefaultQuestionExpiry(expirySaveFailure.ms)}
         />
       )}
     </SettingsSection>

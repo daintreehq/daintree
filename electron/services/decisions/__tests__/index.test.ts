@@ -441,6 +441,7 @@ import {
   setAutoEnrollHosts,
   setDecisionsEnabled,
   setDecisionsProxyAllowlisted,
+  setDecisionsDefaultQuestionExpiry,
   startDecisionsIfEnabled,
   startSetupCheck,
   stopDecisions,
@@ -859,9 +860,81 @@ describe("Decisions entry", () => {
       expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
 
+    it("saves the default expiry, never included, and the running policy asks the next question with it", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const running = peekDecisionsService()!.getPolicy()!;
+
+      const never = await setDecisionsDefaultQuestionExpiry(null);
+      expect(never).toMatchObject({ defaultQuestionExpiryMs: null, maxQuestionExpiryMs: null });
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        defaultQuestionExpiryMs: null,
+      });
+      expect(getDecisionsPolicy()).toEqual(never);
+      expect(peekDecisionsService()!.getPolicy()).toBe(running);
+      expect(running.defaultQuestionExpiryMs).toBeNull();
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.stopped).toBe(0);
+
+      const hour = await setDecisionsDefaultQuestionExpiry(60 * 60_000);
+      expect(hour.defaultQuestionExpiryMs).toBe(60 * 60_000);
+      expect(hour.revision).toBeGreaterThan(never.revision);
+      expect(running.defaultQuestionExpiryMs).toBe(60 * 60_000);
+    });
+
+    it("refuses an expiry Settings doesn't offer, saving nothing and leaving the policy as it was", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const running = peekDecisionsService()!.getPolicy()!;
+      const before = getDecisionsPolicy();
+      vi.mocked(store.set).mockClear();
+
+      for (const ms of [0, 59_999, 2 * 60 * 60_000, 400 * 24 * 60 * 60_000]) {
+        await expect(setDecisionsDefaultQuestionExpiry(ms)).rejects.toMatchObject({
+          code: "VALIDATION",
+        });
+      }
+      expect(store.set).not.toHaveBeenCalled();
+      expect(getDecisionsPolicy()).toEqual(before);
+      expect(running.defaultQuestionExpiryMs).toBe(before.defaultQuestionExpiryMs);
+    });
+
+    it("keeps both fields when the expiry and the allowlist are saved at once", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const running = peekDecisionsService()!.getPolicy()!;
+
+      const [allowed, expiry] = await Promise.all([
+        setDecisionsProxyAllowlisted(true),
+        setDecisionsDefaultQuestionExpiry(null),
+      ]);
+      expect(allowed.proxyAllowlisted).toBe(true);
+      // The later save is applied over the earlier one, so its answer holds both.
+      expect(expiry).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
+      expect(running.defaultQuestionExpiryMs).toBeNull();
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
+
+    it("refuses either policy change after quit, though the switch still reads on", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      await stopDecisions();
+      vi.mocked(store.set).mockClear();
+
+      await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
+      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
     it("refuses to change the allowlist while off, and saves nothing", async () => {
       saved.value = { enabled: false };
       await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
       expect(store.set).not.toHaveBeenCalled();
       expect(peekDecisionsService()).toBeNull();
     });

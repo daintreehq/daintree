@@ -66,6 +66,7 @@ describe("store ownership derived from the settings catalog", () => {
       deviceId: "owner-desktop-01",
       hostId: "owner-host-0001",
       proxyAllowlisted: true,
+      defaultQuestionExpiryMs: null,
       consentedAt: 1_761_955_200_000,
       revokedAt: 1_761_955_300_000,
       recoveryKit: {
@@ -92,6 +93,7 @@ describe("store ownership derived from the settings catalog", () => {
       deviceId: "host-device-0001",
       hostId: "host-host-00001",
       proxyAllowlisted: false,
+      defaultQuestionExpiryMs: 60 * 60_000,
       consentedAt: null,
       revokedAt: null,
       recoveryKit: null,

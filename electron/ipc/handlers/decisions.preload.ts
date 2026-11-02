@@ -18,6 +18,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   deleteLocalData: "decisions:delete-local-data",
   getPolicy: "decisions:get-policy",
   setProxyAllowlisted: "decisions:set-proxy-allowlisted",
+  setDefaultQuestionExpiry: "decisions:set-default-question-expiry",
   exportRecoveryKit: "decisions:export-recovery-kit",
   verifyRecoveryKit: "decisions:verify-recovery-kit",
   revokeDevice: "decisions:revoke-device",

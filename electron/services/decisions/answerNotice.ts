@@ -24,6 +24,8 @@ export interface AnswerBlock {
   confidence: number | null;
   choice: string | null;
   choiceLabel: string | null;
+  /** A correction's reason, as the person gave it on the phone; null when none. */
+  reason: string | null;
   comment: string | null;
 }
 
@@ -49,11 +51,13 @@ const LIBRARY_EXPIRED_NOTE =
 /** Question and injection ids as the library mints them: hex, never free text. */
 const ID = /^[A-Za-z0-9_-]{8,80}$/;
 const MAX_COMMENT_CHARS = 4_000;
+/** The library's own cap on a correction's reason. */
+const MAX_REASON_CHARS = 1_000;
 const MAX_CHOICE_CHARS = 1_000;
 const MAX_MODEL_CHARS = 80;
 /**
- * A rendered block's budget in UTF-8 bytes, met by cutting its comment, the
- * only field ever cut to fit; every other field has its own cap.
+ * A rendered block's budget in UTF-8 bytes, met by cutting its free text, the
+ * comment first; every other field has its own cap.
  */
 export const MAX_DECISION_BLOCK_BYTES = 6_400;
 /** A notice handed to the sink, before parsing: the library chunks at 8000 bytes. */
@@ -137,6 +141,18 @@ class Cursor {
   }
 }
 
+/**
+ * A free-text field: its first line after the key, then every line the
+ * library indented under it, so none of them can pass for a field of the block.
+ */
+function takeText(cursor: Cursor, key: string, maxChars: number): string | null {
+  const first = cursor.take(key);
+  if (first === null) return null;
+  const lines = [first];
+  while (cursor.peek()?.startsWith("  ") === true) lines.push(cursor.next()!.slice(2));
+  return sanitizeAnswerText(lines.join("\n"), maxChars);
+}
+
 function parseBlock(cursor: Cursor): AnswerBlock | null {
   if (!cursor.takeExact(BLOCK_START)) return null;
   const question = /^(\S+)(?: \(q-(\d{1,9})\))?$/.exec(cursor.take("question_id") ?? "");
@@ -158,6 +174,7 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     confidence: null,
     choice: null,
     choiceLabel: null,
+    reason: null,
     comment: null,
   };
 
@@ -190,14 +207,13 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     if (choice !== null) block.choice = oneLine(choice, MAX_CHOICE_CHARS);
     const choiceLabel = cursor.take("choice_label");
     if (choiceLabel !== null) block.choiceLabel = oneLine(choiceLabel, MAX_CHOICE_CHARS);
-    const first = cursor.take("comment");
-    if (first !== null) {
-      // The library indents every later line of a comment, so none of them
-      // can pass for a field of the block.
-      const lines = [first];
-      while (cursor.peek()?.startsWith("  ") === true) lines.push(cursor.next()!.slice(2));
-      block.comment = sanitizeAnswerText(lines.join("\n"), MAX_COMMENT_CHARS);
+    // The library writes a reason only for a correction (0.2.0), before any comment.
+    const reason = takeText(cursor, "reason", MAX_REASON_CHARS);
+    if (reason !== null) {
+      if (!block.correction) return null;
+      block.reason = reason;
     }
+    block.comment = takeText(cursor, "comment", MAX_COMMENT_CHARS);
   } else {
     return null;
   }
@@ -261,17 +277,20 @@ function renderBlock(block: AnswerBlock, marked = true): string {
     if (block.correction) lines.push(CORRECTION_NOTE);
     if (block.choice !== null) lines.push(`choice: ${block.choice}`);
     if (block.choiceLabel !== null) lines.push(`choice_label: ${block.choiceLabel}`);
-    if (block.comment !== null && block.comment.length > 0) {
-      const [first, ...rest] = block.comment.split("\n");
-      lines.push(`comment: ${first}`, ...rest.map((line) => `  ${line}`));
-    }
+    const text = (key: string, value: string | null) => {
+      if (value === null || value.length === 0) return;
+      const [first, ...rest] = value.split("\n");
+      lines.push(`${key}: ${first}`, ...rest.map((line) => `  ${line}`));
+    };
+    if (block.correction) text("reason", block.reason);
+    text("comment", block.comment);
   }
   lines.push(DECISION_BLOCK_END);
   return lines.join("\n");
 }
 
-/** Answer text that may be cut to fit, in the order it is cut. */
-const CUTTABLE = ["comment", "choiceLabel", "choice"] as const;
+/** Answer text that may be cut to fit, in the order it is cut: the library's own order first. */
+const CUTTABLE = ["comment", "reason", "choiceLabel", "choice"] as const;
 
 /**
  * One block within {@link MAX_DECISION_BLOCK_BYTES}. Only answer text is cut,

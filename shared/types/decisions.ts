@@ -32,6 +32,13 @@ export interface DecisionsSettings {
    */
   proxyAllowlisted: boolean;
   /**
+   * How long a question asked on this computer waits when its agent sets no
+   * expiry (#16122), in ms, or null for no expiry: the library's
+   * `PolicyRegistry.defaultQuestionExpiryMs`. One of
+   * `QUESTION_EXPIRY_CHOICES`; 7 days unless the person picks another.
+   */
+  defaultQuestionExpiryMs: number | null;
+  /**
    * When the person agreed to what Decisions sends and where (epoch ms), the
    * first time they turned it on; null until then. The switch asks first
    * while it is null.
@@ -204,11 +211,15 @@ export interface DecisionsPolicy {
   proxyAllowlisted: boolean;
   /**
    * How long a question with no origin gate waits when its agent sets no
-   * expiry, in ms, or null for no expiry. The client library's own rule,
-   * read from it; Daintree has no way to change it yet.
+   * expiry, in ms, or null for no expiry: the saved setting, as the library's
+   * registry applies it.
    */
   defaultQuestionExpiryMs: number | null;
-  /** The latest expiry such a question's agent can ask for, in ms after asking; null for no limit. */
+  /**
+   * The latest expiry such a question's agent can ask for, in ms after asking,
+   * as the library's `questionExpiryPolicy` computes it for that default; null
+   * for no policy limit.
+   */
   maxQuestionExpiryMs: number | null;
   /**
    * Increases with each change main saves, so a read that lands after a

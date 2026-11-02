@@ -424,9 +424,10 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.deleteLocalData();
       }
     ),
-    // The trusted gates and the proxy allowlist (#16013). Read and changed
-    // only while on: Settings shows them behind the switch, and reading them
-    // loads Decisions. No op registers or edits a gate.
+    // The trusted gates, the proxy allowlist (#16013) and the default question
+    // expiry (#16122). Read and changed only while on: Settings shows them
+    // behind the switch, and reading them loads Decisions. No op registers or
+    // edits a gate.
     getPolicy: op(CHANNELS.DECISIONS_GET_POLICY, async (): Promise<DecisionsPolicy> => {
       refuseWhileOff("read its policy");
       const decisions = await loadDecisions();
@@ -441,6 +442,17 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setDecisionsProxyAllowlisted(allowed);
+      }
+    ),
+    // Only the shape here; main refuses any value Settings doesn't offer.
+    setDefaultQuestionExpiry: opValidated(
+      CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
+      z.number().int().positive().nullable(),
+      async (ms: number | null): Promise<DecisionsPolicy> => {
+        refuseWhileOff("change how long questions wait");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsDefaultQuestionExpiry(ms);
       }
     ),
     // Saving and verifying a recovery kit (#16007). The save dialog belongs to

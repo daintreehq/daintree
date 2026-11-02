@@ -6,6 +6,8 @@ import {
   DecisionsBridge,
   MemoryKeyStore,
   MemoryLocalStore,
+  PolicyRegistry,
+  QUESTION_EXPIRY_LIMIT_MS,
   RelayClient,
   TokenMapAuthenticator,
   createDecisionsMcpHandler,
@@ -14,7 +16,6 @@ import {
   loadIdentity,
   type Identity,
   type InjectResult,
-  type PolicyRegistry,
   type QuestionOrigin,
   type StoredIdentity,
   type TerminalSink,
@@ -29,13 +30,16 @@ import {
   newId,
   serializeDeviceKeys,
   sha256Hex,
+  verifyRecordAndEnvelope,
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import {
+  DEFAULTS,
   EventData,
   applyAction,
   bytesToBase64Url,
   type ActionKind,
+  type CryptoEnvelope,
   type DeviceCert,
   type Requirement,
 } from "@daintreehq/decisions-protocol";
@@ -44,8 +48,22 @@ import {
   createTrustedPolicy,
   decisionsPolicyOf,
   describeTrustedGates,
+  type PolicySettings,
 } from "../workflowGates.js";
 import { parseAnswerNotice, renderDecisionSection } from "../answerNotice.js";
+import {
+  DEFAULT_QUESTION_EXPIRY_MS,
+  QUESTION_EXPIRY_CHOICES,
+} from "../../../../shared/config/decisionsQuestionExpiry.js";
+
+const HOUR = 60 * 60_000;
+const DAY = 24 * HOUR;
+
+/** The settings a policy is made from, as saved before anyone changes them. */
+const SAVED: PolicySettings = {
+  proxyAllowlisted: false,
+  defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
+};
 
 const RELAY_ORIGIN = "https://decisions.example.workers.dev";
 const INSTALLATION = "inst_12345678";
@@ -89,6 +107,7 @@ const REVIEW_INPUT = {
 interface Harness {
   bridge: DecisionsBridge;
   policy: PolicyRegistry;
+  store: MemoryLocalStore;
   identity: Identity;
   injected: string[];
   /** A phone answer, signed and sealed as the phone would send it, applied through the real inbox. */
@@ -144,7 +163,7 @@ async function certFor(
   });
 }
 
-async function harness(options: { proxyAllowlisted?: boolean } = {}): Promise<Harness> {
+async function harness(options: Partial<PolicySettings> = {}): Promise<Harness> {
   const ownerKeys = await generateDeviceKeys(true);
   const stored: StoredIdentity = {
     v: 1,
@@ -204,7 +223,7 @@ async function harness(options: { proxyAllowlisted?: boolean } = {}): Promise<Ha
     hasMarker: async () => false,
   };
 
-  const policy = createTrustedPolicy({ proxyAllowlisted: options.proxyAllowlisted ?? false });
+  const policy = createTrustedPolicy({ ...SAVED, ...options });
   const store = new MemoryLocalStore();
   const bridge = new DecisionsBridge({
     identity,
@@ -316,6 +335,7 @@ async function harness(options: { proxyAllowlisted?: boolean } = {}): Promise<Ha
   return {
     bridge,
     policy,
+    store,
     identity,
     injected,
     answer: (questionId, content) =>
@@ -390,6 +410,46 @@ async function ask(
   return result;
 }
 
+/**
+ * The expiry a question was asked with, read from both places it lives: the
+ * record signed for the relay (still queued, since the harness relay is
+ * offline) and the stored row. They must agree, and the record must verify.
+ */
+async function askedExpiry(
+  h: Harness,
+  input: Record<string, unknown>,
+  workflowGateId: string | null = null
+) {
+  const before = Date.now();
+  const { questionId } = await h.bridge.registerQuestion({ origin: origin(workflowGateId), input });
+  const after = Date.now();
+  const row = await h.store.getQuestion(questionId);
+  const create = (await h.store.outboxFor(questionId)).find((item) => item.kind === "create");
+  const { signed } = create!.payload as {
+    signed: { record: Record<string, unknown>; envelope: CryptoEnvelope };
+  };
+  expect(
+    await verifyRecordAndEnvelope(signed.record, signed.envelope, h.identity.keys.signing.publicKey)
+  ).toBe(true);
+  expect(signed.record.expires_at).toBe(row!.expires_at);
+  return { questionId, expiresAt: row!.expires_at, before, after };
+}
+
+/** Whether a question asked between `before` and `after` expires `ms` later, or never for null. */
+function expectLasting(
+  asked: { expiresAt: string | null; before: number; after: number },
+  ms: number | null
+) {
+  if (ms === null) {
+    expect(asked.expiresAt).toBeNull();
+    return;
+  }
+  expect(asked.expiresAt).not.toBeNull();
+  const at = Date.parse(asked.expiresAt!);
+  expect(at - asked.after).toBeLessThanOrEqual(ms);
+  expect(at - asked.before).toBeGreaterThanOrEqual(ms);
+}
+
 async function refusal(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
@@ -400,9 +460,26 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
   throw new Error("expected the bridge to refuse");
 }
 
+describe("default question expiry", () => {
+  it("defaults to the library's own default, and offers only choices the library accepts", () => {
+    expect(DEFAULT_QUESTION_EXPIRY_MS).toBe(DEFAULTS.questionExpiryMs);
+    expect(new PolicyRegistry().defaultQuestionExpiryMs).toBe(DEFAULT_QUESTION_EXPIRY_MS);
+    expect(QUESTION_EXPIRY_CHOICES).toContain(DEFAULT_QUESTION_EXPIRY_MS);
+    expect(QUESTION_EXPIRY_CHOICES).toContain(null);
+    for (const choice of QUESTION_EXPIRY_CHOICES) {
+      // The registry throws on anything else, which would stop Decisions starting.
+      const policy = createTrustedPolicy({ ...SAVED, defaultQuestionExpiryMs: choice });
+      expect(policy.defaultQuestionExpiryMs).toBe(choice);
+      const running = createTrustedPolicy(SAVED);
+      running.defaultQuestionExpiryMs = choice;
+      expect(running.defaultQuestionExpiryMs).toBe(choice);
+    }
+  });
+});
+
 describe("trusted workflow gates", () => {
   it("registers design-review/final as Settings describes it, and every gate it describes is registered", () => {
-    const policy = createTrustedPolicy({ proxyAllowlisted: false });
+    const policy = createTrustedPolicy(SAVED);
     const described = describeTrustedGates();
     expect(described.map((gate) => gate.id)).toContain(DESIGN_REVIEW_FINAL_GATE_ID);
     for (const gate of described) {
@@ -421,8 +498,8 @@ describe("trusted workflow gates", () => {
   });
 
   it("hands Settings copies: changing what it read changes no registered gate", () => {
-    const policy = createTrustedPolicy({ proxyAllowlisted: false });
-    const read = decisionsPolicyOf({ proxyAllowlisted: false }, 0);
+    const policy = createTrustedPolicy(SAVED);
+    const read = decisionsPolicyOf(SAVED, 0);
     const gate = read.gates.find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
     gate.requirement = "proxy-first";
     gate.choices[0]!.id = "ship-anyway";
@@ -438,41 +515,97 @@ describe("trusted workflow gates", () => {
     const again = describeTrustedGates().find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
     expect(again.requirement).toBe("human-required");
     expect(again.choices).toEqual(expected);
-    expect(
-      createTrustedPolicy({ proxyAllowlisted: false }).get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices
-    ).toEqual(expected);
+    expect(createTrustedPolicy(SAVED).get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(expected);
   });
 
-  it("reports the expiry a question really gets, and the latest its agent can ask for", async () => {
-    const h = await harness();
-    const { defaultQuestionExpiryMs, maxQuestionExpiryMs } = decisionsPolicyOf(
-      { proxyAllowlisted: false },
-      0
-    );
-    expect(defaultQuestionExpiryMs).not.toBeNull();
-    expect(maxQuestionExpiryMs).not.toBeNull();
-    expect(maxQuestionExpiryMs!).toBeGreaterThan(defaultQuestionExpiryMs!);
+  it.each([
+    ["an hour", HOUR],
+    ["the library's default", DEFAULT_QUESTION_EXPIRY_MS],
+    ["90 days", 90 * DAY],
+    ["never", null],
+  ])(
+    "asks a question with a saved default of %s as Settings reports it, signed and stored alike",
+    async (_label, saved) => {
+      const h = await harness({ defaultQuestionExpiryMs: saved });
+      const reported = decisionsPolicyOf({ ...SAVED, defaultQuestionExpiryMs: saved }, 0);
+      expect(reported.defaultQuestionExpiryMs).toBe(saved);
 
-    const lifetime = async (input: Record<string, unknown>) => {
-      const before = Date.now();
-      const { questionId } = await ask(h, input);
-      const after = Date.now();
-      const expiresAt = Date.parse((await h.bridge.getDecision(questionId)).expiresAt!);
-      return { low: expiresAt - after, high: expiresAt - before };
-    };
-    const byDefault = await lifetime({ question: "Tabs?" });
-    expect(defaultQuestionExpiryMs!).toBeGreaterThanOrEqual(byDefault.low);
-    expect(defaultQuestionExpiryMs!).toBeLessThanOrEqual(byDefault.high);
+      expectLasting(await askedExpiry(h, { question: "Tabs?" }), saved);
+      // design-review/final sets no expiry, so naming it changes nothing.
+      expectLasting(await askedExpiry(h, REVIEW_INPUT), saved);
 
-    const tooLong = new Date(Date.now() + 10 * maxQuestionExpiryMs!).toISOString();
-    for (const input of [
-      { question: "Tabs?", expires_at: tooLong },
-      { ...REVIEW_INPUT, expires_at: tooLong },
-    ]) {
-      const capped = await lifetime(input);
-      expect(maxQuestionExpiryMs!).toBeGreaterThanOrEqual(capped.low);
-      expect(maxQuestionExpiryMs!).toBeLessThanOrEqual(capped.high);
+      if (saved === null) {
+        // No policy limit: an agent may still ask for any finite expiry the relay accepts.
+        expect(reported.maxQuestionExpiryMs).toBeNull();
+        const asked = new Date(Date.now() + 300 * DAY).toISOString();
+        expect((await askedExpiry(h, { question: "Later?", expires_at: asked })).expiresAt).toBe(
+          asked
+        );
+        // Beyond what the relay accepts, the agent is told, and nothing is stored.
+        const tooFar = new Date(Date.now() + QUESTION_EXPIRY_LIMIT_MS + DAY).toISOString();
+        expect(
+          await refusal(
+            h.bridge.registerQuestion({
+              origin: origin(),
+              input: { question: "Much later?", expires_at: tooFar },
+            })
+          )
+        ).toMatch(/^validation_error: /);
+        expect(await h.store.listQuestions()).toHaveLength(3);
+        return;
+      }
+      expect(reported.maxQuestionExpiryMs).toBeGreaterThanOrEqual(saved);
+      const tooLong = new Date(Date.now() + 10 * reported.maxQuestionExpiryMs!).toISOString();
+      expectLasting(
+        await askedExpiry(h, { question: "Later?", expires_at: tooLong }),
+        reported.maxQuestionExpiryMs
+      );
     }
+  );
+
+  it("asks the next question with a changed default, and leaves questions already asked as they were", async () => {
+    const h = await harness();
+    const first = await askedExpiry(h, { question: "First?" });
+    expectLasting(first, DEFAULT_QUESTION_EXPIRY_MS);
+
+    h.policy.defaultQuestionExpiryMs = null;
+    expectLasting(await askedExpiry(h, { question: "Second?" }), null);
+    h.policy.defaultQuestionExpiryMs = HOUR;
+    expectLasting(await askedExpiry(h, { question: "Third?" }), HOUR);
+
+    expect((await h.store.getQuestion(first.questionId))!.expires_at).toBe(first.expiresAt);
+  });
+
+  it("keeps the expiry a gate sets, and an agent-named gate only ever shortens the default", async () => {
+    const fixed = {
+      gateId: "test/two-hours",
+      minRequirement: "human-required" as const,
+      policyVersion: 1,
+      expiryMs: 2 * HOUR,
+    };
+    const never = await harness({ defaultQuestionExpiryMs: null });
+    never.policy.register(fixed);
+    // A pane's gate with an expiry governs its questions, however long the agent asks for.
+    expectLasting(await askedExpiry(never, { question: "Ship?" }, fixed.gateId), 2 * HOUR);
+    const later = new Date(Date.now() + 30 * DAY).toISOString();
+    expectLasting(
+      await askedExpiry(never, { question: "Ship later?", expires_at: later }, fixed.gateId),
+      2 * HOUR
+    );
+    // Named by the agent, it shortens a default of never.
+    expectLasting(
+      await askedExpiry(never, { question: "Ship now?", workflow_gate_id: fixed.gateId }),
+      2 * HOUR
+    );
+    // A pane's gate that sets none takes the default, never included.
+    expectLasting(await askedExpiry(never, REVIEW_INPUT, DESIGN_REVIEW_FINAL_GATE_ID), null);
+
+    const hour = await harness({ defaultQuestionExpiryMs: HOUR });
+    hour.policy.register(fixed);
+    expectLasting(
+      await askedExpiry(hour, { question: "Ship now?", workflow_gate_id: fixed.gateId }),
+      HOUR
+    );
   });
 
   it("keeps a design review human-required whatever level the agent asks for", async () => {

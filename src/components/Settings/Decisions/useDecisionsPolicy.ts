@@ -7,6 +7,11 @@ export interface DecisionsPolicySaveFailure {
   message: string;
 }
 
+export interface DecisionsExpirySaveFailure {
+  ms: number | null;
+  message: string;
+}
+
 export interface UseDecisionsPolicyResult {
   /** Null until main has answered, and while Decisions is off. */
   policy: DecisionsPolicy | null;
@@ -14,8 +19,12 @@ export interface UseDecisionsPolicyResult {
   /** The allowlist value being saved, so the switch shows what was asked while main acts. */
   pending: boolean | null;
   saveFailure: DecisionsPolicySaveFailure | null;
+  /** The default expiry being saved, boxed because null is "never"; null when nothing is saving. */
+  pendingExpiry: { ms: number | null } | null;
+  expirySaveFailure: DecisionsExpirySaveFailure | null;
   reload(): Promise<void>;
   setProxyAllowlisted(allowed: boolean): Promise<void>;
+  setDefaultQuestionExpiry(ms: number | null): Promise<void>;
 }
 
 const READ_FAILED = "Decisions' policy couldn't be read.";
@@ -28,6 +37,8 @@ const READ_FAILED = "Decisions' policy couldn't be read.";
  * read that lands after a newer change can't roll the switch back. Turning
  * off forgets what was read, and anything still in flight from before lands
  * nowhere, so turning on again starts from main's answer, never a stale one.
+ * Each field saves on its own, so changing one never waits on, or resends, the
+ * other; main applies them in turn over the setting as it stands.
  * Promise chains rather than try/finally, which the React Compiler can't lower.
  */
 export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
@@ -35,7 +46,12 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<boolean | null>(null);
   const [saveFailure, setSaveFailure] = useState<DecisionsPolicySaveFailure | null>(null);
+  const [pendingExpiry, setPendingExpiry] = useState<{ ms: number | null } | null>(null);
+  const [expirySaveFailure, setExpirySaveFailure] = useState<DecisionsExpirySaveFailure | null>(
+    null
+  );
   const savingRef = useRef(false);
+  const savingExpiryRef = useRef(false);
   const revisionRef = useRef(-1);
   /** Moves on each turn on and off; an answer asked for in another one is dropped. */
   const generationRef = useRef(0);
@@ -85,6 +101,7 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
       setPolicy(null);
       setLoadError(null);
       setSaveFailure(null);
+      setExpirySaveFailure(null);
     };
   }, [active]);
 
@@ -116,12 +133,40 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
       });
   };
 
+  const setDefaultQuestionExpiry = (ms: number | null): Promise<void> => {
+    if (savingExpiryRef.current) return Promise.resolve();
+    savingExpiryRef.current = true;
+    setPendingExpiry({ ms });
+    setExpirySaveFailure(null);
+    const generation = generationRef.current;
+    return window.electron.decisions
+      .setDefaultQuestionExpiry(ms)
+      .then(
+        (next) => accept(next, generation),
+        (error: unknown) => {
+          if (generation !== generationRef.current) return;
+          setExpirySaveFailure({
+            ms,
+            message: formatErrorMessage(error, "Try again in a moment."),
+          });
+          void read();
+        }
+      )
+      .then(() => {
+        savingExpiryRef.current = false;
+        setPendingExpiry(null);
+      });
+  };
+
   return {
     policy: active ? policy : null,
     loadError: active ? loadError : null,
     pending,
     saveFailure: active ? saveFailure : null,
+    pendingExpiry,
+    expirySaveFailure: active ? expirySaveFailure : null,
     reload,
     setProxyAllowlisted,
+    setDefaultQuestionExpiry,
   };
 }

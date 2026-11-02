@@ -44,6 +44,7 @@ import {
 } from "../decisionModel.js";
 import { SETUP_DIAGNOSTIC_PROJECT_ID } from "../setupDiagnostic.js";
 import { DESIGN_REVIEW_FINAL_GATE_ID, createTrustedPolicy } from "../workflowGates.js";
+import { defaultDecisionsSettings } from "../decisionsSettings.js";
 
 const OPTIONS = [
   { id: "rebase", label: "Rebase onto develop" },
@@ -657,7 +658,7 @@ async function bridgeLoop(runtime: DecisionModelRuntime) {
     hasMarker: async () => false,
   };
 
-  const policy = createTrustedPolicy({ proxyAllowlisted: true });
+  const policy = createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: true });
   // A gate that would let a proxy answer, named like a design review: the model still never does.
   policy.register({ gateId: "design-review/draft", minRequirement: "proxy-ok", policyVersion: 1 });
   const store = new MemoryLocalStore();

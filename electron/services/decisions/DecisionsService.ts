@@ -756,11 +756,15 @@ export class DecisionsService {
   /**
    * The lifetime's policy, made on its first start and updated in place after
    * that: replacing it would leave the running bridge on the old one. Already
-   * asked questions keep the level they were asked with.
+   * asked questions keep the level and expiry they were asked with.
    */
   private applyPolicy(settings: DecisionsSettings): void {
-    if (this.policy) this.policy.proxyAllowlisted = settings.proxyAllowlisted;
-    else this.policy = createTrustedPolicy(settings);
+    if (!this.policy) {
+      this.policy = createTrustedPolicy(settings);
+      return;
+    }
+    this.policy.proxyAllowlisted = settings.proxyAllowlisted;
+    this.policy.defaultQuestionExpiryMs = settings.defaultQuestionExpiryMs;
   }
 
   /**

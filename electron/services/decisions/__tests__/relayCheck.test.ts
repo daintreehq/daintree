@@ -189,12 +189,12 @@ describe("checkDecisionsRelay", () => {
       checkDecisionsRelay(ORIGIN, { fetchImpl: wider.fetchImpl })
     ).resolves.toMatchObject({ result: "claimed", compatibility: { diverges: true } });
 
-    const newerWorker = healthyRelay(info({ worker_version: "0.2.0", claimed: true }));
+    const newerWorker = healthyRelay(info({ worker_version: "9.0.0", claimed: true }));
     await expect(
       checkDecisionsRelay(ORIGIN, { fetchImpl: newerWorker.fetchImpl })
     ).resolves.toMatchObject({
       result: "claimed",
-      compatibility: { relay: { workerVersion: "0.2.0" }, diverges: true },
+      compatibility: { relay: { workerVersion: "9.0.0" }, diverges: true },
     });
   });
 
