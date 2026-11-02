@@ -135,8 +135,10 @@ const UNREAD_ASK = { kind: "asked", quote: "Run npm test?", readAt: 1, seen: fal
 
 /** Which state's glyph the chip drew, read off the mocked icon. */
 const drawnGlyph = () =>
-  screen.queryByRole("status")?.querySelector("[data-testid='state-icon']")?.getAttribute("data-glyph") ??
-  null;
+  screen
+    .queryByRole("status")
+    ?.querySelector("[data-testid='state-icon']")
+    ?.getAttribute("data-glyph") ?? null;
 
 /** The waiting ring without the amber an unread ask wears. */
 function expectGreyWaitingRing(name: string | RegExp = /^Agent state: waiting/) {
@@ -467,14 +469,17 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
   it.each([
     ["parked", { park: { parkedAt: 1 } }],
     ["snoozed", { snooze: { snoozedAt: 1 } }],
-  ] as const)("draws a %s run's wait as the grey ring, even over an unread ask", (_label, record) => {
-    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "approval" };
-    setRun({ waitingReason: "approval", canopy: UNREAD_ASK, ...record });
+  ] as const)(
+    "draws a %s run's wait as the grey ring, even over an unread ask",
+    (_label, record) => {
+      mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "approval" };
+      setRun({ waitingReason: "approval", canopy: UNREAD_ASK, ...record });
 
-    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+      render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
-    expectGreyWaitingRing("Agent state: waiting (approval)");
-  });
+      expectGreyWaitingRing("Agent state: waiting (approval)");
+    }
+  );
 
   it("draws a restarting pane idle rather than waiting, before the band catches up", () => {
     mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "question" };
