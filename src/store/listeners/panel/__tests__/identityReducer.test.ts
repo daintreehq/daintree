@@ -48,7 +48,7 @@ describe("reduceAgentDetected", () => {
     const attempt = {
       agentId: "codex",
       sessionId: "s1",
-      presetId: "company",
+      target: { kind: "preset" as const, presetId: "company" },
       prior: { cwd: "/repo" },
     };
     const detected = {

@@ -401,8 +401,8 @@ export interface AgentResumeOffer {
 }
 
 /**
- * The launch a pane ran before a preset switch that kept its conversation,
- * which "Back" puts back to reopen the conversation where it was.
+ * The launch a pane ran before a preset or account switch that kept its
+ * conversation, which "Back" puts back to reopen the conversation where it was.
  */
 export type PresetSwitchPriorLaunch = Pick<
   PtyPanelData,
@@ -416,6 +416,7 @@ export type PresetSwitchPriorLaunch = Pick<
   | "callerLaunchFlags"
   | "agentModelId"
   | "env"
+  | "agentAccountId"
   | "conversationCwd"
 > & { cwd: string };
 
@@ -432,21 +433,31 @@ export function presetSwitchLaunchOf(panel: PtyPanelData): PresetSwitchPriorLaun
     callerLaunchFlags: panel.callerLaunchFlags,
     agentModelId: panel.agentModelId,
     env: panel.env,
+    agentAccountId: panel.agentAccountId,
     conversationCwd: panel.conversationCwd,
     cwd: panel.cwd,
   };
 }
 
 /**
- * A preset switch that asked the CLI to reopen the pane's conversation
- * (#16045), held while the run it launched lives so the CLI's own refusal can
- * be told apart from any other end. Transient like `agentResumeOffer`.
+ * What a conversation-keeping switch moved the pane onto: another preset
+ * (#16045), or another account with the preset kept (#16135). A `null`
+ * account is the CLI's default login.
+ */
+export type ConversationSwitchTarget =
+  | { kind: "preset"; presetId: string }
+  | { kind: "account"; accountId: string | null };
+
+/**
+ * A preset or account switch that asked the CLI to reopen the pane's
+ * conversation (#16045, #16135), held while the run it launched lives so the
+ * CLI's own refusal can be told apart from any other end. Transient like
+ * `agentResumeOffer`.
  */
 export interface PresetSwitchResume {
   agentId: string;
   sessionId: string;
-  /** The preset the switch moved the pane onto. */
-  presetId: string;
+  target: ConversationSwitchTarget;
   prior: PresetSwitchPriorLaunch;
   /** The run printed its CLI's refusal; the pane offers a way out either side. */
   refused?: true;

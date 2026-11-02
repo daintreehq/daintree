@@ -1,9 +1,18 @@
 import type { AgentExitedPayload } from "@shared/types";
-import { isPtyPanel, presetSwitchLaunchOf, type PtyPanelData } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  presetSwitchLaunchOf,
+  type ConversationSwitchTarget,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { getAgentConfig } from "@/config/agents";
+import { resolveAccountSwitchTarget } from "@/services/terminal/accountSwitchTarget";
 import { usePanelStore } from "@/store/panelStore";
 import { saveNormalized } from "@/store/slices/panelRegistry/persistence";
-import type { PresetRespawnResult } from "@/store/slices/panelRegistry/types";
+import type {
+  AccountSwitchTarget,
+  PresetRespawnResult,
+} from "@/store/slices/panelRegistry/types";
 import {
   isResumeSessionReserved,
   reserveResumeSession,
@@ -11,6 +20,7 @@ import {
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
 import { logInfo } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /** Agents whose sessions the in-pane "Find session" picker can list. */
 const PICKER_AGENTS: ReadonlySet<string> = new Set(["codex"]);
@@ -62,11 +72,19 @@ async function reopenInPlace(
   }
 }
 
+/** The pane still runs on what the switch moved it to (#16045, #16135). */
+function isOnSwitchTarget(panel: PtyPanelData, target: ConversationSwitchTarget): boolean {
+  return target.kind === "preset"
+    ? panel.agentPresetId === target.presetId
+    : (panel.agentAccountId ?? null) === target.accountId;
+}
+
 /**
- * Take a launched run's end as the answer to the preset switch that asked it to
- * reopen the pane's conversation (#16045), when the run ended on its CLI's own
- * refusal. The pane then offers both ways out; nothing starts by itself. Any
- * other end is left to the handling every launched run gets.
+ * Take a launched run's end as the answer to the preset or account switch that
+ * asked it to reopen the pane's conversation (#16045, #16135), when the run
+ * ended on its CLI's own refusal. The pane then offers both ways out; nothing
+ * starts by itself. Any other end is left to the handling every launched run
+ * gets.
  *
  * `observedRestartKey` is the pane's restart count when the event arrived: a
  * switch made in between watches a run this end can't belong to.
@@ -82,14 +100,15 @@ function takeRefusedPresetSwitch(
   if (!panel || !isPtyPanel(panel)) return false;
   const attempt = panel.presetSwitchResume;
   if (!attempt || attempt.refused || attempt.agentId !== agentId) return false;
-  if (panel.agentPresetId !== attempt.presetId) return false;
+  if (!isOnSwitchTarget(panel, attempt.target)) return false;
   if (observedRestartKey !== undefined && (panel.restartKey ?? 0) !== observedRestartKey) {
     return false;
   }
 
-  logInfo("[agentEndRecovery] Conversation refused on the preset a switch moved it to", {
+  logInfo("[agentEndRecovery] Conversation refused where a switch moved it", {
     terminalId: panel.id,
     agentId,
+    target: attempt.target.kind,
   });
   usePanelStore.setState((current) => {
     const latest = current.panelsById[panel.id];
@@ -197,23 +216,40 @@ function refusedSwitchAt(panelId: string) {
   const panel = usePanelStore.getState().panelsById[panelId];
   if (!panel || !isPtyPanel(panel) || panel.isRestarting || !isIdleShell(panel)) return null;
   const attempt = panel.presetSwitchResume;
-  return attempt?.refused ? { panel, attempt } : null;
+  return attempt?.refused && isOnSwitchTarget(panel, attempt.target) ? { panel, attempt } : null;
 }
 
 /**
- * "Start new" after a refused switch (#16045): a new conversation on the preset
- * the CLI couldn't find the old one on, the user's own pick.
+ * "Start new" after a refused switch: a new conversation on the preset
+ * (#16045) or account (#16135) the CLI couldn't find the old one on, the
+ * user's own pick. The account is looked up again by id, so one removed since
+ * the switch is refused rather than replaced by another login.
  */
 export async function startNewAfterRefusedSwitch(panelId: string): Promise<PresetRespawnResult> {
   const refused = refusedSwitchAt(panelId);
   if (!refused) return { success: false, error: "unavailable" };
-  return usePanelStore.getState().restartTerminalOnPreset(panelId, refused.attempt.presetId);
+  const { target, agentId } = refused.attempt;
+  if (target.kind === "preset") {
+    return usePanelStore.getState().restartTerminalOnPreset(panelId, target.presetId);
+  }
+  let account: AccountSwitchTarget;
+  try {
+    account = await resolveAccountSwitchTarget(agentId, target.accountId);
+  } catch (error) {
+    return { success: false, error: formatErrorMessage(error, "unavailable") };
+  }
+  // The lookup awaited: a choice made meanwhile owns the pane.
+  if (refusedSwitchAt(panelId)?.attempt !== refused.attempt) {
+    return { success: false, error: "unavailable" };
+  }
+  return usePanelStore.getState().restartTerminalOnAccount(panelId, account);
 }
 
 /**
  * "Back" after a refused switch (#16045): the launch the pane ran before the
- * switch, put back as it was, reopening the same conversation there. Refused
- * like any reopen when another pane holds the conversation (#11461).
+ * switch, its preset and account included (#16135), put back as it was,
+ * reopening the same conversation there. Refused like any reopen when another
+ * pane holds the conversation (#11461).
  */
 export async function returnAfterRefusedSwitch(
   panelId: string
@@ -237,7 +273,15 @@ export async function returnAfterRefusedSwitch(
       restored = true;
       const panelsById = {
         ...current.panelsById,
-        [panelId]: { ...latest, ...attempt.prior, presetSwitchResume: undefined },
+        [panelId]: {
+          ...latest,
+          ...attempt.prior,
+          // Named even when unset: the folder and the account it belongs to
+          // go back together, or the restart reopens on the refusing one.
+          env: attempt.prior.env,
+          agentAccountId: attempt.prior.agentAccountId,
+          presetSwitchResume: undefined,
+        },
       };
       saveNormalized(panelsById, current.panelIds);
       return { panelsById };

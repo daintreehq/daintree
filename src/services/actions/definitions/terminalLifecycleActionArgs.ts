@@ -26,10 +26,11 @@ export const RestartOnAccountArgsSchema = z.object({
     .min(1)
     .nullable()
     .describe("An account of the terminal's own agent; null is the CLI's default login."),
+  keepConversation: KeepConversationArgSchema,
   confirmed: z
     .boolean()
     .optional()
-    .describe("Confirms ending the conversation. Without it the terminal is left alone."),
+    .describe("Confirms interrupting the agent. Without it the terminal is left alone."),
 });
 
 export const TerminalKillBatchArgsSchema = z.object({
