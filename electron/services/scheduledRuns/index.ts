@@ -99,8 +99,9 @@ async function followAssistantWorkers(history: ScheduledRunRecorder): Promise<vo
       import("../ProjectStore.js"),
     ]);
     setAssistantWorkerSink((answer) => {
-      const run = helpSessionService.getScheduledRunOf(answer.helpSessionId);
-      if (run === null || answer.projectId === undefined) return;
+      const runId =
+        answer.runId ?? helpSessionService.getScheduledRunOf(answer.helpSessionId)?.runId;
+      if (runId === undefined || answer.projectId === undefined) return;
       const { terminalIds, agentId } = workerLaunchesIn(answer.tool, answer.args, answer.result);
       const projectName =
         answer.hostId === null
@@ -109,7 +110,7 @@ async function followAssistantWorkers(history: ScheduledRunRecorder): Promise<vo
       const observedAt = Date.now();
       for (const terminalId of terminalIds) {
         history.noteWorkerLaunch(
-          run.runId,
+          runId,
           {
             terminalId,
             hostId: answer.hostId,

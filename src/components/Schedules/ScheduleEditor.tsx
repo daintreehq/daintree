@@ -12,9 +12,15 @@ import { SettingsSelect, type SettingsSelectOption } from "@/components/Settings
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
 import { SettingsCheckbox } from "@/components/Settings/SettingsCheckbox";
 import { resolveAgentIcon } from "@/config/agentIcons";
+import { DaintreeIcon } from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import {
+  isScheduleAssistantAgentId,
+  SCHEDULE_ASSISTANT_AGENT_ID,
+  SCHEDULE_ASSISTANT_NAME,
+} from "@shared/config/scheduleAssistant";
 import { machineTimeZone, nextCronOccurrences } from "@shared/utils/cron";
 import { describeParsedCron } from "@shared/utils/cronDescription";
 import { createSchedule, validateCadence } from "@shared/utils/scheduledRuns";
@@ -259,6 +265,16 @@ const PREVIEW_RUNS = 3;
 /** How long the cadence must sit still before its words or error are read out. */
 const CADENCE_ANNOUNCE_SETTLE_MS = 600;
 const NO_PRESET_VALUE = "__none__";
+const ASSISTANT_AGENT_DESCRIPTION =
+  "Starts a new Assistant session with its own settings. It can launch agents in this project, other projects and your hosts";
+/** The Assistant runs in a tab of its own, so there's no background to move it to. */
+const ASSISTANT_DONE_OPTIONS = DONE_OPTIONS.filter((option) => option.value !== "background");
+const ASSISTANT_DONE_CONSEQUENCE: Record<ScheduleDonePolicy, string> = {
+  keep: "The Assistant session stays open. Agents it launched keep running",
+  background: "The Assistant session stays open. Agents it launched keep running",
+  close:
+    "The Assistant session closes; its conversation can still be resumed. Agents it launched keep running",
+};
 
 export function ScheduleEditor({
   schedule,
@@ -372,7 +388,13 @@ export function ScheduleEditor({
     label: agent.name,
     icon: resolveAgentIcon(agent.iconId),
   }));
-  if (draft.agentId && !agents.some((agent) => agent.id === draft.agentId)) {
+  agentOptions.push({
+    value: SCHEDULE_ASSISTANT_AGENT_ID,
+    label: SCHEDULE_ASSISTANT_NAME,
+    icon: DaintreeIcon,
+  });
+  const assistant = isScheduleAssistantAgentId(draft.agentId);
+  if (draft.agentId && !assistant && !agents.some((agent) => agent.id === draft.agentId)) {
     const config = getEffectiveAgentConfig(draft.agentId);
     agentOptions.push({
       value: draft.agentId,
@@ -579,23 +601,31 @@ export function ScheduleEditor({
                 onValueChange={(value) => {
                   update("agentId", value);
                   update("presetId", null);
+                  // The Assistant has no worktree and no background to move to.
+                  if (isScheduleAssistantAgentId(value)) {
+                    update("worktreeId", null);
+                    if (draft.onDone === "background") update("onDone", "keep");
+                  }
                 }}
                 options={agentOptions}
                 placeholder="Choose an agent"
+                description={assistant ? ASSISTANT_AGENT_DESCRIPTION : undefined}
                 error={errorFor("agentId")}
               />
-              <SettingsSelect
-                label="Preset"
-                description="The agent's saved launch settings: model, flags and permissions"
-                controlWidth="wide"
-                value={draft.presetId ?? NO_PRESET_VALUE}
-                onValueChange={(value) =>
-                  update("presetId", value === NO_PRESET_VALUE ? null : value)
-                }
-                options={presetOptions}
-                error={presetMissing ? "This preset no longer exists for this agent" : undefined}
-              />
-              {stopsAtPrompts && (
+              {!assistant && (
+                <SettingsSelect
+                  label="Preset"
+                  description="The agent's saved launch settings: model, flags and permissions"
+                  controlWidth="wide"
+                  value={draft.presetId ?? NO_PRESET_VALUE}
+                  onValueChange={(value) =>
+                    update("presetId", value === NO_PRESET_VALUE ? null : value)
+                  }
+                  options={presetOptions}
+                  error={presetMissing ? "This preset no longer exists for this agent" : undefined}
+                />
+              )}
+              {!assistant && stopsAtPrompts && (
                 <div className="px-4 py-3">
                   <Callout
                     severity="warning"
@@ -613,20 +643,26 @@ export function ScheduleEditor({
                   </Callout>
                 </div>
               )}
-              <SettingsSelect
-                label="Worktree"
-                description="Where the agent works. The main checkout is the project folder itself"
-                controlWidth="wide"
-                value={draft.worktreeId ?? MAIN_CHECKOUT_VALUE}
-                onValueChange={(value) =>
-                  update("worktreeId", value === MAIN_CHECKOUT_VALUE ? null : value)
-                }
-                options={worktreeOptions}
-              />
+              {!assistant && (
+                <SettingsSelect
+                  label="Worktree"
+                  description="Where the agent works. The main checkout is the project folder itself"
+                  controlWidth="wide"
+                  value={draft.worktreeId ?? MAIN_CHECKOUT_VALUE}
+                  onValueChange={(value) =>
+                    update("worktreeId", value === MAIN_CHECKOUT_VALUE ? null : value)
+                  }
+                  options={worktreeOptions}
+                />
+              )}
               <SettingsTextarea
                 rowId={FIELD_ROW.prompt}
                 label="Prompt"
-                description="Sent to the agent as written when each run starts"
+                description={
+                  assistant
+                    ? "Sent to the Assistant as written when each run starts. Say where the work should run"
+                    : "Sent to the agent as written when each run starts"
+                }
                 rows={5}
                 value={draft.prompt}
                 placeholder="Check for outdated dependencies, update the safe ones, and open a pull request"
@@ -716,7 +752,11 @@ export function ScheduleEditor({
                   <SettingsInput
                     rowId={FIELD_ROW.checkCommand}
                     label="Command"
-                    description="Runs in a shell in the schedule's worktree"
+                    description={
+                      assistant
+                        ? "Runs in a shell in the project folder"
+                        : "Runs in a shell in the schedule's worktree"
+                    }
                     className="font-mono"
                     spellCheck={false}
                     autoComplete="off"
@@ -729,9 +769,15 @@ export function ScheduleEditor({
                 </SettingsDependents>
               )}
               <SettingsPresetGroup
-                label="When the agent reports done"
-                description={DONE_CONSEQUENCE[draft.onDone]}
-                options={DONE_OPTIONS}
+                label={
+                  assistant ? "When the Assistant reports done" : "When the agent reports done"
+                }
+                description={
+                  assistant
+                    ? ASSISTANT_DONE_CONSEQUENCE[draft.onDone]
+                    : DONE_CONSEQUENCE[draft.onDone]
+                }
+                options={assistant ? ASSISTANT_DONE_OPTIONS : DONE_OPTIONS}
                 value={draft.onDone}
                 onChange={(value) => update("onDone", value)}
               />

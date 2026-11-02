@@ -22,6 +22,11 @@ export interface AssistantToolAnswer {
   readonly projectName?: string | null;
   /** When the call was made: a run settled before then isn't the call's. */
   readonly askedAt: number;
+  /**
+   * The schedule's run the session was started for, read when the call was
+   * answered, for an answer recorded later; absent, it's read on recording.
+   */
+  readonly runId?: string;
 }
 
 /** The agent terminals an answered call says it launched, with the agent it asked for. */

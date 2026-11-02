@@ -33,6 +33,7 @@ import { useProjectSchedules } from "@/components/Schedules/useProjectSchedules"
 import { useScheduleOsJob } from "@/components/Schedules/useScheduleOsJob";
 import { useLastRuns } from "@/components/Schedules/useLastRuns";
 import { useScheduleRuns } from "@/components/Schedules/useScheduleRuns";
+import { ASSISTANT_RESUMABLE_AGENTS } from "@/components/Schedules/runWords";
 import { useScheduleLaunchOptions } from "@/components/Schedules/useScheduleLaunchOptions";
 import { useWorktreeChoices } from "@/components/Schedules/useWorktreeChoices";
 
@@ -324,12 +325,25 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
       if (closed) then();
     });
   };
+  // An Assistant's run lives in an Assistant tab (#16169): the tab holding its
+  // conversation is brought forward, or the conversation reopens in one.
+  const showAssistantRun = (run: ScheduledRun): boolean => {
+    const resume = run.resume;
+    if (run.assistant !== true || !resume?.agentSessionId) return false;
+    if (!ASSISTANT_RESUMABLE_AGENTS.has(resume.agentId)) return false;
+    const args = { agentId: resume.agentId, sessionId: resume.agentSessionId };
+    closeThen(
+      () => void actionService.dispatch("help.resumePastSession", args, { source: "user" })
+    );
+    return true;
+  };
   const openRun = (run: ScheduledRun) => {
     const terminalId = run.terminalId;
-    if (!terminalId) return;
+    if (!terminalId || showAssistantRun(run)) return;
     closeThen(() => revealRunTerminal(terminalId));
   };
   const resumeRun = (run: ScheduledRun, schedule: Schedule) => {
+    if (showAssistantRun(run)) return;
     const record = sessionRecordFor(run, schedule);
     if (!record) return;
     closeThen(() => void resumeSession(record));

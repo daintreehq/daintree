@@ -1,5 +1,6 @@
 import type { ScheduledRunInboxItem } from "@shared/types/ipc/scheduledRuns";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { SCHEDULE_ASSISTANT_NAME } from "@shared/config/scheduleAssistant";
 import { machineTimeZone } from "@shared/utils/cron";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { lastRunWords } from "./lastRunWords";
@@ -40,7 +41,10 @@ export function scheduledRunInboxEntry(
   if (detail?.kind === "summary") {
     // The agent's claim, said as its own.
     const agentId = run.resume?.agentId;
-    const agentName = (agentId && getEffectiveAgentConfig(agentId)?.name) || agentId || "Agent";
+    const agentName =
+      run.assistant === true
+        ? SCHEDULE_ASSISTANT_NAME
+        : (agentId && getEffectiveAgentConfig(agentId)?.name) || agentId || "Agent";
     said = `${agentName}: ${detail.text}`;
   } else if (detail) {
     said = detail.text;

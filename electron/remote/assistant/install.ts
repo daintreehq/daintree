@@ -77,7 +77,8 @@ function noteHostCallAnswer(
   answer: Parameters<NonNullable<HostCallRuntimeDeps["noteAnswered"]>>[0],
   listHostProjects: ((hostId: HostId) => Promise<readonly HostProjectSummary[]>) | undefined
 ): void {
-  if (helpSessionService.getScheduledRunOf(answer.helpSessionId) === null) return;
+  const runId = helpSessionService.getScheduledRunOf(answer.helpSessionId)?.runId;
+  if (runId === undefined) return;
   if (workerLaunchesIn(answer.tool, answer.args, answer.structured).terminalIds.length === 0) {
     return;
   }
@@ -93,6 +94,7 @@ function noteHostCallAnswer(
       projectId: answer.projectId,
       projectName,
       askedAt: answer.askedAt,
+      runId,
     });
   if (local || listHostProjects === undefined) {
     note(null);

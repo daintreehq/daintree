@@ -20,6 +20,7 @@ const SKIP_DETAIL = {
   missed: "missed",
   overlap: "earlier run unsettled",
   precondition: "check didn't pass",
+  "assistant-sessions-full": "Assistant sessions all in use",
 } as const;
 
 function settled(
@@ -88,7 +89,10 @@ export function lastRunWords(run: ScheduledRun): LastRunWords {
     case "skipped":
       return settled(
         "Skipped",
-        null,
+        // Not the schedule's own policy: only the person can free a session (#16169).
+        evidence.kind === "skip" && evidence.reason.kind === "assistant-sessions-full"
+          ? "warning"
+          : null,
         at,
         evidence.kind === "skip" ? SKIP_DETAIL[evidence.reason.kind] : null
       );

@@ -1,7 +1,11 @@
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
-import type { ScheduledRun, ScheduledRunTrigger } from "@shared/types/scheduledRuns";
+import type {
+  ScheduledRun,
+  ScheduledRunTrigger,
+  ScheduledRunWorker,
+} from "@shared/types/scheduledRuns";
 import { machineTimeZone } from "@shared/utils/cron";
 import { localDayNumber } from "./scheduleWords";
 
@@ -94,6 +98,18 @@ export function runDetail(run: ScheduledRun): RunDetail | null {
   }
 }
 
+/** The Assistant CLIs whose past conversations an Assistant tab reopens (`help.resumePastSession`). */
+export const ASSISTANT_RESUMABLE_AGENTS: ReadonlySet<string> = new Set(["claude", "codex"]);
+
+/** A worker an Assistant run launched, in words: the agent, the machine and the project. */
+export function workerWords(worker: ScheduledRunWorker): string {
+  const agent = worker.agentId
+    ? (getEffectiveAgentConfig(worker.agentId)?.name ?? worker.agentId)
+    : "An agent";
+  const machine = worker.hostId === null ? "this machine" : (worker.hostName ?? worker.hostId);
+  return `${agent} on ${machine}, in ${worker.projectName ?? worker.projectId}`;
+}
+
 export type RunAction =
   | { kind: "open" }
   | { kind: "resume"; sessionId: string }
@@ -149,9 +165,13 @@ export function runAction(
         "The worktree this run worked in has been removed, so its conversation can't be reopened there",
     };
   }
+  // An Assistant's conversation reopens in an Assistant tab, by its exact id (#16169).
   const resumable =
-    buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags) ??
-    buildResumeLatestCommand(resume.agentId, resume.agentLaunchFlags);
+    run.assistant === true
+      ? ASSISTANT_RESUMABLE_AGENTS.has(resume.agentId) &&
+        buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags)
+      : (buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags) ??
+        buildResumeLatestCommand(resume.agentId, resume.agentLaunchFlags));
   if (!resumable) {
     return {
       kind: "none",

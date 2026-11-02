@@ -12,9 +12,11 @@ import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { machineTimeZone } from "@shared/utils/cron";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
+import { SCHEDULE_ASSISTANT_NAME } from "@shared/config/scheduleAssistant";
 import { AgentMark } from "./ScheduleList";
 import { RunGlyph } from "./RunGlyph";
 import { lastRunWords } from "./lastRunWords";
+import { scheduleAgentName } from "./scheduleAgent";
 import {
   TRIGGER_WORDS,
   formatDueTime,
@@ -26,6 +28,7 @@ import {
   runDuration,
   runReferenceAt,
   runStartedAt,
+  workerWords,
   type RunAction,
 } from "./runWords";
 import {
@@ -160,7 +163,11 @@ function RunRow({
   const reference = runReferenceAt(run);
   const duration = runDuration(run, now);
   const { dueAt } = run.origin;
-  const agentName = agentNameOf(run.resume?.agentId ?? schedule.launch.agentId);
+  const agentName =
+    run.assistant === true
+      ? SCHEDULE_ASSISTANT_NAME
+      : agentNameOf(run.resume?.agentId ?? schedule.launch.agentId);
+  const workers = run.workers ?? [];
   const runName = `${dayLabel} at ${formatRunTime(reference, timeZone)}, ${words.label}`;
 
   return (
@@ -188,6 +195,22 @@ function RunRow({
             <p className="mt-0.5 break-words text-xs text-text-secondary [text-wrap:pretty]">
               {detail.text}
             </p>
+          )}
+          {workers.length > 0 && (
+            // What the Assistant's launches were answered with, never how those agents did.
+            <div className="mt-1 text-xs text-text-secondary">
+              <p>Launched {pluralize(workers.length, "agent")}</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {workers.map((worker) => (
+                  <li
+                    key={`${worker.hostId ?? "local"}:${worker.terminalId}`}
+                    className="break-words text-text-primary"
+                  >
+                    {workerWords(worker)}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       </div>
@@ -462,7 +485,7 @@ export function ScheduleRuns({
               {words ?? <span className="font-mono">{schedule.cadence.cron}</span>}
             </p>
             <p className="flex min-w-0 items-center truncate text-xs text-text-secondary">
-              {agentNameOf(schedule.launch.agentId)}
+              {scheduleAgentName(schedule.launch.agentId)}
               {presetMissing ? (
                 <>
                   <span aria-hidden="true">&nbsp;·&nbsp;</span>
