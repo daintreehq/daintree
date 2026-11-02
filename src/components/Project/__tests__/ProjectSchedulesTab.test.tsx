@@ -256,6 +256,46 @@ describe("ProjectSchedulesTab — landing on a request", () => {
 });
 
 describe("ProjectSchedulesTab — the editor", () => {
+  it("never replaces an open draft with another opening", async () => {
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));
+    fireEvent.change(await screen.findByDisplayValue("Nightly audit"), {
+      target: { value: "Renamed" },
+    });
+    act(() => useSchedulesViewStore.getState().openEditor(WEEKLY));
+    expect(useSchedulesViewStore.getState().editor?.schedule?.id).toBe("s1");
+    expect(screen.getByDisplayValue("Renamed")).toBeTruthy();
+  });
+
+  it("deleting from the editor keeps an opening that arrived mid-edit", async () => {
+    client.remove.mockResolvedValue({ snapshot: snapshot([WEEKLY], 2) });
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));
+    await screen.findByDisplayValue("Nightly audit");
+    act(() => useSchedulesViewStore.getState().open("s2"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete schedule…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete schedule" }));
+    await waitFor(() => expect(client.remove).toHaveBeenCalledExactlyOnceWith("s1"));
+    await waitFor(() => expect(editor()).toBeNull());
+    expect(await screen.findByRole("heading", { name: "Weekly triage" })).toBeTruthy();
+  });
+
+  it("goes back to the list after deleting the schedule whose history it was opened from", async () => {
+    client.remove.mockResolvedValue({ snapshot: snapshot([WEEKLY], 2) });
+    useSchedulesViewStore.getState().open("s1");
+    renderTab();
+    await screen.findByRole("heading", { name: "Nightly audit" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    await screen.findByDisplayValue("Nightly audit");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete schedule…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete schedule" }));
+    await waitFor(() => expect(editor()).toBeNull());
+    expect(await screen.findByRole("button", { name: "Edit schedule Weekly triage" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "All schedules" })).toBeNull();
+  });
+
   it("keeps a draft when Settings unmounts the tab beneath it (Cmd+, to global scope)", async () => {
     const { update } = renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));

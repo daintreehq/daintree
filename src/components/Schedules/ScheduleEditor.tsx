@@ -217,6 +217,8 @@ interface ScheduleEditorProps {
   /** Kept current every render, so the dialog can guard Cancel and dismissal. */
   leaveStateRef: RefObject<EditorLeaveState | null>;
   onSaved: (snapshot: SchedulesSnapshot, scheduleId: string) => void;
+  /** A confirmed delete is about to go to main; the schedule's row is still on screen. */
+  onDeleting?: (scheduleId: string) => void;
   onDeleted: (snapshot: SchedulesSnapshot, deletedId: string) => void;
   onCancel: () => void;
   /** Leaves the editor for Agent settings, which takes over the settings it sits on. */
@@ -246,6 +248,7 @@ export function ScheduleEditor({
   osJobContext,
   leaveStateRef,
   onSaved,
+  onDeleting,
   onDeleted,
   onCancel,
   onOpenAgentSettings,
@@ -459,6 +462,7 @@ export function ScheduleEditor({
 
   const remove = async () => {
     if (!base) return;
+    onDeleting?.(base.id);
     setDeleting(true);
     setDeleteError(null);
     try {

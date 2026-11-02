@@ -29,6 +29,7 @@ interface ScheduleEditorDialogProps {
   /** Where focus goes once the editor has closed instead of its opener; null keeps the opener. */
   restoreFocusTo?: RestoreFocusTarget;
   onSaved: (snapshot: SchedulesSnapshot, scheduleId: string) => void;
+  onDeleting?: (scheduleId: string) => void;
   onDeleted: (snapshot: SchedulesSnapshot, deletedId: string) => void;
   onClose: () => void;
   /** Runs once the editor has closed and handed focus back. */
@@ -52,6 +53,7 @@ export function ScheduleEditorDialog({
   osJobContext,
   restoreFocusTo,
   onSaved,
+  onDeleting,
   onDeleted,
   onClose,
   onCloseComplete,
@@ -117,6 +119,7 @@ export function ScheduleEditorDialog({
           osJobContext={osJobContext}
           leaveStateRef={leaveStateRef}
           onSaved={onSaved}
+          onDeleting={onDeleting}
           onDeleted={onDeleted}
           onCancel={close}
           onOpenAgentSettings={openAgentSettings}

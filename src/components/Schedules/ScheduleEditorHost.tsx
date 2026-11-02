@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { useWallClock } from "@/hooks/useWallClock";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
@@ -15,6 +15,21 @@ function untilNextMinute(now: number): number {
 
 function find(selector: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(selector);
+}
+
+const EDITOR_DIALOG_SELECTOR = '[data-testid="schedule-editor-dialog"]';
+
+/**
+ * The surface of the topmost dialog other than the editor: Project settings,
+ * when the editor's opener went with a page Settings moved away from. Focus
+ * left in the app shell would sit behind that modal, out of its reach.
+ */
+function topmostOtherDialog(): HTMLElement | null {
+  const dialogs = Array.from(
+    document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')
+  ).filter((dialog) => !dialog.matches(EDITOR_DIALOG_SELECTOR));
+  const top = dialogs.at(-1);
+  return top?.querySelector<HTMLElement>(':scope > [tabindex="-1"]') ?? top ?? null;
 }
 
 /** The row that slides into a deleted one's place, or the one above it, read before it goes. */
@@ -45,6 +60,15 @@ export function ScheduleEditorHost() {
   const now = useWallClock(editor?.key ?? 0, untilNextMinute);
   // Where focus goes once the editor closes, when its opener is the wrong place.
   const focusAfterRef = useRef<(() => HTMLElement | null) | null>(null);
+  const successorRef = useRef<string | null>(null);
+  // What had focus as this opening began, which the editor hands focus back to.
+  const openerRef = useRef<HTMLElement | null>(null);
+  const openingKey = editor?.key ?? null;
+  useLayoutEffect(() => {
+    if (openingKey === null) return;
+    const active = document.activeElement;
+    openerRef.current = active instanceof HTMLElement ? active : null;
+  }, [openingKey]);
 
   if (!editor) return null;
 
@@ -56,14 +80,24 @@ export function ScheduleEditorHost() {
     closeEditor();
   };
 
-  const handleDeleted = (snapshot: SchedulesSnapshot, deletedId: string) => {
-    const successor = successorRow(deletedId);
+  const handleDeleted = (snapshot: SchedulesSnapshot) => {
+    const successor = successorRef.current;
     answerEditor(snapshot);
     focusAfterRef.current = () =>
       successor ? find(scheduleActionSelector(successor, "delete")) : find(NEW_SCHEDULE_SELECTOR);
     closeEditor();
-    // Opened from the schedule's history, the tab goes back to the list once the editor has gone.
-    open(null);
+    // Opened from the schedule's history, the tab goes back to the list once the
+    // editor has gone, unless an opening already waits to land there instead.
+    const { request, landedSeq } = useSchedulesViewStore.getState();
+    if (request.seq <= landedSeq) open(null);
+  };
+
+  /** A target named for after a save or delete, else the opener, else whatever modal is left. */
+  const restoreTarget = (): HTMLElement | null => {
+    const named = focusAfterRef.current?.();
+    if (named) return named;
+    if (openerRef.current?.isConnected) return null;
+    return topmostOtherDialog();
   };
 
   return (
@@ -75,8 +109,12 @@ export function ScheduleEditorHost() {
       worktrees={choices}
       now={now}
       osJobContext={osJob.status?.context ?? null}
-      restoreFocusTo={() => focusAfterRef.current?.() ?? null}
+      restoreFocusTo={restoreTarget}
       onSaved={handleSaved}
+      // Read while the row is still on screen: main's push can remove it before the delete answers.
+      onDeleting={(id) => {
+        successorRef.current = successorRow(id);
+      }}
       onDeleted={handleDeleted}
       onClose={closeEditor}
       onCloseComplete={clearEditor}

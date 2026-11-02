@@ -45,6 +45,8 @@ interface SchedulesViewState {
   answerEditor: (snapshot: SchedulesSnapshot) => void;
 }
 
+let openings = 0;
+
 export const useSchedulesViewStore = create<SchedulesViewState>()((set) => ({
   request: { scheduleId: null, seq: 0 },
   landedSeq: 0,
@@ -55,10 +57,10 @@ export const useSchedulesViewStore = create<SchedulesViewState>()((set) => ({
     set((state) => ({ request: { scheduleId, seq: state.request.seq + 1 } })),
   markLanded: (seq) => set((state) => (seq > state.landedSeq ? { landedSeq: seq } : state)),
   setShowing: (showing) => set({ showing }),
+  // One editor at a time: an opening never replaces a draft. Only an outside
+  // close of Settings, reopened over the editor, could ask while one is up.
   openEditor: (schedule) =>
-    set((state) => ({
-      editor: { schedule, key: (state.editor?.key ?? 0) + 1, open: true },
-    })),
+    set((state) => (state.editor ? state : { editor: { schedule, key: ++openings, open: true } })),
   closeEditor: () =>
     set((state) => (state.editor?.open ? { editor: { ...state.editor, open: false } } : state)),
   clearEditor: () => set({ editor: null }),

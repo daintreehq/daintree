@@ -133,6 +133,10 @@ vi.mock("@/components/Fleet/FleetPickerPalette", () => ({
   ),
 }));
 
+vi.mock("@/components/Schedules/ScheduleEditorHost", () => ({
+  ScheduleEditorHost: () => <div data-testid="schedule-editor-host" />,
+}));
+
 vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
   RecipeEditor: ({
     isOpen,
@@ -184,6 +188,7 @@ vi.mock("@/components/TerminalRecipe/RecipeManager", () => ({
 
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
+import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { ProjectDialogHost } from "../ProjectDialogHost";
@@ -826,5 +831,29 @@ describe("ProjectDialogHost", () => {
 
       expect(useFleetPickerPaletteStore.getState().isOpen).toBe(false);
     });
+  });
+});
+
+describe("ProjectDialogHost — the schedule editor", () => {
+  beforeEach(() => {
+    setProject({ id: "project-1", path: "/repo" });
+    useSchedulesViewStore.setState({ editor: null });
+  });
+  afterEach(() => cleanup());
+
+  it("mounts the editor while an opening exists, outside Project settings", async () => {
+    render(<ProjectDialogHost />);
+    expect(screen.queryByTestId("schedule-editor-host")).toBeNull();
+    act(() => useSchedulesViewStore.getState().openEditor(null));
+    expect(await screen.findByTestId("schedule-editor-host")).toBeTruthy();
+    act(() => useSchedulesViewStore.getState().clearEditor());
+    expect(screen.queryByTestId("schedule-editor-host")).toBeNull();
+  });
+
+  it("drops the opening with the workspace, so the next one starts without it", () => {
+    const { unmount } = render(<ProjectDialogHost />);
+    act(() => useSchedulesViewStore.getState().openEditor(null));
+    unmount();
+    expect(useSchedulesViewStore.getState().editor).toBeNull();
   });
 });
