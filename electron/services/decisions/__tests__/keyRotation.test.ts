@@ -401,6 +401,35 @@ describe("KeyRotations", () => {
     expect(await stored(memory)).toEqual(ownerStored);
   });
 
+  it("still looks for a staged key whose write landed before it failed, and sends it on the next settle", async () => {
+    const memory = await keysWith();
+    let saves = 0;
+    const keys: KeyStore = {
+      load: () => memory.load(),
+      clear: () => memory.clear(),
+      save: async (identity) => {
+        saves += 1;
+        await memory.save(identity);
+        // The file is in place, but the directory sync after it failed.
+        if (saves === 1) throw new Error("fsync failed");
+      },
+    };
+    const state = relayWith([phoneA]);
+    const relay = fakeClient(state);
+    const rotations = new KeyRotations(keys);
+
+    await expect(rotations.rotate(relay.client, null)).rejects.toThrow("fsync failed");
+
+    expect(relay.rotateEpoch).not.toHaveBeenCalled();
+    expect(pendingRotationOf(await stored(memory))).toEqual({ epoch: 2, revoke: null });
+    // A connection holding keys read before the write still settles it.
+    expect(rotations.mayBePending()).toBe(true);
+    await expect(rotations.settle(relay.client)).resolves.toMatchObject({ outcome: "done" });
+    expect(relay.rotateEpoch).toHaveBeenCalledOnce();
+    expect((await stored(memory)).currentEpoch).toBe(2);
+    expect(rotations.mayBePending()).toBe(false);
+  });
+
   it("says a device the relay doesn't list as active can't be revoked, staging nothing", async () => {
     const keys = await keysWith();
     const state = relayWith([ownerDevice, phoneA]);
