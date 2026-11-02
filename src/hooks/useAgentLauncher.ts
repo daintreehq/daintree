@@ -179,7 +179,8 @@ export interface LaunchAgentOptions {
   presetId?: string | null;
   /**
    * The account to launch on (#16040). `null` is the CLI's default login;
-   * omitted, the worktree's account applies, else the agent's default.
+   * omitted, the worktree's account applies, else the preset's pinned
+   * account, else the agent's default.
    */
   accountId?: string | null;
   /** Bypass the availability gate and always attempt to spawn. */

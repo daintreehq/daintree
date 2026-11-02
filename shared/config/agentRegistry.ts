@@ -244,6 +244,13 @@ export interface AgentPreset {
    * on an offer in the pane rather than walking on.
    */
   keepConversationOnRateLimit?: boolean;
+  /**
+   * One of the agent's accounts (#16133) a launch of this preset signs in as,
+   * unless the launch or its worktree chooses another. Kept on the user's own
+   * presets alone: accounts are this machine's folders, which a shared preset
+   * can't name.
+   */
+  accountId?: string;
 }
 
 /** Max fallback presets that can be chained after the primary. */

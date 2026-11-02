@@ -7,7 +7,13 @@ import { agentPresetPreviewSubject, formatAgentPresetPreviewLines } from "../mcp
 const TOKEN = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
 const MASKED_TOKEN = `••••••••${TOKEN.slice(-4)}`;
 
-const base = { agentId: "codex", agentName: "Codex", customPresets: [], presetNames: {} };
+const base = {
+  agentId: "codex",
+  agentName: "Codex",
+  customPresets: [],
+  presetNames: {},
+  accountNames: {},
+};
 
 function create(
   preset: AgentPreset,
@@ -135,6 +141,31 @@ describe("formatAgentPresetPreviewLines", () => {
       )
     ).join("\n");
     expect(text).toContain('Fallback presets: "Fast" (user-a) → "Fast" (user-b)');
+  });
+
+  it("shows a pinned account by name and id, set, swapped and cleared (#16133)", () => {
+    const accountNames = { company: "Company", personal: "Personal" };
+    const pinned = { id: "user-work", name: "Work", accountId: "company" };
+    const set = formatAgentPresetPreviewLines({
+      ...update({ id: "user-work", name: "Work" }, pinned),
+      accountNames,
+    }).join("\n");
+    expect(set).toContain(`Account: the worktree's or the agent's → "Company" (company)`);
+
+    const swapped = formatAgentPresetPreviewLines({
+      ...update(pinned, { ...pinned, accountId: "personal" }),
+      accountNames,
+    }).join("\n");
+    expect(swapped).toContain('Account: "Company" (company) → "Personal" (personal)');
+
+    // A pin no saved account answers to still shows, by its id alone.
+    const cleared = formatAgentPresetPreviewLines(
+      update({ ...pinned, accountId: "removed" }, { id: "user-work", name: "Work" })
+    ).join("\n");
+    expect(cleared).toContain(`Account: "removed" → the worktree's or the agent's`);
+
+    const created = formatAgentPresetPreviewLines({ ...create(pinned), accountNames });
+    expect(created).toContain('Account: "Company" (company)');
   });
 
   it("lists what a delete takes away and the defaults it moves", () => {

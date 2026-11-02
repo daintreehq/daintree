@@ -58,6 +58,18 @@ describe("resolveEffectiveAccountId", () => {
     expect(resolveEffectiveAccountId(entry, null)).toBe("agent");
     expect(resolveEffectiveAccountId(undefined, "wt1")).toBeNull();
   });
+
+  it("puts a preset's pin under the launch's and the worktree's choice, over the agent's (#16133)", () => {
+    expect(resolveEffectiveAccountId(entry, "wt1", "requested", "pinned")).toBe("requested");
+    expect(resolveEffectiveAccountId(entry, "wt1", null, "pinned")).toBeNull();
+    expect(resolveEffectiveAccountId(entry, "wt1", undefined, "pinned")).toBe("scoped");
+    // A worktree that chose the default login keeps it over the pin.
+    expect(resolveEffectiveAccountId(entry, "wt2", undefined, "pinned")).toBeNull();
+    expect(resolveEffectiveAccountId(entry, "wt3", undefined, "pinned")).toBe("pinned");
+    expect(resolveEffectiveAccountId(entry, null, undefined, "pinned")).toBe("pinned");
+    expect(resolveEffectiveAccountId({}, null, undefined, "pinned")).toBe("pinned");
+    expect(resolveEffectiveAccountId(entry, "wt3", undefined, undefined)).toBe("agent");
+  });
 });
 
 describe("resolveLaunchAccount", () => {
@@ -76,6 +88,20 @@ describe("resolveLaunchAccount", () => {
       kind: "missing",
       accountId: "gone",
     });
+  });
+
+  it("launches on a preset's pin, and refuses one no account answers to", () => {
+    const pinned = resolveLaunchAccount(
+      "codex",
+      { accounts, accountId: "gone" },
+      null,
+      undefined,
+      "company"
+    );
+    expect(pinned).toEqual({ kind: "account", account: accounts[0], envVar: "CODEX_HOME" });
+    expect(
+      resolveLaunchAccount("codex", { accounts, accountId: "company" }, null, undefined, "gone")
+    ).toEqual({ kind: "missing", accountId: "gone" });
   });
 
   it("is the default login for an agent with no folder accounts", () => {

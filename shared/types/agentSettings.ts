@@ -181,6 +181,8 @@ export interface AgentSettingsEntry {
     fallbackOnRateLimit?: boolean;
     /** Reopen the same conversation on a usage-limit hop (#16045). */
     keepConversationOnRateLimit?: boolean;
+    /** The account a launch of this preset signs in as, unless overridden (#16133). */
+    accountId?: string;
   }>;
   /**
    * Environment variables applied to every launch of this agent, regardless of preset.
@@ -193,12 +195,15 @@ export interface AgentSettingsEntry {
    * Host-local: the folders are this machine's.
    */
   accounts?: AgentAccount[];
-  /** Agent-level default account; absent launches on the CLI's default login. */
+  /**
+   * Agent-level default account; absent launches on the CLI's default login.
+   * A preset's own pinned account wins over it (#16133).
+   */
   accountId?: string;
   /**
    * Per-worktree account overrides, keyed by worktreeId, as `worktreePresets`
-   * is for presets. An absent key inherits `accountId`; `null` is the default
-   * login in that worktree alone.
+   * is for presets. An absent key inherits the preset's pin, else `accountId`;
+   * `null` is the default login in that worktree alone.
    */
   worktreeAccounts?: Record<string, string | null>;
   [key: string]: unknown;

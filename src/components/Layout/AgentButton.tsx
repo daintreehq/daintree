@@ -25,6 +25,7 @@ import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { resolveSettledSavedPreset } from "@shared/utils/agentPresets";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
@@ -353,14 +354,28 @@ export function AgentButton({
   // Accounts are a choice of their own beside the preset (#16040).
   const accounts = getAgentConfigFolderAccount(type) ? sanitizeAgentAccounts(entry.accounts) : [];
   const hasAccounts = accounts.length > 0;
-  const savedAccountId = resolveEffectiveAccountId(entry, activeWorktreeId);
-  const activeAccount = savedAccountId
-    ? accounts.find((account) => account.id === savedAccountId)
-    : undefined;
   // Worktree-scoped pick wins over the agent-level default so switching
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
   const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
+  // What a plain launch signs in as: the worktree's pick, else the pin of the
+  // preset it settles on (#16133), else the agent's default.
+  const launchAccountId = resolveEffectiveAccountId(
+    entry,
+    activeWorktreeId,
+    undefined,
+    resolveSettledSavedPreset(presets, entry, activeWorktreeId)?.accountId
+  );
+  const activeAccount = launchAccountId
+    ? accounts.find((account) => account.id === launchAccountId)
+    : undefined;
+  // The radio marks the slot a pick writes: the worktree's, which inherits the
+  // pin, or outside a worktree the agent's own default, which a pin outranks.
+  const savedAccountId = activeWorktreeId
+    ? launchAccountId
+    : resolveEffectiveAccountId(entry, null);
+  const savedAccount =
+    savedAccountId === null ? undefined : accounts.find((account) => account.id === savedAccountId);
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
   const presetDisplayName = (preset: { name: string; displayTitle?: string }) =>
@@ -530,7 +545,8 @@ export function AgentButton({
       : store.updateAgent(type, { accountId: accountId ?? undefined });
     const picked = accountId === null ? undefined : accounts.find((a) => a.id === accountId);
     // A saved account that's gone stands for none, so any pick moves off it.
-    const currentAccountId = savedAccountId === null ? null : activeAccount?.id;
+    // Measured against where the radio stands, the slot this pick writes.
+    const currentAccountId = savedAccountId === null ? null : savedAccount?.id;
     const moved = accountId !== currentAccountId;
     const generation = dismissSwitchNotices();
     void write
@@ -1011,7 +1027,7 @@ export function AgentButton({
                       value={
                         savedAccountId === null
                           ? DEFAULT_LOGIN_VALUE
-                          : (activeAccount?.id ?? MISSING_ACCOUNT_VALUE)
+                          : (savedAccount?.id ?? MISSING_ACCOUNT_VALUE)
                       }
                       onValueChange={pickAccount}
                     >

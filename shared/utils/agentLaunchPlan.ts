@@ -48,7 +48,8 @@ export interface AgentLaunchPlanOptions {
   presetId?: string | null;
   /**
    * The account to launch on (#16040): `null` is the CLI's default login;
-   * omitted, the worktree's account applies, else the agent's default.
+   * omitted, the worktree's account applies, else the preset's pinned
+   * account, else the agent's default.
    */
   accountId?: string | null;
   /** Layered over the agent's global env and the preset's env. */
@@ -240,26 +241,6 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
 
   if (agentConfig) {
     const entry = input.settings?.agents?.[agentId] ?? {};
-    const accountChoice = isAgent
-      ? resolveLaunchAccount(agentId, entry, worktreeId, options?.accountId)
-      : ({ kind: "default" } as const);
-    if (accountChoice.kind === "missing") {
-      return {
-        command: undefined,
-        launchFlags: undefined,
-        callerLaunchFlags: undefined,
-        assignedSessionId: undefined,
-        env: undefined,
-        preset: undefined,
-        cliDetail: undefined,
-        title: agentConfig.name,
-        titleMode: undefined,
-        modelId: undefined,
-        unloadedPresetId: undefined,
-        account: undefined,
-        missingAccountId: accountChoice.accountId,
-      };
-    }
     const scopedId =
       worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
     // null = explicitly default — skip preset lookup entirely
@@ -318,6 +299,29 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       } else if (entry.presetId && entry.presetId === resolvedPresetId) {
         input.onStalePreset?.("agent");
       }
+    }
+
+    // After the preset has settled, fallback included: the preset a launch
+    // actually runs is the one whose pinned account applies (#16133).
+    const accountChoice = isAgent
+      ? resolveLaunchAccount(agentId, entry, worktreeId, options?.accountId, preset?.accountId)
+      : ({ kind: "default" } as const);
+    if (accountChoice.kind === "missing") {
+      return {
+        command: undefined,
+        launchFlags: undefined,
+        callerLaunchFlags: undefined,
+        assignedSessionId: undefined,
+        env: undefined,
+        preset: undefined,
+        cliDetail: undefined,
+        title: agentConfig.name,
+        titleMode: undefined,
+        modelId: undefined,
+        unloadedPresetId: undefined,
+        account: undefined,
+        missingAccountId: accountChoice.accountId,
+      };
     }
 
     // Merge: global env (base) overridden by preset env (preset wins on

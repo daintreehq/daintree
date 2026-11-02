@@ -168,4 +168,37 @@ describe("removeAgentAccount (#16040)", () => {
     );
     expect((await stat(account.configDir)).isDirectory()).toBe(true);
   });
+
+  it("clears the pin of every preset that named the account, and no other preset field (#16133)", async () => {
+    const { account } = await addAgentAccount({
+      agentId: "codex",
+      name: "Company",
+      folder: { kind: "create" },
+    });
+    const other = await addAgentAccount({
+      agentId: "codex",
+      name: "Personal",
+      folder: { kind: "create" },
+    });
+    fakeStore.set("agentSettings.agents", {
+      codex: {
+        ...savedCodex(),
+        customPresets: [
+          { id: "work", name: "Work", accountId: account.id, env: { FOO: "1" } },
+          { id: "home", name: "Home", accountId: other.account.id },
+          { id: "plain", name: "Plain" },
+          { id: "review", name: "Review", accountId: account.id },
+        ],
+      },
+    });
+
+    removeAgentAccount("codex", account.id);
+
+    expect(savedCodex().customPresets).toEqual([
+      { id: "work", name: "Work", env: { FOO: "1" } },
+      { id: "home", name: "Home", accountId: other.account.id },
+      { id: "plain", name: "Plain" },
+      { id: "review", name: "Review" },
+    ]);
+  });
 });

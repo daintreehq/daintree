@@ -452,11 +452,13 @@ export function Toolbar({
         "agent.launch",
         // `null` is the explicit-default sentinel and must survive into the
         // payload; `undefined` must leave the key off so the saved preset still
-        // resolves. A `!= null` test here would collapse the two. A plugin
+        // resolves. A `!= null` test here would collapse the two, for the
+        // account (`null` is the default login) as for the preset. A plugin
         // launch entry adds its first turn and nothing else.
         {
           agentId,
           ...(presetId !== undefined ? { presetId } : {}),
+          ...(options?.accountId !== undefined ? { accountId: options.accountId } : {}),
           ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
         },
         { source: "user" }

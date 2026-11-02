@@ -1,6 +1,9 @@
 import { getAgentConfigFolderAccount } from "../config/agentRegistry.js";
 import type { AgentAccount, AgentSettingsEntry } from "../types/agentSettings.js";
+import { isAccountId } from "./agentAccountId.js";
 import { sanitizeAgentEnv } from "./agentPresets.js";
+
+export { isAccountId };
 
 /**
  * Accounts as their own per-agent choice (#16040), shared by the renderer's
@@ -9,8 +12,6 @@ import { sanitizeAgentEnv } from "./agentPresets.js";
  */
 
 export const ACCOUNT_NAME_MAX_CHARS = 60;
-
-const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 // A path the agent's own process reads as the same folder from any working
 // directory: POSIX absolute, a Windows drive root, or a UNC share. A
@@ -38,10 +39,6 @@ export function sanitizeAccountName(value: unknown): string | undefined {
   return name ? name.slice(0, ACCOUNT_NAME_MAX_CHARS) : undefined;
 }
 
-export function isAccountId(value: unknown): value is string {
-  return typeof value === "string" && ACCOUNT_ID_PATTERN.test(value);
-}
-
 /** The saved accounts that are well formed, first of each id. Never throws. */
 export function sanitizeAgentAccounts(value: unknown): AgentAccount[] {
   if (!Array.isArray(value)) return [];
@@ -61,12 +58,14 @@ export function sanitizeAgentAccounts(value: unknown): AgentAccount[] {
 
 /**
  * The account id a launch asks for: the caller's, else the worktree's own
- * choice, else the agent's default. `null` is the CLI's default login.
+ * choice, else the account the launched preset pins (#16133), else the
+ * agent's default. `null` is the CLI's default login.
  */
 export function resolveEffectiveAccountId(
   entry: AgentSettingsEntry | null | undefined,
   worktreeId: string | null | undefined,
-  requested?: string | null
+  requested?: string | null,
+  presetAccountId?: string
 ): string | null {
   if (requested !== undefined) return requested;
   const scoped = entry?.worktreeAccounts;
@@ -74,6 +73,7 @@ export function resolveEffectiveAccountId(
     const id = scoped[worktreeId];
     return typeof id === "string" ? id : null;
   }
+  if (typeof presetAccountId === "string") return presetAccountId;
   return typeof entry?.accountId === "string" ? entry.accountId : null;
 }
 
@@ -83,16 +83,20 @@ export type LaunchAccountResolution =
   /** A saved or requested id with no account behind it. Never launched on another. */
   | { kind: "missing"; accountId: string };
 
-/** Which account one launch of `agentId` runs on. */
+/**
+ * Which account one launch of `agentId` runs on. `presetAccountId` is the
+ * account the launched preset pins, read from the preset the launch settled on.
+ */
 export function resolveLaunchAccount(
   agentId: string,
   entry: AgentSettingsEntry | null | undefined,
   worktreeId: string | null | undefined,
-  requested?: string | null
+  requested?: string | null,
+  presetAccountId?: string
 ): LaunchAccountResolution {
   const declaration = getAgentConfigFolderAccount(agentId);
   if (!declaration) return { kind: "default" };
-  const id = resolveEffectiveAccountId(entry, worktreeId, requested);
+  const id = resolveEffectiveAccountId(entry, worktreeId, requested, presetAccountId);
   if (id === null) return { kind: "default" };
   const account = sanitizeAgentAccounts(entry?.accounts).find((candidate) => candidate.id === id);
   return account

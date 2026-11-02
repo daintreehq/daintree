@@ -589,6 +589,121 @@ describe("accounts (#16040)", () => {
     expect(getCliDetail).not.toHaveBeenCalled();
   });
 
+  describe("a preset's pinned account (#16133)", () => {
+    const pinnedPresets = [
+      { id: "work", name: "Work", accountId: "company", env: { CLAUDE_CONFIG_DIR: "/legacy" } },
+      { id: "plain", name: "Plain" },
+    ];
+
+    it("launches the preset on its pin over the agent's default, the account's folder last", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            accounts: [COMPANY, PERSONAL],
+            accountId: "personal",
+            presetId: "work",
+            customPresets: pinnedPresets,
+          }),
+        })
+      );
+
+      expect(plan.preset?.id).toBe("work");
+      expect(plan.account?.id).toBe("company");
+      expect(plan.env).toEqual({ CLAUDE_CONFIG_DIR: COMPANY.configDir });
+    });
+
+    it("yields the pin to the launch's choice and to the worktree's", async () => {
+      const settings = settingsWith({
+        accounts: [COMPANY, PERSONAL],
+        presetId: "work",
+        customPresets: pinnedPresets,
+        worktreeAccounts: { "/repo-wt/a": "personal", "/repo-wt/c": null },
+      });
+
+      const worktree = await buildAgentLaunchPlan(input({ settings }));
+      expect(worktree.account?.id).toBe("personal");
+
+      const defaultLogin = await buildAgentLaunchPlan(
+        input({ settings, worktreeId: "/repo-wt/c" })
+      );
+      expect(defaultLogin.account).toBeUndefined();
+      // The preset's own env is all that remains: no account folder is laid over it.
+      expect(defaultLogin.env).toEqual({ CLAUDE_CONFIG_DIR: "/legacy" });
+
+      const requested = await buildAgentLaunchPlan(
+        input({ settings, worktreeId: "/repo-wt/b", options: { accountId: "personal" } })
+      );
+      expect(requested.account?.id).toBe("personal");
+
+      const pinned = await buildAgentLaunchPlan(input({ settings, worktreeId: "/repo-wt/b" }));
+      expect(pinned.account?.id).toBe("company");
+    });
+
+    it("reads the pin of the preset the launch settled on, after a stale worktree pick falls back", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            accounts: [COMPANY],
+            presetId: "work",
+            worktreePresets: { "/repo-wt/a": "deleted" },
+            customPresets: pinnedPresets,
+          }),
+        })
+      );
+
+      expect(plan.preset?.id).toBe("work");
+      expect(plan.account?.id).toBe("company");
+    });
+
+    it("leaves the pin out of a launch of another preset or of the bare agent", async () => {
+      const settings = settingsWith({
+        accounts: [COMPANY, PERSONAL],
+        accountId: "personal",
+        presetId: "work",
+        customPresets: pinnedPresets,
+      });
+
+      const plain = await buildAgentLaunchPlan(input({ settings, options: { presetId: "plain" } }));
+      expect(plain.account?.id).toBe("personal");
+
+      const bare = await buildAgentLaunchPlan(input({ settings, options: { presetId: null } }));
+      expect(bare.account?.id).toBe("personal");
+    });
+
+    it("refuses a launch whose pinned account is gone, before probing the CLI", async () => {
+      const getCliDetail = vi.fn(async () => undefined);
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            accounts: [COMPANY],
+            accountId: "company",
+            presetId: "gone-pin",
+            customPresets: [{ id: "gone-pin", name: "Gone", accountId: "removed" }],
+          }),
+          getCliDetail,
+        })
+      );
+
+      expect(plan.missingAccountId).toBe("removed");
+      expect(plan.command).toBeUndefined();
+      expect(plan.env).toBeUndefined();
+      expect(getCliDetail).not.toHaveBeenCalled();
+    });
+
+    it("takes no pin from a repository's preset", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({ accounts: [COMPANY], presetId: "shared" }),
+          projectPresets: [{ id: "shared", name: "Shared", accountId: "company" }],
+        })
+      );
+
+      expect(plan.preset?.id).toBe("shared");
+      expect(plan.account).toBeUndefined();
+      expect(plan.missingAccountId).toBeUndefined();
+    });
+  });
+
   it("ignores accounts for an agent whose CLI can't hold one per launch", async () => {
     const plan = await buildAgentLaunchPlan(
       input({

@@ -1,10 +1,12 @@
 import { z } from "zod";
 import {
+  getAgentConfigFolderAccount,
   getEffectiveAgentConfig,
   isEffectivelyRegisteredAgent,
   type AgentPreset,
 } from "@shared/config/agentRegistry";
-import type { AgentSettings, AgentSettingsEntry } from "@shared/types/agentSettings";
+import type { AgentAccount, AgentSettings, AgentSettingsEntry } from "@shared/types/agentSettings";
+import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import {
   getMergedPresetIdentities,
   getMergedPresets,
@@ -65,6 +67,8 @@ interface MutationBase {
   customPresets: AgentPreset[];
   /** Names of the presets a fallback chain here names, by id, for the preview. */
   presetNames: Record<string, string>;
+  /** Names of the accounts the preset pins before and after, by id, for the preview. */
+  accountNames: Record<string, string>;
 }
 
 export type AgentPresetMutation =
@@ -96,6 +100,7 @@ interface PresetPatch {
   displayTitle?: string;
   fallbacks?: string[];
   fallbackOnRateLimit?: boolean;
+  accountId?: string | null;
 }
 
 const PATCH_FIELDS = [
@@ -110,6 +115,7 @@ const PATCH_FIELDS = [
   "displayTitle",
   "fallbacks",
   "fallbackOnRateLimit",
+  "accountId",
 ] as const satisfies readonly (keyof PresetPatch)[];
 
 const SHELL_METACHARS = "; | & > < $( ${ ` \\";
@@ -143,20 +149,21 @@ export function agentPresetMutationUpdates(
  * meanwhile, and not a create's id, which only the run mints.
  */
 export function agentPresetMutationFingerprint(mutation: AgentPresetMutation): string {
-  const { agentId, presetNames } = mutation;
+  const { agentId, presetNames, accountNames } = mutation;
   if (mutation.operation === "create") {
     const { id: _id, ...content } = mutation.preset;
-    return canonical({ operation: "create", agentId, presetNames, content });
+    return canonical({ operation: "create", agentId, presetNames, accountNames, content });
   }
   if (mutation.operation === "update") {
     const { before, preset } = mutation;
-    return canonical({ operation: "update", agentId, presetNames, before, preset });
+    return canonical({ operation: "update", agentId, presetNames, accountNames, before, preset });
   }
   const { preset, wasAgentDefault, worktreeDefaults } = mutation;
   return canonical({
     operation: "delete",
     agentId,
     presetNames,
+    accountNames,
     preset,
     wasAgentDefault,
     worktreeDefaults,
@@ -203,18 +210,36 @@ export function planAgentPresetMutation(
   const entry = agents && Object.hasOwn(agents, agentId) ? agents[agentId] : undefined;
   const stored = entry?.customPresets;
   const custom: AgentPreset[] = Array.isArray(stored) ? stored : [];
+  // Null for an agent whose CLI can't launch on a chosen account at all.
+  const accounts = getAgentConfigFolderAccount(agentId)
+    ? sanitizeAgentAccounts(entry?.accounts)
+    : null;
 
   if (parsed.action === "agent.createPreset") {
     const { agentId: _agent, name, env, ...fields } = parsed.data;
     const patch: PresetPatch = { ...fields, name, ...(env !== undefined ? { envSet: env } : {}) };
     const preset = applyPresetPatch({ id: newPresetId, name }, patch);
     const customPresets = [...custom, preset];
-    const problems = presetProblems(preset, patch, knownPresetIds(agentId, customPresets, layers));
+    const problems = presetProblems(
+      preset,
+      patch,
+      knownPresetIds(agentId, customPresets, layers),
+      accounts
+    );
     if (problems.length > 0) return refusePresetProblems(problems);
     const presetNames = fallbackPresetNames(agentId, [customPresets], layers, [preset]);
+    const accountNames = pinnedAccountNames(accounts, [preset]);
     return {
       ok: true,
-      mutation: { operation: "create", agentId, agentName, customPresets, presetNames, preset },
+      mutation: {
+        operation: "create",
+        agentId,
+        agentName,
+        customPresets,
+        presetNames,
+        accountNames,
+        preset,
+      },
     };
   }
 
@@ -240,6 +265,7 @@ export function planAgentPresetMutation(
         agentName,
         customPresets: custom.filter((preset) => !isRecord(preset) || preset.id !== presetId),
         presetNames: fallbackPresetNames(agentId, [custom], layers, [target]),
+        accountNames: pinnedAccountNames(accounts, [target]),
         preset: target,
         wasAgentDefault: entry?.presetId === presetId,
         worktreeDefaults: Object.values(worktreePresets).filter((id) => id === presetId).length,
@@ -261,7 +287,12 @@ export function planAgentPresetMutation(
     return refuse(`Nothing to change: ${presetLabel(target)} already has these values.`);
   }
   const customPresets = custom.map((existing) => (existing === target ? preset : existing));
-  const problems = presetProblems(preset, patch, knownPresetIds(agentId, customPresets, layers));
+  const problems = presetProblems(
+    preset,
+    patch,
+    knownPresetIds(agentId, customPresets, layers),
+    accounts
+  );
   if (problems.length > 0) return refusePresetProblems(problems);
   const presetNames = fallbackPresetNames(agentId, [custom, customPresets], layers, [
     target,
@@ -275,6 +306,7 @@ export function planAgentPresetMutation(
       agentName,
       customPresets,
       presetNames,
+      accountNames: pinnedAccountNames(accounts, [target, preset]),
       before: target,
       preset,
     },
@@ -415,7 +447,24 @@ function applyPresetPatch(base: AgentPreset, patch: PresetPatch): AgentPreset {
     if (patch.fallbackOnRateLimit) next.fallbackOnRateLimit = true;
     else delete next.fallbackOnRateLimit;
   }
+  if (patch.accountId !== undefined) {
+    if (patch.accountId === null) delete next.accountId;
+    else next.accountId = patch.accountId;
+  }
   return next;
+}
+
+/** The names of the accounts `presets` pin, for the preview. */
+function pinnedAccountNames(
+  accounts: readonly AgentAccount[] | null,
+  presets: AgentPreset[]
+): Record<string, string> {
+  const pinned = new Set(presets.map((preset) => preset.accountId));
+  return Object.fromEntries(
+    (accounts ?? [])
+      .filter((account) => pinned.has(account.id))
+      .map((account) => [account.id, account.name])
+  );
 }
 
 /** Ids a fallback may name once this write lands, as the launcher merges them. */
@@ -468,7 +517,8 @@ function fallbackPresetNames(
 function presetProblems(
   preset: AgentPreset,
   patch: PresetPatch,
-  knownIds: ReadonlySet<string>
+  knownIds: ReadonlySet<string>,
+  accounts: readonly AgentAccount[] | null
 ): string[] {
   // Only a stored preset can carry an id launches refuse; a create's is minted.
   if (sanitizePreset({ id: preset.id, name: "id" }) === null) {
@@ -542,6 +592,17 @@ function presetProblems(
           problems.push(`fallbacks: "${id}" isn't one of this agent's presets.`);
         }
       }
+    }
+  }
+  // A pin is checked against the accounts saved now: one no account answers
+  // to would refuse every launch of the preset. Clearing a stale pin is fine.
+  if (typeof patch.accountId === "string") {
+    if (accounts === null) {
+      problems.push(
+        "accountId: this agent's CLI keeps one login, so a preset can't pin an account."
+      );
+    } else if (!accounts.some((account) => account.id === patch.accountId)) {
+      problems.push("accountId: not one of this agent's saved accounts.");
     }
   }
   return problems;

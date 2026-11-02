@@ -379,6 +379,79 @@ describe("agent.updatePreset", () => {
     ).toContain('no user preset "user-nope"');
   });
 
+  describe("a pinned account (#16133)", () => {
+    const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+    const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.codex-personal" };
+
+    it("pins one of the agent's saved accounts, and names both ends for the preview", () => {
+      const mutation = plan(
+        "agent.updatePreset",
+        { agentId: "codex", presetId: WORK.id, accountId: "personal" },
+        sources({
+          accounts: [COMPANY, PERSONAL],
+          customPresets: [{ ...WORK, accountId: "company" }],
+        })
+      );
+      expect(updated(mutation)).toEqual({ ...WORK, accountId: "personal" });
+      expect(mutation.accountNames).toEqual({ company: "Company", personal: "Personal" });
+    });
+
+    it("clears a pin with null, a stale one included, and keeps it when omitted", () => {
+      const stale = { ...WORK, accountId: "removed" };
+      const cleared = plan(
+        "agent.updatePreset",
+        { agentId: "codex", presetId: WORK.id, accountId: null },
+        sources({ accounts: [COMPANY], customPresets: [stale] })
+      );
+      expect(updated(cleared)).toEqual(WORK);
+      expect("accountId" in updated(cleared)).toBe(false);
+
+      const kept = plan(
+        "agent.updatePreset",
+        { agentId: "codex", presetId: WORK.id, name: "Renamed" },
+        sources({ accounts: [COMPANY], customPresets: [stale] })
+      );
+      expect(updated(kept).accountId).toBe("removed");
+    });
+
+    it("refuses an account the agent hasn't saved, and an agent whose CLI keeps one login", () => {
+      expect(
+        refusal(
+          "agent.updatePreset",
+          { agentId: "codex", presetId: WORK.id, accountId: "nobody" },
+          sources({ accounts: [COMPANY], customPresets: [WORK] })
+        )
+      ).toContain("accountId: not one of this agent's saved accounts");
+
+      const cursor = planAgentPresetMutation(
+        "agent.createPreset",
+        { agentId: "cursor", name: "Pinned", accountId: "company" },
+        {
+          settings: { agents: { cursor: { accounts: [COMPANY] } } },
+          ccrPresetsByAgent: {},
+          projectPresetsByAgent: undefined,
+        },
+        NEW_ID
+      );
+      expect(cursor.ok).toBe(false);
+      expect(!cursor.ok && cursor.message).toContain("accountId: this agent's CLI keeps one login");
+    });
+
+    it("creates a preset already pinned", () => {
+      const mutation = plan(
+        "agent.createPreset",
+        { agentId: "codex", name: "Work", accountId: "company" },
+        sources({ accounts: [COMPANY] })
+      );
+      expect(mutation.operation === "create" && mutation.preset).toEqual({
+        id: NEW_ID,
+        name: "Work",
+        accountId: "company",
+      });
+      expect(mutation.accountNames).toEqual({ company: "Company" });
+    });
+  });
+
   it("refuses a sanitiser-dropped env value, without echoing it", () => {
     const message = refusal(
       "agent.updatePreset",
@@ -494,6 +567,21 @@ describe("agentPresetMutationFingerprint", () => {
       sources({ customPresets: [WORK, { ...OTHER, name: "Renamed other" }] })
     );
     expect(print(renamed)).not.toBe(print(named));
+
+    // So does a renamed account the preset pins (#16133).
+    const pin = { agentId: "codex", presetId: WORK.id, accountId: "company" };
+    const company = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+    const pinned = plan(
+      "agent.updatePreset",
+      pin,
+      sources({ accounts: [company], customPresets: [WORK] })
+    );
+    const pinnedRenamed = plan(
+      "agent.updatePreset",
+      pin,
+      sources({ accounts: [{ ...company, name: "Work login" }], customPresets: [WORK] })
+    );
+    expect(print(pinnedRenamed)).not.toBe(print(pinned));
 
     const createArgs = { agentId: "codex", name: "New" };
     const first = planAgentPresetMutation(
