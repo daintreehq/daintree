@@ -22,6 +22,7 @@ import type { FleetSnapshotService } from "../services/FleetSnapshotService.js";
 import type { RunAttentionService } from "../services/RunAttentionService.js";
 import type { RunHandBackService } from "../services/RunHandBackService.js";
 import type * as DecisionsModule from "../services/decisions/index.js";
+import type { DecisionsHostsPort } from "../types/decisionsHosts.js";
 
 // Guard: process.argv CLI path should only be consumed by the first window
 let processArgvCliHandled = false;
@@ -288,4 +289,45 @@ export function sealDecisionsModule(): Promise<typeof DecisionsModule> | null {
 export function _resetDecisionsModuleForTesting(): void {
   decisionsModule = null;
   decisionsModuleSealed = false;
+}
+
+/**
+ * The Remote Hosts client's side of enrolling Hosts as Decisions devices
+ * (#16021). The client publishes it once it is up and Decisions, loaded only
+ * once it is on, watches for it, so neither imports the other and either may
+ * start first.
+ */
+let decisionsHostsPort: DecisionsHostsPort | null = null;
+const decisionsHostsPortWatchers = new Set<(port: DecisionsHostsPort | null) => void>();
+
+function tellDecisionsHostsPortWatchers(): void {
+  for (const watcher of [...decisionsHostsPortWatchers]) {
+    try {
+      watcher(decisionsHostsPort);
+    } catch (error) {
+      console.error("[serviceRefs] A Decisions hosts port watcher threw:", error);
+    }
+  }
+}
+
+/** Publishes the port; the returned function withdraws it, if it is still the one published. */
+export function setDecisionsHostsPort(port: DecisionsHostsPort): () => void {
+  decisionsHostsPort = port;
+  tellDecisionsHostsPortWatchers();
+  return () => {
+    if (decisionsHostsPort !== port) return;
+    decisionsHostsPort = null;
+    tellDecisionsHostsPortWatchers();
+  };
+}
+
+/** Calls `watcher` with the port now, and again whenever it is published or withdrawn. */
+export function watchDecisionsHostsPort(
+  watcher: (port: DecisionsHostsPort | null) => void
+): () => void {
+  decisionsHostsPortWatchers.add(watcher);
+  watcher(decisionsHostsPort);
+  return () => {
+    decisionsHostsPortWatchers.delete(watcher);
+  };
 }

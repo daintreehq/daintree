@@ -50,6 +50,13 @@ export interface DecisionsSettings {
    * only while it names the relay and ids recorded above; null until then.
    */
   recoveryKit: DecisionsRecoveryKitRecord | null;
+  /**
+   * Whether this computer, as the owner, enrolls each Remote Host it connects
+   * to as a Decisions device when the Host's link comes up (#16021). On
+   * unless the person turns it off; with it off, Settings offers Enroll per
+   * connected Host instead.
+   */
+  autoEnrollHosts: boolean;
 }
 
 /** A verified recovery kit, recorded by the identity it held. Never the kit or its passphrase. */

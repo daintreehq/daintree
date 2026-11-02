@@ -25,6 +25,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     consentedAt: null,
     revokedAt: null,
     recoveryKit: null,
+    autoEnrollHosts: true,
   };
 }
 
@@ -131,6 +132,8 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     consentedAt: consentTime(value.consentedAt),
     revokedAt: identified ? consentTime(value.revokedAt) : null,
     recoveryKit: recoveryKitRecord(value.recoveryKit, { relayOrigin, installationId, deviceId }),
+    // On unless turned off: a setting saved before the field existed enrolls.
+    autoEnrollHosts: value.autoEnrollHosts !== false,
   };
 }
 
