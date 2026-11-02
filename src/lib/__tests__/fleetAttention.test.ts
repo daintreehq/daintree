@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { shallow } from "zustand/shallow";
 import {
   ATTENTION_FILTER_BANDS,
   bandForRun,
@@ -10,9 +11,12 @@ import {
   FLEET_BANDS,
   fleetBandForRun,
   fleetBandRunKey,
+  fleetUnseenAskForRun,
+  fleetUnseenAsks,
   isAttentionBand,
   isDemandBand,
   NEEDS_YOU_BANDS,
+  runUnseenAsk,
   UNREAD_FILTER_BANDS,
 } from "../fleetAttention";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
@@ -33,7 +37,7 @@ describe("bandForRun", () => {
   it("reads an error wait as blocked and an unread ask wait no reading placed as review", () => {
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "error" }))).toBe("blocked");
     for (const waitingReason of ["question", "approval"] as const) {
-      // The patterns' guess is news, never a demand: no reading, no amber.
+      // The patterns' guess is news, never a demand: unread, not needs-you.
       expect(bandForRun(run({ agentState: "waiting", waitingReason }))).toBe("review");
       const unseen = run({ agentState: "waiting", waitingReason, wait: { stoppedAt: NOW } });
       expect(bandForRun(unseen)).toBe("review");
@@ -696,6 +700,52 @@ describe("fleetBandRunKey", () => {
     ]);
   });
 
+  it("holds Canopy's unread asks and unseen observed waits for the pane edge, by whose", () => {
+    expect([...fleetUnseenAsks(fleet)].sort()).toEqual([
+      ["approval", "observed"],
+      ["canopy-approval", "canopy"],
+      ["canopy-ask", "canopy"],
+    ]);
+    expect(fleetUnseenAskForRun(fleet, "approval")).toBe("observed");
+    expect(fleetUnseenAskForRun(fleet, "canopy-ask")).toBe("canopy");
+    for (const id of ["looked-approval", "unread", "parked-ask", "bare-prompt", "missing"]) {
+      expect(fleetUnseenAskForRun(fleet, id), id).toBeUndefined();
+    }
+    for (const r of fleet.runs) expect(fleetUnseenAskForRun(fleet, r.runId)).toBe(runUnseenAsk(r));
+  });
+
+  it("holds no unseen ask before the first snapshot, and the same asks in any order", () => {
+    expect(fleetUnseenAsks(null).size).toBe(0);
+    expect(fleetUnseenAskForRun(null, "approval")).toBeUndefined();
+    expect(fleetUnseenAsks(snapshot([])).size).toBe(0);
+    expect(
+      shallow(fleetUnseenAsks(snapshot([...fleet.runs].reverse())), fleetUnseenAsks(fleet))
+    ).toBe(true);
+  });
+
+  it("reads each snapshot afresh, even when it shares rows with an earlier one", () => {
+    const first = run({ runId: "a", agentState: "waiting", waitingReason: "question" });
+    const asking = run({ runId: "b", agentState: "waiting", waitingReason: "approval" });
+    const looked = { ...asking, wait: seen };
+    const before = snapshot([first, asking]);
+    const after = snapshot([first, looked]);
+    expect([...fleetUnseenAsks(before)]).toEqual([
+      ["a", "observed"],
+      ["b", "observed"],
+    ]);
+    expect([...fleetUnseenAsks(after)]).toEqual([["a", "observed"]]);
+    expect(fleetUnseenAskForRun(after, "b")).toBeUndefined();
+    expect(fleetUnseenAskForRun(before, "b")).toBe("observed");
+  });
+
+  it("keys asks by run id whatever characters the id holds", () => {
+    const odd = "run\twith\nbreaks";
+    const asks = fleetUnseenAsks(
+      snapshot([run({ runId: odd, agentState: "waiting", waitingReason: "approval" })])
+    );
+    expect([...asks]).toEqual([[odd, "observed"]]);
+  });
+
   it("holds nobody before the first snapshot", () => {
     expect(fleetBandRunKey(null, ATTENTION_FILTER_BANDS)).toBe("");
     expect(fleetBandRunKey(snapshot([]), UNREAD_FILTER_BANDS)).toBe("");
@@ -717,5 +767,116 @@ describe("fleetBandRunKey", () => {
     expect(one(unseen)).toBe("t1");
     expect(one(seen)).toBe("");
     expect(one({ ...seen, markedUnreadAt: NOW })).toBe("t1");
+  });
+});
+
+describe("runUnseenAsk", () => {
+  const unseenWait = { stoppedAt: NOW - 60_000 };
+  const seenWait = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+  const asked = { kind: "asked", quote: "Ship it?", readAt: NOW, seen: false } as const;
+  const notAsking = {
+    kind: "not-asking",
+    quote: "All tests pass.",
+    readAt: NOW,
+    seen: false,
+  } as const;
+
+  it("reads an observed approval or question wait as an observed ask until it is seen", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      expect(runUnseenAsk(run({ agentState: "waiting", waitingReason }))).toBe("observed");
+      expect(runUnseenAsk(run({ agentState: "waiting", waitingReason, wait: unseenWait }))).toBe(
+        "observed"
+      );
+      expect(
+        runUnseenAsk(run({ agentState: "waiting", waitingReason, wait: seenWait }))
+      ).toBeUndefined();
+    }
+  });
+
+  it("follows Canopy's read mark where its reading applies", () => {
+    for (const waitingReason of [undefined, "prompt", "approval", "question"] as const) {
+      expect(runUnseenAsk(run({ agentState: "waiting", waitingReason, canopy: asked }))).toBe(
+        "canopy"
+      );
+      // A seen ask stays seen even though the wait's own record is unseen.
+      expect(
+        runUnseenAsk(
+          run({
+            agentState: "waiting",
+            waitingReason,
+            wait: unseenWait,
+            canopy: { ...asked, seen: true },
+          })
+        )
+      ).toBeUndefined();
+    }
+    expect(runUnseenAsk(run({ agentState: "completed", handBack: seenWait, canopy: asked }))).toBe(
+      "canopy"
+    );
+  });
+
+  it("draws nothing for a question Canopy read as asking nothing, seen or not", () => {
+    for (const seen of [false, true]) {
+      const row = run({
+        agentState: "waiting",
+        waitingReason: "question",
+        wait: unseenWait,
+        canopy: { ...notAsking, seen },
+      });
+      expect(runUnseenAsk(row)).toBeUndefined();
+    }
+    // A reading never clears an approval Daintree observed itself.
+    expect(
+      runUnseenAsk(run({ agentState: "waiting", waitingReason: "approval", canopy: notAsking }))
+    ).toBe("observed");
+  });
+
+  it("is never a prompt, a hand-back, an error, work, or a run the user set aside", () => {
+    const quiet = [
+      run({ agentState: "waiting" }),
+      run({ agentState: "waiting", waitingReason: "prompt", wait: unseenWait }),
+      run({ agentState: "waiting", handBack: unseenWait }),
+      run({ agentState: "completed", handBack: unseenWait }),
+      run({ agentState: "waiting", waitingReason: "error", wait: unseenWait }),
+      run({ agentState: "working", wait: unseenWait }),
+      run({ agentState: "idle" }),
+      run({ agentState: "exited" }),
+      run({ agentState: "waiting", waitingReason: "approval", park: { parkedAt: NOW } }),
+      run({
+        agentState: "waiting",
+        waitingReason: "question",
+        snooze: { snoozedAt: NOW - 60_000, snoozedUntil: NOW + 900_000 },
+      }),
+    ];
+    for (const row of quiet) expect(runUnseenAsk(row), JSON.stringify(row)).toBeUndefined();
+  });
+
+  it("names every needs-you run Canopy's, and otherwise only unread ones observed", () => {
+    const states = [
+      { agentState: "completed" },
+      { agentState: "waiting" },
+      { agentState: "waiting", waitingReason: "prompt" },
+      { agentState: "waiting", waitingReason: "question" },
+      { agentState: "waiting", waitingReason: "approval" },
+      { agentState: "waiting", waitingReason: "error" },
+      { agentState: "working" },
+      { agentState: "idle" },
+    ] as const;
+    const canopies = [undefined, asked, { ...asked, seen: true }, notAsking];
+    for (const state of states) {
+      for (const handBack of [undefined, unseenWait, seenWait]) {
+        for (const wait of [undefined, unseenWait, seenWait]) {
+          for (const canopy of canopies) {
+            const row = run({ ...state, handBack, wait, canopy });
+            const band = bandForRun(row);
+            const ask = runUnseenAsk(row);
+            const key = JSON.stringify({ state, handBack, wait, canopy });
+            if (band === "needs-you") expect(ask, key).toBe("canopy");
+            else if (band === "review") expect(ask === "canopy", key).toBe(false);
+            else expect(ask, key).toBeUndefined();
+          }
+        }
+      }
+    }
   });
 });

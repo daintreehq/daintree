@@ -9,6 +9,7 @@ import {
   isGroupDeprioritized,
 } from "../useDockBlockedState";
 import type { AgentState } from "@shared/types/agent";
+import type { UnseenAsk } from "@/lib/fleetAttention";
 
 describe("useDockBlockedState", () => {
   beforeEach(() => {
@@ -157,38 +158,63 @@ describe("getGroupBlockedAgentState", () => {
 });
 
 describe("getGroupAmbientAgentState", () => {
-  const NONE: ReadonlySet<string> = new Set();
+  const NONE: ReadonlyMap<string, UnseenAsk> = new Map();
+  const canopyAsk = (id: string) => new Map<string, UnseenAsk>([[id, "canopy"]]);
 
   it("returns undefined when all panels are idle or completed", () => {
     const panels = [{ agentState: "idle" as const }, { agentState: "completed" as const }];
     expect(getGroupAmbientAgentState(panels, NONE)).toBe(undefined);
   });
 
-  it("returns 'waiting' for a hidden tab the fleet places in needs-you, over work", () => {
+  it("returns 'waiting' for a hidden tab the fleet reads as asking unseen, over work", () => {
     const panels = [
       { id: "shown", agentState: "working" as const },
       { id: "asking", agentState: "completed" as const },
     ];
-    expect(getGroupAmbientAgentState(panels, new Set(["asking"]), "shown")).toBe("waiting");
+    expect(getGroupAmbientAgentState(panels, canopyAsk("asking"), "shown")).toBe("waiting");
   });
 
-  it("takes no wait from a prompt, a hand-back or an unread wait the band doesn't call needs-you", () => {
+  it("holds a hidden tab's observed ask only while its pane still shows the wait", () => {
+    const observed = new Map<string, UnseenAsk>([["asking", "observed"]]);
+    for (const waitingReason of ["approval", "question"] as const) {
+      const panels = [
+        { id: "shown", agentState: "working" as const },
+        { id: "asking", agentState: "waiting" as const, waitingReason },
+      ];
+      expect(getGroupAmbientAgentState(panels, observed, "shown"), waitingReason).toBe("waiting");
+    }
+    // A wait the pane holds no reason for is still the fleet's to call.
+    expect(
+      getGroupAmbientAgentState([{ id: "asking", agentState: "waiting" as const }], observed)
+    ).toBe("waiting");
+    // The fleet is a poll behind a pane that has since reached its prompt or finished.
+    for (const stopped of [
+      { id: "asking", agentState: "waiting" as const, waitingReason: "prompt" as const },
+      { id: "asking", agentState: "completed" as const },
+    ]) {
+      expect(getGroupAmbientAgentState([stopped], observed), JSON.stringify(stopped)).toBe(
+        undefined
+      );
+    }
+  });
+
+  it("takes no wait from a tab the fleet doesn't read as asking unseen", () => {
     const panels = [
       { id: "prompt", agentState: "waiting" as const, waitingReason: "prompt" as const },
       { id: "approval", agentState: "waiting" as const, waitingReason: "approval" as const },
       { id: "done", agentState: "completed" as const },
     ];
     expect(getGroupAmbientAgentState(panels, NONE, "prompt")).toBe(undefined);
-    expect(getGroupAmbientAgentState(panels, new Set(["elsewhere"]), "prompt")).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, canopyAsk("elsewhere"), "prompt")).toBe(undefined);
   });
 
   it("leaves the shown tab's ask to the pane itself", () => {
     const panels = [{ id: "shown", agentState: "waiting" as const }];
-    expect(getGroupAmbientAgentState(panels, new Set(["shown"]), "shown")).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, canopyAsk("shown"), "shown")).toBe(undefined);
   });
 
-  it("drops a needs-you tab its pane has since seen go back to work, exit or error", () => {
-    const asking = new Set(["t"]);
+  it("drops an asking tab its pane has since seen go back to work, exit or error", () => {
+    const asking = canopyAsk("t");
     for (const panel of [
       { id: "t", agentState: "exited" as const },
       { id: "t", agentState: "directing" as const },

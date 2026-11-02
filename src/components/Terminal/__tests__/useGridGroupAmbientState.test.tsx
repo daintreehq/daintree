@@ -65,6 +65,70 @@ describe("useGridGroupAmbientState", () => {
     expect(result.current).toBeUndefined();
   });
 
+  it.each(["approval", "question"] as const)(
+    "waits for a hidden tab's observed %s wait without Canopy until the look marks it seen",
+    (waitingReason) => {
+      const tabs = [
+        tab("shown", { agentState: "waiting", waitingReason: "prompt" }),
+        tab("hidden", { agentState: "waiting", waitingReason }),
+      ];
+      const hidden = (wait: FleetRunRow["wait"]) =>
+        fleet([
+          { runId: "shown", agentState: "waiting", waitingReason: "prompt" },
+          { runId: "hidden", agentState: "waiting", waitingReason, wait },
+        ]);
+      hidden({ stoppedAt: 0 });
+      const { result } = renderHook(() => useGridGroupAmbientState(tabs, "shown"));
+      expect(result.current).toBe("waiting");
+
+      hidden({ stoppedAt: 0, seenAt: 1 });
+      expect(result.current).toBeUndefined();
+
+      // A new ask is a new wait, unseen again.
+      hidden({ stoppedAt: 5 });
+      expect(result.current).toBe("waiting");
+    }
+  );
+
+  it("raises nothing for a hidden tab at its prompt", () => {
+    const tabs = [
+      tab("shown", { agentState: "working" }),
+      tab("hidden", { agentState: "waiting", waitingReason: "prompt" }),
+    ];
+    fleet([
+      { runId: "shown", agentState: "working" },
+      { runId: "hidden", agentState: "waiting", waitingReason: "prompt" },
+    ]);
+    const { result } = renderHook(() => useGridGroupAmbientState(tabs, "shown"));
+    expect(result.current).toBe("working");
+  });
+
+  it("drops a hidden observed ask once its tab has moved on before the fleet catches up", () => {
+    fleet([{ runId: "hidden", agentState: "waiting", waitingReason: "question" }]);
+    for (const fields of [
+      { agentState: "waiting", waitingReason: "prompt" },
+      { agentState: "completed" },
+    ] as const) {
+      const moved = [panels[0]!, tab("hidden", fields)];
+      const { result, unmount } = renderHook(() => useGridGroupAmbientState(moved, "shown"));
+      expect(result.current, JSON.stringify(fields)).toBeUndefined();
+      unmount();
+    }
+  });
+
+  it("lets Canopy's reading decide: a hidden question it read as asking nothing raises nothing", () => {
+    fleet([
+      {
+        runId: "hidden",
+        agentState: "waiting",
+        waitingReason: "question",
+        canopy: { kind: "not-asking", quote: "Done.", readAt: 0, seen: false },
+      },
+    ]);
+    const { result } = renderHook(() => useGridGroupAmbientState(panels, "shown"));
+    expect(result.current).toBeUndefined();
+  });
+
   it("hands the ask to the pane once its tab is the one shown", () => {
     fleet([{ runId: "hidden", agentState: "waiting", waitingReason: "question", canopy: ask }]);
     const { result, rerender } = renderHook(

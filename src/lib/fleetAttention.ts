@@ -3,11 +3,20 @@ import {
   FLEET_BANDS,
   bandForRun,
   runCanopyPlacement,
+  runUnseenAsk,
   type FleetBand,
+  type UnseenAsk,
 } from "@shared/utils/fleetBands";
 import { isHandBackStop } from "@shared/utils/runHandBack";
 
-export { FLEET_BANDS, bandForRun, runCanopyPlacement, type FleetBand };
+export {
+  FLEET_BANDS,
+  bandForRun,
+  runCanopyPlacement,
+  runUnseenAsk,
+  type FleetBand,
+  type UnseenAsk,
+};
 
 /** Bands that constitute a demand on the user — the ones an idle fleet has none of. */
 export const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
@@ -84,8 +93,43 @@ export function fleetBandRunKey(
   return key;
 }
 
-/** The one band amber stands for: a Canopy reading of an ask the user hasn't seen. */
+/**
+ * The one band the amber glyph and the counts stand for: a Canopy reading of an
+ * ask the user hasn't seen. The pane edge reads the wider {@link runUnseenAsk}.
+ */
 export const NEEDS_YOU_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["needs-you"]);
+
+const NO_UNSEEN_ASKS: ReadonlyMap<string, UnseenAsk> = new Map();
+const unseenAskCache = new WeakMap<FleetSnapshot, ReadonlyMap<string, UnseenAsk>>();
+
+/**
+ * Every run whose current stop is an ask the user hasn't seen, by run id (the
+ * terminal id), with whose ask it is: what the pane edge draws amber for.
+ * Cached per snapshot and empty before the first one. Each snapshot reads a
+ * new map, so a selector over it compares shallowly.
+ */
+export function fleetUnseenAsks(snapshot: FleetSnapshot | null): ReadonlyMap<string, UnseenAsk> {
+  if (snapshot === null) return NO_UNSEEN_ASKS;
+  let asks = unseenAskCache.get(snapshot);
+  if (asks === undefined) {
+    const byRun = new Map<string, UnseenAsk>();
+    for (const run of snapshot.runs) {
+      const ask = runUnseenAsk(run);
+      if (ask !== undefined) byRun.set(run.runId, ask);
+    }
+    asks = byRun.size === 0 ? NO_UNSEEN_ASKS : byRun;
+    unseenAskCache.set(snapshot, asks);
+  }
+  return asks;
+}
+
+/** One run's unseen ask (`runId` is the terminal id); undefined before the snapshot arrives. */
+export function fleetUnseenAskForRun(
+  snapshot: FleetSnapshot | null,
+  runId: string
+): UnseenAsk | undefined {
+  return fleetUnseenAsks(snapshot).get(runId);
+}
 
 const bandIndexCache = new WeakMap<FleetSnapshot, Map<string, FleetBand>>();
 

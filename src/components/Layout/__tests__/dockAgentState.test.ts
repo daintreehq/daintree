@@ -43,23 +43,23 @@ describe("dock display agent state", () => {
     ).toBe("completed");
   });
 
-  it("edges dock and grid groups from the fleet band alone, never an observed wait", () => {
+  it("edges dock and grid groups from the fleet's read alone, never a pane's own report", () => {
     const panels = [
       agent({ id: "a", launchAgentId: "claude", agentState: "working", activityStatus: "waiting" }),
       agent({ id: "b", launchAgentId: "codex", agentState: "working" }),
     ];
-    // Amber is the fleet band's needs-you alone (#16054), so an observed wait
-    // with no band behind it leaves the dock chip plain and the grid edge on
-    // the work.
+    // Both edges take their amber from the fleet (the dock chip from needs-you,
+    // the grid edge from its unseen asks), so a pane reporting a wait the fleet
+    // doesn't hold leaves the dock chip plain and the grid edge on the work.
     expect(getGroupBlockedAgentState(panels, new Set())).toBeUndefined();
-    expect(getGroupAmbientAgentState(panels, new Set())).toBe("working");
+    expect(getGroupAmbientAgentState(panels, new Map())).toBe("working");
 
     const asking = [
       agent({ id: "a", launchAgentId: "claude", agentState: "waiting" }),
       agent({ id: "b", launchAgentId: "codex", agentState: "working" }),
     ];
     expect(getGroupBlockedAgentState(asking, new Set(["a"]))).toBe("waiting");
-    expect(getGroupAmbientAgentState(asking, new Set(["a"]))).toBe("waiting");
+    expect(getGroupAmbientAgentState(asking, new Map([["a", "canopy"]]))).toBe("waiting");
   });
 
   it("does not deprioritize a group with working activity even before agentState catches up", () => {

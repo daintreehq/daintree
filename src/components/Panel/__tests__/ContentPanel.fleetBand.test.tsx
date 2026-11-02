@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 /**
- * Amber on a pane is the fleet band's `needs-you` and nothing else (#16056):
- * an unread Canopy ask. This renders the real chrome derivation, display-state
- * fold, header indicator and error-wait debounce, and drives the band through
- * the fleet snapshot the way main delivers it.
+ * The amber pane edge marks an ask the user hasn't seen (#16139): an unread
+ * Canopy ask, or with no reading an observed approval or question wait not yet
+ * looked at. The glyph keeps to the band (#16056). This renders the real chrome
+ * derivation, display-state fold, header indicator and error-wait debounce, and
+ * drives the band through the fleet snapshot the way main delivers it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
@@ -253,6 +254,104 @@ describe("ContentPanel amber from the fleet band", () => {
       canopy: { ...UNREAD_ASK, readAt: 9 },
     });
     expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it.each(["approval", "question"] as const)(
+    "draws the edge for an unseen %s wait without Canopy, until the look marks it seen",
+    (waitingReason) => {
+      observe("waiting", waitingReason);
+      fleet({ agentState: "waiting", waitingReason, wait: { stoppedAt: 0 } });
+      const { container, rerender } = render(pane({ agentState: "waiting" }));
+      settle();
+
+      expect(hasEdge(container, "waiting")).toBe(true);
+      // The glyph keeps to the band: unread news, not the amber ring.
+      expect(glyphLabel()).toBe("Agent state: unread");
+      expect(wearsWaitingHue()).toBe(false);
+
+      // Focus alone is not the look: main marks the wait seen after its dwell.
+      rerender(pane({ agentState: "waiting", isFocused: true }));
+      expect(hasEdge(container, "waiting")).toBe(true);
+
+      fleet({ agentState: "waiting", waitingReason, wait: { stoppedAt: 0, seenAt: 1 } });
+      expect(hasEdge(container, "waiting")).toBe(false);
+      rerender(pane({ agentState: "waiting" }));
+      expect(hasEdge(container, "waiting")).toBe(false);
+
+      // A new ask is a new wait, unseen again.
+      fleet({ agentState: "waiting", waitingReason, wait: { stoppedAt: 5 } });
+      expect(hasEdge(container, "waiting")).toBe(true);
+    }
+  );
+
+  it("lets the pane's newer stop end an observed ask before the fleet catches up", () => {
+    // The fleet still holds the approval; the pane has since answered it and
+    // stopped again, at a prompt or finished. Only a Canopy reading outlives that.
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    for (const [agentState, waitingReason] of [
+      ["waiting", "prompt"],
+      ["completed", undefined],
+    ] as const) {
+      observe(agentState, waitingReason);
+      const { container, unmount } = render(pane({ agentState }));
+      settle();
+      expect(hasEdge(container, "waiting"), agentState).toBe(false);
+      unmount();
+    }
+
+    fleet({ agentState: "waiting", waitingReason: "approval", canopy: UNREAD_ASK });
+    observe("waiting", "prompt");
+    const { container } = render(pane({ agentState: "waiting" }));
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it("keeps an observed ask's edge when the pane's wait has lost its reason", () => {
+    // The input controller's directing spell hands the wait back with no
+    // reason; main still holds the approval, and the fleet says so.
+    observe("waiting");
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it("draws no edge once the header has stopped showing the agent as waiting", () => {
+    // An exit code on record retires the display state before the exit itself
+    // lands; the edge goes with it.
+    observe("waiting", "approval");
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    const { container } = render(pane({ agentState: "waiting", exitCode: 0 }));
+    settle();
+    expect(hasEdge(container, "waiting")).toBe(false);
+  });
+
+  it("draws no edge for a question Canopy read as asking nothing", () => {
+    observe("waiting", "question");
+    fleet({
+      agentState: "waiting",
+      waitingReason: "question",
+      wait: { stoppedAt: 0 },
+      canopy: { kind: "not-asking", quote: "All tests pass.", readAt: 0, seen: false },
+    });
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+
+    expect(hasEdge(container, "waiting")).toBe(false);
+    expect(glyphLabel()).toBe("Agent state: unread");
+  });
+
+  it("draws no edge for a seen Canopy ask, whatever the wait's own record says", () => {
+    observe("waiting", "approval");
+    fleet({
+      agentState: "waiting",
+      waitingReason: "approval",
+      wait: { stoppedAt: 0 },
+      canopy: { ...UNREAD_ASK, seen: true },
+    });
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+
+    expect(hasEdge(container, "waiting")).toBe(false);
   });
 
   it("reads a Canopy ask on a finished turn as amber", () => {

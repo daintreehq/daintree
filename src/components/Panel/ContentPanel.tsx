@@ -36,8 +36,8 @@ import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { tabDomId } from "./TabButton";
 import { usePluginPanelActivity } from "./PluginPanelActivity";
 import { isBuiltInPanelKind, isPtyPanel } from "@shared/types/panel";
-import { useRunFleetBand } from "@/hooks/useRunFleetBand";
-import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
+import { useRunUnseenAsk } from "@/hooks/useRunFleetBand";
+import { isUnseenAskPane } from "@/lib/paneSessionPresentation";
 import { describeExitStatus } from "@/components/Terminal/exitStatus";
 
 /**
@@ -475,7 +475,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       };
     })
   );
-  const ownBand = useRunFleetBand(id);
+  const ownUnseenAsk = useRunUnseenAsk(id);
   const ownBlockedState = useDockBlockedState(ownAgentState);
   // A restart or an exit is newer than the error wait it ends.
   const isBlockedWait =
@@ -483,21 +483,23 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     paneSignals.waitingReason === "error" &&
     !paneSignals.isRestarting &&
     !isExited;
-  // Amber is the fleet band's `needs-you` and nothing else: an unread Canopy
-  // ask. The edge reads it through the header glyph's own resolver, so the
-  // glyph's amber and the edge come and go together. A prompt that asks
+  // The amber edge marks a moment: the run stopped to ask and the user hasn't
+  // had it in front of them yet. Canopy's unread ask, or with no reading an
+  // observed approval or question wait; the look that marks it seen takes the
+  // edge away while the header glyph keeps to the band. A prompt that asks
   // nothing, a hand-back, and any pane the fleet hasn't reported draw no amber.
   // Only a live pane can ask. An error wait is never asking: it is failed
   // while the run is alive and nothing once a restart or exit replaces it.
   const ownCanAsk = paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
   const ownAsking =
     ownCanAsk &&
-    resolvePaneSessionPresentation(headerAgentState, ownBand, {
+    headerAgentState === "waiting" &&
+    isUnseenAskPane(ownUnseenAsk, {
       agentState: ownAgentState,
       waitingReason: paneSignals.waitingReason,
       isRestarting: paneSignals.isRestarting,
-    }) === "waiting";
-  // The group only reports waiting for a hidden tab the band says needs you.
+    });
+  // The group only reports waiting for a hidden tab asking unseen.
   const hiddenTabAsking = ambientAgentState === "waiting";
   const isAskingWait = ownAsking || hiddenTabAsking || pluginActivity?.shown === "waiting";
   const exitedFailed = isExited === true && describeExitStatus(exitCode).failed && exitCode !== 130;

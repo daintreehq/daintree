@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { isNeedsYouPane, resolvePaneSessionPresentation } from "../paneSessionPresentation";
+import {
+  isNeedsYouPane,
+  isUnseenAskPane,
+  resolvePaneSessionPresentation,
+} from "../paneSessionPresentation";
 import { FLEET_BANDS } from "../fleetAttention";
 
 describe("resolvePaneSessionPresentation", () => {
@@ -86,5 +90,47 @@ describe("pane observation ahead of the band", () => {
         runtimeStatus: "error",
       })
     ).toBe("waiting");
+  });
+});
+
+describe("isUnseenAskPane", () => {
+  it("holds Canopy's ask at any stop the pane is still at", () => {
+    for (const agentState of ["waiting", "completed", "idle", undefined] as const) {
+      expect(isUnseenAskPane("canopy", { agentState }), String(agentState)).toBe(true);
+      expect(isUnseenAskPane(undefined, { agentState }), String(agentState)).toBe(false);
+    }
+    expect(isUnseenAskPane("canopy", { agentState: "waiting", waitingReason: "prompt" })).toBe(
+      true
+    );
+  });
+
+  it("holds an observed ask until the pane shows a different stop", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      expect(isUnseenAskPane("observed", { agentState: "waiting", waitingReason })).toBe(true);
+    }
+    // A wait the pane holds no reason for (a directing spell drops it), or no
+    // observation at all, is still the fleet's to call.
+    expect(isUnseenAskPane("observed", { agentState: "waiting" })).toBe(true);
+    expect(isUnseenAskPane("observed", {})).toBe(true);
+    for (const pane of [
+      { agentState: "waiting", waitingReason: "prompt" },
+      { agentState: "completed" },
+      { agentState: "idle" },
+    ] as const) {
+      expect(isUnseenAskPane("observed", pane), JSON.stringify(pane)).toBe(false);
+      expect(isUnseenAskPane("canopy", pane), JSON.stringify(pane)).toBe(true);
+    }
+  });
+
+  it("drops either once the pane has seen the agent work, exit, restart or hit an error", () => {
+    for (const ask of ["canopy", "observed"] as const) {
+      for (const agentState of ["working", "directing", "exited"] as const) {
+        expect(isUnseenAskPane(ask, { agentState }), `${ask} ${agentState}`).toBe(false);
+      }
+      const asking = { agentState: "waiting", waitingReason: "question" } as const;
+      expect(isUnseenAskPane(ask, { agentState: "waiting", waitingReason: "error" })).toBe(false);
+      expect(isUnseenAskPane(ask, { ...asking, isRestarting: true })).toBe(false);
+      expect(isUnseenAskPane(ask, { ...asking, runtimeStatus: "exited" })).toBe(false);
+    }
   });
 });
