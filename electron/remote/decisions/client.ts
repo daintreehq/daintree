@@ -181,6 +181,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   /** Counts each Host's announcements, so an answer to an older one can't replace a newer one's. */
   private readonly announced = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
+  /** Each wired session's handler and close listener, removed on stop. */
+  private readonly unwires = new Set<() => void>();
   private readonly now: () => number;
 
   constructor(private readonly deps: DecisionsHostsClientDeps) {
@@ -199,6 +201,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     }
     return () => {
       offOpened();
+      for (const unwire of [...this.unwires]) unwire();
       this.listeners.clear();
     };
   }
@@ -248,16 +251,23 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       DecisionsLinkMethod.HOST_RUNTIME,
       HostRuntimePayloadSchema,
       ({ runtime }) => {
+        // Newer than any announcement still waiting for its answer.
+        this.announced.set(hostId, (this.announced.get(hostId) ?? 0) + 1);
         this.observe(hostId, session, runtime);
         return null;
       }
     );
-    const offClose = session.onClose(() => {
+    const unwire = () => {
       offReport();
       offClose();
+      this.unwires.delete(unwire);
+    };
+    const offClose = session.onClose(() => {
+      unwire();
       // What it said last stands, now as what it said before its link closed.
       if (this.reports.get(hostId)?.session === session) this.changed();
     });
+    this.unwires.add(unwire);
     void this.announce(hostId, session);
   }
 

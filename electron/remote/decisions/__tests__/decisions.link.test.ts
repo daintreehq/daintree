@@ -12,7 +12,11 @@ import {
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
 import type { DecisionsHostRuntime } from "../../../../shared/types/decisionsHosts.js";
-import type { DecisionsHostLink, OwnerStateAnnouncement } from "../../../types/decisionsHosts.js";
+import type {
+  DecisionsHostLink,
+  HeldHost,
+  OwnerStateAnnouncement,
+} from "../../../types/decisionsHosts.js";
 import { HostEnrollments } from "../../../services/decisions/hostEnrollmentHost.js";
 import type { LinkSession } from "../../link/session.js";
 import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests__/linkTestUtils.js";
@@ -446,15 +450,16 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     ownerDeviceId: "dev_owner_desktop_01",
     enabled: true,
   };
-  const RUNNING: DecisionsHostRuntime = {
+  const RUNNING = {
     state: "running",
     deviceId: "dev_host_studio_01",
     connection: "connected",
-  };
+  } as const satisfies DecisionsHostRuntime;
 
   /** The Host's lifetime as a fake: what it was told, and a report the test sets and announces. */
   function hostLifetime(enrolledOwner: string | null = OWNER.ownerDeviceId) {
     const applied: OwnerStateAnnouncement[] = [];
+    const adopted: Array<{ deviceId: string; ownerEnabled: boolean | undefined }> = [];
     const listeners = new Set<() => void>();
     let report: DecisionsHostRuntime = RUNNING;
     const lifetime: DecisionsHostLifetime = {
@@ -466,6 +471,9 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
         return report;
       },
       reportFor: () => report,
+      adopt: async (held, ownerEnabled) => {
+        adopted.push({ deviceId: held.deviceId, ownerEnabled });
+      },
       onChanged: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -474,6 +482,7 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     const load = vi.fn(async () => lifetime);
     return {
       applied,
+      adopted,
       load,
       source: {
         enrolledBy: (owner: { ownerDeviceId: string }) => owner.ownerDeviceId === enrolledOwner,
@@ -488,10 +497,15 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     };
   }
 
-  function serveLifetime(session: LinkSession, lifetime: ReturnType<typeof hostLifetime>) {
-    const enrollment = vi.fn(async () => {
-      throw new Error("enrollment isn't asked for here");
-    });
+  function serveLifetime(
+    session: LinkSession,
+    lifetime: ReturnType<typeof hostLifetime>,
+    enrollment: (onHeld: (held: HeldHost) => void) => Promise<DecisionsHostEnrollment> = vi.fn(
+      async () => {
+        throw new Error("enrollment isn't asked for here");
+      }
+    )
+  ) {
     const uninstall = installDecisionsHostWith(
       { sessions: [{ session }], onSession: () => () => {} },
       enrollment,
@@ -535,6 +549,7 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     expect(changed).toHaveBeenCalled();
 
     // The Host's own changes reach the Shell as they happen, each once.
+    const pushes = vi.spyOn(host, "call");
     const reconnecting: DecisionsHostRuntime = {
       ...RUNNING,
       connection: "reconnecting",
@@ -542,7 +557,9 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     };
     lifetime.change(reconnecting);
     lifetime.change(reconnecting);
+    lifetime.change(reconnecting);
     await vi.waitFor(() => expect(shell.runtimeOf(HOST)?.runtime).toEqual(reconnecting));
+    expect(pushes.mock.calls.map(([method]) => method)).toEqual([DecisionsLinkMethod.HOST_RUNTIME]);
 
     // The switch changing here is announced again.
     const off = { ...OWNER, enabled: false };
@@ -604,5 +621,81 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
 
     await uninstall();
     expect(lifetime.listening()).toBe(0);
+  });
+
+  it("takes up an identity held after its owner said Decisions is off as off", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    const keys = memoryKeys();
+    const owner = await makeOwner({
+      installationId: OWNER.installationId,
+      deviceId: OWNER.ownerDeviceId,
+    });
+    serveLifetime(
+      host,
+      lifetime,
+      async (onHeld) => new HostEnrollments({ openKeys: keys.open, onHeld })
+    );
+    // The owner turned Decisions off while this Host was still being enrolled.
+    shellOver(client, () => ({ ...OWNER, enabled: false }));
+    await vi.waitFor(() => expect(lifetime.applied).toHaveLength(1));
+    const link = linkOver(client);
+
+    const { accepted } = await enrollOver(link, owner);
+    expect(accepted).toMatchObject({ ok: true, value: { step: "accepted" } });
+
+    await vi.waitFor(() =>
+      expect(lifetime.adopted).toEqual([
+        { deviceId: keys.current()!.config.deviceId, ownerEnabled: false },
+      ])
+    );
+  });
+
+  it("keeps a push newer than an announcement's late answer", async () => {
+    const { host, client } = await pair();
+    let answer!: (report: DecisionsHostRuntime) => void;
+    const lifetime = hostLifetime();
+    const held = new Promise<DecisionsHostRuntime>((resolve) => {
+      answer = resolve;
+    });
+    lifetime.source.load = vi.fn(async () => ({
+      apply: () => held,
+      adopt: async () => {},
+      reportFor: () => RUNNING,
+      onChanged: () => () => {},
+    }));
+    serveLifetime(host, lifetime);
+    const { client: shell } = shellOver(client, () => OWNER);
+    await vi.waitFor(() => expect(lifetime.source.load).toHaveBeenCalled());
+
+    const pushed: DecisionsHostRuntime = { ...RUNNING, connection: "reconnecting" };
+    await host.call(DecisionsLinkMethod.HOST_RUNTIME, { runtime: pushed });
+    answer({ ...RUNNING, connection: "connecting" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(shell.runtimeOf(HOST)?.runtime).toEqual(pushed);
+  });
+
+  it("stops hearing a Host's reports once the Shell's client stops", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    const shell = new DecisionsHostsClient({
+      hosts: () => [{ hostId: HOST, name: HOST }],
+      sessionFor: () => client,
+      onSessionOpened: () => () => {},
+      onHostsChanged: () => () => {},
+      hold: () => () => {},
+      ownerState: () => OWNER,
+    });
+    const stop = shell.start();
+    await vi.waitFor(() => expect(shell.runtimeOf(HOST)).not.toBeNull());
+
+    stop();
+    await expect(
+      host.call(DecisionsLinkMethod.HOST_RUNTIME, {
+        runtime: { ...RUNNING, connection: "reconnecting" },
+      })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
   });
 });

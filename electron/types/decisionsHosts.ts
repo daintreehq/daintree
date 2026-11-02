@@ -113,6 +113,37 @@ export interface OwnerStateAnnouncement {
   enabled: boolean;
 }
 
+/** A Host identity this machine holds, public parts only (#16022). */
+export interface HeldHost {
+  relayOrigin: string;
+  installationId: string;
+  deviceId: string;
+  ownerDeviceId: string;
+}
+
+/** The relay protocol's id shape: what a relay mints for installations and devices. */
+const RELAY_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+/**
+ * What a Shell tells its Hosts of its Decisions, from the saved setting
+ * (#16022): only once it holds an owner identity, whose ids say which owner
+ * is speaking, and on only while the switch is on with a relay recorded (an
+ * unreadable relay reads as off, as the setting's sanitiser has it). Read
+ * here, not through the setting's own module, so the Remote Hosts client
+ * loads nothing of Decisions.
+ */
+export function ownerStateOf(setting: unknown): OwnerStateAnnouncement | null {
+  if (typeof setting !== "object" || setting === null) return null;
+  const { installationId, deviceId, relayOrigin, enabled } = setting as Record<string, unknown>;
+  if (typeof installationId !== "string" || !RELAY_ID.test(installationId)) return null;
+  if (typeof deviceId !== "string" || !RELAY_ID.test(deviceId)) return null;
+  return {
+    installationId,
+    ownerDeviceId: deviceId,
+    enabled: enabled === true && typeof relayOrigin === "string" && relayOrigin !== "",
+  };
+}
+
 export interface DecisionsHostEntry {
   hostId: string;
   name: string;

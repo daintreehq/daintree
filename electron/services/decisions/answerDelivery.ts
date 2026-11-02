@@ -577,7 +577,12 @@ export class AnswerDelivery {
             throw error;
           }
         ),
-      save: (identity) => keys.save(identity),
+      // A Host saves the grants it fetched (#16022), and a failed save costs an answer the same way.
+      save: (identity) =>
+        keys.save(identity).catch((error: unknown) => {
+          if (!(error instanceof RetiredAttemptError)) unusable();
+          throw error;
+        }),
       clear: () => keys.clear(),
     };
   }

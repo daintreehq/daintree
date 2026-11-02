@@ -17,18 +17,9 @@ function decisionsModule() {
 export function installDecisionsHost(server: DecisionsSessionSource): () => Promise<void> {
   return installDecisionsHostWith(
     server,
-    async () => {
+    async (onHeld) => {
       const { HostEnrollments } = await import("../../services/decisions/hostEnrollmentHost.js");
-      return new HostEnrollments({
-        // An identity just accepted, or one held from before its lifetime existed, is what it runs.
-        onHeld: (held) => {
-          decisionsModule()
-            .then((decisions) => decisions.noteHostIdentity(held))
-            .catch((err: unknown) => {
-              console.warn("[Decisions] This Host's enrollment couldn't be taken up:", err);
-            });
-        },
-      });
+      return new HostEnrollments({ onHeld });
     },
     {
       enrolledBy: (owner) => {
@@ -42,6 +33,8 @@ export function installDecisionsHost(server: DecisionsSessionSource): () => Prom
         const decisions = await decisionsModule();
         return {
           apply: (state) => decisions.applyOwnerState(state),
+          adopt: (held, ownerEnabled) =>
+            decisions.noteHostIdentity(held, ownerEnabled === undefined ? {} : { ownerEnabled }),
           reportFor: (owner) => decisions.decisionsHostRuntimeFor(owner),
           onChanged: (listener) => decisions.onDecisionsHostRuntimeChanged(listener),
         };

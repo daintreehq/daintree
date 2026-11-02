@@ -227,6 +227,51 @@ describe("Remote Hosts under Devices", () => {
     await act(async () => {});
     expect(document.querySelector("#decisions-host-studio")?.textContent).toContain("Enrolled");
   });
+
+  it("shows what an enrolled Host last reported of its own Decisions, read again with each push (#16022)", async () => {
+    const enrolled: Pick<DecisionsHost, "enrollment" | "canEnroll"> = {
+      enrollment: { state: "enrolled", deviceId: "dev_x" },
+      canEnroll: false,
+    };
+    listHosts.mockResolvedValueOnce(
+      listed([
+        host({
+          ...enrolled,
+          runtime: {
+            runtime: { state: "running", deviceId: "dev_x", connection: "connected" },
+            at: 1,
+            live: true,
+          },
+        }),
+      ])
+    );
+    const view = await renderGroup({ revision: 1 });
+    expect(document.querySelector("#decisions-host-studio")?.textContent).toContain(
+      "It reports Decisions connected to the relay."
+    );
+
+    listHosts.mockResolvedValueOnce(
+      listed([
+        host({
+          ...enrolled,
+          runtime: {
+            runtime: { state: "revoked", deviceId: "dev_x", since: 2, credentialsRemoved: true },
+            at: 2,
+            live: true,
+          },
+        }),
+      ])
+    );
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsHostsGroup enabled revision={2} />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    expect(document.querySelector("#decisions-host-studio")?.textContent).toContain(
+      "stopped, as the relay revoked it, and its keys removed"
+    );
+  });
 });
 
 describe("Remote Host copy", () => {

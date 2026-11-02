@@ -1,5 +1,6 @@
 import type { DecisionsHostRuntime } from "../../../shared/types/decisionsHosts.js";
 import type {
+  HeldHost,
   HostAcceptResult,
   HostIdentityReport,
   HostRequestResult,
@@ -54,6 +55,11 @@ type OwnerOf = Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">;
 export interface DecisionsHostLifetime {
   /** Applies what the owner's Shell said, and answers what the Host then reports to it. */
   apply(state: OwnerStateAnnouncement): Promise<DecisionsHostRuntime>;
+  /**
+   * The key file holds `held`, just accepted or read: what this Host runs as,
+   * off from the start if its owner's Shell last said so (`ownerEnabled`).
+   */
+  adopt(held: HeldHost, ownerEnabled: boolean | undefined): Promise<void>;
   /** What the Host reports to `owner` now. */
   reportFor(owner: OwnerOf): DecisionsHostRuntime;
   /** Called whenever what it reports may have changed. */
@@ -80,7 +86,7 @@ export interface DecisionsHostRuntimeSource {
  */
 export function installDecisionsHostWith(
   server: DecisionsSessionSource,
-  load: () => Promise<DecisionsHostEnrollment>,
+  load: (onHeld: (held: HeldHost) => void) => Promise<DecisionsHostEnrollment>,
   runtime?: DecisionsHostRuntimeSource
 ): () => Promise<void> {
   let loading: Promise<DecisionsHostEnrollment> | null = null;
@@ -92,6 +98,9 @@ export function installDecisionsHostWith(
   const owners = new Map<LinkSession, OwnerStateAnnouncement>();
   /** What each session was last told, so a report it already has isn't sent again. */
   const told = new Map<LinkSession, string>();
+  /** What each owner's Shells last said, by owner: an enrollment taken up later starts as it says. */
+  const latestByOwner = new Map<string, boolean>();
+  const ownerKey = (owner: OwnerOf) => `${owner.installationId}\n${owner.ownerDeviceId}`;
   let lifetime: Promise<DecisionsHostLifetime> | null = null;
   let offChanged: (() => void) | null = null;
 
@@ -136,6 +145,7 @@ export function installDecisionsHostWith(
   ): Promise<{ runtime: DecisionsHostRuntime }> => {
     if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
     owners.set(session, state);
+    latestByOwner.set(ownerKey(state), state.enabled);
     // An owner that never enrolled this Host loads nothing of Decisions here.
     if (!runtime?.enrolledBy(state)) {
       const none: DecisionsHostRuntime = { state: "not-enrolled" };
@@ -145,12 +155,27 @@ export function installDecisionsHostWith(
     const made = await followLifetime();
     if (!made) throw new Error("This Host stopped serving Shells");
     const report = await made.apply(state);
-    told.set(session, JSON.stringify(report));
+    // A session that closed, or announced again, meanwhile keeps no record of this answer.
+    if (!disposed && session.isOpen && owners.get(session) === state) {
+      told.set(session, JSON.stringify(report));
+    }
     return { runtime: HostRuntimeSchema.parse(report) };
   };
 
+  /** The key file holds `held`: its lifetime takes it up, as its owner last said. */
+  const onHeld = (held: HeldHost): void => {
+    const made = followLifetime();
+    if (!made) return;
+    const ownerEnabled = latestByOwner.get(ownerKey(held));
+    made
+      .then((lifetimeOf) => lifetimeOf.adopt(held, ownerEnabled))
+      .catch((err: unknown) => {
+        console.warn("[Decisions] This Host's enrollment couldn't be taken up:", err);
+      });
+  };
+
   const enrollment = (): Promise<DecisionsHostEnrollment> => {
-    loading ??= load().then((made) => {
+    loading ??= load(onHeld).then((made) => {
       loaded = made;
       return made;
     });
@@ -165,12 +190,8 @@ export function installDecisionsHostWith(
     const made = await enrollment();
     if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
     switch (payload.step) {
-      case "status": {
-        const identity = await made.status();
-        // Holding an identity means its lifetime may start: its reports follow (#16022).
-        if (identity.kind === "host") void followLifetime()?.catch(() => {});
-        return HostStatusResultSchema.parse({ step: "status", identity });
-      }
+      case "status":
+        return HostStatusResultSchema.parse({ step: "status", identity: await made.status() });
       case "request":
         return HostRequestResultSchema.parse(
           await made.request(session, {
@@ -179,14 +200,10 @@ export function installDecisionsHostWith(
             ...(payload.replace !== undefined ? { replace: payload.replace } : {}),
           })
         );
-      case "accept": {
-        const accepted = await made.accept(session, {
-          attempt: payload.attempt,
-          response: payload.response,
-        });
-        if (accepted.step === "accepted") void followLifetime()?.catch(() => {});
-        return HostAcceptResultSchema.parse(accepted);
-      }
+      case "accept":
+        return HostAcceptResultSchema.parse(
+          await made.accept(session, { attempt: payload.attempt, response: payload.response })
+        );
     }
   };
 

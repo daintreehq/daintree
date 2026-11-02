@@ -17,6 +17,7 @@ import {
   OWNER_RW_FILE_MODE,
   resilientAtomicWriteFile,
   resilientUnlink,
+  syncParentDirectory,
 } from "../../utils/fs.js";
 
 /**
@@ -419,6 +420,28 @@ export class SealedKeyStore implements KeyStore {
       } catch (error) {
         if (!isMissing(error)) throw error;
       }
+    });
+  }
+
+  /**
+   * Removes the key file only if `removable` holds for what it holds when the
+   * removal's turn comes: one step, so keys another store saved meanwhile (a
+   * Host enrolled again) are never removed unseen. Resolves whether it was
+   * removed; rejects, removing nothing, when the file can't be opened.
+   */
+  clearIf(removable: (current: StoredIdentity | null) => boolean): Promise<boolean> {
+    return this.enqueue(async () => {
+      const existing = await this.readEnvelope();
+      const current = existing ? await openEnvelope(existing) : null;
+      if (current === null || !removable(current)) return false;
+      this.weakConfirmed = false;
+      try {
+        await resilientUnlink(this.filePath);
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+      await syncParentDirectory(this.filePath);
+      return true;
     });
   }
 

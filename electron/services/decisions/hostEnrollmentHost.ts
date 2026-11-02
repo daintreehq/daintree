@@ -7,6 +7,7 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   boundedDetail,
+  type HeldHost,
   type HostAcceptResult,
   type HostEnrollRefusal,
   type HostEnrollRefusalReason,
@@ -18,14 +19,6 @@ import { DecisionsKeyStoreError, decisionsKeyFilePath, SealedKeyStore } from "./
 
 /** What enrollment needs of this machine's sealed key store. */
 export type HostKeys = Pick<SealedKeyStore, "load" | "saveIf" | "check" | "close">;
-
-/** A Host identity this machine holds, public parts only. */
-export interface HeldHost {
-  relayOrigin: string;
-  installationId: string;
-  deviceId: string;
-  ownerDeviceId: string;
-}
 
 export interface HostEnrollmentsOptions {
   /** A key store for one step, closed after it: this machine's sealed one unless a test says otherwise. */

@@ -295,6 +295,35 @@ vi.mock("../../../store.js", () => ({
   },
 }));
 
+// The key file holds a plain identity here, not a sealed one: only a Host's
+// conditional removal (#16022) reads it, and it reads it as written.
+vi.mock("../keyStore.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../keyStore.js")>();
+  const { readFileSync: read, rmSync: remove } = await import("node:fs");
+  class ReadableKeyStore extends actual.SealedKeyStore {
+    override async clearIf(
+      removable: Parameters<InstanceType<typeof actual.SealedKeyStore>["clearIf"]>[0]
+    ): Promise<boolean> {
+      let text: string;
+      try {
+        text = read(this.filePath, "utf8");
+      } catch {
+        return false;
+      }
+      const current = JSON.parse(text) as Parameters<typeof removable>[0];
+      if (!removable(current)) return false;
+      remove(this.filePath);
+      return true;
+    }
+  }
+  return { ...actual, SealedKeyStore: ReadableKeyStore };
+});
+
+/** A key file holding a Host identity for `deviceId`, as the readable store above reads it. */
+function heldKeys(deviceId: string): string {
+  return JSON.stringify({ role: "desktop-host", config: { deviceId } });
+}
+
 // Counts constructions; `failNextConstruct` fails the next one, once.
 vi.mock("../DecisionsService.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../DecisionsService.js")>();
@@ -306,7 +335,10 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
       }
       // A store that holds nothing, so starting never reaches the app database;
       // `failNextOpen` makes the next open fail, once.
-      entryHooks.onRelayRevoked = options.onRelayRevoked ?? null;
+      const onRelayRevoked = options.onRelayRevoked;
+      entryHooks.onRelayRevoked = onRelayRevoked
+        ? (relay, role = "owner") => onRelayRevoked(relay, role)
+        : null;
       entryHooks.delivery = options.delivery ?? null;
       super({
         ...options,
@@ -2176,7 +2208,7 @@ describe("Decisions entry", () => {
 
     it("stops when the relay revokes it, removes its keys and stored questions, and says why", async () => {
       savedHost.value = HOST_RECORD;
-      writeFileSync(keyFile.path, "sealed");
+      writeFileSync(keyFile.path, heldKeys(HOST_RECORD.deviceId));
       storedRows.count = 3;
       await startDecisionsIfEnabled();
       const changes = vi.fn();
@@ -2205,10 +2237,31 @@ describe("Decisions entry", () => {
       expect(connections).toHaveLength(0);
     });
 
+    it("never removes keys an enrollment saved for another device while the revocation waited", async () => {
+      savedHost.value = HOST_RECORD;
+      await startDecisionsIfEnabled();
+      // The owner enrolled this Host again: the key file holds the new device's keys.
+      writeFileSync(keyFile.path, heldKeys("dev_host_00002"));
+
+      entryHooks.onRelayRevoked!(BINDING, "host");
+
+      await vi.waitFor(() =>
+        expect(savedHost.value).toMatchObject({ credentialsRemovedAt: expect.any(Number) })
+      );
+      expect(readFileSync(keyFile.path, "utf8")).toBe(heldKeys("dev_host_00002"));
+    });
+
     it("finishes removing a revoked Host's keys at the next start when it couldn't before", async () => {
       savedHost.value = { ...HOST_RECORD, revokedAt: 50 };
-      writeFileSync(keyFile.path, "sealed");
+      writeFileSync(keyFile.path, heldKeys(HOST_RECORD.deviceId));
       storedRows.count = 1;
+      storedRows.failErase = true;
+
+      // The rows can't be deleted this time: nothing is recorded as removed.
+      await startDecisionsIfEnabled();
+      expect(storedRows.count).toBe(1);
+      expect(savedHost.value).toMatchObject({ revokedAt: 50, credentialsRemovedAt: null });
+      expect(peekDecisionsService()!.getRole()).toBeNull();
 
       await startDecisionsIfEnabled();
 
@@ -2220,6 +2273,43 @@ describe("Decisions entry", () => {
       });
       // Nothing connected on the way.
       expect(connections).toHaveLength(0);
+    });
+
+    it("starts a Host taken up while its owner's Shell said Decisions is off as off", async () => {
+      await noteHostIdentity(
+        {
+          relayOrigin: HOST_RECORD.relayOrigin,
+          installationId: HOST_RECORD.installationId,
+          deviceId: HOST_RECORD.deviceId,
+          ownerDeviceId: OWNER.ownerDeviceId,
+        },
+        { ownerEnabled: false }
+      );
+
+      expect(savedHost.value).toMatchObject({ ownerOffAt: expect.any(Number) });
+      expect(connections).toHaveLength(0);
+    });
+
+    it("leaves the record naming the old device while that device's questions can't be removed", async () => {
+      savedHost.value = HOST_RECORD;
+      storedRows.count = 2;
+      storedRows.failErase = true;
+      const held = {
+        relayOrigin: HOST_RECORD.relayOrigin,
+        installationId: HOST_RECORD.installationId,
+        deviceId: "dev_host_00002",
+        ownerDeviceId: OWNER.ownerDeviceId,
+      };
+
+      await noteHostIdentity(held);
+      expect(savedHost.value).toMatchObject({ deviceId: HOST_RECORD.deviceId });
+      expect(storedRows.count).toBe(2);
+
+      // The next read of the key file tries again.
+      await noteHostIdentity(held);
+      expect(savedHost.value).toMatchObject({ deviceId: "dev_host_00002" });
+      expect(storedRows.count).toBe(0);
+      await stopDecisions();
     });
 
     it("takes up an identity it holds, and drops a replaced device's questions but keeps its host id", async () => {
@@ -2269,7 +2359,8 @@ describe("Decisions entry", () => {
     });
 
     it("tells connected Hosts whenever this computer's switch changes", async () => {
-      const announceOwnerState = vi.fn();
+      // What the setting said as each announcement went out.
+      const announceOwnerState = vi.fn(() => (saved.value as { enabled?: boolean }).enabled);
       const withdraw = setDecisionsHostsPort({
         hosts: () => [],
         linkFor: () => null,
@@ -2281,9 +2372,11 @@ describe("Decisions entry", () => {
       try {
         saved.value = { consentedAt: 5, ...RELAY };
         await setDecisionsEnabled(true);
-        expect(announceOwnerState).toHaveBeenCalledTimes(1);
         await setDecisionsEnabled(false);
-        expect(announceOwnerState).toHaveBeenCalledTimes(2);
+        expect(announceOwnerState.mock.results.map((result) => result.value)).toEqual([
+          true,
+          false,
+        ]);
       } finally {
         withdraw();
       }

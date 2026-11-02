@@ -1,6 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../../../store.js", () => ({ store: { get: () => undefined, set: () => {} } }));
+import { describe, expect, it } from "vitest";
 import {
   hostLifetimeSettings,
   hostRecordServes,
@@ -9,7 +7,7 @@ import {
   sanitizeHostRecord,
   writeHostRecord,
 } from "../hostRecord.js";
-import { ownerStateOf } from "../../../remote/decisions/clientInstall.js";
+import { ownerStateOf } from "../../../types/decisionsHosts.js";
 
 const RECORD = {
   relayOrigin: "https://relay.example.com",

@@ -71,7 +71,7 @@ function runtimeState(runtime: DecisionsHostRuntime): string | null {
     case "not-enrolled":
       return null;
     case "owner-off":
-      return "off, as Decisions is off here";
+      return "off, as this computer told it Decisions was off";
     case "revoked":
       return runtime.credentialsRemoved
         ? "stopped, as the relay revoked it, and its keys removed"

@@ -53,7 +53,7 @@ import type {
   DecisionsHostRuntime,
   DecisionsHostsResult,
 } from "../../../shared/types/decisionsHosts.js";
-import type { OwnerStateAnnouncement } from "../../types/decisionsHosts.js";
+import type { HeldHost, OwnerStateAnnouncement } from "../../types/decisionsHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
@@ -66,7 +66,6 @@ import type { DecisionsDeliveryDeps, DecisionsService } from "./DecisionsService
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
-import type { HeldHost } from "./hostEnrollmentHost.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
 import {
   hostLifetimeSettings,
@@ -419,8 +418,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         publishAnswerAttention: setAnswerAttention,
         onRelayRevoked: (relay, role) =>
           role === "host" ? void hostRevoked(relay) : recordRevocation(relay),
-        forgetIdentity: () =>
-          next.getRole() === "host" ? forgetHostCredentials() : forgetRecordedIdentity(),
+        forgetIdentity: forgetRecordedIdentity,
         openQuestions: (source, previousClosed) =>
           openDecisionsMcpRoute(source, sources, previousClosed),
         delivery: deliveryDeps,
@@ -573,6 +571,8 @@ function recordIdentity(
   running.updateSettings(saved);
   forgetOwnerDevices();
   hostEnroller.forget();
+  // Hosts connected already hear of this owner now, not at their next connection (#16022).
+  getDecisionsHostsPort()?.announceOwnerState();
   return saved;
 }
 
@@ -1190,23 +1190,26 @@ async function reconcileHostLifetime(): Promise<void> {
 }
 
 /**
- * Removes a revoked Host's delivery credentials: its keys, and the questions
- * stored for its device, which no later device of this Host could have
- * answered. Runs on a Host lifetime that connects to nothing (the record says
- * revoked), and ends it. What fails is tried again at the next start.
+ * Removes a revoked Host's delivery credentials: its keys, only while the
+ * key file still holds that device's (an enrollment may have saved another's
+ * meanwhile), and the questions stored for it, which no later device of this
+ * Host could have answered. Its lifetime stops first. Recorded as removed
+ * only once both are gone; what fails is tried again at the next start.
  */
 async function removeHostCredentials(record: DecisionsHostRecord): Promise<void> {
   const next = await getDecisionsService();
-  await next.start(hostLifetimeSettings(record), "host");
   try {
-    const outcome = next.getRole() === "host" ? await next.eraseLocalData() : null;
-    if (outcome !== null && outcome.result !== "deleted") {
-      console.warn(`[Decisions] A revoked Host's keys weren't all removed (${outcome.result})`);
-    }
+    if (next.getRole() === "host") await next.stop();
+    await next.clearHostKeys(record.deviceId);
+    await next.eraseStoredRows();
   } catch (err) {
-    console.warn("[Decisions] A revoked Host's keys couldn't be removed:", err);
+    console.warn("[Decisions] A revoked Host's keys couldn't be removed yet:", err);
+    return;
   }
-  if (next.getRole() === "host") await next.stop();
+  const current = readHostRecord(store);
+  if (current?.deviceId === record.deviceId && current.revokedAt !== null) {
+    writeHostRecord(store, { ...current, credentialsRemovedAt: Date.now() });
+  }
 }
 
 /** The relay revoked this Host's device: recorded, then the Host stops and its credentials go. */
@@ -1238,30 +1241,18 @@ function hostRevoked(relay: RelayBinding): Promise<void> {
 }
 
 /**
- * What a revoked Host's erase forgets: the record keeps the revocation and
- * notes the credentials gone, and the lifetime carries on with no relay.
- */
-function forgetHostCredentials(): DecisionsSettings {
-  const record = readHostRecord(store);
-  if (record?.revokedAt != null && record.credentialsRemovedAt === null) {
-    writeHostRecord(store, { ...record, credentialsRemovedAt: Date.now() });
-  }
-  return {
-    ...(record ? hostLifetimeSettings(record) : readDecisionsSettings(store)),
-    relayOrigin: null,
-    installationId: null,
-    deviceId: null,
-  };
-}
-
-/**
  * This machine holds `held` as its Remote Host identity, just accepted or
  * read (#16022). A record naming that device already stands as it is (turned
- * off or revoked included); otherwise the record names it now and its
- * lifetime starts. The questions stored for a device it replaced go first:
- * only the device that asked could have them answered.
+ * off or revoked included); otherwise the record names it now, off if the
+ * owner's Shell last said Decisions is off (`ownerEnabled`), and its lifetime
+ * starts. The questions stored for a device it replaced go first: only the
+ * device that asked could have them answered. While they can't be removed,
+ * the record stays as it was, and the next read tries again.
  */
-export function noteHostIdentity(held: HeldHost): Promise<void> {
+export function noteHostIdentity(
+  held: HeldHost,
+  options: { ownerEnabled?: boolean } = {}
+): Promise<void> {
   return serialize(async () => {
     if (shutDown) return;
     const relayOrigin = normalizeRelayOrigin(held.relayOrigin);
@@ -1281,8 +1272,11 @@ export function noteHostIdentity(held: HeldHost): Promise<void> {
         if (running.getRole() === "host") await running.stop();
         await running.eraseStoredRows();
       } catch (err) {
-        // The new device's lifetime shows the store as another relay's, which is what it is.
-        console.warn("[Decisions] A replaced Host device's questions couldn't be removed:", err);
+        console.warn(
+          "[Decisions] A replaced Host device's questions couldn't be removed yet:",
+          err
+        );
+        return;
       }
     }
     writeHostRecord(store, {
@@ -1291,7 +1285,7 @@ export function noteHostIdentity(held: HeldHost): Promise<void> {
       deviceId: held.deviceId,
       ownerDeviceId: held.ownerDeviceId,
       hostId: previous?.hostId ?? newId(),
-      ownerOffAt: null,
+      ownerOffAt: options.ownerEnabled === false ? Date.now() : null,
       revokedAt: null,
       credentialsRemovedAt: null,
     });

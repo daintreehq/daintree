@@ -1709,3 +1709,19 @@ describe("DecisionsService as an enrolled Remote Host (#16022)", () => {
     }
   });
 });
+
+describe("DecisionsService removing a revoked Host's keys (#16022)", () => {
+  it("refuses while a lifetime runs, and reads the file in its own turn when stopped", async () => {
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => ABSENT_KEY_FILE,
+      connect: () => ({ start: () => {}, stop: () => {} }),
+    });
+    await service.start(on(), "host");
+    await expect(service.clearHostKeys("dev_host_0001")).rejects.toThrow(/running/);
+
+    await service.stop();
+    // No key file at all: nothing to remove, and nothing asked of the keychain.
+    await expect(service.clearHostKeys("dev_host_0001")).resolves.toBeUndefined();
+  });
+});

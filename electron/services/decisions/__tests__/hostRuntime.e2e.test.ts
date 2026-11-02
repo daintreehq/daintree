@@ -405,7 +405,11 @@ async function loopbackListener() {
         },
       };
     },
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
   };
 }
 
@@ -450,6 +454,7 @@ async function askHuman(port: number, token: string, question: string): Promise<
         res.on("end", () => resolve({ status: res.statusCode ?? 0, body: text }));
       }
     );
+    req.setTimeout(10_000, () => req.destroy(new Error("/mcp/decisions didn't answer")));
     req.on("error", reject);
     req.end(body);
   });
@@ -561,8 +566,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
       revokedAt: null,
       credentialsRemovedAt: null,
     };
-    let service!: DecisionsService;
-    service = new DecisionsService({
+    const service: DecisionsService = new DecisionsService({
       openStore: async () => new DaintreeLocalStore(sqlite),
       keyFilePath: () => path.join(dir, "keys.bin"),
       openQuestions: (source, previousClosed) =>
@@ -632,12 +636,21 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
       data: {},
     });
     await phoneAnswers(relay, owner, phone, foreign, "b");
+    const foreignEvents = relay.events.filter((event) => event.question_id === foreign).length;
 
     // The phone answers while the Host is connected: typed into the pane that asked.
     await phoneAnswers(relay, owner, phone, first, "a");
     await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
     expect(terminals.submitted[0]!.id).toBe("pane-1");
     expect(typedChoices(terminals.submitted[0]!.text)).toEqual(["a"]);
+    // The other device's question and answer were stored for sync, and made no row or report here.
+    const hostStore = new DaintreeLocalStore(sqlite);
+    expect(await hostStore.getQuestion(foreign)).toBeNull();
+    expect(
+      sqlite
+        .prepare("SELECT COUNT(*) AS n FROM decisions_inbound_events WHERE json LIKE ?")
+        .get(`%${foreign}%`)
+    ).toEqual({ n: foreignEvents });
     await vi.waitFor(
       async () =>
         expect((await new DaintreeLocalStore(sqlite).getQuestion(first))?.delivery_status).toBe(
@@ -664,6 +677,14 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     expect(typedChoices(terminals.submitted[1]!.text)).toEqual(["b"]);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(terminals.submitted).toHaveLength(2);
+
+    expect(
+      relay.requests.some(
+        (request) =>
+          request.path.startsWith("/api/v1/deliveries/") &&
+          JSON.stringify(request.body).includes(foreign)
+      )
+    ).toBe(false);
 
     // Everything the relay was asked was signed by the Host's own device: the owner signed nothing.
     const signers = new Set(relay.requests.map((request) => request.deviceId));

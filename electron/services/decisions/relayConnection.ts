@@ -593,7 +593,13 @@ export class RelayConnection {
             throw error;
           }
         ),
-      save: (identity) => keys.save(identity),
+      // A Host saves the grants it fetched after a rotation (#16022): a save that
+      // fails is final to the library too, so it stops the connection first.
+      save: (identity) =>
+        keys.save(identity).catch((error: unknown) => {
+          if (!(error instanceof RetiredAttemptError)) unusable();
+          throw error;
+        }),
       clear: () => keys.clear(),
     };
   }

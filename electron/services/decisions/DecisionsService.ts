@@ -529,6 +529,30 @@ export class DecisionsService {
     });
   }
 
+  /**
+   * Removes a revoked Remote Host's keys (#16022) while no lifetime runs, only
+   * if the key file still holds that device's: keys an enrollment saved for
+   * another device meanwhile stay. Resolves once that device's keys are
+   * gone; rejects when the file can't be opened, removing nothing.
+   */
+  clearHostKeys(deviceId: string): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.disposed) throw new Error("Decisions has stopped for this run");
+      if (this.settings !== null) {
+        throw new Error("Decisions is running, so its keys can't be removed");
+      }
+      const keys = new SealedKeyStore(this.keyFilePath());
+      try {
+        await keys.clearIf(
+          (stored) =>
+            stored !== null && stored.role === "desktop-host" && stored.config.deviceId === deviceId
+        );
+      } finally {
+        await keys.close();
+      }
+    });
+  }
+
   /** Ends the enabled lifetime, keeping everything stored. Another `start` may follow. */
   stop(): Promise<void> {
     return this.enqueue(() => this.release(true));
