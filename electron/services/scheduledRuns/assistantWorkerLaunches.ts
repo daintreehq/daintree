@@ -1,8 +1,10 @@
-import { extractOwnedResources } from "../mcp-server/resourceOwnership.js";
+// Import-free on purpose: the boot graph reaches it through the run history,
+// and the MCP server's modules reach it too, so an import here would tie the
+// two together at load.
 
 /**
- * The tools whose answer names an agent it launched. A shell, a recipe's
- * terminals or a worktree are no worker.
+ * The tools whose answer names an agent it launched, in a `terminalId`. A
+ * shell, a recipe's terminals or a worktree are no worker.
  */
 const WORKER_LAUNCH_TOOLS = new Set(["agent.launch", "workflow.startWorkOnIssue"]);
 
@@ -36,9 +38,14 @@ export function workerLaunchesIn(
   result: unknown
 ): { terminalIds: string[]; agentId: string | null } {
   if (!WORKER_LAUNCH_TOOLS.has(tool)) return { terminalIds: [], agentId: null };
-  const terminalIds = extractOwnedResources(tool, result)
-    .filter((draft) => draft.kind === "terminal")
-    .map((draft) => draft.id);
+  const answered =
+    typeof result === "object" && result !== null && !Array.isArray(result) ? result : null;
+  // `launched: false` comes with no terminal; the flag is read too, as the ownership ledger does.
+  const terminalId =
+    answered !== null && Reflect.get(answered, "launched") !== false
+      ? Reflect.get(answered, "terminalId")
+      : undefined;
+  const terminalIds = typeof terminalId === "string" && terminalId !== "" ? [terminalId] : [];
   const asked =
     typeof args === "object" && args !== null ? Reflect.get(args, "agentId") : undefined;
   return { terminalIds, agentId: typeof asked === "string" && asked !== "" ? asked : null };
