@@ -783,6 +783,75 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(waiting);
   });
 
+  it("keeps a create's possibly-published mark across a rewrite from a copy read before it", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const create = { ...item("o1", "q1"), payload: { signed: 1, attachments: [], uploaded: [] } };
+    await store.commitNewQuestion(row("q1", 1), create);
+    await store.putOutbox({ ...item("o2", "q1"), kind: "cancel", payload: {} });
+
+    expect(await store.markCreateMaybePublished("q1")).toBe(true);
+    await store.putOutbox({ ...create, payload: { signed: 1, attachments: [], uploaded: ["a1"] } });
+    await store.putOutbox({ ...item("o2", "q1"), kind: "cancel", payload: { n: 2 } });
+
+    const [kept, cancel] = await store.outboxFor("q1");
+    expect(kept.payload).toEqual({
+      signed: 1,
+      attachments: [],
+      uploaded: ["a1"],
+      maybePublished: true,
+    });
+    expect(cancel.payload).toEqual({ n: 2 });
+  });
+
+  it("marks a create in place, keeping its upload progress and retry time, and never puts one back", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const payload = { signed: 1, attachments: [{ attachment_id: "a1" }], uploaded: ["a1"] };
+    await store.commitNewQuestion(row("q1", 1), { ...item("o1", "q1"), payload });
+    await store.recordOutboxFailure("o1", "network_error", 40);
+
+    expect(await store.markCreateMaybePublished("q1")).toBe(true);
+    const [marked] = await store.outboxFor("q1");
+    expect(marked).toMatchObject({
+      payload: { ...payload, maybePublished: true },
+      attempts: 1,
+      next_attempt_at: 40,
+    });
+
+    await store.deleteOutbox("o1");
+    expect(await store.markCreateMaybePublished("q1")).toBe(false);
+    expect(await store.outboxFor("q1")).toEqual([]);
+  });
+
+  it("lists every attachment a pending create names, whatever its retry time", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const create = (id: string, qid: string, ids: string[]) => ({
+      ...item(id, qid),
+      payload: { attachments: ids.map((attachment_id) => ({ attachment_id })), uploaded: [] },
+    });
+    await store.commitNewQuestion(row("q1", 1), create("o1", "q1", ["a1", "a2"]));
+    await store.commitNewQuestion(row("q2", 2), create("o2", "q2", ["a3"]));
+    await store.recordOutboxFailure("o2", "network_error", Number.MAX_SAFE_INTEGER);
+    await store.commitNewQuestion(row("q3", 3), item("o3", "q3"));
+    await store.putOutbox({
+      ...item("o4", "q1"),
+      kind: "cancel",
+      payload: { attachments: [{ attachment_id: "not-a-create" }] },
+    });
+
+    expect(await store.referencedAttachmentIds()).toEqual(new Set(["a1", "a2", "a3"]));
+    await store.deleteOutbox("o1");
+    expect(await store.referencedAttachmentIds()).toEqual(new Set(["a3"]));
+  });
+
+  it("refuses to list attachments it can't read, rather than reporting none", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), {
+      ...item("o1", "q1"),
+      payload: { attachments: [{ id: "no attachment_id" }] },
+    });
+    await expect(store.referencedAttachmentIds()).rejects.toThrow(/unreadable/);
+  });
+
   it("refuses a new question carrying plaintext content", async () => {
     const store = new DaintreeLocalStore(sqlite);
 

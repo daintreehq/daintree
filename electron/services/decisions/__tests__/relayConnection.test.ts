@@ -44,6 +44,7 @@ import {
 import type { RelayFetch } from "../relayCheck.js";
 import { openDb } from "../../persistence/db.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
+import { DecisionsAttachments } from "../attachmentSpool.js";
 import { createTrustedPolicy } from "../workflowGates.js";
 import { QuestionBridge } from "../questionBridge.js";
 import type { QuestionSource } from "../relayConnection.js";
@@ -153,6 +154,8 @@ function fakeRelay() {
   const tickets: string[] = [];
   /** Idempotency keys of the questions Daintree published, in order. */
   const questions: string[] = [];
+  /** Attachment ids whose ciphertext Daintree uploaded, in order. */
+  const uploads: string[] = [];
   let answerTicket: (n: number) => Response = (n) =>
     new Response(
       JSON.stringify({
@@ -176,6 +179,24 @@ function fakeRelay() {
         headers: { "content-type": "application/json" },
       });
     }
+    if (pathname === "/api/v1/attachments/reservations" && init.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { attachment_id: string };
+      return new Response(
+        JSON.stringify({
+          attachment_id: body.attachment_id,
+          upload_path: `/api/v1/attachments/${body.attachment_id}/content`,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    const upload = /^\/api\/v1\/attachments\/([^/]+)\/(content|complete)$/.exec(pathname);
+    if (upload && (init.method === "PUT" || init.method === "POST")) {
+      if (upload[2] === "content") uploads.push(upload[1]);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     return new Response(JSON.stringify({ code: "not_found", message: "no route" }), {
       status: 404,
     });
@@ -190,6 +211,7 @@ function fakeRelay() {
     sockets,
     tickets,
     questions,
+    uploads,
     fetchImpl,
     webSocket,
     /** The nth socket Daintree opens (0-based), once it does. */
@@ -1075,6 +1097,109 @@ describe("RelayConnection", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("uploads, after the app starts again, what an upload cut short left spooled, from the ciphertext alone", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-attachments-"));
+    const migrations = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../persistence/migrations"
+    );
+    const dbPath = path.join(dir, "app.db");
+    const spoolDir = path.join(dir, "spool");
+    const worktree = path.join(dir, "worktree");
+    fs.mkdirSync(worktree);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    fs.writeFileSync(path.join(worktree, "before.png"), png);
+    fs.writeFileSync(path.join(worktree, "after.png"), Buffer.concat([png, png]));
+    const origin = { ...QUESTION_ORIGIN, worktree_id: worktree, worktree_root: worktree };
+    const spooled = () => (fs.existsSync(spoolDir) ? fs.readdirSync(spoolDir).sort() : []);
+    try {
+      const firstDb = openDb(dbPath, migrations).sqlite;
+      const firstStore = new DaintreeLocalStore(firstDb);
+      const firstAttachments = new DecisionsAttachments({
+        dir: spoolDir,
+        referenced: () => firstStore.referencedAttachmentIds(),
+      });
+      let firstSource: QuestionSource | null = null;
+      let uploadsTried = 0;
+      const first = await harness({
+        store: firstStore,
+        overrides: {
+          attachments: firstAttachments,
+          onQuestionsReady: (ready) => (firstSource = ready),
+        },
+        // The relay takes the first image and is gone before the second lands.
+        wrapFetch: (fetchImpl) => async (url, init) => {
+          if (init.method === "PUT" && ++uploadsTried === 2) {
+            return new Response(JSON.stringify({ code: "unavailable", message: "down" }), {
+              status: 503,
+            });
+          }
+          return fetchImpl(url, init);
+        },
+      });
+      first.connection.start();
+      await connectLive(first);
+      const ready = firstSource as unknown as QuestionSource;
+      expect(ready.attachments).toBe(firstAttachments);
+      const asked = await new QuestionBridge({
+        source: ready,
+        isCurrent: () => true,
+      }).registerQuestion({
+        origin,
+        input: {
+          question: "Which one?",
+          attachments: [{ local_resource_id: "before.png" }, { local_resource_id: "after.png" }],
+        },
+      });
+      await vi.waitFor(() => expect(uploadsTried).toBe(2));
+      await vi.waitFor(async () => {
+        const [create] = await firstStore.outboxFor(asked.questionId);
+        expect((create?.payload as { uploaded: string[] }).uploaded).toHaveLength(1);
+        expect(create?.attempts).toBe(1);
+      });
+      const [uploadedFirst] = first.relay.uploads;
+      expect(first.relay.questions).toEqual([]);
+      const pending = spooled();
+      expect(pending).toHaveLength(2);
+      first.connection.stop();
+      await firstAttachments.close();
+      await firstStore.close();
+      firstDb.close();
+
+      // The screenshots are gone: only the spooled ciphertext can publish the question now.
+      fs.rmSync(worktree, { recursive: true });
+      vi.setSystemTime(Date.now() + 10 * 60_000);
+
+      const secondDb = openDb(dbPath, migrations).sqlite;
+      const secondStore = new DaintreeLocalStore(secondDb);
+      const secondAttachments = new DecisionsAttachments({
+        dir: spoolDir,
+        referenced: () => secondStore.referencedAttachmentIds(),
+      });
+      const second = await harness({
+        store: secondStore,
+        overrides: { attachments: secondAttachments },
+      });
+      second.connection.start();
+      await connectLive(second);
+      await vi.waitFor(() => expect(second.relay.questions).toHaveLength(1));
+      expect(second.relay.uploads).toHaveLength(1);
+      expect(second.relay.uploads[0]).not.toBe(uploadedFirst);
+      expect(pending).toContain(second.relay.uploads[0]);
+      await vi.waitFor(async () =>
+        expect((await secondStore.getQuestion(asked.questionId))?.local_status).toBe("open")
+      );
+      expect(spooled()).toEqual([]);
+      expect(await secondStore.outboxFor(asked.questionId)).toEqual([]);
+      second.connection.stop();
+      await secondAttachments.close();
+      await secondStore.close();
+      secondDb.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("hands questions a source once the identity loads, before any request, with a bridge only while an attempt runs", async () => {
     let source: QuestionSource | null = null;
     let atReady: { tickets: number; live: unknown } | null = null;
