@@ -2331,3 +2331,100 @@ describe("restored panes and the plugin hold (#14017)", () => {
     });
   });
 });
+
+describe("terminal.sessionFile.get (#16097)", () => {
+  const get = vi.fn();
+  const observed = {
+    status: "observed",
+    agentId: "codex",
+    sessionId: "01a19a09-d462-7101-a841-24b57d849008",
+    path: "/Users/x/.codex/sessions/2026/11/02/rollout-2026-11-02T04-14-57-01a19a09-d462-7101-a841-24b57d849008.jsonl",
+    observedBy: "open-for-writing",
+  };
+
+  function definition(): AnyActionDefinition {
+    const actions: ActionRegistry = new Map();
+    registerTerminalLifecycleActions(actions, {} as ActionCallbacks);
+    const factory = actions.get("terminal.sessionFile.get");
+    if (!factory) throw new Error("missing terminal.sessionFile.get");
+    return factory() as AnyActionDefinition;
+  }
+
+  beforeEach(() => {
+    get.mockReset();
+    get.mockResolvedValue(observed);
+    vi.stubGlobal("window", { electron: { terminalSessionFile: { get } } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("asks main for the named terminal on a plugin's behalf", async () => {
+    await expect(
+      definition().run({ terminalId: "term-1" }, {
+        dispatchSource: "plugin",
+        callerPluginId: "acme.handoff",
+      } as never)
+    ).resolves.toEqual(observed);
+    expect(get).toHaveBeenCalledWith({ terminalId: "term-1" });
+  });
+
+  it.each([
+    { dispatchSource: "agent" },
+    { dispatchSource: "user" },
+    { dispatchSource: "agent", callerPluginId: "acme.handoff" },
+    { dispatchSource: "plugin" },
+  ])("refuses a dispatch with no plugin behind it (%o)", async (ctx) => {
+    await expect(definition().run({ terminalId: "term-1" }, ctx as never)).rejects.toThrow(
+      /Only a plugin/
+    );
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("requires a terminal id, with no focused-panel fallback", () => {
+    const schema = definition().argsSchema;
+    expect(schema?.safeParse({}).success).toBe(false);
+    expect(schema?.safeParse({ terminalId: "  " }).success).toBe(false);
+    expect(schema?.safeParse({ terminalId: "term-1" }).success).toBe(true);
+  });
+
+  it("delivers both answers through its result schema whole", () => {
+    const schema = definition().resultSchema;
+    expect(schema?.parse(observed)).toEqual(observed);
+    const unknown = { status: "unknown", reason: "store-unknown" };
+    expect(schema?.parse(unknown)).toEqual(unknown);
+    expect(schema?.safeParse({ status: "unknown", reason: "guessed" }).success).toBe(false);
+  });
+
+  it("reaches dispatch only as the plugin the host says is calling", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+    service.register(definition());
+    const id = "terminal.sessionFile.get" as ActionId;
+
+    const plugin = await service.dispatch(
+      id,
+      { terminalId: "term-1" },
+      { source: "plugin", callerPluginId: "acme.handoff" }
+    );
+    const forged = await service.dispatch(
+      id,
+      { terminalId: "term-1" },
+      {
+        source: "agent",
+        contextOverride: { dispatchSource: "plugin", callerPluginId: "acme.handoff" },
+      }
+    );
+
+    expect(plugin).toMatchObject({ ok: true, result: observed });
+    expect(forged.ok).toBe(false);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays out of the palette and off MCP", () => {
+    const def = definition();
+    expect(def.palette).toEqual({ mode: "hidden" });
+    expect(def.mcpVisibility).toBe("hidden");
+  });
+});

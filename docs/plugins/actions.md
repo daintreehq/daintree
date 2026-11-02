@@ -491,6 +491,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.resumeSessions` | Resume session… | safe | — |
 | `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId` |
 | `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
+| `terminal.sessionFile.get` | Get agent session file | safe | `terminalId` |
 | `terminal.setHoldOnRestart` | Hold agent on restart | safe | `hold`, `terminalId` |
 | `terminal.startHeld` | Start held pane | confirm | `start`, `terminalId` |
 | `terminal.stashInput` | Stash input | safe | — |

@@ -1153,6 +1153,8 @@ export const CHANNEL_LOCALITY = {
   "terminal-config:set-resource-monitoring": "host",
   "terminal-config:set-screen-reader-mode": "shell",
   "terminal-config:set-scrollback": "shell",
+  // Answered where the pane runs; the handler refuses a remote view (#16097).
+  "terminal-session-file:get": "host",
   "terminal:acknowledge-data": "host",
   "terminal:activity": "host",
   "terminal:agent-title-state": "host",

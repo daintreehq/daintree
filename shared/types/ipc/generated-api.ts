@@ -1861,6 +1861,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["system-sleep:reset"]["args"]
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
+  terminalSessionFile: {
+    get(
+      ...args: IpcInvokeMap["terminal-session-file:get"]["args"]
+    ): Promise<IpcInvokeMap["terminal-session-file:get"]["result"]>;
+  };
   voiceDictionary: {
     acceptSuggestion(
       ...args: IpcInvokeMap["voice-dictionary:accept-suggestion"]["args"]
