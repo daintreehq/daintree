@@ -69,15 +69,19 @@ describe("addAgentAccount (#16040)", () => {
     );
   });
 
-  it("never takes over a folder that already exists, even an empty one", async () => {
-    const folder = path.join(home, ".codex-company");
-    await mkdir(folder);
-    await writeFile(path.join(folder, "auth.json"), "{}");
+  it("never takes over a folder that already exists, signed in or empty", async () => {
+    const signedIn = path.join(home, ".codex-company");
+    await mkdir(signedIn);
+    await writeFile(path.join(signedIn, "auth.json"), "{}");
+    await mkdir(path.join(home, ".codex-lab"));
 
     await expect(
       addAgentAccount({ agentId: "codex", name: "Company", folder: { kind: "create" } })
     ).rejects.toMatchObject({ code: "VALIDATION" });
-    expect(await readdir(folder)).toEqual(["auth.json"]);
+    await expect(
+      addAgentAccount({ agentId: "codex", name: "Lab", folder: { kind: "create" } })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(await readdir(signedIn)).toEqual(["auth.json"]);
     expect(savedCodex().accounts).toBeUndefined();
   });
 
@@ -147,14 +151,21 @@ describe("removeAgentAccount (#16040)", () => {
       },
     });
 
+    broadcastMock.mockClear();
+
     const settings = removeAgentAccount("codex", account.id);
 
-    expect(settings.agents.codex).toMatchObject({
+    // Read back from the store, so a removal that only answered without saving fails.
+    expect(savedCodex()).toEqual({
       presetId: "keep-me",
       accounts: [other.account],
       worktreeAccounts: { wt2: other.account.id, wt3: null },
     });
-    expect(settings.agents.codex?.accountId).toBeUndefined();
+    expect(settings.agents.codex).toEqual(savedCodex());
+    expect(broadcastMock).toHaveBeenCalledWith(
+      CHANNELS.AGENT_SETTINGS_CHANGED,
+      fakeStore.dump().agentSettings
+    );
     expect((await stat(account.configDir)).isDirectory()).toBe(true);
   });
 });

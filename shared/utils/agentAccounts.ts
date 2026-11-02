@@ -144,9 +144,8 @@ export function keepPaneAccount(
   pane: { agentAccountId?: string; env?: Record<string, string> }
 ): Record<string, string> | undefined {
   const selector = paneAccountEnv(agentId, pane);
-  if (!selector) return env;
-  const [[envVar, configDir]] = Object.entries(selector);
-  return withAccountEnv(env, envVar, configDir);
+  const entry = selector ? Object.entries(selector)[0] : undefined;
+  return entry ? withAccountEnv(env, entry[0], entry[1]) : env;
 }
 
 /**

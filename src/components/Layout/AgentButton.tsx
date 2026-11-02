@@ -103,6 +103,7 @@ interface AgentButtonProps {
 }
 
 const DEFAULT_LOGIN_VALUE = "default-login";
+const MISSING_ACCOUNT_VALUE = "missing-account";
 
 const stopPointer = (e: ReactPointerEvent) => {
   e.stopPropagation();
@@ -968,8 +969,14 @@ export function AgentButton({
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel>Account</DropdownMenuLabel>
+                    {/* A saved account that's gone checks nothing, so picking the
+                        default login still registers as a change. */}
                     <DropdownMenuRadioGroup
-                      value={activeAccount?.id ?? DEFAULT_LOGIN_VALUE}
+                      value={
+                        savedAccountId === null
+                          ? DEFAULT_LOGIN_VALUE
+                          : (activeAccount?.id ?? MISSING_ACCOUNT_VALUE)
+                      }
                       onValueChange={pickAccount}
                     >
                       <DropdownMenuRadioItem value={DEFAULT_LOGIN_VALUE}>

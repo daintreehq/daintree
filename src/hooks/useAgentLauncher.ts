@@ -723,6 +723,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               agentAccountId: plan.account?.id,
+              // The folder the account is, kept with it so a reload restores
+              // the gate's launch on that account, not the default login.
+              ...(plan.account && plan.env && { env: plan.env }),
               spawnStatus: "missing-cli",
               // "Run anyway" replays the gate's command, prompt included, so
               // the gate holds the launch's record for it. Review Hub shows

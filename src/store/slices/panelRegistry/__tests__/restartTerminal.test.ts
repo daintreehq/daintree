@@ -2532,11 +2532,8 @@ describe("accounts on restart and switch (#16040)", () => {
       presetId ? presets[presetId] : undefined
     );
     buildAgentLaunchFlagsMock.mockReturnValue([]);
-    const { agentSettingsClient, projectClient } = await import("@/clients");
+    const { agentSettingsClient } = await import("@/clients");
     vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
-    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
-      environmentVariables: {},
-    });
   });
 
   function seed(overrides: Partial<PtyPanelData> = {}): void {
@@ -2579,7 +2576,12 @@ describe("accounts on restart and switch (#16040)", () => {
   });
 
   it("switches only the account: same preset, a new conversation, the folder saved for restore", async () => {
-    seed({ title: "Claude [Z.ai]", titleMode: "custom" });
+    seed({
+      title: "Claude [Z.ai]",
+      titleMode: "custom",
+      agentLaunchFlags: ["--persisted-flag", "--continue", "--verbose"],
+      callerLaunchFlags: ["--continue", "--verbose"],
+    });
 
     const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
       id: "personal",
@@ -2601,16 +2603,34 @@ describe("accounts on restart and switch (#16040)", () => {
       env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: PERSONAL },
     });
     expect(pane().agentSessionId).toBeUndefined();
+    // A caller's own resume selector would reopen the new folder's latest conversation.
+    expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
+    expect(payload.command).not.toContain("--continue");
   });
 
   it("moves a pane back to the default login, leaving the variable to its preset", async () => {
-    seed();
+    seed({ agentPresetId: "legacy", originalPresetId: "legacy" });
 
     await usePanelStore.getState().restartTerminalOnAccount("test-1", null);
 
-    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe("/home/me/.claude-legacy");
     expect(pane().agentAccountId).toBeUndefined();
-    expect(pane().env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai" });
+    expect(pane().env).toEqual({ CLAUDE_CONFIG_DIR: "/home/me/.claude-legacy" });
+  });
+
+  it("refuses to switch a pane whose preset can't be found, before touching the process", async () => {
+    seed({ agentPresetId: "still-loading", originalPresetId: "still-loading" });
+
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
+
+    expect(result.success).toBe(false);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(pane().agentPresetId).toBe("still-loading");
+    expect(pane().agentAccountId).toBe("company");
   });
 
   it("switches the account of a pane with no preset", async () => {

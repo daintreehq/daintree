@@ -46,9 +46,10 @@ export function AgentAccountsSection({
   if (!declaration) return null;
 
   const accounts = sanitizeAgentAccounts(entry.accounts);
-  const defaultId = accounts.some((account) => account.id === entry.accountId)
-    ? (entry.accountId as string)
-    : DEFAULT_LOGIN;
+  const defaultId = accounts.find((account) => account.id === entry.accountId)?.id ?? DEFAULT_LOGIN;
+  // A saved default no account answers to any more refuses every launch, so
+  // it shows as changed and can be reset even with nothing left to choose.
+  const hasSavedDefault = typeof entry.accountId === "string";
 
   // A sign-in runs in a terminal, so Settings closes first and the terminal
   // takes focus once it has gone.
@@ -108,11 +109,15 @@ export function AgentAccountsSection({
         )}
       </SettingsGroup>
 
-      {accounts.length > 0 && (
+      {(accounts.length > 0 || hasSavedDefault) && (
         <SettingsGroup>
           <SettingsSelect
             label="Default account"
-            description="What a new launch signs in as, unless its worktree picks another in the toolbar"
+            description={
+              hasSavedDefault && defaultId === DEFAULT_LOGIN
+                ? "The saved account was removed, so launches are refused until this is reset"
+                : "What a new launch signs in as, unless its worktree picks another in the toolbar"
+            }
             value={defaultId}
             onValueChange={(value) => {
               void (async () => {
@@ -126,7 +131,7 @@ export function AgentAccountsSection({
               { value: DEFAULT_LOGIN, label: "Default login" },
               ...accounts.map((account) => ({ value: account.id, label: account.name })),
             ]}
-            isModified={defaultId !== DEFAULT_LOGIN}
+            isModified={hasSavedDefault}
             onReset={() => {
               void (async () => {
                 await updateAgent(agentId, { accountId: undefined });
@@ -168,6 +173,7 @@ export function AgentAccountsSection({
               type: "error",
               title: "Couldn't remove account",
               message: formatErrorMessage(error, "The account is still saved."),
+              context: { eventKind: "agent" },
               action: { label: "Retry", onClick: () => setRemoving(account) },
             });
           });

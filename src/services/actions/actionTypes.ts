@@ -85,6 +85,7 @@ export interface ActionCallbacks {
       interactive?: boolean;
       modelId?: string;
       presetId?: string | null;
+      accountId?: string | null;
       activateDockOnCreate?: boolean;
       env?: Record<string, string>;
       excludeFromPersistence?: boolean;

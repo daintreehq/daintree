@@ -324,6 +324,7 @@ export const createRestartActions = (
   | "setHoldOnRestart"
   | "activateFallbackPreset"
   | "restartTerminalOnPreset"
+  | "restartTerminalOnAccount"
   | "dismissSessionLost"
   | "dismissAllSessionLost"
 > => ({
@@ -1833,9 +1834,11 @@ async function respawnAgentOnPreset(
       projectPresets,
     });
     const nextPreset = runtimeSettings.preset;
-    // An account switch on a pane whose preset has since gone runs bare, as a
-    // plain restart of it would; a preset switch or hop needs its preset.
-    if (!nextPreset && mode.kind !== "account") {
+    // An account switch keeps the pane's preset, so one that can't be found —
+    // gone, or a project or CCR preset still loading — refuses the switch
+    // before anything is torn down, as a preset switch does. A pane with no
+    // preset switches bare.
+    if (!nextPreset && (mode.kind !== "account" || nextPresetId !== undefined)) {
       throw new Error(`preset "${nextPresetId}" not found`);
     }
     const presetKept = mode.kind === "account" && nextPreset !== undefined;

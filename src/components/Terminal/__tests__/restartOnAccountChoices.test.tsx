@@ -3,17 +3,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import { useRestartAccountChoices } from "../RestartOnAccount";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import type { AgentSettings } from "@shared/types";
+import type { AgentAccount, AgentSettings } from "@shared/types";
 
-const ACCOUNTS = [
+const ACCOUNTS: AgentAccount[] = [
   { id: "company", name: "Company", configDir: "/Users/me/.codex-company" },
   { id: "lab", name: "Lab", configDir: "/Users/me/.codex-lab" },
 ];
 
-function withAccounts(agentId: string, accounts: unknown[]): void {
-  useAgentSettingsStore.setState({
-    settings: { agents: { [agentId]: { accounts } } } as unknown as AgentSettings,
-  });
+function withAccounts(agentId: string, accounts: AgentAccount[]): void {
+  const settings: AgentSettings = { agents: { [agentId]: { accounts } } };
+  useAgentSettingsStore.setState({ settings });
 }
 
 afterEach(() => {
@@ -35,6 +34,12 @@ describe("useRestartAccountChoices (#16040)", () => {
     withAccounts("codex", ACCOUNTS);
     const { result } = renderHook(() => useRestartAccountChoices("codex", undefined));
     expect(result.current.map((choice) => choice.id)).toEqual(["company", "lab"]);
+  });
+
+  it("keeps the way back to the default login for a pane on an account since removed", () => {
+    withAccounts("codex", []);
+    const { result } = renderHook(() => useRestartAccountChoices("codex", "company"));
+    expect(result.current).toEqual([{ id: null, name: "Default login" }]);
   });
 
   it("offers nothing when the agent has no saved account, or none it can choose", () => {

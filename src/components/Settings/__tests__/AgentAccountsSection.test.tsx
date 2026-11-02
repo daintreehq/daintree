@@ -71,15 +71,25 @@ describe("AgentAccountsSection (#16040)", () => {
   });
 
   it("doesn't open the terminal when the close is held", async () => {
-    const onClose = vi.fn(async (callback?: (closed: boolean) => void) => {
-      callback?.(false);
-      return false;
-    });
+    // A held close answers false and never calls back (SettingsTabClose).
+    const onClose = vi.fn(async () => false);
     renderSection({ accounts: [COMPANY] }, { onClose });
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await act(async () => {});
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("shows a saved default whose account is gone as changed, and resets it", async () => {
+    const updateAgent = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ updateAgent });
+    renderSection({ accounts: [], accountId: "gone" });
+
+    expect(screen.getByText(/launches are refused until this is reset/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Use Codex's default login" }));
+    await act(async () => {});
+
+    expect(updateAgent).toHaveBeenCalledWith("codex", { accountId: undefined });
   });
 
   it("asks before forgetting an account, then removes it", async () => {

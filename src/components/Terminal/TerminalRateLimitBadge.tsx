@@ -112,7 +112,9 @@ function RateLimitChip({
   // An expired chip takes its menu with it, so the quota stops being read too,
   // and a later observation doesn't bring the chip back with the menu open.
   if (!live && menuOpen) setMenuOpen(false);
-  const choices = useRestartPresetChoices(agentId, presetId, menuOpen && live);
+  // A pane on an account keeps it across a preset switch, so a preset's own
+  // home says nothing about the quota it would run on: no hints then.
+  const choices = useRestartPresetChoices(agentId, presetId, menuOpen && live && !accountId);
   const accountChoices = useRestartAccountChoices(agentId, accountId);
 
   if (!live) return null;

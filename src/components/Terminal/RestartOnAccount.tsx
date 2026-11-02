@@ -52,8 +52,9 @@ export function buildRestartOnAccountCopy(
 
 /**
  * The accounts an agent pane can move to (#16040): every other one of its
- * agent's, with the default login among them. None when the agent has no
- * saved accounts, so the menu doesn't offer a choice of one.
+ * agent's, with the default login among them. A pane still on an account
+ * that has since been removed can always go back to the default login. None
+ * for a pane on the default login when the agent has no saved account.
  */
 export function useRestartAccountChoices(
   agentId: string | undefined,
@@ -65,7 +66,7 @@ export function useRestartAccountChoices(
   return useMemo(() => {
     if (!agentId || !getAgentConfigFolderAccount(agentId)) return [];
     const accounts = sanitizeAgentAccounts(savedAccounts);
-    if (accounts.length === 0) return [];
+    if (accounts.length === 0 && !currentAccountId) return [];
     const choices: RestartAccountChoice[] = [
       { id: null, name: "Default login" },
       ...accounts.map((account) => ({ id: account.id, name: account.name })),

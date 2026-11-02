@@ -106,19 +106,28 @@ async function createFolder(defaultDir: string, accountName: string): Promise<st
         userMessage: "Couldn't create the account folder: permission denied.",
       });
     }
+    // The code only: the raw error names the folder's full path.
     throw new AppError({
       code: "VALIDATION",
-      message: "Couldn't create the account folder",
+      message: `Couldn't create the account folder (${fsCode(error) ?? "unknown"})`,
       userMessage: "Couldn't create the account folder.",
-      cause: error instanceof Error ? error : undefined,
     });
   }
   return folder;
 }
 
+// What this host's own processes read as one folder from any working
+// directory: on Windows a drive root or a UNC share (a drive-relative path
+// lands on whichever drive the agent starts on), elsewhere a path from `/`.
+function isFullyQualifiedOnHost(folder: string): boolean {
+  return process.platform === "win32"
+    ? /^[A-Za-z]:[\\/]/.test(folder) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(folder)
+    : folder.startsWith("/");
+}
+
 async function checkExistingFolder(raw: unknown): Promise<string> {
   const folder = typeof raw === "string" ? raw.trim() : "";
-  if (!isUsableAccountFolder(folder)) {
+  if (!isUsableAccountFolder(folder) || !isFullyQualifiedOnHost(folder)) {
     throw new AppError({
       code: "INVALID_PATH",
       message: "Account folder must be a full path",

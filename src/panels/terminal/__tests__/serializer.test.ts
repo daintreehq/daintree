@@ -165,12 +165,17 @@ describe("serializePtyPanel — account (#16040)", () => {
   it("writes the account beside the launch env that holds its folder", () => {
     const snapshot = serializePtyPanel(
       makePanel({
-        agentAccountId: "company",
-        env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-company" },
+        agentAccountId: "personal",
+        env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-personal" },
       })
     );
-    expect(snapshot.agentAccountId).toBe("company");
-    expect(snapshot.env).toEqual({ CLAUDE_CONFIG_DIR: "/Users/me/.claude-company" });
+    expect(snapshot.agentAccountId).toBe("personal");
+    expect(snapshot.env).toEqual({ CLAUDE_CONFIG_DIR: "/Users/me/.claude-personal" });
+  });
+
+  it("writes no account for a pane on the default login", () => {
+    const snapshot = serializePtyPanel(makePanel({ env: { ANTHROPIC_BASE_URL: "https://x" } }));
+    expect("agentAccountId" in snapshot).toBe(false);
   });
 
   it("drops the account when no env survives to carry its folder", () => {

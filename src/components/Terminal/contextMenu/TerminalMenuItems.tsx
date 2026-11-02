@@ -411,6 +411,7 @@ export function TerminalSessionMenuItems({
             <RestartOnPresetSubmenu
               agentId={terminalPty.launchAgentId}
               currentPresetId={terminalPty.agentPresetId}
+              accountBound={terminalPty.agentAccountId !== undefined}
               onPick={(preset) =>
                 onRequestRestartOnPreset({
                   terminalId,
