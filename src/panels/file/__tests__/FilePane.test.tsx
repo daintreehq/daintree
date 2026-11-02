@@ -18,6 +18,7 @@ import {
   type GridGroupTabReorder,
 } from "@/components/Panel/gridGroupTabReorder";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -508,22 +509,40 @@ describe("FilePane tab group edges (#16151)", () => {
 });
 
 describe("FilePane tab reorder (#16160)", () => {
-  const tabs: TabInfo[] = [];
+  const tabs: TabInfo[] = [
+    {
+      id: "file-1",
+      title: "spec.md",
+      chrome: deriveTerminalChrome(),
+      kind: "file",
+      isActive: true,
+    },
+    {
+      id: "t-2",
+      title: "Shell",
+      chrome: deriveTerminalChrome(),
+      kind: "terminal",
+      isActive: false,
+    },
+  ];
   const onTabReorder = vi.fn();
 
   function inGroup(panelId: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/spec.md" };
     return (
-      <GridGroupTabReorderContext.Provider value={{ panelId, groupId: "g-1", onTabReorder }}>
-        <FilePane
-          id="file-1"
-          title="spec.md"
-          isFocused={false}
-          location="grid"
-          onFocus={() => {}}
-          onClose={() => {}}
-          tabs={tabs}
-        />
-      </GridGroupTabReorderContext.Provider>
+      <TooltipProvider>
+        <GridGroupTabReorderContext.Provider value={{ panelId, groupId: "g-1", onTabReorder }}>
+          <FilePane
+            id="file-1"
+            title="spec.md"
+            isFocused={false}
+            location="grid"
+            onFocus={() => {}}
+            onClose={() => {}}
+            tabs={tabs}
+          />
+        </GridGroupTabReorderContext.Provider>
+      </TooltipProvider>
     );
   }
 
@@ -535,6 +554,7 @@ describe("FilePane tab reorder (#16160)", () => {
 
   it("takes no reorder meant for another tab", () => {
     render(inGroup("other"));
+    expect(lastContentPanelProps().tabs).toBe(tabs);
     expect(groupReorders.at(-1)).toBeNull();
   });
 });

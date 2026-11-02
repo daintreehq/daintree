@@ -78,6 +78,7 @@ interface PaneProps {
   title: string;
   isFocused: boolean;
   location?: "grid" | "dock" | "dialog";
+  isMaximized?: boolean;
   isMultiPanelGrid?: boolean;
   onFocus: () => void;
   onClose: () => void;
@@ -97,6 +98,7 @@ const standIn = (kind: string) =>
         kind={kind}
         isFocused={props.isFocused}
         location={props.location}
+        isMaximized={props.isMaximized}
         isMultiPanelGrid={props.isMultiPanelGrid}
         onFocus={props.onFocus}
         onClose={props.onClose}
@@ -127,18 +129,27 @@ const TAB_WIDTH = 100;
 // dnd-kit swallows clicks for 50ms after a drop.
 const CLICK_GUARD_LAPSE_MS = 60;
 
-function shownPanel(kind: ShownKind): PanelInstance {
-  const base = { id: SHOWN, title: `Shown ${kind}`, location: "grid" } as const;
-  if (kind === "terminal") return { ...base, kind, cwd: "/repo", cols: 80, rows: 24 };
-  return { ...base, kind };
-}
+const SHOWN_BASE = { id: SHOWN, location: "grid" } as const;
+const SHOWN_PANELS: Record<ShownKind, PanelInstance> = {
+  browser: { ...SHOWN_BASE, kind: "browser", title: "Shown browser" },
+  file: { ...SHOWN_BASE, kind: "file", title: "Shown file" },
+  diff: { ...SHOWN_BASE, kind: "diff", title: "Shown diff" },
+  terminal: {
+    ...SHOWN_BASE,
+    kind: "terminal",
+    title: "Shown terminal",
+    cwd: "/repo",
+    cols: 80,
+    rows: 24,
+  },
+};
 
 function shellTab(id: string, title: string): PanelInstance {
   return { id, kind: "terminal", title, location: "grid", cwd: "/repo", cols: 80, rows: 24 };
 }
 
 function seed(kind: ShownKind) {
-  const panels = [shownPanel(kind), shellTab("second", "Second"), shellTab("third", "Third")];
+  const panels = [SHOWN_PANELS[kind], shellTab("second", "Second"), shellTab("third", "Third")];
   const group: TabGroup = { id: GROUP, location: "grid", activeTabId: SHOWN, panelIds: TABS };
   act(() => {
     usePanelStore.setState({
@@ -151,14 +162,22 @@ function seed(kind: ShownKind) {
 }
 
 /** The group as the grid renders it: re-read from the store, so a reorder repaints. */
-function StoredGroup() {
+function StoredGroup({ isMaximized = false }: { isMaximized?: boolean }) {
   const group = usePanelStore((s) => s.tabGroups.get(GROUP));
-  return group ? <GridTabGroup group={group} focusedId={null} isMultiPanelGrid /> : null;
+  return group ? (
+    <GridTabGroup group={group} focusedId={null} isMultiPanelGrid isMaximized={isMaximized} />
+  ) : null;
 }
 
 // jsdom lays nothing out: tabs sit side by side, every box around a single tab
-// is the tab's own size, and the tablist is as wide as all of them.
+// is the tab's own size, and the tablist is as wide as all of them. It has no
+// scrollTo either, which the strip calls to bring a newly shown tab into view.
 function stubLayout() {
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    writable: true,
+    value: () => {},
+  });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement
   ) {
@@ -187,17 +206,38 @@ const tabOrder = () =>
   [...document.querySelectorAll<HTMLElement>("[data-tab-id]")].map((el) => el.dataset.tabId);
 const storedOrder = () => usePanelStore.getState().tabGroups.get(GROUP)?.panelIds;
 const tab = (id: string) => document.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
+const activeTabId = () => usePanelStore.getState().tabGroups.get(GROUP)?.activeTabId;
+const shownBody = (id: string) =>
+  screen.getByRole("tabpanel").closest(`[data-panel-id="${id}"]`) !== null;
+const dragFlag = () => document.documentElement.dataset.dragging;
+const nextTask = (ms = 0) => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
 
-function dragShownTabPastSecond() {
-  fireEvent.mouseDown(tab(SHOWN), { button: 0, clientX: 50, clientY: 15 });
-  fireEvent.mouseMove(document, { clientX: 60, clientY: 15 });
+function dragTranslateX(tabId: string): number {
+  let node: HTMLElement | null = tab(tabId);
+  while (node && !node.style.transform) node = node.parentElement;
+  const match = node?.style.transform.match(/translate3d\((-?[\d.]+)px/);
+  return match ? Number(match[1]) : 0;
+}
+
+/** Picks a tab up by its centre and carries it `by` pixels, the button held. */
+function pickUp(tabId: string, by: number) {
+  const x = TABS.indexOf(tabId) * TAB_WIDTH + TAB_WIDTH / 2;
+  fireEvent.mouseDown(tab(tabId), { button: 0, clientX: x, clientY: 15 });
+  fireEvent.mouseMove(document, { clientX: x + 10, clientY: 15, buttons: 1 });
   act(() => {
-    fireEvent.mouseMove(document, { clientX: 150, clientY: 15 });
+    fireEvent.mouseMove(document, { clientX: x + by, clientY: 15, buttons: 1 });
   });
+  return x + by;
+}
+
+function dragTab(tabId: string, by: number) {
+  const x = pickUp(tabId, by);
   act(() => {
-    fireEvent.mouseUp(document, { clientX: 150, clientY: 15 });
+    fireEvent.mouseUp(document, { clientX: x, clientY: 15 });
   });
 }
+
+const dragShownTabPastSecond = () => dragTab(SHOWN, TAB_WIDTH);
 
 afterEach(async () => {
   // A failed assertion mid-drag skips the drop, and the sensors' document
@@ -210,6 +250,8 @@ afterEach(async () => {
   cleanup();
   usePanelStore.setState({ panelsById: {}, panelIds: [], tabGroups: new Map(), focusedId: null });
   useLayoutUndoStore.getState().clearHistory();
+  delete document.documentElement.dataset.dragging;
+  Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
   vi.restoreAllMocks();
 });
 
@@ -227,9 +269,12 @@ describe("GridTabGroup tab reorder (#16160)", () => {
     expect(storedOrder()).toEqual(["second", SHOWN, "third"]);
     expect(tabOrder()).toEqual(["second", SHOWN, "third"]);
     // The moved tab stays the one shown, and the move can be undone.
-    expect(usePanelStore.getState().tabGroups.get(GROUP)?.activeTabId).toBe(SHOWN);
-    expect(screen.getByRole("tabpanel").closest(`[data-panel-id="${SHOWN}"]`)).not.toBeNull();
-    expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+    expect(activeTabId()).toBe(SHOWN);
+    expect(shownBody(SHOWN)).toBe(true);
+    act(() => useLayoutUndoStore.getState().undo());
+    expect(storedOrder()).toEqual(TABS);
+    expect(tabOrder()).toEqual(TABS);
+    expect(activeTabId()).toBe(SHOWN);
   });
 
   it.each(KINDS)("reorders the tabs by keyboard while a %s pane is shown", async (kind) => {
@@ -261,17 +306,83 @@ describe("GridTabGroup tab reorder (#16160)", () => {
     const shown = tab(SHOWN);
     act(() => shown.focus());
     fireEvent.keyDown(shown, { key: " ", code: "Space" });
-    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await nextTask();
     act(() => {
       fireEvent.keyDown(shown, { key: "ArrowRight", code: "ArrowRight" });
     });
+    expect(dragTranslateX(SHOWN)).toBe(TAB_WIDTH);
     act(() => {
       fireEvent.keyDown(shown, { key: "Escape", code: "Escape" });
     });
 
+    expect(dragTranslateX(SHOWN)).toBe(0);
     expect(storedOrder()).toEqual(TABS);
     expect(tabOrder()).toEqual(TABS);
     expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+
+    // The strip's arrow keys are its own again once the drag is over.
+    act(() => {
+      fireEvent.keyDown(tab(SHOWN), { key: "ArrowRight", code: "ArrowRight" });
+    });
+    await nextTask(CLICK_GUARD_LAPSE_MS);
+    expect(document.activeElement).toBe(tab("second"));
+  });
+
+  it("reorders from the strip of the tab it switches to", () => {
+    seed("browser");
+    stubLayout();
+    render(<StoredGroup />);
+
+    fireEvent.click(tab("second"));
+    expect(activeTabId()).toBe("second");
+    expect(shownBody("second")).toBe(true);
+
+    dragTab("second", TAB_WIDTH);
+    expect(storedOrder()).toEqual([SHOWN, "third", "second"]);
+    expect(tabOrder()).toEqual([SHOWN, "third", "second"]);
+    expect(activeTabId()).toBe("second");
+  });
+
+  it("reorders the tabs of a maximized group", () => {
+    seed("diff");
+    stubLayout();
+    render(<StoredGroup isMaximized />);
+
+    dragShownTabPastSecond();
+    expect(storedOrder()).toEqual(["second", SHOWN, "third"]);
+  });
+
+  it("shields a browser pane's page from a tab drag, and takes the shield down after the drop", async () => {
+    seed("browser");
+    stubLayout();
+    render(<StoredGroup />);
+
+    const x = pickUp(SHOWN, TAB_WIDTH);
+    expect(dragFlag()).toBe("true");
+    act(() => {
+      fireEvent.mouseUp(document, { clientX: x, clientY: 15 });
+    });
+    expect(storedOrder()).toEqual(["second", SHOWN, "third"]);
+    await nextTask();
+    expect(dragFlag()).toBeUndefined();
+  });
+
+  it("drops a tab drag whose release the page swallowed, and takes the next one", async () => {
+    seed("browser");
+    stubLayout();
+    render(<StoredGroup />);
+
+    pickUp(SHOWN, TAB_WIDTH);
+    // Released over the page: the host's next move comes with no button held.
+    act(() => {
+      fireEvent.mouseMove(document, { clientX: 150, clientY: 300, buttons: 0 });
+    });
+    expect(storedOrder()).toEqual(TABS);
+    await nextTask(CLICK_GUARD_LAPSE_MS);
+    expect(dragFlag()).toBeUndefined();
+
+    dragShownTabPastSecond();
+    expect(storedOrder()).toEqual(["second", SHOWN, "third"]);
   });
 });
 

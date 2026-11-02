@@ -567,7 +567,7 @@ describe("DiffPane — tab reorder (#16160)", () => {
     id,
     title: id,
     chrome: deriveTerminalChrome(),
-    kind: "terminal",
+    kind: id === PANEL_ID ? "diff" : "terminal",
     isActive: id === PANEL_ID,
   }));
 

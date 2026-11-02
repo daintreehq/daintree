@@ -360,7 +360,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       id,
       title: id,
       chrome: deriveTerminalChrome(),
-      kind: "terminal",
+      kind: id === baseProps.id ? "browser" : "terminal",
       isActive: id === baseProps.id,
     }));
     const onTabReorder = vi.fn();
