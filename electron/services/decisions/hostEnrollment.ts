@@ -194,7 +194,7 @@ export class HostEnroller {
     await this.queueRun(hostId, link, "manual");
     const after = this.options.owner();
     if (after === null) return { result: "not-set-up" };
-    let record: HostRecord | null = null;
+    let record: HostRecord | null;
     try {
       record = (await after.records?.get(hostId)) ?? null;
     } catch {
@@ -221,7 +221,9 @@ export class HostEnroller {
         if (record.deviceId === null || record.revokedAt !== null) continue;
         if (!revoked.has(record.deviceId)) continue;
         if (generation !== this.generation) return;
-        await owner.records.markRevoked(hostId, record.deviceId, this.now());
+        const marked = await owner.records.markRevoked(hostId, record.deviceId, this.now());
+        // Another device replaced it since the read: that one stands.
+        if (marked === null) continue;
         const view = this.views.get(hostId);
         if (view?.key === owner.key && generation === this.generation) {
           this.views.set(hostId, { key: owner.key, enrollment: { state: "revoked" } });
@@ -252,7 +254,9 @@ export class HostEnroller {
   }
 
   private maybeAuto(hostId: string, link: DecisionsHostLink): void {
-    if (!this.active || !link.isOpen || this.runs.has(hostId)) return;
+    // A run in flight for the Host's previous link doesn't take this one's
+    // attempt: it waits its turn behind it.
+    if (!this.active || !link.isOpen) return;
     const owner = this.options.owner();
     if (owner === null || !owner.connected) return;
     if (this.attempted.get(link) === owner.key) return;
@@ -263,8 +267,15 @@ export class HostEnroller {
   /** Runs after whatever already runs for the Host, so one Host never runs two at once. */
   private queueRun(hostId: string, link: DecisionsHostLink, mode: Mode): Promise<void> {
     const before = this.runs.get(hostId) ?? Promise.resolve();
+    // Asked for this lifetime and owner: a stop, a forget or another identity
+    // while it waits its turn drops it unrun.
+    const generation = this.generation;
+    const ownerKey = this.options.owner()?.key ?? null;
     const run = before
-      .then(() => this.run(hostId, link, mode))
+      .then(() => {
+        if (generation !== this.generation || this.options.owner()?.key !== ownerKey) return;
+        return this.run(hostId, link, mode);
+      })
       .catch((error: unknown) => {
         if (!(error instanceof Superseded)) {
           console.warn("[Decisions] Enrolling a Remote Host stopped unexpectedly:", error);
@@ -338,7 +349,7 @@ export class HostEnroller {
             : null;
       if (seenRevoked !== null && record?.revokedAt == null) {
         try {
-          record = await records.markRevoked(hostId, seenRevoked, this.now());
+          record = (await records.markRevoked(hostId, seenRevoked, this.now())) ?? record;
         } catch (error) {
           return show(failure("records-unavailable", this.now(), formatErrorMessage(error, "")));
         }
@@ -396,6 +407,17 @@ export class HostEnroller {
       if (!requested.ok) return show(this.callFailure(requested));
       if (requested.value.step === "refused") return show(this.refusal(requested.value));
       stillWanted();
+      if (mode === "auto") {
+        // Revoked from Devices while the Host made its keys: not now, not automatically.
+        let latest: HostRecord | null;
+        try {
+          latest = await records.get(hostId);
+        } catch (error) {
+          return show(failure("records-unavailable", this.now(), formatErrorMessage(error, "")));
+        }
+        stillWanted();
+        if (latest?.revokedAt != null) return show({ state: "revoked" });
+      }
       let enrolled: { response: string } | DecisionsRelayRequestFailure;
       try {
         enrolled = await owner.enroll(requested.value.request);

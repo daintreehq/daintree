@@ -52,7 +52,7 @@ type Answer = HostStatusResult | HostRequestResult | HostAcceptResult;
 export function installDecisionsHostWith(
   server: DecisionsSessionSource,
   load: () => Promise<DecisionsHostEnrollment>
-): () => void {
+): () => Promise<void> {
   let loading: Promise<DecisionsHostEnrollment> | null = null;
   let loaded: DecisionsHostEnrollment | null = null;
   let disposed = false;
@@ -62,7 +62,6 @@ export function installDecisionsHostWith(
   const enrollment = (): Promise<DecisionsHostEnrollment> => {
     loading ??= load().then((made) => {
       loaded = made;
-      if (disposed) void made.dispose();
       return made;
     });
     // A failed load is tried again by the next CALL.
@@ -114,10 +113,13 @@ export function installDecisionsHostWith(
 
   for (const ctx of server.sessions) wire(ctx);
   const offSession = server.onSession(wire);
-  return () => {
+  // Resolves once a step already under way has finished, so a listener
+  // started again never has two enrollments writing the same key file.
+  return async () => {
     disposed = true;
     offSession();
     for (const unregister of [...unregisters]) unregister();
-    void loaded?.dispose();
+    const made = loaded ?? (loading ? await loading.catch(() => null) : null);
+    await made?.dispose();
   };
 }

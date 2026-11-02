@@ -55,6 +55,8 @@ export function useDecisionsHosts(enabled: boolean, revision: number): UseDecisi
           setAutoEnrollShown(read.autoEnroll);
           setLoadError(null);
         } else {
+          // No owner to enroll with now: rows that offered Enroll would do nothing.
+          setHosts(null);
           setLoadError(hostsUnlistedText(read));
         }
       },
@@ -73,7 +75,7 @@ export function useDecisionsHosts(enabled: boolean, revision: number): UseDecisi
     if (savingAuto) return;
     setSavingAuto(true);
     setActionFailure(null);
-    window.electron.decisions
+    void window.electron.decisions
       .setAutoEnrollHosts(next)
       .then(
         (read) => {
@@ -101,7 +103,7 @@ export function useDecisionsHosts(enabled: boolean, revision: number): UseDecisi
     setEnrolling((held) => new Set(held).add(hostId));
     setActionFailure(null);
     const retry = () => enroll(hostId);
-    window.electron.decisions
+    void window.electron.decisions
       .enrollHost({ hostId })
       .then(
         (outcome) => {

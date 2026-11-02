@@ -36,6 +36,24 @@ describe("HostRecords", () => {
     });
   });
 
+  it("ignores a revocation sighting of a device another one has replaced since", async () => {
+    const meta = memoryMeta();
+    const records = new HostRecords(meta, "inst_one_000000001");
+    await records.markEnrolled("studio", "dev_host_2", 100);
+    expect(await records.markRevoked("studio", "dev_host_1", 200)).toBeNull();
+    expect(await records.get("studio")).toEqual({
+      deviceId: "dev_host_2",
+      enrolledAt: 100,
+      revokedAt: null,
+    });
+    // A Host never recorded takes the sighting as it is.
+    expect(await records.markRevoked("lab", "dev_lab_1", 300)).toEqual({
+      deviceId: "dev_lab_1",
+      enrolledAt: null,
+      revokedAt: 300,
+    });
+  });
+
   it("reads another installation's records, or a damaged one, as none", async () => {
     const meta = memoryMeta();
     await new HostRecords(meta, "inst_one_000000001").markRevoked("studio", "dev_host_1", 100);
@@ -63,7 +81,7 @@ describe("HostRecords", () => {
     await Promise.all([
       records.markEnrolled("studio", "dev_host_1", 100),
       records.markEnrolled("lab", "dev_lab_1", 100),
-      records.markRevoked("desk", null, 100),
+      records.markRevoked("desk", "dev_desk_1", 100),
     ]);
     expect([...(await records.read()).keys()].sort()).toEqual(["desk", "lab", "studio"]);
   });

@@ -71,22 +71,30 @@ export class HostRecords {
     }));
   }
 
-  /** The Host's device was seen revoked. The first sighting's time stands. */
-  markRevoked(hostId: string, deviceId: string | null, now: number): Promise<HostRecord> {
-    return this.update(hostId, (current) => ({
-      deviceId: deviceId ?? current?.deviceId ?? null,
-      enrolledAt: current?.enrolledAt ?? null,
-      revokedAt: current?.revokedAt ?? now,
-    }));
+  /**
+   * `deviceId` was seen revoked. Recorded only while the Host's record names
+   * that device (or none): a sighting read before another device replaced it
+   * changes nothing, and answers null. The first sighting's time stands.
+   */
+  markRevoked(hostId: string, deviceId: string, now: number): Promise<HostRecord | null> {
+    return this.update(hostId, (current) => {
+      if (current?.deviceId != null && current.deviceId !== deviceId) return null;
+      return {
+        deviceId,
+        enrolledAt: current?.enrolledAt ?? null,
+        revokedAt: current?.revokedAt ?? now,
+      };
+    });
   }
 
-  private update(
+  private update<R extends HostRecord | null>(
     hostId: string,
-    next: (current: HostRecord | null) => HostRecord
-  ): Promise<HostRecord> {
+    next: (current: HostRecord | null) => R
+  ): Promise<R> {
     return this.enqueue(async () => {
       const hosts = await this.load();
       const record = next(hosts.get(hostId) ?? null);
+      if (record === null) return record;
       hosts.set(hostId, record);
       const file: RecordsFile = {
         v: 1,

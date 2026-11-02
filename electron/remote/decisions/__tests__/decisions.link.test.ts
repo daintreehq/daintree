@@ -167,28 +167,36 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     });
   });
 
-  it("makes no keys when its keychain couldn't keep them, so the owner never registers one", async () => {
-    const { host, client } = await pair();
-    const keys = memoryKeys();
-    keys.state.keychain = { kind: "weak", reason: "No keyring is available" };
-    serve(host, new HostEnrollments({ openKeys: keys.open }));
-    const link = linkOver(client);
+  it.each([
+    ["weak", "No keyring is available"],
+    ["locked", "The keychain is locked"],
+    ["unavailable", "Secure storage is unavailable"],
+    ["timeout", "The keychain didn't answer in time"],
+  ] as const)(
+    "makes no keys when its keychain is %s, so the owner never registers one",
+    async (kind, reason) => {
+      const { host, client } = await pair();
+      const keys = memoryKeys();
+      keys.state.keychain = { kind, reason };
+      serve(host, new HostEnrollments({ openKeys: keys.open }));
+      const link = linkOver(client);
 
-    expect(await link.request({ attempt: "attempt_0000000001", label: HOST })).toEqual({
-      ok: true,
-      value: { step: "refused", reason: "no-keychain", detail: "No keyring is available" },
-    });
-    // Nothing was kept for that attempt: an enrollment for it is refused.
-    const owner = await makeOwner();
-    const other = await pair();
-    const keysElsewhere = memoryKeys();
-    serve(other.host, new HostEnrollments({ openKeys: keysElsewhere.open }));
-    const elsewhere = await enrollOver(linkOver(other.client), owner);
-    expect(
-      await link.accept({ attempt: "attempt_0000000001", response: elsewhere.response })
-    ).toEqual({ ok: true, value: { step: "refused", reason: "stale-attempt" } });
-    expect(keys.current()).toBeNull();
-  });
+      expect(await link.request({ attempt: "attempt_0000000001", label: HOST })).toEqual({
+        ok: true,
+        value: { step: "refused", reason: "no-keychain", detail: reason },
+      });
+      // Nothing was kept for that attempt: an enrollment for it is refused.
+      const owner = await makeOwner();
+      const other = await pair();
+      const keysElsewhere = memoryKeys();
+      serve(other.host, new HostEnrollments({ openKeys: keysElsewhere.open }));
+      const elsewhere = await enrollOver(linkOver(other.client), owner);
+      expect(
+        await link.accept({ attempt: "attempt_0000000001", response: elsewhere.response })
+      ).toEqual({ ok: true, value: { step: "refused", reason: "stale-attempt" } });
+      expect(keys.current()).toBeNull();
+    }
+  );
 
   it("never replaces its own owner setup, and refuses another enrollment once enrolled", async () => {
     const owner = await makeOwner();
@@ -243,7 +251,7 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     });
   });
 
-  it("drops a link's keys when it closes", async () => {
+  it("drops a link's keys when it closes, so its enrollment can't be accepted after", async () => {
     const owner = await makeOwner();
     const { host, client } = await pair();
     const keys = memoryKeys();
@@ -253,11 +261,74 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     const link = linkOver(client);
     const requested = await link.request({ attempt: "attempt_0000000001", label: HOST });
     if (!requested.ok || requested.value.step !== "requested") throw new Error("not requested");
-    await enrollHost(owner.client, requested.value.request);
+    const { response } = await enrollHost(owner.client, requested.value.request);
 
     client.close("test");
     await vi.waitFor(() => expect(forget).toHaveBeenCalledWith(host));
+    // The session object is what the keys were bound to: even it can't use them now.
+    expect(await enrollment.accept(host, { attempt: "attempt_0000000001", response })).toEqual({
+      step: "refused",
+      reason: "stale-attempt",
+    });
     expect(keys.current()).toBeNull();
+  });
+
+  it("keeps no keys a closed link's request finishes making", async () => {
+    const owner = await makeOwner();
+    const keys = memoryKeys();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const enrollment = new HostEnrollments({
+      openKeys: () => {
+        const opened = keys.open();
+        return {
+          ...opened,
+          check: async () => {
+            await held;
+            return opened.check();
+          },
+        };
+      },
+    });
+    const link = {};
+    const asking = enrollment.request(link, { attempt: "attempt_0000000001", label: HOST });
+    enrollment.forget(link);
+    release();
+    await expect(asking).rejects.toThrow("closed");
+
+    // A request made for another link gives a valid enrollment; the closed link has none to accept.
+    const other = {};
+    const requested = await enrollment.request(other, {
+      attempt: "attempt_0000000002",
+      label: HOST,
+    });
+    if (requested.step !== "requested") throw new Error("not requested");
+    const { response } = await enrollHost(owner.client, requested.request);
+    expect(await enrollment.accept(link, { attempt: "attempt_0000000001", response })).toEqual({
+      step: "refused",
+      reason: "stale-attempt",
+    });
+  });
+
+  it("never writes over an identity saved on the Host while it was being enrolled", async () => {
+    const owner = await makeOwner();
+    const ownSetup = await makeOwner({
+      installationId: "inst_own_setup_001",
+      deviceId: "dev_own_setup_0001",
+    });
+    const { host, client } = await pair();
+    const keys = memoryKeys();
+    serve(host, new HostEnrollments({ openKeys: keys.open }));
+    const link = linkOver(client);
+    const requested = await link.request({ attempt: "attempt_0000000001", label: HOST });
+    if (!requested.ok || requested.value.step !== "requested") throw new Error("not requested");
+    const { response } = await enrollHost(owner.client, requested.value.request);
+
+    // The person set Decisions up on the Host itself meanwhile.
+    keys.replace(ownSetup.stored);
+    const accepted = await link.accept({ attempt: "attempt_0000000001", response });
+    expect(accepted).toMatchObject({ ok: true, value: { step: "refused" } });
+    expect(keys.current()).toEqual(ownSetup.stored);
   });
 
   it("refuses an enrollment that doesn't match the keys it made", async () => {
@@ -293,6 +364,11 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     await enrollOver(link, owner);
     const revoked = keys.current()!;
     owner.revoke(revoked.config.deviceId);
+    // Not named, it is never replaced.
+    expect(await link.request({ attempt: "attempt_0000000004", label: HOST })).toEqual({
+      ok: true,
+      value: { step: "refused", reason: "enrolled" },
+    });
 
     // Another owner naming it is refused, and the identity stays.
     const stranger = await makeOwner({

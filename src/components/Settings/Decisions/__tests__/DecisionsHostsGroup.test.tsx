@@ -129,7 +129,7 @@ describe("Remote Hosts under Devices", () => {
     await renderGroup({ onEnrolledChange });
 
     await act(async () => {
-      fireEvent.click(enrollButtons()[0]);
+      fireEvent.click(enrollButtons()[0]!);
     });
     expect(enrollHost).toHaveBeenCalledWith({ hostId: "studio" });
     expect(listHosts).toHaveBeenCalledTimes(2);
@@ -143,7 +143,7 @@ describe("Remote Hosts under Devices", () => {
     enrollHost.mockResolvedValue({ result: "not-connected" });
     await renderGroup();
     await act(async () => {
-      fireEvent.click(enrollButtons()[0]);
+      fireEvent.click(enrollButtons()[0]!);
     });
     expect(document.body.textContent).toContain("isn't connected now");
     enrollHost.mockResolvedValue({ result: "done", host: host() });
@@ -162,8 +162,51 @@ describe("Remote Hosts under Devices", () => {
     await act(async () => {
       fireEvent.click(autoSwitch());
     });
-    expect(setAutoEnrollHosts).toHaveBeenCalledWith(false);
+    expect(setAutoEnrollHosts).toHaveBeenLastCalledWith(false);
     expect(autoSwitch().getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(autoSwitch());
+    });
+    expect(setAutoEnrollHosts).toHaveBeenLastCalledWith(true);
+    expect(autoSwitch().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("never lets an older read replace a newer one", async () => {
+    let answerOlder!: (read: DecisionsHostsResult) => void;
+    listHosts.mockImplementationOnce(() => new Promise((resolve) => (answerOlder = resolve)));
+    const view = await renderGroup({ revision: 1 });
+    listHosts.mockResolvedValueOnce(
+      listed([host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false })])
+    );
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsHostsGroup enabled revision={2} />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    await act(async () => {
+      answerOlder(listed([host({ enrollment: { state: "enrolling" }, canEnroll: false })]));
+    });
+    const row = document.querySelector("#decisions-host-studio")?.textContent ?? "";
+    expect(row).toContain("Enrolled");
+    expect(row).not.toContain("Enrolling");
+  });
+
+  it("drops rows that offered Enroll once there is no owner to enroll with", async () => {
+    listHosts.mockResolvedValueOnce(listed([host()], false));
+    const view = await renderGroup({ revision: 1 });
+    expect(enrollButtons()).toHaveLength(1);
+
+    listHosts.mockResolvedValueOnce({ result: "not-set-up" });
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsHostsGroup enabled revision={2} />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    expect(enrollButtons()).toHaveLength(0);
+    expect(document.body.textContent).toContain("No relay is set up on this computer");
   });
 
   it("reads the Hosts again with each status push, which carries an enrollment's progress", async () => {

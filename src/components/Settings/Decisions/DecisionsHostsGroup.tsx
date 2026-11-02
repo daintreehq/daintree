@@ -61,10 +61,14 @@ export function DecisionsHostsGroup({
 
   return (
     <>
-      {hosts === null && loadError !== null && (
+      {loadError !== null && (
         <SettingsLoadErrorBanner
-          title="Couldn't read the Remote Hosts"
-          message={loadError}
+          title={
+            hosts === null ? "Couldn't read the Remote Hosts" : "Couldn't refresh the Remote Hosts"
+          }
+          message={
+            hosts === null ? loadError : `${loadError} The list below is from the last read.`
+          }
           onRetry={reload}
         />
       )}

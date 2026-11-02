@@ -743,6 +743,7 @@ describe("decisions IPC", () => {
     }
     const autoSchema = decisionsNamespace.ops.setAutoEnrollHosts.schema as SafeParse;
     expect(autoSchema.safeParse(false).success).toBe(true);
+    expect(autoSchema.safeParse(true).success).toBe(true);
     for (const value of [undefined, "false", 0, { autoEnrollHosts: false }]) {
       expect(autoSchema.safeParse(value).success).toBe(false);
     }

@@ -17,7 +17,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { DecisionsKeyStoreError, decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
 
 /** What enrollment needs of this machine's sealed key store. */
-export type HostKeys = Pick<SealedKeyStore, "load" | "save" | "check" | "close">;
+export type HostKeys = Pick<SealedKeyStore, "load" | "saveIf" | "check" | "close">;
 
 export interface HostEnrollmentsOptions {
   /** A key store for one step, closed after it: this machine's sealed one unless a test says otherwise. */
@@ -75,6 +75,8 @@ function reportOf(stored: StoredIdentity | null): HostIdentityReport {
 export class HostEnrollments {
   private readonly openKeys: () => HostKeys;
   private readonly attempts = new Map<string, PendingAttempt>();
+  /** Links that closed: keys a request of theirs finishes making afterwards are dropped. */
+  private readonly closedLinks = new WeakSet<object>();
   private queue: Promise<unknown> = Promise.resolve();
   private disposed = false;
 
@@ -120,8 +122,12 @@ export class HostEnrollments {
       const pending = new MemoryPendingHostStore();
       const { request } = await createHostRequest({ pending, label: input.label, fresh: true });
       if (this.disposed) throw new Error("This Host stopped serving Shells");
+      if (this.closedLinks.has(link)) {
+        await pending.clear();
+        throw new Error("The Shell's connection closed while the keys were being made");
+      }
       // One attempt per link: a newer request replaces the keys an older one made.
-      this.forget(link);
+      this.dropAttemptsOf(link);
       this.attempts.set(input.attempt, {
         link,
         attempt: input.attempt,
@@ -150,20 +156,22 @@ export class HostEnrollments {
           const stored = await keys.load();
           return stored !== null && replaceable(stored) ? null : stored;
         },
-        save: async (identity) => {
-          const stored = await keys.load();
-          if (!replaceable(stored)) {
-            throw new Error("This Host's Decisions identity changed while it was being enrolled");
-          }
-          // Only the owner the old identity was pinned to replaces it.
-          if (
-            stored !== null &&
-            stored.host?.ownerCert.signing_pub !== identity.host?.ownerCert.signing_pub
-          ) {
-            throw new Error("This Host was enrolled by another owner, so it was left as it is");
-          }
-          await keys.save(identity);
-        },
+        // Checked again in the write's own turn, so an identity saved meanwhile
+        // (a setup on this machine, another Shell's enrollment) is never replaced.
+        save: (identity) =>
+          keys.saveIf((stored) => {
+            if (!replaceable(stored)) {
+              return "This Host's Decisions identity changed while it was being enrolled";
+            }
+            // Only the owner the old identity was pinned to replaces it.
+            if (
+              stored !== null &&
+              stored.host?.ownerCert.signing_pub !== identity.host?.ownerCert.signing_pub
+            ) {
+              return "This Host was enrolled by another owner, so it was left as it is";
+            }
+            return null;
+          }, identity),
         clear: () => Promise.reject(new Error("Enrollment never removes an identity")),
       };
       let identity;
@@ -187,15 +195,20 @@ export class HostEnrollments {
   }
 
   forget(link: object): void {
-    for (const [attempt, held] of this.attempts) {
-      if (held.link === link) this.attempts.delete(attempt);
-    }
+    this.closedLinks.add(link);
+    this.dropAttemptsOf(link);
   }
 
   async dispose(): Promise<void> {
     this.disposed = true;
     this.attempts.clear();
     await this.queue.catch(() => {});
+  }
+
+  private dropAttemptsOf(link: object): void {
+    for (const [attempt, held] of this.attempts) {
+      if (held.link === link) this.attempts.delete(attempt);
+    }
   }
 
   private detailOf(error: unknown, fallback: string): { detail?: string } {

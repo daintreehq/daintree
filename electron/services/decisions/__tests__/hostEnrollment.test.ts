@@ -38,6 +38,7 @@ class FakeLink implements DecisionsHostLink {
   isOpen = true;
   readonly asked: string[] = [];
   readonly requests: Array<{ attempt: string; label: string; replace?: string }> = [];
+  readonly accepts: Array<{ attempt: string; response: string }> = [];
   private readonly closeListeners = new Set<() => void>();
   holds = 0;
   identity: HostIdentityReport = { kind: "none" };
@@ -83,8 +84,9 @@ class FakeLink implements DecisionsHostLink {
     return this.onRequest();
   }
 
-  accept(_input: { attempt: string; response: string }) {
+  accept(input: { attempt: string; response: string }) {
     this.asked.push("accept");
+    this.accepts.push(input);
     return this.onAccept();
   }
 }
@@ -170,7 +172,7 @@ let enroll: ReturnType<
   typeof vi.fn<(request: string) => Promise<{ response: string } | DecisionsRelayRequestFailure>>
 >;
 let meta: ReturnType<typeof memoryMeta>;
-let watched: ReturnType<typeof vi.fn>;
+let watched: ReturnType<typeof vi.fn<(watcher: unknown) => void>>;
 
 function makeOwner(connected: boolean) {
   const relayDevices: DeviceInfo[] = [];
@@ -203,7 +205,7 @@ beforeEach(() => {
   attempts = 0;
   enroll = vi.fn(async () => ({ response: "decisions-host-enrollment.v1.fake" }));
   owner = makeOwner(true);
-  watched = vi.fn();
+  watched = vi.fn<(watcher: unknown) => void>();
   enroller = new HostEnroller({
     watchPort: (watcher) => {
       watched(watcher);
@@ -235,6 +237,10 @@ describe("HostEnroller", () => {
     expect(link.requests[0]).toMatchObject({ label: "studio" });
     expect(link.requests[0].replace).toBeUndefined();
     expect(enroll).toHaveBeenCalledWith("decisions-host-request.v1.fake");
+    // The Host is handed exactly what the relay registered, for the attempt it made keys for.
+    expect(link.accepts).toEqual([
+      { attempt: link.requests[0].attempt, response: "decisions-host-enrollment.v1.fake" },
+    ]);
     expect(await stateOf("studio")).toEqual({ state: "enrolled", deviceId: "dev_host_000000001" });
     expect(await owner!.records!.get("studio")).toMatchObject({
       deviceId: "dev_host_000000001",
@@ -511,5 +517,72 @@ describe("HostEnroller", () => {
     // The automatic run enrolled it; Enroll found it enrolled and asked nothing more of the relay.
     expect(enroll).toHaveBeenCalledTimes(1);
     expect(link.asked).toEqual(["status", "request", "accept", "status"]);
+  });
+  it("gives a link that comes up while its Host's last run is in flight its own attempt after", async () => {
+    enroller.start();
+    const first = new FakeLink();
+    const registering = deferred<{ response: string } | DecisionsRelayRequestFailure>();
+    enroll.mockImplementationOnce(() => registering.promise);
+    port.connect("studio", first);
+    await settle();
+    expect(first.asked).toEqual(["status", "request"]);
+
+    // The link drops and comes back while the relay is still answering.
+    const second = port.connect("studio");
+    await settle();
+    expect(second.asked).toEqual([]);
+    registering.resolve({ response: "decisions-host-enrollment.v1.fake" });
+    await settle();
+    expect(first.asked).toEqual(["status", "request"]);
+    expect(second.asked).toEqual(["status", "request", "accept"]);
+    expect(await stateOf("studio")).toMatchObject({ state: "enrolled" });
+  });
+
+  it("drops an Enroll still waiting its turn when Decisions stops or the owner changes", async () => {
+    enroller.start();
+    const link = new FakeLink();
+    const status = deferred<HostCallOutcome<HostIdentityReport>>();
+    link.onStatus = () => status.promise;
+    port.connect("studio", link);
+    await settle();
+    const manual = enroller.enroll("studio");
+    await settle();
+
+    enroller.forget();
+    owner = { ...makeOwner(true), key: "another-owner" };
+    status.resolve({ ok: true, value: { kind: "none" } });
+    await manual;
+    await settle();
+    expect(link.asked).toEqual(["status"]);
+    expect(enroll).not.toHaveBeenCalled();
+  });
+
+  it("registers nothing automatically for a Host revoked while it made its keys", async () => {
+    enroller.start();
+    const first = port.connect("studio");
+    await settle();
+    expect(await stateOf("studio")).toMatchObject({ state: "enrolled" });
+    enroll.mockClear();
+
+    // It reconnects having lost its identity; while it makes new keys, Devices revokes its old device.
+    const second = new FakeLink("dev_host_000000002");
+    const requesting = deferred<HostCallOutcome<HostRequestResult>>();
+    second.onRequest = () => requesting.promise;
+    first.close();
+    port.connect("studio", second);
+    await settle();
+    expect(second.asked).toEqual(["status", "request"]);
+    revokeOnRelay("dev_host_000000001");
+    await enroller.observeDevices(owner!.relayDevices);
+    requesting.resolve({
+      ok: true,
+      value: { step: "requested", request: "decisions-host-request.v1.fake" },
+    });
+    await settle();
+
+    expect(enroll).not.toHaveBeenCalled();
+    expect(second.asked).toEqual(["status", "request"]);
+    expect(await stateOf("studio")).toEqual({ state: "revoked" });
+    expect((await owner!.records!.get("studio"))?.revokedAt).toEqual(expect.any(Number));
   });
 });

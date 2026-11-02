@@ -112,11 +112,20 @@ export function memoryKeys(initial: StoredIdentity | null = null) {
   return {
     state,
     current: () => value,
+    /** Something else on this machine writes the file, as a setup here would. */
+    replace: (identity: StoredIdentity | null) => {
+      value = identity ? structuredClone(identity) : null;
+    },
     open: () => {
       state.opened += 1;
       return {
         load: async () => (value ? structuredClone(value) : null),
-        save: async (identity: StoredIdentity) => {
+        saveIf: async (
+          refusal: (current: StoredIdentity | null) => string | null,
+          identity: StoredIdentity
+        ) => {
+          const refused = refusal(value ? structuredClone(value) : null);
+          if (refused !== null) throw new Error(refused);
           state.saves += 1;
           value = structuredClone(identity);
         },
