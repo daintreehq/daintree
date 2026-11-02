@@ -76,9 +76,24 @@ describe("locateAgentSessionFile — Codex", () => {
     ).resolves.toEqual(OBSERVED_CODEX);
   });
 
-  it("drops an observation when the pane restarted under it", async () => {
+  it.each([
+    ["respawned", { spawnedAt: 2_000 }],
+    ["relaunched", { launchGeneration: 4 }],
+    ["started another agent run", { agentIncarnation: 1 }],
+    ["took another session id", { agentSessionId: "other" }],
+  ])("drops an observation when the pane %s under it", async (_label, changed) => {
     const result = await locateAgentSessionFile(TERMINAL, PROJECT, {
-      ptyClient: queries(record(), { after: record({ spawnedAt: 2_000 }) }),
+      ptyClient: queries(record(), { after: record(changed) }),
+      platform: "darwin",
+      probeCodex: vi.fn().mockResolvedValue(OBSERVED_CODEX),
+    });
+
+    expect(result).toEqual({ status: "unknown", reason: "pane-changed" });
+  });
+
+  it("drops it when the terminal is gone by the time the probe answers", async () => {
+    const result = await locateAgentSessionFile(TERMINAL, PROJECT, {
+      ptyClient: queries(record(), { after: null }),
       platform: "darwin",
       probeCodex: vi.fn().mockResolvedValue(OBSERVED_CODEX),
     });
@@ -183,6 +198,20 @@ describe("locateAgentSessionFile — Claude Code", () => {
     });
 
     expect(result).toEqual({ status: "unknown", reason: "session-id-unknown" });
+  });
+
+  it.each([
+    ["restarted", claudePane({ spawnedAt: 2_000 })],
+    ["changed agent", claudePane({ detectedAgentId: "codex" })],
+    ["went away", null],
+  ])("drops the transcript when the pane %s during the lookup", async (_label, after) => {
+    const result = await locateAgentSessionFile(TERMINAL, PROJECT, {
+      ptyClient: queries(claudePane(), { after }),
+      getClaudeProjectsRoot: () => "/Users/x/.claude/projects",
+      locateClaude: vi.fn().mockResolvedValue({ status: "found", file: transcript }),
+    });
+
+    expect(result).toEqual({ status: "unknown", reason: "pane-changed" });
   });
 
   it("reports a transcript not written yet as not observed", async () => {

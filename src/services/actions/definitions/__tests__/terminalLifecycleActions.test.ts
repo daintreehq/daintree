@@ -2417,8 +2417,16 @@ describe("terminal.sessionFile.get (#16097)", () => {
       }
     );
 
+    // The source is a plugin's, but the identity only came in through the override.
+    const unattributed = await service.dispatch(
+      id,
+      { terminalId: "term-1" },
+      { source: "plugin", contextOverride: { callerPluginId: "acme.handoff" } }
+    );
+
     expect(plugin).toMatchObject({ ok: true, result: observed });
     expect(forged.ok).toBe(false);
+    expect(unattributed.ok).toBe(false);
     expect(get).toHaveBeenCalledTimes(1);
   });
 

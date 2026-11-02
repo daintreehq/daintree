@@ -3,17 +3,20 @@
  *
  * Codex holds its session's rollout open for writing for as long as the
  * session runs (`<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`),
- * so the file is an operating-system fact about the pane's own processes. That
- * answers for any `CODEX_HOME` and for a `codex` typed into a shell, which
+ * so the file is an operating-system fact about the pane's own Codex process.
+ * That answers for any `CODEX_HOME` and for a `codex` typed into a shell, which
  * Daintree never learned an id for. Nothing here reads Codex's config or asks
  * Codex; the file's first record is read only to confirm what it is.
  *
- * One `ps` and one `lsof`, each on demand, bounded in time and output. Any
+ * The pane's Codex is the outermost `codex` process under the pane, and only
+ * the files it holds count: a `codex` one of its tools started is a different
+ * conversation. One `ps`, one `lsof` and one more `ps` to confirm the process
+ * is still the one listed, each on demand and bounded in time and output. Any
  * listing that can't be complete answers unknown, because only a complete one
  * can show there is exactly one file.
  */
 
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import path from "node:path";
@@ -35,8 +38,18 @@ const MAX_CANDIDATES = 8;
  */
 const SESSION_META_MAX_BYTES = 256 * 1024;
 
-const ROLLOUT_NAME =
-  /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/**
+ * `rollout-<time>-<thread id>.jsonl`, or `…-<thread id>_<rollout id>.jsonl`
+ * for a thread Codex reverted, which keeps its thread id.
+ */
+const ROLLOUT_NAME = new RegExp(
+  `^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${UUID})(?:_${UUID})?\\.jsonl$`,
+  "i"
+);
+/** `ps -o pid=,ppid=,lstart=,comm=`: `lstart` is five fields, `comm` the rest of the line. */
+const CENSUS_LINE = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.+?)\s*$/;
+const CENSUS_COLUMNS = "pid=,ppid=,lstart=,comm=";
 
 export interface ListingResult {
   stdout: string;
@@ -55,62 +68,137 @@ export interface CodexSessionFileProbeDeps {
   run?: ListingRunner;
 }
 
+function killGroup(child: ChildProcess): void {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    // The group is already gone.
+  }
+}
+
+/**
+ * Runs a listing in a process group of its own, so a timeout or an overflow
+ * takes everything it started with it: `lsof` can leave a helper blocked on an
+ * unreachable mount.
+ */
 export const runListing: ListingRunner = (file, args, { timeoutMs, maxBytes }) =>
   new Promise((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        killSignal: "SIGKILL",
-        maxBuffer: maxBytes,
+    let child: ChildProcess;
+    try {
+      child = spawn(file, args, {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
         env: {
           ...process.env,
           LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
         },
-      },
-      (error, stdout) => {
-        if (!error) {
-          resolve({ stdout, exitCode: 0 });
-          return;
-        }
-        const code = (error as { code?: unknown }).code;
-        // An exit status is an answer; a spawn failure, a kill or an overflow is not.
-        if (typeof code === "number" && !error.killed && !error.signal) {
-          resolve({ stdout, exitCode: code });
-          return;
-        }
-        reject(error);
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const settle = (outcome: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      outcome();
+    };
+    const timer = setTimeout(() => {
+      killGroup(child);
+      settle(() => reject(new Error(`${file} timed out`)));
+    }, timeoutMs);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > maxBytes) {
+        killGroup(child);
+        settle(() => reject(new Error(`${file} output passed its cap`)));
+        return;
       }
-    );
+      chunks.push(chunk);
+    });
+    child.on("error", (error) => {
+      killGroup(child);
+      settle(() => reject(error));
+    });
+    child.on("close", (code, signal) => {
+      killGroup(child);
+      settle(() => {
+        if (code === null) reject(new Error(`${file} ended on ${signal ?? "a signal"}`));
+        else resolve({ stdout: Buffer.concat(chunks).toString("utf8"), exitCode: code });
+      });
+    });
   });
 
-/** The pane's root process and every descendant, or null when the tree is too big to list whole. */
-export function collectTreePids(psOutput: string, rootPid: number): number[] | null {
-  const children = new Map<number, number[]>();
+export interface CensusEntry {
+  pid: number;
+  ppid: number;
+  /** Start time as `ps` prints it: with the pid, what tells a process from a later one reusing its id. */
+  started: string;
+  comm: string;
+}
+
+export function parseCensus(psOutput: string): Map<number, CensusEntry> {
+  const census = new Map<number, CensusEntry>();
   for (const line of psOutput.split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    const match = CENSUS_LINE.exec(line);
     if (!match) continue;
     const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const siblings = children.get(ppid);
-    if (siblings) siblings.push(pid);
-    else children.set(ppid, [pid]);
+    census.set(pid, { pid, ppid: Number(match[2]), started: match[3], comm: match[4] });
+  }
+  return census;
+}
+
+/** The native Codex binary: `codex`, or `codex-<target>` in older packages. The npm launcher runs as `node`. */
+export function isCodexExecutable(comm: string): boolean {
+  let name = path.basename(comm.replace(/\\/g, "/")).toLowerCase();
+  if (name.startsWith("-")) name = name.slice(1);
+  return name === "codex" || name.startsWith("codex-");
+}
+
+export type PaneCodexProcess =
+  { status: "found"; process: CensusEntry } | { status: "none" | "ambiguous" | "too-big" };
+
+/**
+ * The outermost Codex process under `rootPid`, the root included. A `codex`
+ * below another is something the outer one ran; two at the same depth leave
+ * no one process the pane's.
+ */
+export function findPaneCodexProcess(
+  census: Map<number, CensusEntry>,
+  rootPid: number
+): PaneCodexProcess {
+  const children = new Map<number, number[]>();
+  for (const entry of census.values()) {
+    const siblings = children.get(entry.ppid);
+    if (siblings) siblings.push(entry.pid);
+    else children.set(entry.ppid, [entry.pid]);
   }
   const seen = new Set<number>([rootPid]);
-  const queue = [rootPid];
-  while (queue.length > 0) {
-    const pid = queue.shift()!;
-    for (const child of children.get(pid) ?? []) {
-      if (seen.has(child)) continue;
-      seen.add(child);
-      if (seen.size > MAX_TREE_PIDS) return null;
-      queue.push(child);
+  let level = [rootPid];
+  while (level.length > 0) {
+    const found = level
+      .map((pid) => census.get(pid))
+      .filter((entry): entry is CensusEntry => !!entry && isCodexExecutable(entry.comm));
+    if (found.length > 1) return { status: "ambiguous" };
+    if (found.length === 1) return { status: "found", process: found[0]! };
+    const next: number[] = [];
+    for (const pid of level) {
+      for (const child of children.get(pid) ?? []) {
+        if (seen.has(child)) continue;
+        seen.add(child);
+        if (seen.size > MAX_TREE_PIDS) return { status: "too-big" };
+        next.push(child);
+      }
     }
+    level = next;
   }
-  return [...seen];
+  return { status: "none" };
 }
 
 export interface OpenFileRecord {
@@ -118,11 +206,12 @@ export interface OpenFileRecord {
   fd: string;
   access: string;
   type: string;
+  device: string;
   inode: string;
   name: string;
 }
 
-/** Parses `lsof -F pfatin`: a `p` line opens a process, an `f` line opens one of its files. */
+/** Parses `lsof -F pfatDin`: a `p` line opens a process, an `f` line opens one of its files. */
 export function parseLsofFields(output: string): OpenFileRecord[] {
   const records: OpenFileRecord[] = [];
   let pid: number | null = null;
@@ -140,21 +229,22 @@ export function parseLsofFields(output: string): OpenFileRecord[] {
     if (field === "f") {
       current = null;
       if (pid === null) continue;
-      current = { pid, fd: value, access: "", type: "", inode: "", name: "" };
+      current = { pid, fd: value, access: "", type: "", device: "", inode: "", name: "" };
       records.push(current);
       continue;
     }
     if (!current) continue;
     if (field === "a") current.access = value;
     else if (field === "t") current.type = value;
+    else if (field === "D") current.device = value;
     else if (field === "i") current.inode = value;
     else if (field === "n") current.name = value;
   }
   return records;
 }
 
-/** The session id a rollout's path names, when it sits where Codex writes rollouts. */
-export function rolloutSessionId(filePath: string): string | null {
+/** The thread id a rollout's path names, when it sits where Codex writes rollouts. */
+export function rolloutThreadId(filePath: string): string | null {
   if (!path.isAbsolute(filePath)) return null;
   const match = ROLLOUT_NAME.exec(path.basename(filePath));
   if (!match) return null;
@@ -169,7 +259,7 @@ export function rolloutSessionId(filePath: string): string | null {
   ) {
     return null;
   }
-  return match[1].toLowerCase();
+  return match[1]!.toLowerCase();
 }
 
 function isWriteAccess(access: string): boolean {
@@ -179,11 +269,11 @@ function isWriteAccess(access: string): boolean {
 export type SessionMetaKind = "root" | "child" | "invalid";
 
 /**
- * What a rollout's first record says it is. A subagent's thread shares its
- * root's `session_id` under an id of its own; older records with no
- * `session_id` mark a subagent by an object `source`.
+ * What a rollout's first record says it is. A subagent's thread names its
+ * parent, and shares its root's `session_id` under an id of its own; older
+ * records with neither mark a subagent by an object `source`.
  */
-export function classifySessionMeta(firstLine: string, fileSessionId: string): SessionMetaKind {
+export function classifySessionMeta(firstLine: string, fileThreadId: string): SessionMetaKind {
   let record: unknown;
   try {
     record = JSON.parse(firstLine);
@@ -196,31 +286,47 @@ export function classifySessionMeta(firstLine: string, fileSessionId: string): S
   const {
     id,
     session_id: sessionId,
+    parent_thread_id: parentThreadId,
     source,
   } = payload as {
     id?: unknown;
     session_id?: unknown;
+    parent_thread_id?: unknown;
     source?: unknown;
   };
-  if (typeof id !== "string" || id.toLowerCase() !== fileSessionId) return "invalid";
+  if (typeof id !== "string" || id.toLowerCase() !== fileThreadId) return "invalid";
+  if (parentThreadId !== undefined && parentThreadId !== null) return "child";
   if (sessionId !== undefined && sessionId !== null) {
     if (typeof sessionId !== "string") return "invalid";
-    if (sessionId.toLowerCase() !== fileSessionId) return "child";
+    if (sessionId.toLowerCase() !== fileThreadId) return "child";
   }
   if (source !== null && typeof source === "object") return "child";
   return "root";
 }
 
+/** `lsof` prints a device as hex, the way `stat` holds it. */
+function sameDevice(listed: string, dev: number): boolean {
+  if (!/^0x[0-9a-f]+$/i.test(listed)) return false;
+  return Number.parseInt(listed.slice(2), 16) === dev;
+}
+
 /**
- * The first record of the file `lsof` saw, read through a descriptor that is
- * checked to be that same file. Null when it isn't, or the record doesn't end
- * inside the read.
+ * The first record of the file `lsof` saw, read through a descriptor checked
+ * to be that same file: the device and inode it listed, a regular file, no
+ * symlink at the end of the path. Null when it isn't, or the record doesn't
+ * end inside the read.
  */
-async function readFirstRecord(filePath: string, inode: string): Promise<string | null> {
-  const checked = await lstat(filePath);
-  if (!checked.isFile() || String(checked.ino) !== inode) return null;
+async function readFirstRecord(candidate: OpenFileRecord): Promise<string | null> {
+  const checked = await lstat(candidate.name);
+  if (
+    !checked.isFile() ||
+    String(checked.ino) !== candidate.inode ||
+    !sameDevice(candidate.device, checked.dev)
+  ) {
+    return null;
+  }
   const handle = await open(
-    filePath,
+    candidate.name,
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
   );
   try {
@@ -241,18 +347,26 @@ async function readFirstRecord(filePath: string, inode: string): Promise<string 
   }
 }
 
-async function classifyCandidate(candidate: OpenFileRecord, sessionId: string) {
+async function classifyCandidate(
+  candidate: OpenFileRecord,
+  threadId: string
+): Promise<SessionMetaKind> {
   try {
-    const line = await readFirstRecord(candidate.name, candidate.inode);
-    return line === null ? "invalid" : classifySessionMeta(line, sessionId);
+    const line = await readFirstRecord(candidate);
+    return line === null ? "invalid" : classifySessionMeta(line, threadId);
   } catch {
     return "invalid";
   }
 }
 
+async function listCensus(run: ListingRunner, args: string[]) {
+  const ps = await run("ps", args, { timeoutMs: PS_TIMEOUT_MS, maxBytes: LISTING_MAX_BYTES });
+  return ps.exitCode === 0 ? parseCensus(ps.stdout) : null;
+}
+
 /**
- * The rollout the process tree under `rootPid` is writing: observed when
- * exactly one root session's rollout is open for writing there, unknown
+ * The rollout the pane's Codex under `rootPid` is writing: observed when that
+ * process holds exactly one root session's rollout open for writing, unknown
  * otherwise.
  */
 export async function probeCodexSessionFile(
@@ -264,63 +378,84 @@ export async function probeCodexSessionFile(
   if (platform === "win32") return unknownSessionFile("unsupported-platform");
   if (!Number.isInteger(rootPid) || rootPid <= 1) return unknownSessionFile("no-live-agent");
 
-  let pids: number[] | null;
+  let codex: CensusEntry;
   try {
-    const ps = await run("ps", ["-A", "-o", "pid=,ppid="], {
-      timeoutMs: PS_TIMEOUT_MS,
-      maxBytes: LISTING_MAX_BYTES,
-    });
-    if (ps.exitCode !== 0) return unknownSessionFile("probe-failed");
-    pids = collectTreePids(ps.stdout, rootPid);
+    const census = await listCensus(run, ["-A", "-o", CENSUS_COLUMNS]);
+    if (!census) return unknownSessionFile("probe-failed");
+    const found = findPaneCodexProcess(census, rootPid);
+    if (found.status === "none") return unknownSessionFile("not-observed");
+    if (found.status === "ambiguous") return unknownSessionFile("ambiguous");
+    if (found.status === "too-big") return unknownSessionFile("probe-failed");
+    codex = found.process;
   } catch {
     return unknownSessionFile("probe-failed");
   }
-  if (!pids) return unknownSessionFile("probe-failed");
 
   let lsof: ListingResult;
   try {
-    lsof = await run(
-      "lsof",
-      ["-n", "-P", "-w", "-a", "-p", pids.join(","), "-d", "0-65535", "-F", "pfatin"],
-      { timeoutMs: LSOF_TIMEOUT_MS, maxBytes: LISTING_MAX_BYTES }
-    );
+    lsof = await run("lsof", ["-n", "-P", "-w", "-p", String(codex.pid), "-F", "pfatDin"], {
+      timeoutMs: LSOF_TIMEOUT_MS,
+      maxBytes: LISTING_MAX_BYTES,
+    });
   } catch {
     return unknownSessionFile("probe-failed");
   }
-  // `lsof` exits 1 when some listed process had nothing to show or has gone,
-  // which still leaves the others' files listed.
-  if (lsof.exitCode !== 0 && lsof.exitCode !== 1) return unknownSessionFile("probe-failed");
+  // Anything but a clean exit may have left files out.
+  if (lsof.exitCode !== 0) return unknownSessionFile("probe-failed");
 
-  const candidates = new Map<string, { record: OpenFileRecord; sessionId: string }>();
+  // The listing is only the pane's if the process is still the one the census
+  // found: same parent, same start, same program.
+  try {
+    const after = (await listCensus(run, ["-o", CENSUS_COLUMNS, "-p", String(codex.pid)]))?.get(
+      codex.pid
+    );
+    if (
+      !after ||
+      after.ppid !== codex.ppid ||
+      after.started !== codex.started ||
+      after.comm !== codex.comm
+    ) {
+      return unknownSessionFile("pane-changed");
+    }
+  } catch {
+    return unknownSessionFile("probe-failed");
+  }
+
+  const candidates = new Map<string, { record: OpenFileRecord; threadId: string }>();
   for (const record of parseLsofFields(lsof.stdout)) {
-    if (record.type !== "REG" || !isWriteAccess(record.access) || !/^\d+$/.test(record.fd)) {
+    if (
+      record.pid !== codex.pid ||
+      record.type !== "REG" ||
+      !isWriteAccess(record.access) ||
+      !/^\d+$/.test(record.fd)
+    ) {
       continue;
     }
-    const sessionId = rolloutSessionId(record.name);
-    if (!sessionId) continue;
-    // One file held by several descriptors or processes is still one file.
-    candidates.set(`${record.inode}\0${record.name}`, { record, sessionId });
+    const threadId = rolloutThreadId(record.name);
+    if (!threadId) continue;
+    // One file held by several descriptors is still one file.
+    candidates.set(`${record.device}\0${record.inode}\0${record.name}`, { record, threadId });
   }
   if (candidates.size === 0) return unknownSessionFile("not-observed");
   if (candidates.size > MAX_CANDIDATES) return unknownSessionFile("ambiguous");
 
   const classified = await Promise.all(
-    [...candidates.values()].map(async ({ record, sessionId }) => ({
+    [...candidates.values()].map(async ({ record, threadId }) => ({
       record,
-      sessionId,
-      kind: await classifyCandidate(record, sessionId),
+      threadId,
+      kind: await classifyCandidate(record, threadId),
     }))
   );
   const roots = classified.filter((entry) => entry.kind === "root");
   if (roots.length > 1) return unknownSessionFile("ambiguous");
-  if (roots.length === 0 || classified.some((entry) => entry.kind === "invalid")) {
+  const [root] = roots;
+  if (!root || classified.some((entry) => entry.kind === "invalid")) {
     return unknownSessionFile("unverified");
   }
-  const [root] = roots;
   return {
     status: "observed",
     agentId: "codex",
-    sessionId: root.sessionId,
+    sessionId: root.threadId,
     path: root.record.name,
     observedBy: "open-for-writing",
   };

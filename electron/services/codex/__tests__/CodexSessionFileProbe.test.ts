@@ -4,16 +4,23 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifySessionMeta,
-  collectTreePids,
+  findPaneCodexProcess,
+  parseCensus,
   parseLsofFields,
   probeCodexSessionFile,
-  rolloutSessionId,
+  rolloutThreadId,
+  runListing,
+  type ListingResult,
   type ListingRunner,
 } from "../CodexSessionFileProbe.js";
 
 const ROOT_ID = "01a19a09-d462-7101-a841-24b57d849008";
 const CHILD_ID = "02b29b19-e573-7212-b952-35c68e95a119";
 const OTHER_ROOT_ID = "03c39c29-f684-7323-ca63-46d79fa6b22a";
+const REVERT_ID = "04d49d39-0795-7434-db74-57e8a0b7c33b";
+
+const NATIVE = "/opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/bin/codex";
+const STARTED = "Mon Nov  2 04:36:27 2026";
 
 function sessionMeta(id: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -23,10 +30,24 @@ function sessionMeta(id: string, extra: Record<string, unknown> = {}): string {
   });
 }
 
-/** A shell (100) running the npm launcher (101), whose child is the native binary (102). */
-const PS_TREE = ["  1     0", "100     1", "101   100", "102   101", "103   102", "900     1"].join(
-  "\n"
-);
+function censusLine(pid: number, ppid: number, comm: string, started = STARTED): string {
+  return `${String(pid).padStart(5)} ${String(ppid).padStart(5)} ${started}     ${comm}`;
+}
+
+/**
+ * A shell (100) running the npm launcher (101), whose child is the native
+ * binary (102). Codex ran a tool (103) that started another `codex` (104).
+ * 900 is another pane's Codex.
+ */
+const PS_TREE = [
+  censusLine(1, 0, "/sbin/launchd"),
+  censusLine(100, 1, "-zsh"),
+  censusLine(101, 100, "node"),
+  censusLine(102, 101, NATIVE),
+  censusLine(103, 102, "/bin/zsh"),
+  censusLine(104, 103, "codex"),
+  censusLine(900, 1, NATIVE),
+].join("\n");
 
 let codexHome: string;
 
@@ -38,19 +59,29 @@ afterEach(async () => {
   await rm(codexHome, { recursive: true, force: true });
 });
 
-async function writeRollout(id: string, firstLine: string, rest = ""): Promise<string> {
+function rolloutPath(id: string, revertedTo?: string): string {
   const dir = path.join(codexHome, "sessions", "2026", "11", "02");
-  await mkdir(dir, { recursive: true });
-  const file = path.join(dir, `rollout-2026-11-02T04-14-57-${id}.jsonl`);
-  await writeFile(file, `${firstLine}\n${rest}`);
+  const ids = revertedTo ? `${id}_${revertedTo}` : id;
+  return path.join(dir, `rollout-2026-11-02T04-14-57-${ids}.jsonl`);
+}
+
+async function writeRollout(
+  id: string,
+  firstLine: string,
+  options: { rest?: string; revertedTo?: string } = {}
+): Promise<string> {
+  const file = rolloutPath(id, options.revertedTo);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${firstLine}\n${options.rest ?? ""}`);
   return file;
 }
 
 interface OpenFile {
-  pid: number;
+  pid?: number;
   fd: string;
   access: string;
   type?: string;
+  device?: string;
   inode?: string;
   name: string;
 }
@@ -58,67 +89,117 @@ interface OpenFile {
 async function lsofFor(files: OpenFile[]): Promise<string> {
   const lines: string[] = [];
   const byPid = new Map<number, OpenFile[]>();
-  for (const file of files) byPid.set(file.pid, [...(byPid.get(file.pid) ?? []), file]);
+  for (const file of files) {
+    const pid = file.pid ?? 102;
+    byPid.set(pid, [...(byPid.get(pid) ?? []), file]);
+  }
   for (const [pid, held] of byPid) {
     lines.push(`p${pid}`);
     for (const file of held) {
-      const inode = file.inode ?? String((await stat(file.name)).ino);
-      lines.push(`f${file.fd}`, `a${file.access}`, `t${file.type ?? "REG"}`, `i${inode}`);
-      lines.push(`n${file.name}`);
+      const stats = await stat(file.name).catch(() => null);
+      const device = file.device ?? `0x${(stats?.dev ?? 0).toString(16)}`;
+      const inode = file.inode ?? String(stats?.ino ?? 0);
+      lines.push(`f${file.fd}`, `a${file.access}`, `t${file.type ?? "REG"}`, `D${device}`);
+      lines.push(`i${inode}`, `n${file.name}`);
     }
   }
   return `${lines.join("\n")}\n`;
 }
 
-function runner(lsofStdout: string, overrides: Partial<Record<"ps" | "lsof", unknown>> = {}) {
-  return vi.fn<ListingRunner>(async (file) => {
-    const override = overrides[file as "ps" | "lsof"];
+type Overrides = Partial<Record<"census" | "lsof" | "recheck", ListingResult | Error>>;
+
+/** Answers the census, the file listing and the one-process recheck the probe runs, in that order. */
+function runner(lsofStdout: string, overrides: Overrides = {}) {
+  return vi.fn<ListingRunner>(async (file, args) => {
+    const step = file === "lsof" ? "lsof" : args.includes("-A") ? "census" : "recheck";
+    const override = overrides[step];
     if (override instanceof Error) throw override;
-    if (override !== undefined) return override as { stdout: string; exitCode: number };
-    if (file === "ps") return { stdout: PS_TREE, exitCode: 0 };
-    if (file === "lsof") return { stdout: lsofStdout, exitCode: 0 };
-    throw new Error(`unexpected ${file}`);
+    if (override) return override;
+    if (step === "lsof") return { stdout: lsofStdout, exitCode: 0 };
+    if (step === "census") return { stdout: PS_TREE, exitCode: 0 };
+    const pid = Number(args[args.indexOf("-p") + 1]);
+    const line = PS_TREE.split("\n").find((entry) => parseCensus(entry).has(pid));
+    return line ? { stdout: line, exitCode: 0 } : { stdout: "", exitCode: 1 };
   });
 }
 
-describe("collectTreePids", () => {
-  it("walks from the pane's root through every descendant and nothing else", () => {
-    expect(collectTreePids(PS_TREE, 100)?.sort((a, b) => a - b)).toEqual([100, 101, 102, 103]);
+describe("findPaneCodexProcess", () => {
+  it("takes the outermost native Codex under the pane, past the npm launcher", () => {
+    const found = findPaneCodexProcess(parseCensus(PS_TREE), 100);
+    expect(found).toMatchObject({ status: "found", process: { pid: 102, ppid: 101 } });
   });
 
-  it("refuses a tree too big to list whole", () => {
-    const lines = ["100 1", ...Array.from({ length: 300 }, (_, i) => `${1000 + i} 100`)];
-    expect(collectTreePids(lines.join("\n"), 100)).toBeNull();
+  it("finds none in a pane whose tree runs no Codex", () => {
+    const shellOnly = [censusLine(100, 1, "-zsh"), censusLine(101, 100, "node")].join("\n");
+    expect(findPaneCodexProcess(parseCensus(shellOnly), 100)).toEqual({ status: "none" });
+  });
+
+  it("names none when two Codex processes run side by side", () => {
+    const twin = [censusLine(100, 1, "-zsh"), censusLine(101, 100, "codex")];
+    twin.push(censusLine(102, 100, "codex-aarch64-apple-darwin"));
+    expect(findPaneCodexProcess(parseCensus(twin.join("\n")), 100)).toEqual({
+      status: "ambiguous",
+    });
+  });
+
+  it("refuses a tree too big to search whole", () => {
+    const lines = [censusLine(100, 1, "-zsh")];
+    for (let i = 0; i < 300; i += 1) lines.push(censusLine(1000 + i, 100, "sleep"));
+    expect(findPaneCodexProcess(parseCensus(lines.join("\n")), 100)).toEqual({
+      status: "too-big",
+    });
   });
 });
 
 describe("parseLsofFields", () => {
   it("attributes each file to the process listed above it", () => {
     const records = parseLsofFields(
-      ["p10", "f3", "aw", "tREG", "i7", "n/a", "p11", "fcwd", "ar", "tDIR", "n/b", ""].join("\n")
+      [
+        "p10",
+        "f3",
+        "aw",
+        "tREG",
+        "D0x10",
+        "i7",
+        "n/a",
+        "p11",
+        "fcwd",
+        "ar",
+        "tDIR",
+        "n/b",
+        "",
+      ].join("\n")
     );
-    expect(records.map((r) => [r.pid, r.fd, r.access, r.type, r.inode, r.name])).toEqual([
-      [10, "3", "w", "REG", "7", "/a"],
-      [11, "cwd", "r", "DIR", "", "/b"],
+    expect(records.map((r) => [r.pid, r.fd, r.access, r.type, r.device, r.inode, r.name])).toEqual([
+      [10, "3", "w", "REG", "0x10", "7", "/a"],
+      [11, "cwd", "r", "DIR", "", "", "/b"],
     ]);
   });
 });
 
-describe("rolloutSessionId", () => {
-  it("reads the id from a rollout in a dated sessions folder, under any home", () => {
+describe("rolloutThreadId", () => {
+  it("reads the thread id from a rollout in a dated sessions folder, under any home", () => {
     expect(
-      rolloutSessionId(
+      rolloutThreadId(
         `/elsewhere/profile-b/sessions/2026/11/02/rollout-2026-11-02T04-14-57-${ROOT_ID}.jsonl`
+      )
+    ).toBe(ROOT_ID);
+  });
+
+  it("reads it from a reverted thread's name, which keeps the thread id first", () => {
+    expect(
+      rolloutThreadId(
+        `/h/sessions/2026/11/02/rollout-2026-11-02T04-14-57-${ROOT_ID}_${REVERT_ID}.jsonl`
       )
     ).toBe(ROOT_ID);
   });
 
   it("refuses a rollout name outside the dated layout", () => {
     expect(
-      rolloutSessionId(`/home/me/.codex/archived/rollout-2026-11-02T04-14-57-${ROOT_ID}.jsonl`)
+      rolloutThreadId(`/home/me/.codex/archived/rollout-2026-11-02T04-14-57-${ROOT_ID}.jsonl`)
     ).toBeNull();
     expect(
-      rolloutSessionId(`sessions/2026/11/02/rollout-2026-11-02T04-14-57-${ROOT_ID}.jsonl`)
+      rolloutThreadId(`sessions/2026/11/02/rollout-2026-11-02T04-14-57-${ROOT_ID}.jsonl`)
     ).toBeNull();
   });
 });
@@ -129,6 +210,9 @@ describe("classifySessionMeta", () => {
     expect(classifySessionMeta(sessionMeta(CHILD_ID, { session_id: ROOT_ID }), CHILD_ID)).toBe(
       "child"
     );
+    expect(
+      classifySessionMeta(sessionMeta(CHILD_ID, { parent_thread_id: ROOT_ID }), CHILD_ID)
+    ).toBe("child");
     expect(
       classifySessionMeta(
         sessionMeta(CHILD_ID, { session_id: undefined, source: { subagent: {} } }),
@@ -145,24 +229,40 @@ describe("classifySessionMeta", () => {
 });
 
 describe("probeCodexSessionFile", () => {
-  it("answers the root rollout the native child holds open for writing, wherever its home is", async () => {
-    const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID), '{"type":"event_msg"}\n');
-    const run = runner(await lsofFor([{ pid: 102, fd: "37", access: "u", name: file }]));
+  it.each(["u", "w"])(
+    "answers the root rollout the pane's Codex holds open (access %s), wherever its home is",
+    async (access) => {
+      const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID), {
+        rest: '{"type":"event_msg"}\n',
+      });
+      const run = runner(await lsofFor([{ fd: "37", access, name: file }]));
 
-    await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
-      status: "observed",
-      agentId: "codex",
-      sessionId: ROOT_ID,
-      path: file,
-      observedBy: "open-for-writing",
-    });
-    const lsofArgs = run.mock.calls.find(([file]) => file === "lsof")?.[1] ?? [];
-    expect(lsofArgs[lsofArgs.indexOf("-p") + 1]?.split(",").sort()).toEqual([
-      "100",
-      "101",
-      "102",
-      "103",
-    ]);
+      await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
+        status: "observed",
+        agentId: "codex",
+        sessionId: ROOT_ID,
+        path: file,
+        observedBy: "open-for-writing",
+      });
+      const lsofArgs = run.mock.calls.find(([command]) => command === "lsof")?.[1] ?? [];
+      // Only the pane's own Codex is listed, in the fields the parser reads.
+      expect(lsofArgs.slice(lsofArgs.indexOf("-p"), lsofArgs.indexOf("-p") + 2)).toEqual([
+        "-p",
+        "102",
+      ]);
+      expect(lsofArgs.slice(lsofArgs.indexOf("-F"), lsofArgs.indexOf("-F") + 2)).toEqual([
+        "-F",
+        "pfatDin",
+      ]);
+    }
+  );
+
+  it("answers a reverted thread's rollout by its thread id", async () => {
+    const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID), { revertedTo: REVERT_ID });
+    const run = runner(await lsofFor([{ fd: "37", access: "u", name: file }]));
+
+    const result = await probeCodexSessionFile(100, { platform: "darwin", run });
+    expect(result).toMatchObject({ status: "observed", sessionId: ROOT_ID, path: file });
   });
 
   it("picks the root out of a session whose subagents hold rollouts too", async () => {
@@ -170,8 +270,8 @@ describe("probeCodexSessionFile", () => {
     const child = await writeRollout(CHILD_ID, sessionMeta(CHILD_ID, { session_id: ROOT_ID }));
     const run = runner(
       await lsofFor([
-        { pid: 102, fd: "37", access: "u", name: root },
-        { pid: 102, fd: "41", access: "w", name: child },
+        { fd: "37", access: "u", name: root },
+        { fd: "41", access: "w", name: child },
       ])
     );
 
@@ -179,13 +279,25 @@ describe("probeCodexSessionFile", () => {
     expect(result).toMatchObject({ status: "observed", sessionId: ROOT_ID, path: root });
   });
 
-  it("names none when two root sessions are open", async () => {
+  it("never credits the pane with a conversation a nested codex is writing", async () => {
+    // The pane's own Codex keeps no rollout (an ephemeral run); the one its
+    // tool started does, and it isn't the pane's conversation.
+    const nested = await writeRollout(OTHER_ROOT_ID, sessionMeta(OTHER_ROOT_ID));
+    const run = runner(await lsofFor([{ pid: 104, fd: "12", access: "w", name: nested }]));
+
+    await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
+      status: "unknown",
+      reason: "not-observed",
+    });
+  });
+
+  it("names none when the pane's Codex holds two root sessions", async () => {
     const a = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID));
     const b = await writeRollout(OTHER_ROOT_ID, sessionMeta(OTHER_ROOT_ID));
     const run = runner(
       await lsofFor([
-        { pid: 102, fd: "37", access: "u", name: a },
-        { pid: 103, fd: "12", access: "w", name: b },
+        { fd: "37", access: "u", name: a },
+        { fd: "12", access: "w", name: b },
       ])
     );
 
@@ -199,8 +311,8 @@ describe("probeCodexSessionFile", () => {
     const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID));
     const run = runner(
       await lsofFor([
-        { pid: 101, fd: "20", access: "w", name: file },
-        { pid: 102, fd: "37", access: "u", name: file },
+        { fd: "20", access: "w", name: file },
+        { fd: "37", access: "u", name: file },
       ])
     );
 
@@ -210,7 +322,7 @@ describe("probeCodexSessionFile", () => {
 
   it("ignores rollouts open only for reading", async () => {
     const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID));
-    const run = runner(await lsofFor([{ pid: 102, fd: "37", access: "r", name: file }]));
+    const run = runner(await lsofFor([{ fd: "37", access: "r", name: file }]));
 
     await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
       status: "unknown",
@@ -218,10 +330,13 @@ describe("probeCodexSessionFile", () => {
     });
   });
 
-  it("refuses a path that no longer names the file lsof saw", async () => {
+  it.each([
+    ["inode", { inode: "1" }],
+    ["device", { device: "0x1" }],
+    ["device, unreadable", { device: "" }],
+  ])("refuses a path whose %s isn't the file lsof saw", async (_label, listed) => {
     const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID));
-    const inode = String((await stat(file)).ino + 1);
-    const run = runner(await lsofFor([{ pid: 102, fd: "37", access: "u", inode, name: file }]));
+    const run = runner(await lsofFor([{ fd: "37", access: "u", name: file, ...listed }]));
 
     await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
       status: "unknown",
@@ -232,12 +347,10 @@ describe("probeCodexSessionFile", () => {
   it("refuses a symlink planted where the rollout was", async () => {
     const real = path.join(codexHome, "elsewhere.jsonl");
     await writeFile(real, `${sessionMeta(ROOT_ID)}\n`);
-    const dir = path.join(codexHome, "sessions", "2026", "11", "02");
-    await mkdir(dir, { recursive: true });
-    const link = path.join(dir, `rollout-2026-11-02T04-14-57-${ROOT_ID}.jsonl`);
+    const link = rolloutPath(ROOT_ID);
+    await mkdir(path.dirname(link), { recursive: true });
     await symlink(real, link);
-    const inode = String((await stat(real)).ino);
-    const run = runner(await lsofFor([{ pid: 102, fd: "37", access: "u", inode, name: link }]));
+    const run = runner(await lsofFor([{ fd: "37", access: "u", name: link }]));
 
     await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
       status: "unknown",
@@ -247,7 +360,7 @@ describe("probeCodexSessionFile", () => {
 
   it("refuses a subagent's rollout with no root beside it", async () => {
     const child = await writeRollout(CHILD_ID, sessionMeta(CHILD_ID, { session_id: ROOT_ID }));
-    const run = runner(await lsofFor([{ pid: 102, fd: "41", access: "w", name: child }]));
+    const run = runner(await lsofFor([{ fd: "41", access: "w", name: child }]));
 
     await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
       status: "unknown",
@@ -256,11 +369,10 @@ describe("probeCodexSessionFile", () => {
   });
 
   it("refuses a rollout whose first record has not ended yet", async () => {
-    const dir = path.join(codexHome, "sessions", "2026", "11", "02");
-    await mkdir(dir, { recursive: true });
-    const file = path.join(dir, `rollout-2026-11-02T04-14-57-${ROOT_ID}.jsonl`);
+    const file = rolloutPath(ROOT_ID);
+    await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, sessionMeta(ROOT_ID));
-    const run = runner(await lsofFor([{ pid: 102, fd: "37", access: "u", name: file }]));
+    const run = runner(await lsofFor([{ fd: "37", access: "u", name: file }]));
 
     await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toEqual({
       status: "unknown",
@@ -268,36 +380,36 @@ describe("probeCodexSessionFile", () => {
     });
   });
 
-  it("still reads the listing when lsof exits 1 for a process that went away", async () => {
+  it("drops the listing when the process it listed was replaced under it", async () => {
     const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID));
-    const run = runner("", {
-      lsof: {
-        stdout: await lsofFor([{ pid: 102, fd: "37", access: "u", name: file }]),
-        exitCode: 1,
-      },
-    });
-
-    const result = await probeCodexSessionFile(100, { platform: "darwin", run });
-    expect(result).toMatchObject({ status: "observed", sessionId: ROOT_ID });
+    const lsof = await lsofFor([{ fd: "37", access: "u", name: file }]);
+    for (const recheck of [
+      { stdout: censusLine(102, 101, NATIVE, "Mon Nov  2 05:00:00 2026"), exitCode: 0 },
+      { stdout: censusLine(102, 1, NATIVE), exitCode: 0 },
+      { stdout: "", exitCode: 1 },
+    ]) {
+      await expect(
+        probeCodexSessionFile(100, { platform: "darwin", run: runner(lsof, { recheck }) })
+      ).resolves.toEqual({ status: "unknown", reason: "pane-changed" });
+    }
   });
 
-  it("answers probe-failed when a listing can't run or fails", async () => {
+  it("fails closed on any listing that didn't finish cleanly", async () => {
+    const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID));
+    const lsof = await lsofFor([{ fd: "37", access: "u", name: file }]);
     const missing = Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
-    await expect(
-      probeCodexSessionFile(100, { platform: "linux", run: runner("", { lsof: missing }) })
-    ).resolves.toEqual({ status: "unknown", reason: "probe-failed" });
-    await expect(
-      probeCodexSessionFile(100, {
-        platform: "darwin",
-        run: runner("", { ps: { stdout: "", exitCode: 1 } }),
-      })
-    ).resolves.toEqual({ status: "unknown", reason: "probe-failed" });
-    await expect(
-      probeCodexSessionFile(100, {
-        platform: "darwin",
-        run: runner("", { lsof: { stdout: "", exitCode: 2 } }),
-      })
-    ).resolves.toEqual({ status: "unknown", reason: "probe-failed" });
+    const cases: Overrides[] = [
+      { lsof: missing },
+      // Exit 1 can mean a file it couldn't inspect, not only a process that went.
+      { lsof: { stdout: lsof, exitCode: 1 } },
+      { census: { stdout: PS_TREE, exitCode: 1 } },
+      { census: new Error("ps timed out") },
+    ];
+    for (const overrides of cases) {
+      await expect(
+        probeCodexSessionFile(100, { platform: "linux", run: runner(lsof, overrides) })
+      ).resolves.toEqual({ status: "unknown", reason: "probe-failed" });
+    }
   });
 
   it("runs nothing on Windows", async () => {
@@ -307,5 +419,36 @@ describe("probeCodexSessionFile", () => {
       reason: "unsupported-platform",
     });
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("runListing", () => {
+  it("hands back the output and the exit status", async () => {
+    await expect(
+      runListing("sh", ["-c", "printf 'p1\\n'; exit 1"], { timeoutMs: 5_000, maxBytes: 1024 })
+    ).resolves.toEqual({ stdout: "p1\n", exitCode: 1 });
+  });
+
+  it("kills the whole group when the listing runs out of time", async () => {
+    const marker = path.join(codexHome, "survivor");
+    // The helper outlives the shell unless its group is killed with it.
+    const script = `(sleep 1; touch '${marker}') & sleep 5`;
+    await expect(
+      runListing("sh", ["-c", script], { timeoutMs: 100, maxBytes: 1024 })
+    ).rejects.toThrow(/timed out/);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await expect(stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses output past its cap", async () => {
+    await expect(
+      runListing("sh", ["-c", "yes"], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
+    ).rejects.toThrow(/cap/);
+  });
+
+  it("rejects when the command can't start", async () => {
+    await expect(
+      runListing("daintree-no-such-listing", [], { timeoutMs: 1_000, maxBytes: 1024 })
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

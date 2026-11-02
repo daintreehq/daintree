@@ -113,7 +113,8 @@ async function findTranscript(
   signal: AbortSignal | undefined
 ): Promise<{ file: string; rootReal: string } | null> {
   const found = await findTranscripts(location, signal, 1);
-  return found ? { file: found.files[0], rootReal: found.rootReal } : null;
+  const file = found?.files[0];
+  return found && file !== undefined ? { file, rootReal: found.rootReal } : null;
 }
 
 /**
@@ -195,9 +196,9 @@ export async function locateClaudeTranscript(
   if (!isSafeSessionId(location.sessionId)) return { status: "missing" };
   signal?.throwIfAborted();
   const found = await findTranscripts(location, signal, 2);
-  if (!found) return { status: "missing" };
-  if (found.files.length > 1) return { status: "ambiguous" };
-  const [file] = found.files;
+  const [file, second] = found?.files ?? [];
+  if (!found || file === undefined) return { status: "missing" };
+  if (second !== undefined) return { status: "ambiguous" };
   const opened = await openVerified(file, found.rootReal);
   if (!opened) return { status: "unverified" };
   await opened.handle.close();

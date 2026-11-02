@@ -6323,6 +6323,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Plugins only: the session file the Codex or Claude Code agent in a terminal is writing, and how that was seen. Answers unknown with a reason instead of guessing.",
+    "examples": undefined,
+    "id": "terminal.sessionFile.get",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Get agent session file",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Attach your own JSON record to a terminal so a reconnecting client can tell panels apart. It outlives your connection and restarts, and dies with the panel; read it back from the terminal listing, null clears it. Shared: every external client sees the same record, and it confers no ownership.",
     "examples": [
       {
