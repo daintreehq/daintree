@@ -186,6 +186,36 @@ describe("RemoteHostsClient", () => {
     events.length = 0;
   });
 
+  it("tells what would dial a host again that a person let it go, before its link goes (#16170)", async () => {
+    const letGo: Array<{ hostId: string; disconnects: number }> = [];
+    const watched = new RemoteHostsClient({
+      registry,
+      manager: manager as unknown as RemoteHostManager,
+      bindings,
+      router,
+      senders: { projectKeyFor: () => null, windowIdFor: () => null },
+      windows,
+      installRouter,
+      emit: () => {},
+      listViews: () => [],
+      onLetGo: (hostId) =>
+        letGo.push({ hostId, disconnects: manager.disconnect.mock.calls.length }),
+    });
+    manager.connect("studio-01");
+    await watched.disconnect({ hostId: "studio-01" });
+    expect(letGo).toEqual([{ hostId: "studio-01", disconnects: 0 }]);
+    await watched.update({
+      hostId: "studio-01",
+      connection: { kind: "ssh", target: "mini.example" },
+    });
+    await watched.forget({ hostId: "studio-01" });
+    expect(letGo.map((entry) => entry.hostId)).toEqual(["studio-01", "studio-01", "studio-01"]);
+    // A rename lets nothing go.
+    registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+    await watched.update({ hostId: "studio-02", name: "studio two" });
+    expect(letGo).toHaveLength(3);
+  });
+
   it("reports this machine for a window that never attached anywhere", () => {
     const info = client.getWindowHost(ctxFor(5, 1));
     expect(info).toMatchObject({

@@ -98,7 +98,7 @@ function restarting(state: HostConnectionState): boolean {
  */
 export class HostBringBackService {
   private readonly attempts = new Map<HostId, Promise<HostBringBackAnswer>>();
-  private readonly cancels = new Set<() => void>();
+  private readonly cancels = new Map<HostId, () => void>();
   private disposed = false;
 
   constructor(private readonly deps: HostBringBackDeps) {}
@@ -138,10 +138,18 @@ export class HostBringBackService {
     return this.attempts.has(hostId);
   }
 
+  /**
+   * Ends the host's attempt as cancelled: a person disconnected it, removed
+   * it or pointed it at another machine, so nothing may dial it again for it.
+   */
+  cancel(hostId: HostId): void {
+    this.cancels.get(hostId)?.();
+  }
+
   /** Ends every attempt as cancelled and refuses new ones. */
   dispose(): void {
     this.disposed = true;
-    for (const cancel of [...this.cancels]) cancel();
+    for (const cancel of [...this.cancels.values()]) cancel();
   }
 
   private run(descriptor: HostDescriptor): Promise<HostBringBackAnswer> {
@@ -188,8 +196,10 @@ export class HostBringBackService {
         });
       };
       const cancel = () => finish("cancelled");
-      this.cancels.add(cancel);
-      cleanups.push(() => this.cancels.delete(cancel));
+      this.cancels.set(hostId, cancel);
+      cleanups.push(() => {
+        if (this.cancels.get(hostId) === cancel) this.cancels.delete(hostId);
+      });
 
       if (linkUp(deps.linkState(hostId))) {
         reached = true;
@@ -202,11 +212,37 @@ export class HostBringBackService {
       );
       cleanups.push(() => clearTimeout(deadline));
       cleanups.push(deps.hold(hostId));
+      const settleMs = deps.restartSettleMs ?? BRING_BACK_RESTART_SETTLE_MS;
+      // The explicit start, held only while the attempt may start the host.
+      let allowance: (() => void) | null = null;
+      const grant = (): void => {
+        if (allowance === null && !settled) allowance = deps.allowStart(hostId);
+      };
+      const revoke = (): void => {
+        const release = allowance;
+        allowance = null;
+        release?.();
+      };
+      cleanups.push(revoke);
+      /** The attempt has left the host one settle period already, or saw no need to. */
+      let restartWaited = false;
 
       const onLink = (state: HostConnectionState): void => {
         if (settled) return;
         const previous = lastStatus;
         lastStatus = state.status;
+        // It said it was shutting down after this attempt began dialling (an
+        // update starting just now): no start until it has had its while.
+        if (dialStarted && !restartWaited && restarting(state)) {
+          restartWaited = true;
+          revoke();
+          const timer = setTimeout(() => {
+            if (settled) return;
+            grant();
+            deps.nudge(hostId);
+          }, settleMs);
+          cleanups.push(() => clearTimeout(timer));
+        }
         if (state.status === "unreachable" && state.answered === true) reached = true;
         switch (state.status) {
           case "connected":
@@ -286,7 +322,7 @@ export class HostBringBackService {
           return;
         }
         dialStarted = true;
-        cleanups.push(deps.allowStart(hostId));
+        grant();
         cleanups.push(deps.observeStarts(hostId, onStart));
         try {
           deps.redial(hostId);
@@ -316,9 +352,13 @@ export class HostBringBackService {
       // itself, as an update does, before anything starts it.
       const afterSettle = (): void => {
         if (settled) return;
-        const wait =
-          (deps.restartSettleMs ?? BRING_BACK_RESTART_SETTLE_MS) - Math.max(0, now() - startedAt);
-        if (wait <= 0 || !restarting(deps.linkState(hostId))) {
+        const wait = settleMs - Math.max(0, now() - startedAt);
+        if (!restarting(deps.linkState(hostId))) {
+          startDial();
+          return;
+        }
+        restartWaited = true;
+        if (wait <= 0) {
           startDial();
           return;
         }

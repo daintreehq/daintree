@@ -244,6 +244,11 @@ export interface RemoteHostsClientOptions {
   isAttemptingStart?: (hostId: HostId) => boolean;
   /** A person asked to try the host again: what was last found there no longer stands. */
   onRetry?: (hostId: HostId) => void;
+  /**
+   * The host is being disconnected by a person, removed or re-pointed, told
+   * before anything else happens to it: work that would dial it again stops.
+   */
+  onLetGo?: (hostId: HostId) => void;
   /** How long forgetting a host waits for each of its windows to come back here. */
   forgetSwitchWaitMs?: number;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
@@ -615,6 +620,7 @@ export class RemoteHostsClient {
    * the person moved elsewhere meanwhile is left where they put it.
    */
   private retire(descriptor: HostDescriptor): void {
+    this.options.onLetGo?.(descriptor.id);
     this.retiring.set(descriptor.id, descriptor.connection);
     this.epochs.set(descriptor.id, (this.epochs.get(descriptor.id) ?? 0) + 1);
     this.listings.delete(descriptor.id);
@@ -739,6 +745,7 @@ export class RemoteHostsClient {
 
   async disconnect(payload: { hostId: string }): Promise<void> {
     const hostId = hostIdOf(payload);
+    this.options.onLetGo?.(hostId);
     this.rememberBoundViews(hostId);
     this.disconnectedByPerson.add(hostId);
     await this.options.manager.disconnect(hostId);

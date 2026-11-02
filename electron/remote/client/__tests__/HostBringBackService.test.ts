@@ -43,7 +43,7 @@ const ROUTE: WakeRoute = {
 
 function unreachable(
   detail: string | null,
-  flags: { stoppedRetrying?: true; hostModeOff?: true } = {}
+  flags: { stoppedRetrying?: true; hostModeOff?: true; restarting?: true; answered?: true } = {}
 ): HostConnectionState {
   return { status: "unreachable", lastSeenAt: null, detail, ...flags };
 }
@@ -256,11 +256,57 @@ describe("HostBringBackService", () => {
     }
   });
 
+  it("withdraws the start when the host says it is shutting down after the dial began, until it has had its while", async () => {
+    const w = world();
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    expect(w.allowed()).toBe(1);
+    w.setLink(
+      unreachable("Host refused the connection: shutting-down", {
+        answered: true,
+        restarting: true,
+      })
+    );
+    expect(w.allowed()).toBe(0);
+    const nudges = () => w.calls.filter((call) => call === "nudge").length;
+    // The link's own retries meanwhile may nudge, but none may start it.
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+    expect(w.allowed()).toBe(0);
+    // Mid-dial, so only the end of its while dials it again. Once is its
+    // while: the restart word again in the same attempt waits no more.
+    w.setLink({ status: "connecting", attempt: 3, restarting: true });
+    const before = nudges();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(w.allowed()).toBe(1);
+    expect(nudges()).toBe(before + 1);
+    w.setLink(CONNECTED);
+    await expect(answer).resolves.toMatchObject({ status: "connected" });
+    expect(w.allowed()).toBe(0);
+  });
+
+  it("is cancelled at once when the person lets the host go, before the link says anything", async () => {
+    let delivered!: () => void;
+    const w = world({
+      host: descriptor({ wake: WAKE }),
+      sendWake: () => new Promise<void>((resolve) => (delivered = resolve)),
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    w.service.cancel(HOST);
+    await expect(answer).resolves.toMatchObject({ status: "cancelled" });
+    delivered();
+    await flush();
+    expect(w.calls).not.toContain("redial");
+    expect(w.released()).toBe(true);
+    // Another host's attempt is its own.
+    w.service.cancel("elsewhere");
+  });
+
   it("keeps trying a host whose Daintree answered and refused, rather than calling it unwakeable", async () => {
     const w = world();
     const answer = w.service.bringBack(HOST);
     await flush();
-    w.setLink({ ...unreachable("Host refused the connection: busy"), answered: true });
+    w.setLink(unreachable("Host refused the connection: busy", { answered: true }));
     await vi.advanceTimersByTimeAsync(NUDGE_MS);
     expect(w.service.isBringingBack(HOST)).toBe(true);
     w.setLink(CONNECTED);
@@ -268,10 +314,7 @@ describe("HostBringBackService", () => {
   });
 
   it("leaves a host that said it was shutting down to come back by itself before starting it", async () => {
-    const shuttingDown: HostConnectionState = {
-      ...unreachable("no Daintree listening there"),
-      restarting: true,
-    };
+    const shuttingDown = unreachable("no Daintree listening there", { restarting: true });
     const back = world({ state: shuttingDown });
     const answer = back.service.bringBack(HOST);
     await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);

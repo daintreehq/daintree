@@ -859,6 +859,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     isAttemptingStart: (hostId) => starts.isAttempting(hostId),
     isInstalling: (connection) => setup.isInstallRunning(connection),
     onRetry: (hostId) => recheckStart(hostId),
+    // Before the link goes: an attempt to bring it back would dial it again.
+    onLetGo: (hostId) => bringBack.cancel(hostId),
   });
   const starts = new HostStarts({
     setup: {
