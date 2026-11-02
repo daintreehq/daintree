@@ -35,6 +35,7 @@ const TOOLS = [
   "terminal.sendCommandOwned",
   "terminal.sendKeysOwned",
   "terminal.interruptOwned",
+  "terminal.revealOwned",
   "terminal.closeOwned",
   "terminal.restartOnPresetOwned",
   "terminal.injectOwned",
@@ -356,6 +357,95 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
   });
 });
 
+describe.each(LANES)("a global Assistant's relayed reveal ($lane) (#16096)", ({ shellName }) => {
+  const reveal = (terminalId: string, extra: Record<string, unknown> = {}) => ({
+    name: "terminal.revealOwned",
+    arguments: { terminalId, ...extra },
+  });
+
+  it("shows the person a worker it didn't launch, with someone typing into it, and takes nothing", async () => {
+    const { deps, store, pty, records } = harness({ shellName, global: true });
+    records.set(WORKER, atPrompt({ lastTypedInputAt: 1_500, hasPendingSubmission: true }));
+    const server = await serve(deps);
+
+    const result = await callTool(
+      server,
+      // A destination of its own is never forwarded: the run is in this project.
+      reveal(WORKER, { generation: 4, workspaceId: "proj-elsewhere", runId: SHELL })
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+    expect(deps.dispatchAction).toHaveBeenCalledWith(
+      "pilot.openRun",
+      { runId: WORKER, workspaceId: PROJECT },
+      false
+    );
+    expect(store.resourceOwnership.creatorOf("terminal", WORKER)).toBeUndefined();
+    expect(
+      store.terminalAdoption.get(store.resourceOwnership.ownerOf(SESSION), WORKER)
+    ).toBeUndefined();
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(pty.write).not.toHaveBeenCalled();
+  });
+
+  it("refuses what a prompt can't reach, and shows nothing", async () => {
+    const { deps, records, generations } = harness({ shellName, global: true });
+    const server = await serve(deps);
+
+    const shell = await callTool(server, reveal(SHELL, { generation: 2 }));
+    expect(toolErrorPayload(shell).code).toBe(WORKER_STEER_REFUSALS.notAgent);
+
+    const unnamed = await callTool(server, reveal(WORKER));
+    expect(toolErrorPayload(unnamed).code).toBe("VALIDATION_ERROR");
+    expect(toolErrorPayload(unnamed).message).toContain("incarnation");
+
+    generations.set(WORKER, 5);
+    const restarted = await callTool(server, reveal(WORKER, { generation: 4 }));
+    expect(toolErrorPayload(restarted).code).toBe(WORKER_STEER_REFUSALS.restarted);
+
+    generations.set(WORKER, 4);
+    records.set(WORKER, atPrompt({ isExited: true }));
+    const exited = await callTool(server, reveal(WORKER, { generation: 4 }));
+    expect(toolErrorPayload(exited).code).toBe(WORKER_STEER_REFUSALS.notAgent);
+    expect(toolErrorPayload(exited).message).toContain("Nothing was shown.");
+
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["launched", MINE],
+    ["was handed", HANDED],
+  ])("keeps what it %s on the owned reveal, with no generation", async (_how, terminalId) => {
+    const { deps } = harness({ shellName, global: true });
+    const server = await serve(deps);
+
+    const result = await callTool(server, reveal(terminalId));
+
+    expect(result.isError).toBeFalsy();
+    expect(deps.dispatchAction).toHaveBeenCalledWith(
+      "pilot.openRun",
+      { runId: terminalId, workspaceId: PROJECT },
+      false
+    );
+  });
+
+  it("answers to the host's drive rule before anything is shown", async () => {
+    const { deps, refuseWrite } = harness({
+      shellName,
+      global: true,
+      refuseWrite: { code: "DRIVEN_ELSEWHERE", message: "Another machine drives it." },
+    });
+    const server = await serve(deps);
+
+    const result = await callTool(server, reveal(WORKER, { generation: 4 }));
+
+    expect(toolErrorPayload(result).code).toBe("DRIVEN_ELSEWHERE");
+    expect(refuseWrite).toHaveBeenCalledWith(PROJECT);
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(LANES)("a project assistant's relayed call ($lane) (#14551)", ({ shellName }) => {
   it("gains nothing: the same tools on the same worker are refused as not its own", async () => {
     const { deps, pty } = harness({ shellName, global: false });
@@ -365,6 +455,7 @@ describe.each(LANES)("a project assistant's relayed call ($lane) (#14551)", ({ s
       ["terminal.sendCommandOwned", { command: "go on" }],
       ["terminal.sendKeysOwned", { keys: ["Enter"] }],
       ["terminal.interruptOwned", {}],
+      ["terminal.revealOwned", {}],
     ] as const) {
       // Naming itself global in its arguments changes nothing.
       const result = await callTool(server, {

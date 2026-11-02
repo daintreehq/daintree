@@ -62,10 +62,11 @@ export function callHandler(
 /** The structured error envelope a failed tool call carries in its text content. */
 export function toolErrorPayload(result: { content: unknown }): {
   code: string;
+  message: string;
   retriable: boolean;
 } {
   const [first] = result.content as Array<{ text: string }>;
-  return JSON.parse(first.text) as { code: string; retriable: boolean };
+  return JSON.parse(first.text) as { code: string; message: string; retriable: boolean };
 }
 
 export function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionStore {

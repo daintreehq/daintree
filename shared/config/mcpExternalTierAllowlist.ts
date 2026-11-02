@@ -158,6 +158,12 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // only be taken to a panel it created, which is no escalation over having
   // created it — and the ledger is server-authoritative, written from trusted
   // dispatch results, so the id cannot be claimed into it.
+  //
+  // The global Assistant alone reaches past the ledger here (#16096), keyed on
+  // the relay caller its Shell's runtime named, never on arguments: it may
+  // already prompt any agent worker in the project it calls into (#14551), and
+  // showing the person that panel is strictly less. The target passes the
+  // steer's own checks, so a reveal and a prompt reach the same runs.
   "terminal.revealOwned",
   // Where an owned panel sits, without taking the user there (#13662). An
   // orchestrator parks idle seats in the background and brings them back to
@@ -280,8 +286,8 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
  * they only work for a caller with a pane of its own. `notify` types a line
  * into the caller's own prompt, and an api-key client has none: it is refused
  * if it sends one anyway, and `replyLines` only shapes that notice. `generation`
- * names another assistant's run, or a worker the global Assistant steers, which
- * only an assistant may address (#13496, #14551).
+ * names another assistant's run, or a worker the global Assistant steers or
+ * shows, which only an assistant may address (#13496, #14551, #16096).
  * Left off the listing so every such client does not pay for an argument it can
  * never use on every turn.
  */
@@ -289,5 +295,6 @@ export const MCP_EXTERNAL_OMITTED_ARGS: Readonly<Record<string, readonly string[
   "terminal.sendCommandOwned": ["notify", "replyLines", "generation"],
   "terminal.sendKeysOwned": ["generation"],
   "terminal.interruptOwned": ["generation"],
+  "terminal.revealOwned": ["generation"],
   "agent.launch": ["notify", "replyLines"],
 } satisfies Partial<Record<BuiltInActionId, readonly string[]>>;

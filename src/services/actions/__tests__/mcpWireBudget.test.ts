@@ -949,7 +949,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // has to know to write one. No output schemas: each answers an id and a name,
   // and a removal whether the agent default went with it. In-app
   // only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 172_900;
+  // 172_900 → 173_000 for #16096, measured at 172_992 B (+120 over develop's
+  // 172_872): `terminal.revealOwned` takes `generation`, so the global
+  // Assistant shows the person the run it read. Withheld from external
+  // clients like the steer's, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 173_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

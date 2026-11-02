@@ -76,13 +76,22 @@ export interface WorkerSteerTarget {
   terminalId: string;
   generation: number | undefined;
   /**
-   * Asked right before every write: throws while the call may no longer
-   * write here (the drive rule, a session gone), so nothing more goes out.
+   * Asked right before every write, and before a reveal: throws while the call
+   * may no longer act here (the drive rule, a session gone), so nothing more
+   * goes out.
    */
   authorize(): void;
 }
 
 const NOTHING_SENT = "Nothing was sent.";
+
+/** How a refusal from the reach gate names what the call would have done, and what it left undone. */
+interface ReachWording {
+  doing: string;
+  undone: string;
+}
+const STEERING: ReachWording = { doing: "Steering", undone: NOTHING_SENT };
+const SHOWING: ReachWording = { doing: "Showing the person", undone: "Nothing was shown." };
 
 function refuse(code: string, message: string): never {
   throw new AssistantTargetError(code, message);
@@ -157,6 +166,11 @@ function noWorkerWhy(terminalId: string, record: WorkerSteerRecord): string | nu
  * generation names, and never one a person is typing into: all three are
  * read again right before each write, never trusted from the caller's read.
  * Answers say what was written, never what the agent did with it.
+ *
+ * Showing the person that worker's panel (#16096) reaches exactly as far,
+ * through the same gate, so a reveal and a prompt can't drift apart on what
+ * they'll reach. It writes nothing, so a person at the terminal and a steer
+ * still writing to it hold it back no more than they would a glance.
  */
 export class GlobalWorkerSteer {
   /** Runs a steer is writing to: a second, planned from the same screen, is refused. */
@@ -339,6 +353,16 @@ export class GlobalWorkerSteer {
     });
   }
 
+  /**
+   * Run `show`, the reveal, once the run passes the gate, right after its
+   * last read of it and the caller's `authorize`; never on a refusal.
+   */
+  async reveal<T>(target: WorkerSteerTarget, show: () => Promise<T>): Promise<T> {
+    await this.requireWorker(target, SHOWING);
+    target.authorize();
+    return show();
+  }
+
   private async exclusive<T>(target: WorkerSteerTarget, run: () => Promise<T>): Promise<T> {
     if (this.writing.has(target.terminalId)) {
       refuse(
@@ -354,40 +378,47 @@ export class GlobalWorkerSteer {
     }
   }
 
-  /** The named run, if it is still an agent worker of this project; refused otherwise. */
-  private async requireWorker(target: WorkerSteerTarget): Promise<WorkerSteerRecord> {
+  /**
+   * The gate every reach goes through: the named run, if it is still an agent
+   * worker of this project; refused otherwise.
+   */
+  private async requireWorker(
+    target: WorkerSteerTarget,
+    wording: ReachWording = STEERING
+  ): Promise<WorkerSteerRecord> {
     const { terminalId, projectId } = target;
+    const { undone } = wording;
     if (target.generation === undefined) {
       refuse(
         "VALIDATION_ERROR",
-        `Steering an agent you didn't launch needs its 'generation': the 'incarnation' host.list gave for it. ${NOTHING_SENT}`
+        `${wording.doing} an agent you didn't launch needs its 'generation': the 'incarnation' host.list gave for it. ${undone}`
       );
     }
     if (this.deps.getTerminalProjectId(terminalId) !== projectId) {
       refuse(
         WORKER_STEER_REFUSALS.notFound,
-        `No terminal '${terminalId}' is in this project. ${NOTHING_SENT} Take the id from host.list or terminal.list here.`
+        `No terminal '${terminalId}' is in this project. ${undone} Take the id from host.list or terminal.list here.`
       );
     }
     if (this.deps.isAssistantTerminal(terminalId)) {
       refuse(
         WORKER_STEER_REFUSALS.notAgent,
-        `Terminal '${terminalId}' runs a Daintree Assistant, not a worker. ${NOTHING_SENT}`
+        `Terminal '${terminalId}' runs a Daintree Assistant, not a worker. ${undone}`
       );
     }
-    this.requireSameRun(target);
+    this.requireSameRun(target, undone);
     const record = await this.deps.getTerminal(terminalId).catch(() => null);
     if (!record || (record.projectId !== undefined && record.projectId !== projectId)) {
       refuse(
         WORKER_STEER_REFUSALS.notFound,
-        `Terminal '${terminalId}' can't be read right now. ${NOTHING_SENT}`
+        `Terminal '${terminalId}' can't be read right now. ${undone}`
       );
     }
     // The read was async: still the run the caller named.
-    this.requireSameRun(target);
+    this.requireSameRun(target, undone);
     const notWorker = noWorkerWhy(terminalId, record);
     if (notWorker !== null) {
-      refuse(WORKER_STEER_REFUSALS.notAgent, `${notWorker} ${NOTHING_SENT}`);
+      refuse(WORKER_STEER_REFUSALS.notAgent, `${notWorker} ${undone}`);
     }
     return record;
   }
@@ -403,11 +434,11 @@ export class GlobalWorkerSteer {
     return `Terminal '${target.terminalId}' isn't the run that generation named: it was restarted or replaced.`;
   }
 
-  private requireSameRun(target: WorkerSteerTarget): void {
+  private requireSameRun(target: WorkerSteerTarget, undone: string = NOTHING_SENT): void {
     if (!this.isSameRun(target)) {
       refuse(
         WORKER_STEER_REFUSALS.restarted,
-        `${this.restartedWhy(target)} ${NOTHING_SENT} List the agents again with host.list.`
+        `${this.restartedWhy(target)} ${undone} List the agents again with host.list.`
       );
     }
   }

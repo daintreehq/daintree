@@ -2105,6 +2105,14 @@ describe("terminal.revealOwned (#12315)", () => {
     expect(schema?.safeParse({}).success).toBe(false);
     expect(schema?.safeParse({ terminalId: "terminal-1" }).success).toBe(true);
   });
+
+  it("takes the run's generation for a worker the global Assistant didn't launch, never in its place (#16096)", () => {
+    const schema = definition().argsSchema;
+    expect(schema?.safeParse({ terminalId: "terminal-1", generation: 4 }).success).toBe(true);
+    expect(schema?.safeParse({ terminalId: "terminal-1", generation: -1 }).success).toBe(false);
+    expect(schema?.safeParse({ terminalId: "terminal-1", generation: 1.5 }).success).toBe(false);
+    expect(schema?.safeParse({ generation: 4 }).success).toBe(false);
+  });
 });
 
 describe("restored panes and the plugin hold (#14017)", () => {
