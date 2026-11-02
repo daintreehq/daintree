@@ -2845,7 +2845,7 @@ describe("Decisions entry", () => {
       await expect(getDecisionsStatus()).resolves.toMatchObject({
         setupCheck: { checkedAt: recorded.checkedAt, failedStep: "question" },
       });
-      // Its push goes out behind any status read still under way.
+      // A status push queued before it may still be reading the key file.
       await vi.waitFor(() =>
         expect(pushedStatuses().at(-1)).toMatchObject({
           setupCheck: { checkedAt: recorded.checkedAt, failedStep: "question" },
@@ -2911,14 +2911,13 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true, ...RELAY };
       await startSetupCheck();
       const check = setupChecks.made[0]!;
-      const untouched = saved.value;
       let release!: () => void;
       setupChecks.holdCancel = new Promise<void>((resolve) => {
         release = resolve;
       });
       // The run's end also ends the disconnect's wait on it, so the disconnect
-      // is held where it goes on, before the keys and the identity it checked
-      // go: the record is refused while that identity is still the one set up.
+      // is held before it removes the keys and the identity: otherwise its own
+      // write would hide a record the run should never have made.
       const service = peekDecisionsService()!;
       const suspend = service.suspendConnection.bind(service);
       let suspending!: () => void;
@@ -2941,9 +2940,15 @@ describe("Decisions entry", () => {
         // The run ends as passed before its cancel lands: still not recorded.
         check.finish("passed");
         // Its own handler has run by the time the disconnect gets past the wait.
-        await reached;
+        await Promise.race([
+          reached,
+          disconnecting.then(() => {
+            throw new Error("The disconnect never suspended the connection");
+          }),
+        ]);
         // Not even for a moment, while the disconnect is still under way.
-        expect(saved.value).toBe(untouched);
+        expect(saved.value).toMatchObject(RELAY);
+        expect((saved.value as { setupCheck?: unknown }).setupCheck ?? null).toBeNull();
         expect(getSetupCheck()).toBeNull();
       } finally {
         release();
