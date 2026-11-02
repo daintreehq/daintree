@@ -36,6 +36,15 @@ import {
   type PresetSwitchNoticeState,
   type PresetSwitchRestartRequest,
 } from "./PresetSwitchNotice";
+import {
+  AccountSwitchDialog,
+  AccountSwitchNoticeItems,
+  buildAccountSwitchRequest,
+  readUsageLimitedPaneIds,
+  useAccountSwitchPaneIds,
+  type AccountSwitchNoticeState,
+  type AccountSwitchRequest,
+} from "./AccountSwitchNotice";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
 import {
@@ -255,12 +264,19 @@ export function AgentButton({
   // Raised by a default pick in this picker and dropped when it closes: the
   // offer is said once, at the moment of the change (#13746).
   const [presetNotice, setPresetNotice] = useState<PresetSwitchNoticeState | null>(null);
+  // The account version (#16136): the panes stopped on a usage limit the
+  // account just picked could take.
+  const [accountNotice, setAccountNotice] = useState<AccountSwitchNoticeState | null>(null);
   // Bumped by every pick and every close, so a save that resolves late can't
   // bring back an offer the user already moved past.
-  const presetNoticeGenerationRef = useRef(0);
+  const switchNoticeGenerationRef = useRef(0);
   const [presetRestartRequest, setPresetRestartRequest] =
     useState<PresetSwitchRestartRequest | null>(null);
+  const [accountSwitchRequest, setAccountSwitchRequest] = useState<AccountSwitchRequest | null>(
+    null
+  );
   const panesLeftOnPreset = usePanesLeftOnPreset(type, presetNotice);
+  const panesOnAccountNotice = useAccountSwitchPaneIds(accountNotice);
   const isRestoringFocusRef = useRef(false);
   // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
   // preventDefault() the focus restoration only for pointer dismissals so the
@@ -467,9 +483,10 @@ export function AgentButton({
   // defaults. Pass `null` to pin the bare agent to this worktree. Guard on
   // activeWorktreeId — when no worktree is active we skip persistence entirely
   // rather than polluting the global scope.
-  const dismissPresetNotice = () => {
+  const dismissSwitchNotices = () => {
     setPresetNotice(null);
-    return ++presetNoticeGenerationRef.current;
+    setAccountNotice(null);
+    return ++switchNoticeGenerationRef.current;
   };
 
   const persistWorktreePick = (presetId: string | null) => {
@@ -489,12 +506,12 @@ export function AgentButton({
             toName: presetDisplayName(next),
           }
         : null;
-    const generation = dismissPresetNotice();
+    const generation = dismissSwitchNotices();
     void useAgentSettingsStore
       .getState()
       .updateWorktreePreset(type, worktreeId, presetId)
       .then(() => {
-        if (presetNoticeGenerationRef.current === generation) setPresetNotice(notice);
+        if (switchNoticeGenerationRef.current === generation) setPresetNotice(notice);
       })
       .catch(() => {});
   };
@@ -502,13 +519,32 @@ export function AgentButton({
   // The account rides with every launch from here, so picking one changes the
   // worktree's account (or the agent's, outside a worktree) rather than
   // launching once, and the radio mark is where it now stands.
+  // A move to another account then offers the agent's panes stopped on a
+  // usage limit (#16136), across every worktree: the new account helps any of
+  // them, and the panes elsewhere stay as they are unless the user says so.
   const pickAccount = (value: string) => {
     const accountId = value === DEFAULT_LOGIN_VALUE ? null : value;
     const store = useAgentSettingsStore.getState();
     const write = activeWorktreeId
       ? store.updateWorktreeAccount(type, activeWorktreeId, accountId)
       : store.updateAgent(type, { accountId: accountId ?? undefined });
-    void write.catch(() => {});
+    const picked = accountId === null ? undefined : accounts.find((a) => a.id === accountId);
+    // A saved account that's gone stands for none, so any pick moves off it.
+    const currentAccountId = savedAccountId === null ? null : activeAccount?.id;
+    const moved = accountId !== currentAccountId;
+    const generation = dismissSwitchNotices();
+    void write
+      .then(async () => {
+        if (!moved || (accountId !== null && !picked)) return;
+        const paneIds = await readUsageLimitedPaneIds(type, accountId);
+        if (switchNoticeGenerationRef.current !== generation || paneIds.length === 0) return;
+        setAccountNotice({
+          agentId: type,
+          account: { id: accountId, name: picked?.name ?? "Default login" },
+          paneIds,
+        });
+      })
+      .catch(() => {});
   };
 
   // The agent-default row saves the bare agent to this worktree's slot rather
@@ -568,7 +604,7 @@ export function AgentButton({
   const launchWithPreset = (presetId: string | null) => {
     wasPointerCloseRef.current = true;
     setDropdownOpen(false);
-    dismissPresetNotice();
+    dismissSwitchNotices();
     void actionService.dispatch("agent.launch", { agentId: type, presetId }, { source: "user" });
   };
 
@@ -823,7 +859,7 @@ export function AgentButton({
               open={dropdownOpen}
               onOpenChange={(open) => {
                 setDropdownOpen(open);
-                if (!open) dismissPresetNotice();
+                if (!open) dismissSwitchNotices();
                 if (open) {
                   setPrimaryTooltipOpen(false);
                   setChevronTooltipOpen(false);
@@ -979,11 +1015,21 @@ export function AgentButton({
                       }
                       onValueChange={pickAccount}
                     >
-                      <DropdownMenuRadioItem value={DEFAULT_LOGIN_VALUE}>
+                      {/* A pick stays in the picker, as a preset default does: it
+                          sets what launches use, and the offer it may raise
+                          lands below. */}
+                      <DropdownMenuRadioItem
+                        value={DEFAULT_LOGIN_VALUE}
+                        onSelect={(event) => event.preventDefault()}
+                      >
                         Default login
                       </DropdownMenuRadioItem>
                       {accounts.map((account) => (
-                        <DropdownMenuRadioItem key={account.id} value={account.id}>
+                        <DropdownMenuRadioItem
+                          key={account.id}
+                          value={account.id}
+                          onSelect={(event) => event.preventDefault()}
+                        >
                           {account.name}
                         </DropdownMenuRadioItem>
                       ))}
@@ -1002,6 +1048,20 @@ export function AgentButton({
                       setPresetNotice(null);
                     }}
                     onKeep={() => setPresetNotice(null)}
+                  />
+                )}
+                {accountNotice && (
+                  <AccountSwitchNoticeItems
+                    agentName={config.name}
+                    notice={accountNotice}
+                    paneIds={panesOnAccountNotice}
+                    onSwitch={() => {
+                      setAccountSwitchRequest(
+                        buildAccountSwitchRequest(accountNotice, panesOnAccountNotice)
+                      );
+                      setAccountNotice(null);
+                    }}
+                    onKeep={() => setAccountNotice(null)}
                   />
                 )}
                 <DropdownMenuSeparator />
@@ -1134,6 +1194,10 @@ export function AgentButton({
       <PresetSwitchRestartDialog
         request={presetRestartRequest}
         onClose={() => setPresetRestartRequest(null)}
+      />
+      <AccountSwitchDialog
+        request={accountSwitchRequest}
+        onClose={() => setAccountSwitchRequest(null)}
       />
     </>
   );

@@ -29,6 +29,10 @@ import {
 const dispatchMock = vi.fn();
 const updateWorktreePresetMock = vi.fn().mockResolvedValue(undefined);
 const updateAgentMock = vi.fn().mockResolvedValue(undefined);
+const updateWorktreeAccountMock = vi.fn().mockResolvedValue(undefined);
+// The host's answer to which panes are stopped on a usage limit (#16136).
+const readUsageLimitedPaneIdsMock = vi.fn().mockResolvedValue([]);
+let radioGroupOnValueChange: ((value: string) => void) | null = null;
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 // Track the chevron dropdown's controlled-open contract (issue #10720): the
@@ -65,6 +69,7 @@ vi.mock("@/store/agentSettingsStore", () => ({
       getState: () => ({
         updateWorktreePreset: updateWorktreePresetMock,
         updateAgent: updateAgentMock,
+        updateWorktreeAccount: updateWorktreeAccountMock,
       }),
     }
   ),
@@ -251,6 +256,44 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     <div data-testid="preset-menu-label">{children}</div>
   ),
   DropdownMenuSeparator: () => <hr data-testid="preset-menu-separator" />,
+  DropdownMenuRadioGroup: ({
+    children,
+    onValueChange,
+  }: {
+    children: React.ReactNode;
+    onValueChange?: (value: string) => void;
+  }) => {
+    radioGroupOnValueChange = onValueChange ?? null;
+    return <div role="group">{children}</div>;
+  },
+  // Mirrors real Radix: the value changes whatever onSelect does, and the
+  // menu closes unless onSelect prevented it.
+  DropdownMenuRadioItem: ({
+    children,
+    value,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    value: string;
+    onSelect?: (e: Event) => void;
+  }) => (
+    <div
+      role="menuitemradio"
+      onClick={() => {
+        const event = new Event("select", { cancelable: true });
+        onSelect?.(event);
+        radioGroupOnValueChange?.(value);
+        if (!event.defaultPrevented) dropdownOnOpenChange?.(false);
+      }}
+    >
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock("../AccountSwitchNotice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../AccountSwitchNotice")>()),
+  readUsageLimitedPaneIds: (...args: unknown[]) => readUsageLimitedPaneIdsMock(...args),
 }));
 
 vi.mock("@/components/ui/context-menu", () => ({
@@ -402,6 +445,13 @@ vi.mock("lucide-react", () => ({
   // CheckCircle2 is pulled in transitively by terminalStateConfig.tsx for
   // STATE_LABELS (#9823); a stub satisfies its import graph.
   CheckCircle2: () => null,
+  // The account-switch confirm's checkboxes pull in the field and severity
+  // glyphs (#16136); stubs satisfy that graph too.
+  AlertTriangle: () => null,
+  Info: () => null,
+  XCircle: () => null,
+  CheckIcon: () => null,
+  MinusIcon: () => null,
 }));
 
 import { AgentButton } from "../AgentButton";
@@ -2447,5 +2497,123 @@ describe("AgentButton context menu — every actionable row leads with an icon",
     const content = screen.getByTestId("context-menu-content");
     expect(content.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(5);
     expect(rowsMissingLeadingIcon(content)).toEqual([]);
+  });
+});
+
+describe("account pick offers the panes stopped on a usage limit (#16136)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const pane = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    kind: "terminal",
+    title: `Claude ${id}`,
+    cwd: "/repo",
+    location: "grid",
+    launchAgentId: "claude",
+    worktreeId: "wt-B",
+    agentState: "waiting",
+    ...extra,
+  });
+
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    updateWorktreeAccountMock.mockClear();
+    updateWorktreeAccountMock.mockResolvedValue(undefined);
+    readUsageLimitedPaneIdsMock.mockReset();
+    readUsageLimitedPaneIdsMock.mockResolvedValue(["p1"]);
+    mockActiveWorktreeId = "wt-A";
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY] } });
+    mockMergedPresetsFn = () => [];
+    mockCcrPresetsByAgent = {};
+    mockProjectPresetsByAgent = {};
+    mockCliDetails = {};
+    mockPanelsById = { p1: pane("p1"), p2: pane("p2", { agentAccountId: "company" }) };
+    mockPanelIds = ["p1", "p2"];
+    mockPanelIdsByWorktreeId = { "wt-B": ["p1", "p2"] };
+    mockWorktrees = [];
+    dropdownOnOpenChange = null;
+    radioGroupOnValueChange = null;
+  });
+
+  function pickAccount(name: string) {
+    const row = screen
+      .getAllByRole("menuitemradio")
+      .find((candidate) => candidate.textContent === name);
+    if (!row) throw new Error(`no account row ${name}`);
+    fireEvent.click(row);
+  }
+
+  it("lists them under the pick, which keeps the picker open", async () => {
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+
+    expect(updateWorktreeAccountMock).toHaveBeenCalledWith("claude", "wt-A", "company");
+    expect(readUsageLimitedPaneIdsMock).toHaveBeenCalledWith("claude", "company");
+    expect(screen.getByRole("status").textContent).toBe("1 Claude pane stopped on a usage limit");
+    expect(screen.getByText("Switch it to Company…")).toBeTruthy();
+  });
+
+  it("offers a move back to the default login too", async () => {
+    mockSettings = settingsWith({
+      claude: { accounts: [COMPANY], worktreeAccounts: { "wt-A": "company" } },
+    });
+    readUsageLimitedPaneIdsMock.mockResolvedValue(["p2"]);
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Default login");
+    });
+
+    expect(readUsageLimitedPaneIdsMock).toHaveBeenCalledWith("claude", null);
+    expect(screen.getByText("Switch it to Default login…")).toBeTruthy();
+  });
+
+  it("asks nothing when the pick is the account already in use", async () => {
+    mockSettings = settingsWith({
+      claude: { accounts: [COMPANY], worktreeAccounts: { "wt-A": "company" } },
+    });
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+
+    expect(readUsageLimitedPaneIdsMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("offers nothing when no pane is stopped on a limit", async () => {
+    readUsageLimitedPaneIdsMock.mockResolvedValue([]);
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("doesn't bring the offer back when the save lands after the picker closed", async () => {
+    let resolveSave: () => void = () => {};
+    updateWorktreeAccountMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (resolveSave = resolve))
+    );
+    render(<AgentButton type="claude" availability="ready" />);
+    pickAccount("Company");
+    act(() => dropdownOnOpenChange?.(false));
+    await act(async () => resolveSave());
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("drops the offer with Keep, and launches nothing", async () => {
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Keep"));
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 });

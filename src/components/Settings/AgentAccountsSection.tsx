@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -9,6 +9,16 @@ import type { AgentAccount, AgentSettingsEntry } from "@shared/types";
 import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { notify } from "@/lib/notify";
+import {
+  AccountSwitchDialog,
+  buildAccountSwitchRequest,
+  limitedPanesLabel,
+  readUsageLimitedPaneIds,
+  switchPanesLabel,
+  useAccountSwitchPaneIds,
+  type AccountSwitchNoticeState,
+  type AccountSwitchRequest,
+} from "@/components/Layout/AccountSwitchNotice";
 import { AddAccountDialog } from "./AddAccountDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow, SettingsRowActions } from "./SettingsGroup";
@@ -41,6 +51,12 @@ export function AgentAccountsSection({
   const removeAccount = useAgentSettingsStore((state) => state.removeAccount);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [removing, setRemoving] = useState<AgentAccount | null>(null);
+  // The panes stopped on a usage limit that a new default or a new account
+  // could take (#16136), offered once, under the change that raised it.
+  const [offer, setOffer] = useState<AccountSwitchNoticeState | null>(null);
+  const offerGenerationRef = useRef(0);
+  const [switchRequest, setSwitchRequest] = useState<AccountSwitchRequest | null>(null);
+  const offerPaneIds = useAccountSwitchPaneIds(offer);
 
   const declaration = getAgentConfigFolderAccount(agentId);
   if (!declaration) return null;
@@ -62,6 +78,18 @@ export function AgentAccountsSection({
       );
     if (onClose) void onClose((closed) => closed && launch());
     else launch();
+  };
+
+  const offerSwitch = (account: { id: string | null; name: string }) => {
+    const generation = ++offerGenerationRef.current;
+    setOffer(null);
+    void readUsageLimitedPaneIds(agentId, account.id).then(
+      (paneIds) => {
+        if (offerGenerationRef.current !== generation || paneIds.length === 0) return;
+        setOffer({ agentId, account, paneIds });
+      },
+      () => {}
+    );
   };
 
   const addButton = (
@@ -120,11 +148,17 @@ export function AgentAccountsSection({
             }
             value={defaultId}
             onValueChange={(value) => {
+              const moved = value !== defaultId;
+              const account =
+                value === DEFAULT_LOGIN
+                  ? { id: null, name: "Default login" }
+                  : accounts.find((candidate) => candidate.id === value);
               void (async () => {
                 await updateAgent(agentId, {
                   accountId: value === DEFAULT_LOGIN ? undefined : value,
                 });
                 onSettingsChange?.();
+                if (moved && account) offerSwitch({ id: account.id, name: account.name });
               })();
             }}
             options={[
@@ -133,12 +167,41 @@ export function AgentAccountsSection({
             ]}
             isModified={hasSavedDefault}
             onReset={() => {
+              const moved = defaultId !== DEFAULT_LOGIN;
               void (async () => {
                 await updateAgent(agentId, { accountId: undefined });
                 onSettingsChange?.();
+                if (moved) offerSwitch({ id: null, name: "Default login" });
               })();
             }}
             resetAriaLabel={`Use ${agentName}'s default login`}
+          />
+        </SettingsGroup>
+      )}
+
+      {offer && offerPaneIds.length > 0 && (
+        <SettingsGroup>
+          <SettingsRow
+            label={<span role="status">{limitedPanesLabel(offerPaneIds.length, agentName)}</span>}
+            layout="stacked"
+            description={`${offerPaneIds.length === 1 ? "It restarts" : "Each restarts"} on ${offer.account.name}, and you choose which before any do`}
+            control={
+              <SettingsRowActions>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setSwitchRequest(buildAccountSwitchRequest(offer, offerPaneIds));
+                    setOffer(null);
+                  }}
+                >
+                  {switchPanesLabel(offerPaneIds.length, offer.account.name)}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setOffer(null)}>
+                  Keep
+                </Button>
+              </SettingsRowActions>
+            }
           />
         </SettingsGroup>
       )}
@@ -152,10 +215,15 @@ export function AgentAccountsSection({
         onAdded={(account, folder) => {
           setIsAddOpen(false);
           onSettingsChange?.();
-          // A new folder is empty: the CLI's own sign-in fills it.
+          // A new folder is empty: the CLI's own sign-in fills it, and a pane
+          // switched onto it before then would only reach that sign-in, so the
+          // offer waits until the account is picked.
           if (folder === "create") signIn(account);
+          else offerSwitch({ id: account.id, name: account.name });
         }}
       />
+
+      <AccountSwitchDialog request={switchRequest} onClose={() => setSwitchRequest(null)} />
 
       <ConfirmDialog
         isOpen={removing !== null}

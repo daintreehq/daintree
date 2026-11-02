@@ -5,9 +5,59 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 const dispatch = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
+// The host's answer to which panes are stopped on a usage limit (#16136).
+const readUsageLimitedPaneIds = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+vi.mock("@/components/Layout/AccountSwitchNotice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Layout/AccountSwitchNotice")>()),
+  readUsageLimitedPaneIds,
+}));
+
+// A native select in place of the Radix one, which jsdom can't open; the
+// reset button stays, as the real row draws it.
+vi.mock("@/components/Settings/SettingsSelect", () => ({
+  SettingsSelect: ({
+    label,
+    description,
+    value,
+    onValueChange,
+    options,
+    isModified,
+    onReset,
+    resetAriaLabel,
+  }: {
+    label: string;
+    description?: string;
+    value: string;
+    onValueChange: (value: string) => void;
+    options: { value: string; label: string }[];
+    isModified?: boolean;
+    onReset?: () => void;
+    resetAriaLabel?: string;
+  }) => (
+    <div>
+      <span>{label}</span>
+      <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {description && <p>{description}</p>}
+      {isModified && onReset && (
+        <button type="button" aria-label={resetAriaLabel} onClick={onReset}>
+          Reset
+        </button>
+      )}
+    </div>
+  ),
+}));
+
 import { AgentAccountsSection } from "../AgentAccountsSection";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { usePanelStore } from "@/store/panelStore";
 import type { AgentSettingsEntry } from "@shared/types";
+import type { PanelInstance } from "@shared/types/panel";
 
 const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
 
@@ -30,6 +80,9 @@ function renderSection(
 
 beforeEach(() => {
   dispatch.mockClear();
+  readUsageLimitedPaneIds.mockReset();
+  readUsageLimitedPaneIds.mockResolvedValue([]);
+  usePanelStore.setState({ panelsById: {}, panelIds: [] });
 });
 
 afterEach(() => {
@@ -106,5 +159,122 @@ describe("AgentAccountsSection (#16040)", () => {
     await act(async () => {});
 
     expect(removeAccount).toHaveBeenCalledWith("codex", "company");
+  });
+
+  describe("offering the panes stopped on a usage limit (#16136)", () => {
+    const limitedPane = {
+      id: "p1",
+      kind: "terminal",
+      title: "Parser",
+      cwd: "/repo",
+      cols: 80,
+      rows: 24,
+      location: "grid",
+      launchAgentId: "codex",
+      agentState: "waiting",
+    } as PanelInstance;
+
+    beforeEach(() => {
+      usePanelStore.setState({ panelsById: { p1: limitedPane }, panelIds: ["p1"] });
+      readUsageLimitedPaneIds.mockResolvedValue(["p1"]);
+    });
+
+    it("offers them under a new default account, and switches the ones confirmed", async () => {
+      const updateAgent = vi.fn().mockResolvedValue(undefined);
+      useAgentSettingsStore.setState({ updateAgent });
+      renderSection({ accounts: [COMPANY] });
+
+      await act(async () => {
+        fireEvent.change(screen.getByRole("combobox", { name: "Default account" }), {
+          target: { value: "company" },
+        });
+      });
+
+      expect(updateAgent).toHaveBeenCalledWith("codex", { accountId: "company" });
+      expect(readUsageLimitedPaneIds).toHaveBeenCalledWith("codex", "company");
+      expect(screen.getByRole("status").textContent).toBe("1 Codex pane stopped on a usage limit");
+
+      fireEvent.click(screen.getByRole("button", { name: "Switch it to Company…" }));
+      expect(screen.getByText("Restart 1 pane on 'Company'?")).toBeTruthy();
+      expect(screen.queryByRole("status")).toBeNull();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Restart pane" }));
+      });
+
+      expect(dispatch).toHaveBeenCalledWith(
+        "terminal.restartOnAccount",
+        { terminalId: "p1", accountId: "company", confirmed: true },
+        { source: "user" }
+      );
+    });
+
+    it("offers a move to the default login when the default is reset", async () => {
+      useAgentSettingsStore.setState({ updateAgent: vi.fn().mockResolvedValue(undefined) });
+      usePanelStore.setState({
+        panelsById: { p1: { ...limitedPane, agentAccountId: "company" } as PanelInstance },
+        panelIds: ["p1"],
+      });
+      renderSection({ accounts: [COMPANY], accountId: "company" });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Use Codex's default login" }));
+      });
+
+      expect(readUsageLimitedPaneIds).toHaveBeenCalledWith("codex", null);
+      expect(screen.getByRole("button", { name: "Switch it to Default login…" })).toBeTruthy();
+    });
+
+    it("leaves them alone with Keep", async () => {
+      useAgentSettingsStore.setState({ updateAgent: vi.fn().mockResolvedValue(undefined) });
+      renderSection({ accounts: [COMPANY] });
+      await act(async () => {
+        fireEvent.change(screen.getByRole("combobox", { name: "Default account" }), {
+          target: { value: "company" },
+        });
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("offers them when an existing, signed-in folder is added", async () => {
+      const addAccount = vi.fn().mockResolvedValue(COMPANY);
+      useAgentSettingsStore.setState({ addAccount });
+      renderSection({});
+
+      fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+      fireEvent.change(screen.getByTestId("add-account-name"), { target: { value: "Company" } });
+      fireEvent.click(screen.getByLabelText("Use an existing folder"));
+      fireEvent.change(screen.getByTestId("add-account-path"), {
+        target: { value: COMPANY.configDir },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Add account" }).at(-1)!);
+      });
+
+      expect(readUsageLimitedPaneIds).toHaveBeenCalledWith("codex", "company");
+      expect(screen.getByRole("button", { name: "Switch it to Company…" })).toBeTruthy();
+    });
+
+    it("waits on a new folder, which only its sign-in fills", async () => {
+      const addAccount = vi.fn().mockResolvedValue(COMPANY);
+      useAgentSettingsStore.setState({ addAccount });
+      renderSection({});
+
+      fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+      fireEvent.change(screen.getByTestId("add-account-name"), { target: { value: "Company" } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Create and sign in" }));
+      });
+
+      expect(readUsageLimitedPaneIds).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "codex", accountId: "company", presetId: null },
+        { source: "user" }
+      );
+    });
   });
 });
