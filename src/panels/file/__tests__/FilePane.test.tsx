@@ -25,15 +25,15 @@ const groupEdges: Array<GridGroupAttention | null> = [];
 
 vi.mock("@/components/Panel/ContentPanel", () => ({
   ContentPanel: (
-    props: Record<string, unknown> & { toolbar?: ReactNode; children?: ReactNode }
+    props: Record<string, unknown> & {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      toolbar?: ReactNode;
+      children?: ReactNode;
+    }
   ) => {
     contentPanelProps.push(props);
-    groupEdges.push(
-      useGridGroupAttention(
-        props.id as string,
-        (props.location as "grid" | "dock" | "dialog" | undefined) ?? "grid"
-      )
-    );
+    groupEdges.push(useGridGroupAttention(props.id, props.location ?? "grid"));
     // Render children too so the Source/Rendered branch is observable, not just
     // the toolbar (#11191 HTML preview branch).
     return (

@@ -741,7 +741,10 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   });
 
   describe("tab group edges (#16151)", () => {
-    const inGroup = (attention: Partial<GridGroupAttention>, props = {}) => (
+    const inGroup = (
+      attention: Partial<GridGroupAttention>,
+      props: Partial<DevPreviewPaneProps> = {}
+    ) => (
       <GridGroupAttentionContext.Provider
         value={{
           panelId: baseProps.id,
@@ -793,11 +796,22 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           unmount();
         }
         // Where the group draws no edge, the preview's own frame stays.
-        for (const props of [{ isMaximized: true }, { isMultiPanelGrid: false }]) {
+        for (const props of [
+          { isMaximized: true },
+          { isMultiPanelGrid: false },
+          { location: "dock" },
+          { location: "dialog" },
+        ] as const) {
           const { unmount } = render(inGroup({ hiddenTabFailed: true }, props));
           expect(frameClass(), JSON.stringify(props)).toBe(own.frame);
           unmount();
         }
+        // Nor does an edge meant for another tab hold it back.
+        const { unmount } = render(
+          inGroup({ panelId: "other", ambientAgentState: "waiting", hiddenTabFailed: true })
+        );
+        expect(frameClass(), "other tab").toBe(own.frame);
+        unmount();
         devServerStateRef.current = {
           ...devServerStateRef.current,
           phaseLabel: undefined,

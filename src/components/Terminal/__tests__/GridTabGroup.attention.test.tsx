@@ -6,10 +6,16 @@
  * `ContentPanel` with its own prop list and forwards nothing group-related, as
  * the browser, dev-preview, file and diff panes do.
  */
+import { useContext } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import type { PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PtyPanelData,
+  type TabGroup,
+} from "@shared/types/panel";
 import { HAND_BACK_SEEN_DWELL_MS } from "@shared/utils/runHandBack";
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
@@ -70,6 +76,7 @@ vi.mock("@/registry", () => ({
 
 import { GridTabGroup } from "../GridTabGroup";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
+import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
@@ -92,6 +99,18 @@ interface PaneProps {
   agentState?: PtyPanelData["agentState"];
 }
 
+/** What the group hands the shown pane, before ContentPanel's own id and location checks. */
+function GroupProbe() {
+  const attention = useContext(GridGroupAttentionContext);
+  return (
+    <span
+      data-testid="group-probe"
+      data-ambient={attention?.ambientAgentState}
+      data-hidden-failed={String(attention?.hiddenTabFailed)}
+    />
+  );
+}
+
 const standIn = (kind: string) =>
   function StandInPane(props: PaneProps) {
     return (
@@ -107,13 +126,14 @@ const standIn = (kind: string) =>
         tabs={props.tabs}
         onTabClick={props.onTabClick}
       >
-        <div />
+        <GroupProbe />
       </ContentPanel>
     );
   };
 
 function TerminalStandIn(props: PaneProps) {
-  const panel = usePanelStore((s) => s.panelsById[props.id]) as PtyPanelData | undefined;
+  const record = usePanelStore((s) => s.panelsById[props.id]);
+  const panel = record && isPtyPanel(record) ? record : undefined;
   return (
     <ContentPanel
       id={props.id}
@@ -129,7 +149,7 @@ function TerminalStandIn(props: PaneProps) {
       onFocus={props.onFocus}
       onClose={props.onClose}
     >
-      <div />
+      <GroupProbe />
     </ContentPanel>
   );
 }
@@ -149,7 +169,17 @@ const AGENT = "agent";
 type ShownKind = "browser" | "dev-preview" | "file" | "diff";
 
 function shownPanel(kind: ShownKind): PanelInstance {
-  return { id: SHOWN, kind, title: kind, location: "grid" } as PanelInstance;
+  const base = { id: SHOWN, title: kind, location: "grid" } as const;
+  switch (kind) {
+    case "browser":
+      return { ...base, kind };
+    case "dev-preview":
+      return { ...base, kind, cwd: "/repo" };
+    case "file":
+      return { ...base, kind };
+    case "diff":
+      return { ...base, kind };
+  }
 }
 
 function agentTab(fields: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -325,6 +355,8 @@ describe("GridTabGroup edges for hidden tabs", () => {
     view.rerender(<GridTabGroup group={group(AGENT)} focusedId={AGENT} isMultiPanelGrid />);
     expect(view.frame(SHOWN)).toBeNull();
     expect(view.edge(AGENT, "failed")).toBe(true);
+    // Its failure is its own pane's to draw now, not the group's.
+    expect(view.getByTestId("group-probe").getAttribute("data-hidden-failed")).toBe("false");
     advance(HAND_BACK_SEEN_DWELL_MS);
     expect(view.edge(AGENT, "failed")).toBe(false);
 
@@ -336,5 +368,23 @@ describe("GridTabGroup edges for hidden tabs", () => {
     records(browser, agentTab({ agentState: "working" }), { focused: SHOWN });
     records(browser, agentTab({ runtimeStatus: "exited", exitCode: 2 }), { focused: SHOWN });
     expect(view.edge(SHOWN, "failed")).toBe(true);
+  });
+
+  it("leaves a shown agent's ask and failure to its own pane", () => {
+    records(
+      shownPanel("file"),
+      agentTab({
+        agentState: "waiting",
+        waitingReason: "approval",
+        restartError: { message: "no", timestamp: 1, recoverable: false },
+      }),
+      { active: AGENT }
+    );
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    const view = mount();
+    const probe = view.getByTestId("group-probe");
+    expect(probe.hasAttribute("data-ambient")).toBe(false);
+    expect(probe.getAttribute("data-hidden-failed")).toBe("false");
+    expect(view.edge(AGENT, "failed")).toBe(true);
   });
 });

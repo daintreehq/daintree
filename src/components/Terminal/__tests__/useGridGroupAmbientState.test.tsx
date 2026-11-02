@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { BrowserPanelData, PanelInstance, PtyPanelData } from "@shared/types/panel";
@@ -199,7 +199,6 @@ describe("useGridGroupHiddenFailure", () => {
   }
 
   const failures: Array<[string, Partial<PtyPanelData>]> = [
-    ["an error wait", { agentState: "waiting", waitingReason: "error" }],
     ["a failed exit", { runtimeStatus: "exited", exitCode: 1 }],
     ["a failed spawn", { spawnError: { code: "ENOENT", message: "not found" } }],
     ["a failed restart", { restartError: { message: "no", timestamp: 1, recoverable: false } }],
@@ -217,6 +216,36 @@ describe("useGridGroupHiddenFailure", () => {
 
     lookAt("hidden");
     expect(result.current).toBe(false);
+  });
+
+  it("raises a hidden error wait only once it outlasts its pane's debounce, until seen", () => {
+    vi.useFakeTimers();
+    try {
+      const waiting = tab("hidden", { agentState: "waiting", waitingReason: "error" });
+      const working = tab("hidden", { agentState: "working" });
+      records([browser, waiting]);
+      const { result, rerender } = renderHook(
+        ({ panels }) => useGridGroupHiddenFailure(panels, "shown"),
+        { initialProps: { panels: [browser, waiting] as PanelInstance[] } }
+      );
+      // A wait that passes in a moment never flashes the group.
+      act(() => vi.advanceTimersByTime(500));
+      expect(result.current).toBe(false);
+      records([browser, working]);
+      rerender({ panels: [browser, working] });
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(result.current).toBe(false);
+
+      records([browser, waiting]);
+      rerender({ panels: [browser, waiting] });
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(result.current).toBe(true);
+
+      lookAt("hidden");
+      expect(result.current).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("raises a failure again once it clears and comes back", () => {

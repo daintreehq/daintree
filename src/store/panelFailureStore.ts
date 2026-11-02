@@ -7,7 +7,7 @@ import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
  */
 export type PanelFailureSource = "wait" | "exit" | "spawn" | "restart" | "reconnect" | "submit";
 
-type RecordFailureSource = Exclude<PanelFailureSource, "submit">;
+export type RecordFailureSource = Exclude<PanelFailureSource, "submit">;
 
 export const PANEL_FAILURE_SOURCES: readonly PanelFailureSource[] = [
   "wait",
@@ -18,7 +18,7 @@ export const PANEL_FAILURE_SOURCES: readonly PanelFailureSource[] = [
   "submit",
 ];
 
-const RECORD_FAILURE_SOURCES: readonly RecordFailureSource[] = [
+export const RECORD_FAILURE_SOURCES: readonly RecordFailureSource[] = [
   "wait",
   "exit",
   "spawn",
@@ -40,7 +40,7 @@ interface FailureOccurrence {
 export type PanelFailureTokens = Partial<Record<PanelFailureSource, number>>;
 type PanelOccurrences = Partial<Record<PanelFailureSource, FailureOccurrence>>;
 
-interface PanelFailureState {
+export interface PanelFailureState {
   /** The failure each source shows now, per panel. */
   occurrences: Record<string, PanelOccurrences>;
   /** The occurrence of each source the user has had in front of them, per panel. */
@@ -142,19 +142,20 @@ function withoutSources(
 }
 
 /**
- * Whether a record-backed failure the panel shows now is one the user hasn't
- * had in front of them. A failed submit doesn't count: only a mounted pane
- * observes one, and its occurrence outlives the failure, so a pane that isn't
- * showing can neither draw nor clear it.
+ * Whether a record-backed failure the panel shows now, from `sources`, is one
+ * the user hasn't had in front of them. A failed submit doesn't count: only a
+ * mounted pane observes one, and its occurrence outlives the failure, so a pane
+ * that isn't showing can neither draw nor clear it.
  */
 export function hasUnseenRecordFailure(
   state: Pick<PanelFailureState, "occurrences" | "seen">,
-  panelId: string
+  panelId: string,
+  sources: readonly RecordFailureSource[] = RECORD_FAILURE_SOURCES
 ): boolean {
   const occurrences = state.occurrences[panelId];
   if (occurrences === undefined) return false;
   const seen = state.seen[panelId];
-  return RECORD_FAILURE_SOURCES.some((source) => {
+  return sources.some((source) => {
     const occurrence = occurrences[source];
     return occurrence !== undefined && seen?.[source] !== occurrence.token;
   });
