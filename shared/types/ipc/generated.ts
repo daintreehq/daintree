@@ -3870,7 +3870,8 @@ export interface GeneratedIpcInvokeMap {
                         exitCode: number | null;
                         signal: number | null;
                         error: string | null;
-                      };
+                      }
+                    | { kind: "assistant-sessions-full" };
                 }
               | { kind: "launch-error"; message: string }
               | { kind: "cancel" }
@@ -3914,6 +3915,18 @@ export interface GeneratedIpcInvokeMap {
         agentModelId: string | null;
         agentPresetId: string | null;
       } | null;
+      assistant?: true | undefined;
+      workers?:
+        | {
+            terminalId: string;
+            hostId: string | null;
+            hostName: string | null;
+            projectId: string;
+            projectName: string | null;
+            agentId: string | null;
+            observedAt: number;
+          }[]
+        | undefined;
     }[];
   };
   "scheduled-runs:list-by-schedule": {
@@ -3978,7 +3991,8 @@ export interface GeneratedIpcInvokeMap {
                         exitCode: number | null;
                         signal: number | null;
                         error: string | null;
-                      };
+                      }
+                    | { kind: "assistant-sessions-full" };
                 }
               | { kind: "launch-error"; message: string }
               | { kind: "cancel" }
@@ -4022,6 +4036,18 @@ export interface GeneratedIpcInvokeMap {
         agentModelId: string | null;
         agentPresetId: string | null;
       } | null;
+      assistant?: true | undefined;
+      workers?:
+        | {
+            terminalId: string;
+            hostId: string | null;
+            hostName: string | null;
+            projectId: string;
+            projectName: string | null;
+            agentId: string | null;
+            observedAt: number;
+          }[]
+        | undefined;
     }[];
   };
   "scheduled-runs:take-inbox": {
