@@ -44,10 +44,16 @@ function nameText(name: unknown): string {
   return typeof name === "string" ? quote(name) : "none";
 }
 
+/** Display names by id, for the presets and accounts a preset names. */
+interface PreviewNames {
+  presets: Record<string, string>;
+  accounts: Record<string, string>;
+}
+
 interface PresetField {
   label: string;
   /** The value as shown, or undefined when the preset doesn't set it. */
-  read: (preset: AgentPreset, names: Record<string, string>) => string | undefined;
+  read: (preset: AgentPreset, names: PreviewNames) => string | undefined;
   /** What an unset field means at launch. */
   unset: string;
 }
@@ -102,7 +108,9 @@ const PRESET_FIELDS: readonly PresetField[] = [
         ? p.fallbacks
             // With its id: two presets can share a name, and a swap between
             // them would otherwise read as no change at all.
-            .map((id) => (names[id] !== undefined ? `${quote(names[id])} (${id})` : quote(id)))
+            .map((id) =>
+              names.presets[id] !== undefined ? `${quote(names.presets[id])} (${id})` : quote(id)
+            )
             .join(", ")
         : undefined,
     unset: "none",
@@ -116,6 +124,16 @@ const PRESET_FIELDS: readonly PresetField[] = [
     label: "Keep the conversation on usage limits",
     read: (p) => (p.keepConversationOnRateLimit === true ? "On" : undefined),
     unset: "Off",
+  },
+  {
+    // By name and id, never its folder: the id is what the preset stores.
+    label: "Account",
+    read: (p, names) => {
+      if (typeof p.accountId !== "string") return undefined;
+      const name = names.accounts[p.accountId];
+      return name !== undefined ? `${quote(name)} (${p.accountId})` : quote(p.accountId);
+    },
+    unset: "the worktree's or the agent's",
   },
 ];
 
@@ -138,7 +156,7 @@ function envValue(value: string, secret: boolean): string {
 }
 
 /** Every value a preset sets, for a create or for what a delete takes away. */
-function presetContentLines(preset: AgentPreset, names: Record<string, string>): string[] {
+function presetContentLines(preset: AgentPreset, names: PreviewNames): string[] {
   const lines: string[] = [];
   const env = envEntries(preset);
   if (env.size > 0) {
@@ -158,7 +176,7 @@ function presetContentLines(preset: AgentPreset, names: Record<string, string>):
 function presetChangeLines(
   before: AgentPreset,
   after: AgentPreset,
-  names: Record<string, string>
+  names: PreviewNames
 ): string[] {
   const lines: string[] = [];
   if (before.name !== after.name) {
@@ -187,13 +205,14 @@ function presetChangeLines(
 }
 
 export function formatAgentPresetPreviewLines(mutation: AgentPresetMutation): string[] {
-  const { agentName, presetNames } = mutation;
+  const { agentName } = mutation;
+  const names: PreviewNames = { presets: mutation.presetNames, accounts: mutation.accountNames };
   const agentLine = `Agent: ${agentName}`;
   if (mutation.operation === "create") {
     return [
       agentLine,
       `Name: ${nameText(mutation.preset.name)}`,
-      ...presetContentLines(mutation.preset, presetNames),
+      ...presetContentLines(mutation.preset, names),
       `${agentName}'s default preset stays as it is.`,
     ];
   }
@@ -201,13 +220,13 @@ export function formatAgentPresetPreviewLines(mutation: AgentPresetMutation): st
     return [
       agentLine,
       `Preset: ${nameText(mutation.before.name)}`,
-      ...presetChangeLines(mutation.before, mutation.preset, presetNames),
+      ...presetChangeLines(mutation.before, mutation.preset, names),
     ];
   }
   const lines = [
     agentLine,
     `Preset: ${nameText(mutation.preset.name)}`,
-    ...presetContentLines(mutation.preset, presetNames),
+    ...presetContentLines(mutation.preset, names),
   ];
   if (mutation.wasAgentDefault) {
     lines.push(`It's ${agentName}'s default preset, so the default is cleared.`);

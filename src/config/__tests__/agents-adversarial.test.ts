@@ -354,6 +354,29 @@ describe("Preset fallback chain sanitization", () => {
     ]);
   });
 
+  it("keeps a well-formed pinned account on the user's own presets alone (#16133)", () => {
+    const numeric = { id: "numeric", name: "Numeric" };
+    Reflect.set(numeric, "accountId", 7);
+    const result = getMergedPresets(
+      "codex",
+      [
+        // An id no account answers to stays, so its launch is refused rather than moved.
+        { id: "dangling", name: "Dangling", accountId: "removed-account" },
+        { id: "spaced", name: "Spaced", accountId: "not an id" },
+        numeric,
+      ],
+      [{ id: "ccr-route", name: "Route", accountId: "company" }],
+      [{ id: "shared", name: "Shared", accountId: "company" }]
+    );
+    expect(result.map((p) => [p.id, p.accountId])).toEqual([
+      ["dangling", "removed-account"],
+      ["spaced", undefined],
+      ["numeric", undefined],
+      ["shared", undefined],
+      ["ccr-route", undefined],
+    ]);
+  });
+
   it("strips self-references from fallbacks", () => {
     const bad = [
       { id: "me", name: "Me", fallbacks: ["me", "other"] },

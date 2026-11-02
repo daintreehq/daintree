@@ -119,6 +119,7 @@ const PRESET_TITLE_DESCRIPTION = "Panel title; defaults to the name.";
 const PRESET_FALLBACKS_DESCRIPTION =
   "Up to 3 of this agent's preset ids, tried if its provider fails.";
 const PRESET_RATE_LIMIT_DESCRIPTION = "Also fall back on usage limits, ending the conversation.";
+const PRESET_ACCOUNT_DESCRIPTION = "One of the agent's saved accounts its launches sign in as.";
 
 const PresetIdArgSchema = z
   .string()
@@ -137,13 +138,14 @@ export const AgentCreatePresetArgsSchema = z.strictObject({
   displayTitle: z.string().optional().describe(PRESET_TITLE_DESCRIPTION),
   fallbacks: z.array(z.string()).optional().describe(PRESET_FALLBACKS_DESCRIPTION),
   fallbackOnRateLimit: z.boolean().optional().describe(PRESET_RATE_LIMIT_DESCRIPTION),
+  accountId: z.string().optional().describe(PRESET_ACCOUNT_DESCRIPTION),
 });
 
 // A patch, never a whole preset: the listing returns no env or flags, so a
 // caller could only replace a preset by being handed every value, secrets
 // included. Omitted keeps a field; an empty value or "inherit" clears it, and
 // `customFlags: null` hands the flags back to the agent's own (an empty string
-// is a real value there: no flags at all).
+// is a real value there: no flags at all). `accountId: null` clears the pin.
 export const AgentUpdatePresetArgsSchema = z.strictObject({
   agentId: PresetAgentIdSchema,
   presetId: PresetIdArgSchema,
@@ -162,6 +164,11 @@ export const AgentUpdatePresetArgsSchema = z.strictObject({
   displayTitle: z.string().optional().describe(PRESET_TITLE_DESCRIPTION),
   fallbacks: z.array(z.string()).optional().describe(PRESET_FALLBACKS_DESCRIPTION),
   fallbackOnRateLimit: z.boolean().optional().describe(PRESET_RATE_LIMIT_DESCRIPTION),
+  accountId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(`${PRESET_ACCOUNT_DESCRIPTION} null clears it.`),
 });
 
 export const AgentDeletePresetArgsSchema = z.strictObject({
