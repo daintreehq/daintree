@@ -193,6 +193,40 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
     ).toBeUndefined();
   });
 
+  it("runs a fixed slash form unstamped and refuses any other, in main (#16101)", async () => {
+    const { deps, pty, records } = harness({ shellName, global: true });
+    records.set(WORKER, atPrompt({ detectedAgentId: "codex" }));
+    const server = await serve(deps);
+
+    const resumed = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: WORKER, command: "/goal resume", generation: 4 },
+    });
+    expect(resumed.isError).toBeFalsy();
+    expect(answerOf(resumed)).toMatchObject({ sent: true, command: "/goal resume" });
+    expect(pty.submit).toHaveBeenCalledWith(
+      WORKER,
+      "/goal resume",
+      expect.any(String),
+      undefined,
+      null
+    );
+
+    const cleared = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: WORKER, command: "/clear", generation: 4 },
+    });
+    expect(toolErrorPayload(cleared).code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+    // The caller hears the steer's own code; the audit files it as a restriction.
+    expect(vi.mocked(deps.appendAuditRecord).mock.calls.at(-1)![0]).toMatchObject({
+      toolId: "terminal.sendCommandOwned",
+      outcome: { kind: "result", value: { ok: false, error: { code: "RESTRICTED" } } },
+    });
+
+    expect(pty.submit).toHaveBeenCalledTimes(1);
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
   it("refuses a plain shell, a restarted run and a terminal someone typed into", async () => {
     const { deps, pty, records, generations } = harness({ shellName, global: true });
     const server = await serve(deps);
@@ -254,6 +288,33 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
     expect(deps.dispatchAction).not.toHaveBeenCalled();
     expect(pty.doubleEscape).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["launched", MINE],
+    ["was handed", HANDED],
+  ])(
+    "sends any slash command to what it %s verbatim, on the owned path",
+    async (_how, terminalId) => {
+      const { deps, pty } = harness({ shellName, global: true });
+      const server = await serve(deps);
+
+      // A form the steer would run and one it would refuse take the same path.
+      for (const command of ["/compact", "/clear"]) {
+        const result = await callTool(server, {
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId, command },
+        });
+
+        expect(result.isError, command).toBeFalsy();
+        expect(deps.dispatchAction).toHaveBeenLastCalledWith(
+          "terminal.sendCommand",
+          expect.objectContaining({ terminalId, command }),
+          expect.anything()
+        );
+      }
+      expect(pty.submit).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     ["launched", MINE],

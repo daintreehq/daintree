@@ -8,6 +8,7 @@ import {
   resolveRunbooksMcpUrl,
 } from "../helpSessionRunbooks.js";
 import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistant.js";
+import { WORKER_STEER_SLASH_FORMS } from "../../../shared/config/workerSteerCommands.js";
 
 describe("buildRunbooksHeaders (#13496, #14458)", () => {
   it("names the host-control model and never a host state or lane", () => {
@@ -99,6 +100,17 @@ describe("buildRunbooksAddendum", () => {
       expect(global).toContain("`actions.search` through `host.call`");
       expect(global).not.toContain("yours is");
       expect(buildRunbooksAddendum()).not.toContain("through `host.call`,");
+    });
+
+    // #16101 — a steered slash command is refused unless it is one of these.
+    it("tells only the global assistant the slash forms a steer runs, as the steer enforces them", () => {
+      const global = buildRunbooksAddendum({ global: true });
+      for (const [agentId, forms] of Object.entries(WORKER_STEER_SLASH_FORMS)) {
+        // Each agent's forms are named under it, never under another agent.
+        expect(global).toContain(`${agentId}: ${forms.map((form) => `\`${form}\``).join(", ")}`);
+      }
+      expect(global).toContain("sent alone without `handback`");
+      expect(text).not.toContain("`/goal resume`");
     });
 
     it("keeps a project's assistant on the unscoped names in its own project alone", () => {

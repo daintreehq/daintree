@@ -2175,7 +2175,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "List the slash commands an agent CLI offers, including project-local ones, before driving the agent with one. An empty list means it has none.",
+      "List the slash commands an agent CLI offers, with what each does, project-local ones included. An empty list means it has none.",
     enabled: true,
     id: "slashCommands.list",
     inputSchema: {

@@ -1,3 +1,10 @@
+import { WORKER_STEER_SLASH_FORMS } from "../../shared/config/workerSteerCommands.js";
+
+// What a steer runs as a slash command (#16101), read off the policy that enforces it.
+const STEER_SLASH_FORMS = Object.entries(WORKER_STEER_SLASH_FORMS)
+  .map(([agentId, forms]) => `${agentId}: ${forms.map((form) => `\`${form}\``).join(", ")}`)
+  .join("; ");
+
 export const DAINTREE_DOCS_MCP_URL = "https://daintree.org/api/mcp";
 
 export const RUNBOOKS_MCP_SERVER_NAME = "daintree-runbooks";
@@ -80,7 +87,9 @@ export function resolveRunbooksMcpUrl(env: NodeJS.ProcessEnv = process.env): str
  */
 export function buildRunbooksAddendum(caller: { global?: boolean } = {}): string {
   const toolNames = caller.global
-    ? "**Tool names:** you have no project of your own: `host.list` finds projects, a page per host (follow `projectInventory.nextCursor`, or narrow by `projectQuery`, before calling one missing), and every step a runbook gives runs through `host.call` with that project's `hostId` and `projectId` (`local` for this machine). Call the tools it names as written, `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.closeOwned` included. Prompting, keys and `terminal.interruptOwned` also reach an agent you didn't launch, given its `incarnation` from `host.list` as `generation`; you can close only what you launched. Their `notify` steps apply to you too. A host's own settings, turning Canopy on included, are read and changed with `host.settings`, never through `host.call`. Holding work for a host that is down or busy, arm one notice for when its link or a fresh sample changes with `host.watch`, and list hosts again before acting on it."
+    ? "**Tool names:** you have no project of your own: `host.list` finds projects, a page per host (follow `projectInventory.nextCursor`, or narrow by `projectQuery`, before calling one missing), and every step a runbook gives runs through `host.call` with that project's `hostId` and `projectId` (`local` for this machine). Call the tools it names as written, `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.closeOwned` included. Prompting, keys and `terminal.interruptOwned` also reach an agent you didn't launch, given its `incarnation` from `host.list` as `generation`; you can close only what you launched. There a slash command runs only as one of its agent's fixed forms (" +
+      STEER_SLASH_FORMS +
+      "), sent alone without `handback`; for any other, ask the person to type it, or to hand you the pane if it runs on this machine. Their `notify` steps apply to you too. A host's own settings, turning Canopy on included, are read and changed with `host.settings`, never through `host.call`. Holding work for a host that is down or busy, arm one notice for when its link or a fresh sample changes with `host.watch`, and list hosts again before acting on it."
     : "**Tool names:** runbooks are written for every caller. In your own project, where one says `terminal.sendCommandOwned`, `terminal.sendKeysOwned` or `terminal.closeOwned`, yours is `terminal.sendCommand`, `terminal.sendKeys` or `terminal.close`, with the same arguments; don't look the owned names up. Through `host.call` use the owned names as written. Their `notify` steps apply to you too.";
   return [
     "## Runbooks First",
