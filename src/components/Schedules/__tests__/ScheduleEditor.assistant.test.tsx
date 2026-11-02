@@ -65,6 +65,7 @@ function renderEditor(schedule: Schedule) {
       onDeleted={vi.fn()}
       onCancel={vi.fn()}
       onOpenAgentSettings={vi.fn()}
+      projectSwitches={null}
     />
   );
 }
