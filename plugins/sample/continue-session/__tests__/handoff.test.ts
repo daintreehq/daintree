@@ -40,6 +40,7 @@ describe("HandoffCollector", () => {
     collector.add({ kind: "prompt", text: "do it" }, 1, null);
     collector.add({ kind: "assistant", text: "done", messageKey: "m" }, 2, null);
     collector.add({ kind: "context", text: "Daintree: terminal t1 is waiting." }, 3, null);
+    collector.add({ kind: "context", text: "<command-name>/old</command-name>" }, 3, null);
     collector.add({ kind: "tool_result", text: "ok" }, 4, null);
     expect(collector.recentPrompts().map((turn) => turn.text)).toEqual(["do it"]);
     expect(collector.lastReply()?.text).toBe("done");

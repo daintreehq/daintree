@@ -48,5 +48,10 @@ export async function pruneRemovedProjects(
   if (!ids.has(anchorProjectId)) return;
   if ((await currentProjectId(ctx.host)) !== anchorProjectId) return;
   const orphans = records.filter((record) => !ids.has(record.projectId));
-  if (orphans.length > 0) await deleteConversions(ctx, orphans);
+  if (orphans.length === 0) return;
+  // A failed delete keeps its record, so the next look tries it again; there
+  // is nothing for the user to do about it meanwhile.
+  const { failed } = await deleteConversions(ctx, orphans);
+  if (failed > 0)
+    ctx.host.logger.warn(`kept ${failed} removed-project index(es) that couldn't be deleted`);
 }

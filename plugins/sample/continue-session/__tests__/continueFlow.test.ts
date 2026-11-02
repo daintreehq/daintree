@@ -24,6 +24,8 @@ interface Scenario {
   sessionFile: Record<string, unknown>;
   launchResult: (args: Record<string, unknown>) => ActionDispatchResult;
   projects: string[];
+  /** What the pane's own record says its project is; unset, the record names none. */
+  terminalProjectId?: string;
 }
 
 function ok(result: unknown): ActionDispatchResult {
@@ -68,7 +70,12 @@ async function setUp(): Promise<Scenario> {
         case "project.getAll":
           return ok({ projects: scenario.projects.map((id) => ({ id })) });
         case "terminal.info.get":
-          return ok({ id: input.terminalId, cwd: "/repo/wt", worktreeId: "wt-1" });
+          return ok({
+            id: input.terminalId,
+            cwd: "/repo/wt",
+            worktreeId: "wt-1",
+            ...(scenario.terminalProjectId ? { projectId: scenario.terminalProjectId } : {}),
+          });
         case "terminal.sessionFile.get":
           return ok(scenario.sessionFile);
         case "agent.launch":
@@ -191,6 +198,48 @@ describe("Continue in another agent", () => {
     expect(outcome.status).toBe("unavailable");
     expect(scenario.host.showConfirmCalls).toEqual([]);
     expect(scenario.host.shownToasts[0]?.message).toContain("didn't record this pane's session");
+  });
+
+  it("refuses a pane whose own record puts it in a project that isn't in front", async () => {
+    const scenario = await setUp();
+    scenario.terminalProjectId = "p2";
+    const outcome = (await clickContinue(scenario.host)) as { status: string };
+    expect(outcome.status).toBe("unavailable");
+    expect(scenario.host.showConfirmCalls).toEqual([]);
+  });
+
+  it("files the session under the pane's own project", async () => {
+    const scenario = await setUp();
+    scenario.terminalProjectId = "p1";
+    scenario.host.simulateConfirmResponse(true);
+    await clickContinue(scenario.host);
+    await expect(
+      searchTool(scenario.host).execute(
+        { query: "keymap" },
+        caller("p1", "continue-id-2"),
+        new AbortController().signal
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it("keeps nothing and launches nothing when Cancel lands while the session is saved", async () => {
+    const scenario = await setUp();
+    const { host } = scenario;
+    host.simulateConfirmResponse(true);
+    const storage = host.storage as { set: typeof host.storage.set };
+    const realSet = storage.set.bind(host.storage);
+    storage.set = async (key, value, scope) => {
+      const task = host.startedTasks[0];
+      if (key === "conversions" && task?.state === "working") host.simulateTaskCancel(task.id);
+      return realSet(key, value, scope);
+    };
+
+    const outcome = (await clickContinue(host)) as { status: string };
+
+    expect(outcome.status).toBe("cancelled");
+    expect(scenario.launches).toEqual([]);
+    expect(readdirSync(join(scenario.dataDir, "sessions"))).toEqual([]);
+    expect(await host.storage.get("conversions")).toEqual({});
   });
 
   it("refuses a file that turns out to be another session's", async () => {

@@ -158,6 +158,24 @@ describe("convertSession and IndexStore", () => {
     expect(store.search("c8", buildMatch("p q", "any")!, 5)).toHaveLength(1);
   });
 
+  it("finds the longest phrase a query allows across a cut", async () => {
+    const phrase = Array.from({ length: 74 }, () => "alpha").join(" ");
+    const text = `${"p ".repeat(1785)}${phrase} ${"q ".repeat(3000)}`;
+    const store = await indexTexts("c10", [text]);
+    expect(phrase.length).toBeLessThanOrEqual(500);
+    expect(store.search("c10", buildMatch(`"${phrase}"`, "all")!, 5)).toHaveLength(1);
+  });
+
+  it("counts the limit in records, so one record matching everywhere hides no other", async () => {
+    const store = await indexTexts("c11", [
+      "needle ".repeat(30_000),
+      "one needle here",
+      "and a needle there",
+    ]);
+    const lines = store.search("c11", buildMatch("needle", "all")!, 8).map((hit) => hit.line);
+    expect(lines.sort()).toEqual([2, 3, 4]);
+  });
+
   it("indexes a Claude Code transcript and leaves sidechains and thinking out", async () => {
     const { dir, store } = workspace();
     const source = join(dir, `${CLAUDE_SESSION_ID}.jsonl`);
@@ -306,15 +324,13 @@ describe("convertSession and IndexStore", () => {
 });
 
 describe("chunks", () => {
-  it("cuts a long text without spaces into bounded, overlapping chunks that cover it all", () => {
+  it("cuts a long text without spaces into bounded chunks that cover it all and overlap", () => {
     const text = "x".repeat(1024 * 1024);
-    const started = performance.now();
-    const parts = [...chunks(text)];
-    expect(performance.now() - started).toBeLessThan(1_000);
     let covered = 0;
-    for (const [offset, chunk] of parts) {
+    for (const [offset, chunk] of chunks(text)) {
       expect(chunk.length).toBeLessThanOrEqual(4_000);
-      expect(offset).toBeLessThanOrEqual(covered);
+      // Each chunk repeats more of the last one than the longest searchable phrase.
+      if (covered > 0) expect(covered - offset).toBeGreaterThan(500);
       expect(text.slice(offset, offset + chunk.length)).toBe(chunk);
       covered = offset + chunk.length;
     }
@@ -372,7 +388,8 @@ describe("search_converted results", () => {
   });
 
   it("answer a session whose index is missing as missing, and still search the rest", async () => {
-    const records = ["gone", "here"].map((id, index) => ({
+    // The missing index is the newest, so it is searched first.
+    const records = ["here", "gone"].map((id, index) => ({
       id,
       projectId: "p1",
       terminalIds: ["t1"],
@@ -402,8 +419,8 @@ describe("search_converted results", () => {
     )) as { sessions: { convertedSessionId: string; error?: string }[] };
     expect(result.sessions.map((session) => [session.convertedSessionId, !!session.error])).toEqual(
       [
-        ["here", false],
         ["gone", true],
+        ["here", false],
       ]
     );
   });

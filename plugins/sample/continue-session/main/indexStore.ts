@@ -96,34 +96,40 @@ export class IndexStore {
   search(id: string, match: string, limit: number): SearchHit[] {
     const db = new DatabaseSync(this.pathOf(id), { readOnly: true });
     try {
-      const rows = db
+      // A long record is indexed as overlapping chunks, so one match can hit
+      // several of them: each record's best-ranked chunk stands for it, and
+      // the limit counts records.
+      const best = db
         .prepare(
-          `SELECT f.kind AS kind, f.line AS line, f.byte_offset AS byteOffset,
-                  f.timestamp AS timestamp, f.char_offset AS charOffset,
-                  snippet(fragments_fts, 0, '[', ']', '…', 48) AS excerpt
-             FROM fragments_fts JOIN fragments f ON f.id = fragments_fts.rowid
-            WHERE fragments_fts MATCH ?
-            ORDER BY bm25(fragments_fts)
+          `SELECT id FROM (
+             SELECT id, rank, ROW_NUMBER() OVER (PARTITION BY byte_offset ORDER BY rank) AS nth
+               FROM (SELECT f.id AS id, f.byte_offset AS byte_offset, bm25(fragments_fts) AS rank
+                       FROM fragments_fts JOIN fragments f ON f.id = fragments_fts.rowid
+                      WHERE fragments_fts MATCH ?))
+            WHERE nth = 1
+            ORDER BY rank
             LIMIT ?`
         )
-        .all(match, limit * 4);
-      // A long record is indexed as overlapping chunks, so one match can hit
-      // two of them: the best-ranked chunk stands for its record.
+        .all(match, limit);
+      const detail = db.prepare(
+        `SELECT f.kind AS kind, f.line AS line, f.byte_offset AS byteOffset,
+                f.timestamp AS timestamp, f.char_offset AS charOffset,
+                snippet(fragments_fts, 0, '[', ']', '…', 48) AS excerpt
+           FROM fragments_fts JOIN fragments f ON f.id = fragments_fts.rowid
+          WHERE fragments_fts MATCH ? AND fragments_fts.rowid = ?`
+      );
       const hits: SearchHit[] = [];
-      const seen = new Set<number>();
-      for (const row of rows) {
-        const byteOffset = Number(row.byteOffset);
-        if (seen.has(byteOffset)) continue;
-        seen.add(byteOffset);
+      for (const { id: rowid } of best) {
+        const row = detail.get(match, rowid as number);
+        if (!row) continue;
         hits.push({
           kind: String(row.kind) as FragmentKind,
           line: Number(row.line),
-          byteOffset,
+          byteOffset: Number(row.byteOffset),
           charOffset: Number(row.charOffset),
           timestamp: typeof row.timestamp === "string" ? row.timestamp : null,
           excerpt: clipExcerpt(String(row.excerpt)),
         });
-        if (hits.length >= limit) break;
       }
       return hits;
     } finally {
@@ -146,7 +152,12 @@ export interface SearchHit {
 
 /** Long texts are split so a snippet comes from near the match, not from a whole log. */
 const CHUNK_CHARS = 4_000;
-const OVERLAP_CHARS = 400;
+/**
+ * Longer than the longest phrase a search can ask for (its query is capped at
+ * 500 characters), so any such phrase that crosses a cut is whole in the next
+ * chunk.
+ */
+const OVERLAP_CHARS = 600;
 const BATCH_ROWS = 2_000;
 
 export class IndexBuilder {
@@ -256,7 +267,8 @@ export function* chunks(text: string): Generator<[number, string]> {
     yield [start, text.slice(start, end)];
     if (end >= text.length) return;
     const overlapStart = end - OVERLAP_CHARS;
-    start = keepPairWhole(text, backToSpace(text, overlapStart, overlapStart - OVERLAP_CHARS));
+    const next = keepPairWhole(text, backToSpace(text, overlapStart, overlapStart - OVERLAP_CHARS));
+    start = Math.max(next, start + 1);
   }
 }
 

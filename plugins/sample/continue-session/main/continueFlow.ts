@@ -142,6 +142,7 @@ export async function continueFromPane(
     // is kept and nothing launches.
     signal.throwIfAborted();
     await ctx.catalog.put(record);
+    signal.throwIfAborted();
   } catch (error) {
     await ctx.catalog.remove([conversionId]).catch(() => undefined);
     await ctx.store.delete(conversionId).catch(() => undefined);
