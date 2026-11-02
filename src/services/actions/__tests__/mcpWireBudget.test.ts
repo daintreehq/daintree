@@ -968,7 +968,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 174_200 → 174_500 for #16040, measured at 174_433 B (+268 over develop's
   // 174_165): `agent.launch`'s `accountId`, carried in-app for the
   // external⊆in-app subset invariant.
-  const MAX_COHORT_PAYLOAD_BYTES = 174_500;
+  // 174_500 → 174_700 for #16133, measured at 174_599 B (+166 over develop's
+  // 174_433): the user-preset create and edit take `accountId`, so an
+  // assistant pins the account a preset launches on the way Settings does.
+  // In-app only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 174_700;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

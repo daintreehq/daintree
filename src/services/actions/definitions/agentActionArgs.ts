@@ -119,7 +119,7 @@ const PRESET_TITLE_DESCRIPTION = "Panel title; defaults to the name.";
 const PRESET_FALLBACKS_DESCRIPTION =
   "Up to 3 of this agent's preset ids, tried if its provider fails.";
 const PRESET_RATE_LIMIT_DESCRIPTION = "Also fall back on usage limits, ending the conversation.";
-const PRESET_ACCOUNT_DESCRIPTION = "One of the agent's saved accounts its launches sign in as.";
+const PRESET_ACCOUNT_DESCRIPTION = "Account id to sign in as";
 
 const PresetIdArgSchema = z
   .string()
@@ -138,7 +138,7 @@ export const AgentCreatePresetArgsSchema = z.strictObject({
   displayTitle: z.string().optional().describe(PRESET_TITLE_DESCRIPTION),
   fallbacks: z.array(z.string()).optional().describe(PRESET_FALLBACKS_DESCRIPTION),
   fallbackOnRateLimit: z.boolean().optional().describe(PRESET_RATE_LIMIT_DESCRIPTION),
-  accountId: z.string().optional().describe(PRESET_ACCOUNT_DESCRIPTION),
+  accountId: z.string().optional().describe(`${PRESET_ACCOUNT_DESCRIPTION}.`),
 });
 
 // A patch, never a whole preset: the listing returns no env or flags, so a
@@ -168,7 +168,7 @@ export const AgentUpdatePresetArgsSchema = z.strictObject({
     .string()
     .nullable()
     .optional()
-    .describe(`${PRESET_ACCOUNT_DESCRIPTION} null clears it.`),
+    .describe(`${PRESET_ACCOUNT_DESCRIPTION}; null clears.`),
 });
 
 export const AgentDeletePresetArgsSchema = z.strictObject({
