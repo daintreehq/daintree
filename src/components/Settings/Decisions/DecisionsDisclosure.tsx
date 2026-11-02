@@ -46,8 +46,8 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
           The decision model, only if you turn it on.
         </span>{" "}
         Its learning is off unless you turn it on under Decision model, which asks first. The agent
-        CLI you then choose for it sends a question and your past answers like it to that
-        CLI&apos;s provider (Anthropic, OpenAI or Google, unless the CLI is set up to use another).
+        CLI you then choose for it sends a question and your past answers like it to that CLI&apos;s
+        provider (Anthropic, OpenAI or Google, unless the CLI is set up to use another).
       </li>
     </ul>
   );

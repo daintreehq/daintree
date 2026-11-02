@@ -595,6 +595,9 @@ export class DecisionModelRuntime {
         if (controller.signal.aborted || this.closed || this.model !== model) {
           throw evaluationCancelled();
         }
+        // The replay finished, and storing its report is the commit: a cancel
+        // asked from here on is too late, and the run ends as finished.
+        signal?.removeEventListener("abort", cancel);
         const evaluation: DecisionModelEvaluation = {
           adapter: model.adapter,
           // Later than the one it replaces, so a threshold chosen from that one names it alone.

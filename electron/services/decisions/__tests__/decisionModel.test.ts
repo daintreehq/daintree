@@ -635,9 +635,9 @@ describe("the decision model's settings (#16027)", () => {
     const second = await runtime.evaluate();
     expect(second.evaluatedAt).toBeGreaterThan(first.evaluatedAt);
 
-    await expect(runtime.setAutoAnswerThreshold(0.8, first.evaluatedAt)).rejects.toThrow(
-      /evaluated again/
-    );
+    await expect(runtime.setAutoAnswerThreshold(0.8, first.evaluatedAt)).rejects.toMatchObject({
+      name: "StaleEvaluationError",
+    });
     expect(runtime.proxy()).toBeNull();
     await runtime.setAutoAnswerThreshold(0.8, second.evaluatedAt);
     expect(runtime.snapshot().answeringFrom).toBe(0.8);
@@ -745,6 +745,11 @@ describe("the decision model's settings (#16027)", () => {
     expect(view.report.buckets.slice(0, -1).every((bucket) => bucket.answered === 0)).toBe(true);
     expect(view.thresholds.map((choice) => choice.threshold)).toContain(0.8);
     expect(view.autoAnswerThreshold).toBe(0.8);
+    // A threshold chosen between the band floors is listed with the rest.
+    await runtime.setAutoAnswerThreshold(0.85);
+    expect(
+      describeEvaluation(runtime.getEvaluation()!).thresholds.map((choice) => choice.threshold)
+    ).toContain(0.85);
 
     const damaged = describeReport({
       total: -3,

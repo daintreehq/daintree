@@ -50,8 +50,8 @@ export function DecisionsModelConsentDialog({
             Sent only through the agent CLI you choose.
           </span>{" "}
           When the model is asked a question or evaluated, that CLI sends the question, its context
-          and options, and your past answers like it to its provider ({DESTINATIONS}, unless the
-          CLI is set up to use another), using its own sign-in and settings on this computer. An
+          and options, and your past answers like it to its provider ({DESTINATIONS}, unless the CLI
+          is set up to use another), using its own sign-in and settings on this computer. An
           evaluation sends your past questions and answers to it, one at a time.
         </li>
         <li>

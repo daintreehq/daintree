@@ -147,7 +147,8 @@ export function DecisionsModelSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {running ? "Evaluating the decision model…" : ""}
       </span>
-      {model === null && loadError !== null && (
+      {/* Shown over an older read too, so a failed Reload still says so and offers Retry. */}
+      {loadError !== null && (
         <SettingsLoadErrorBanner
           title="Couldn't read the decision model's settings"
           message={loadError}

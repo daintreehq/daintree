@@ -295,6 +295,43 @@ describe("Decisions → Decision model", () => {
     expect(row("decisions-model-answering").textContent).toContain("Answering in your place");
   });
 
+  it("recovers a failed threshold choice by reading the model again, and says when that fails", async () => {
+    const learning = state({
+      learning: true,
+      adapter: "claude",
+      consentedAt: 5,
+      history: { state: "open", count: 60 },
+      evaluation: EVALUATION,
+    });
+    getModel.mockResolvedValueOnce(learning);
+    setModelThreshold.mockRejectedValueOnce(new Error("The decision model's evaluation changed"));
+    // The read after the failure, then a Reload that fails, then one that works.
+    getModel.mockResolvedValueOnce(learning);
+    getModel.mockRejectedValueOnce(new Error("Decisions has stopped"));
+    getModel.mockResolvedValueOnce({ ...learning, revision: 2 });
+    await renderSection();
+
+    const trigger = within(row("decisions-model-threshold")).getByRole("combobox");
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("option", { name: /0\.90 or higher/ }), { key: "Enter" });
+    });
+    expect(screen.getByText("Couldn't change when the model answers")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    });
+    expect(screen.queryByText("Couldn't change when the model answers")).toBeNull();
+    expect(screen.getByText("Couldn't read the decision model's settings")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(screen.queryByText("Couldn't read the decision model's settings")).toBeNull();
+  });
+
   it("offers Clear history for a history that couldn't be opened", async () => {
     getModel.mockResolvedValue(
       state({ learning: true, consentedAt: 5, history: { state: "unavailable" } })
