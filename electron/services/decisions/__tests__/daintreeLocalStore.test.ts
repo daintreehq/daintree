@@ -827,6 +827,23 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.outboxFor("q1")).toEqual([]);
   });
 
+  it("keeps a cancelled question cancelled when a stale flush reports its create refused", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1, { local_status: "cancelled" }), item("o1", "q1"));
+    await store.commitNewQuestion(row("q2", 2), item("o2", "q2"));
+
+    const failed = { local_status: "publish-failed" as const, error_code: "validation_error" };
+    await store.updateQuestion("q1", { ...failed, last_attempt_at: "2026-11-02T00:00:00.000Z" });
+    await store.updateQuestion("q2", failed);
+
+    expect(await store.getQuestion("q1")).toMatchObject({
+      local_status: "cancelled",
+      error_code: null,
+      last_attempt_at: "2026-11-02T00:00:00.000Z",
+    });
+    expect(await store.getQuestion("q2")).toMatchObject(failed);
+  });
+
   it("never writes back a create it has deleted, from a copy a flush still holds", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const create = { ...item("o1", "q1"), payload: { attachments: [], uploaded: [] } };

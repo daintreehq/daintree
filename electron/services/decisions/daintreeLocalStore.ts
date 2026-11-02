@@ -230,6 +230,18 @@ function assertNoLegacyContent(value: { legacy_content_json?: string | null }): 
 }
 
 /** A detached copy of a question patch, so a caller changing its object later can't change the write. */
+/**
+ * A question cancelled stays cancelled when a flush that read its create
+ * before the cancel dropped it then finds the ciphertext gone (#16014): the
+ * library would record the create as refused for good, `publish-failed`,
+ * though nothing was ever refused and the agent was told it was cancelled.
+ */
+function keepingCancelled(current: QuestionRow, patch: Partial<QuestionRow>): Partial<QuestionRow> {
+  if (current.local_status !== "cancelled" || patch.local_status !== "publish-failed") return patch;
+  const { local_status: _status, error_code: _code, ...rest } = patch;
+  return rest;
+}
+
 function copyQuestionPatch(patch: Partial<QuestionRow>): Partial<QuestionRow> {
   assertNoLegacyContent(patch);
   const { legacy_content_json: _legacy, ...rest } = patch;
@@ -906,7 +918,7 @@ export class DaintreeLocalStore implements LocalStore {
     if (!current) return null;
     const next: QuestionRow = {
       ...current,
-      ...patch,
+      ...keepingCancelled(current, patch),
       question_id: current.question_id,
       origin: { ...current.origin, ...(patch.origin ?? {}) },
     };

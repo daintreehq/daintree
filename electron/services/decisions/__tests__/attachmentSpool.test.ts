@@ -439,6 +439,60 @@ describe("asking with attachments", () => {
     expect(spooled()).toEqual([]);
   });
 
+  it("keeps a question cancelled offline while a starting attempt is busy with the one before it", async () => {
+    writeImage("a.png");
+    writeImage("b.png");
+    const offline = bridge();
+    const ask = (id: string) =>
+      offline.registerQuestion({
+        origin: origin(),
+        input: { question: `About ${id}?`, attachments: [{ local_resource_id: id }] },
+      });
+    const first = await ask("a.png");
+    const second = await ask("b.png");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let uploading = false;
+    const client = {
+      reserveAttachment: async (body: { attachment_id: string }) => ({
+        attachment_id: body.attachment_id,
+        upload_path: `/api/v1/attachments/${body.attachment_id}/content`,
+      }),
+      uploadAttachment: async () => {
+        if (uploading) return;
+        uploading = true;
+        await held;
+      },
+      completeAttachment: async () => ({}),
+      createQuestion: vi.fn(async () => ({ event_seq: 1 })),
+    };
+    const attempt = new DecisionsBridge({
+      identity,
+      store,
+      policy: new PolicyRegistry(),
+      sink: holdingTerminalSink,
+      client: client as unknown as RelayClient,
+      resolver: attachments.resolver,
+      spool: attachments.spool,
+      pumpIntervalMs: 0,
+    });
+    // The flush has read both creates and is uploading the first one's image.
+    const pumping = attempt.pump();
+    await vi.waitFor(() => expect(uploading).toBe(true));
+
+    await offline.cancelQuestion(second.questionId, paneIdentityOf(origin()));
+    release();
+    await pumping;
+
+    expect(client.createQuestion).toHaveBeenCalledTimes(1);
+    expect((await store.getQuestion(first.questionId))?.local_status).toBe("open");
+    expect(await store.getQuestion(second.questionId)).toMatchObject({
+      local_status: "cancelled",
+      error_code: null,
+    });
+    expect(spooled()).toEqual([]);
+  });
+
   it("drops the spool with a question cancelled before it was ever published", async () => {
     writeImage("shot.png");
     const b = bridge();
