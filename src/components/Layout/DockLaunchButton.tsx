@@ -68,6 +68,7 @@ import { resolveLauncherToolbarButtonId } from "./launcherToolbarCatalog";
 import { resolveEffectivePresetId } from "@shared/types";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { resolveSettledSavedPreset } from "@shared/utils/agentPresets";
 import { getMergedPresets } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -321,12 +322,10 @@ export function DockLaunchButton({
         const accounts = getAgentConfigFolderAccount(agent.id)
           ? sanitizeAgentAccounts(entry?.accounts)
           : [];
-        const savedPreset = savedPresetId
-          ? presets.find((preset) => preset.id === savedPresetId)
-          : undefined;
+        const settledPreset = resolveSettledSavedPreset(presets, entry, activeWorktreeId);
         const accountChoices = buildAccountChoices(
           accounts,
-          resolveEffectiveAccountId(entry, activeWorktreeId, undefined, savedPreset?.accountId)
+          resolveEffectiveAccountId(entry, activeWorktreeId, undefined, settledPreset?.accountId)
         );
         return {
           ...agent,

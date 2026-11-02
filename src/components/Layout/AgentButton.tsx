@@ -25,6 +25,7 @@ import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { resolveSettledSavedPreset } from "@shared/utils/agentPresets";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
@@ -357,13 +358,13 @@ export function AgentButton({
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
   const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
-  // What a plain launch signs in as: the worktree's pick, else the saved
-  // preset's pin (#16133), else the agent's default.
+  // What a plain launch signs in as: the worktree's pick, else the pin of the
+  // preset it settles on (#16133), else the agent's default.
   const launchAccountId = resolveEffectiveAccountId(
     entry,
     activeWorktreeId,
     undefined,
-    activePreset?.accountId
+    resolveSettledSavedPreset(presets, entry, activeWorktreeId)?.accountId
   );
   const activeAccount = launchAccountId
     ? accounts.find((account) => account.id === launchAccountId)

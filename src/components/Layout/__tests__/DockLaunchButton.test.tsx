@@ -3219,6 +3219,18 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       }
     });
 
+    it("collapses the expansion from an account row back to its agent", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(selectedOption(container)?.getAttribute("data-row-kind")).toBe("account");
+
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(accountRows(container)).toHaveLength(0);
+      expect(selectedOption(container)?.getAttribute("aria-label")).toMatch(/^Claude,/);
+    });
+
     it("lists the accounts after the presets, under their own heading", () => {
       mockMergedPresets = [{ id: "fast", name: "Fast" }];
       const { container, getAllByTestId } = renderButton({ agents: READY });
@@ -3272,6 +3284,26 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(qualifierTextOf(company)).toBe("Current default");
       expect(setDefaultControl(company)).toBeNull();
       expect(qualifierTextOf(accountRows(container)[2]!)).toBe("");
+    });
+
+    it("marks the pin of the agent's preset when the worktree's own pick is gone", () => {
+      mockMergedPresets = [{ id: "fast", name: "Fast", accountId: "company" }];
+      mockAgentSettings = {
+        agents: {
+          claude: {
+            accounts: [COMPANY, PERSONAL],
+            accountId: "personal",
+            presetId: "fast",
+            worktreePresets: { "wt-1": "deleted" },
+          },
+        },
+      };
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      expect(qualifierTextOf(accountRows(container)[1]!)).toBe("Current default");
+      // Personal isn't what launches, so it can still be saved for this worktree.
+      expect(setDefaultControl(accountRows(container)[2]!)).not.toBeNull();
     });
 
     it("saves an account to this worktree with Set as default, and offers none outside one", () => {

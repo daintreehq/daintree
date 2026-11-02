@@ -53,7 +53,7 @@ let mockCcrPresetsByAgent: Record<string, Array<{ id: string; name: string }>> =
 let mockProjectPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
 let mockMergedPresetsFn: (
   agentId: string
-) => Array<{ id: string; name: string; color?: string }> = () => [];
+) => Array<{ id: string; name: string; color?: string; accountId?: string }> = () => [];
 let mockExternalLinks: Array<{ label: string; url: string }> | undefined;
 
 vi.mock("@/services/ActionService", () => ({
@@ -493,14 +493,12 @@ describe("AgentButton preset UX", () => {
     const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
     const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.codex-personal" };
 
-    function renderCodex() {
-      mockMergedPresetsFn = () => [{ id: "work", name: "Work", accountId: "company" } as never];
+    function renderCodex(entry: Record<string, unknown> = {}) {
+      mockMergedPresetsFn = () => [{ id: "work", name: "Work", accountId: "company" }];
       mockSettings = settingsWith({
-        codex: { accounts: [COMPANY, PERSONAL], accountId: "personal", presetId: "work" },
+        codex: { accounts: [COMPANY, PERSONAL], accountId: "personal", presetId: "work", ...entry },
       });
-      return render(
-        <AgentButton type="codex" availability={"ready" as unknown as CliAvailability[string]} />
-      );
+      return render(<AgentButton type="codex" availability="ready" />);
     }
 
     it("marks the saved preset's pinned account for a worktree that hasn't picked one", () => {
@@ -509,9 +507,19 @@ describe("AgentButton preset UX", () => {
       expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("company");
     });
 
+    it("marks the pin of the agent's preset when the worktree's own pick is gone", () => {
+      // The launch falls back to the agent's preset, so its pin is what signs in.
+      mockActiveWorktreeId = "wt1";
+      const { getByTestId } = renderCodex({ worktreePresets: { wt1: "deleted" } });
+      expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("company");
+    });
+
     it("marks the agent's default outside a worktree, the slot a pick writes there", () => {
-      const { getByTestId, getByText } = renderCodex();
+      const { getByTestId, getByText, getAllByTestId } = renderCodex();
       expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("personal");
+      // The trigger still names what a plain launch signs in as: the preset's pin.
+      const tooltips = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      expect(tooltips.some((text) => text.includes("Work · Company"))).toBe(true);
 
       fireEvent.click(getByText("Company"));
       expect(updateAgentMock).toHaveBeenCalledWith("codex", { accountId: "company" });

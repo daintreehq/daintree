@@ -568,6 +568,21 @@ describe("agentPresetMutationFingerprint", () => {
     );
     expect(print(renamed)).not.toBe(print(named));
 
+    // So does a renamed account the preset pins (#16133).
+    const pin = { agentId: "codex", presetId: WORK.id, accountId: "company" };
+    const company = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+    const pinned = plan(
+      "agent.updatePreset",
+      pin,
+      sources({ accounts: [company], customPresets: [WORK] })
+    );
+    const pinnedRenamed = plan(
+      "agent.updatePreset",
+      pin,
+      sources({ accounts: [{ ...company, name: "Work login" }], customPresets: [WORK] })
+    );
+    expect(print(pinnedRenamed)).not.toBe(print(pinned));
+
     const createArgs = { agentId: "codex", name: "New" };
     const first = planAgentPresetMutation(
       "agent.createPreset",

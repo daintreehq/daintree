@@ -134,7 +134,8 @@ export function resolveCodexQuotaProfiles(
 
   // First, so a folder an account and a legacy preset share takes the
   // account's place. Saved accounts are always fully qualified.
-  for (const account of sanitizeAgentAccounts(entry?.accounts)) {
+  const accounts = sanitizeAgentAccounts(entry?.accounts);
+  for (const account of accounts) {
     const { home } = namedHome(account.configDir);
     const existing = byHome.get(homeIdentity(home));
     if (existing) {
@@ -156,7 +157,12 @@ export function resolveCodexQuotaProfiles(
     "codex",
     entry?.customPresets as AgentPreset[]
   ).entries()) {
-    const raw = envCodexHome(preset.env);
+    // A pinned account's folder is the one the preset launches on, over its
+    // own CODEX_HOME (#16133); a pin no account answers to launches nothing.
+    const raw =
+      preset.accountId === undefined
+        ? envCodexHome(preset.env)
+        : accounts.find((account) => account.id === preset.accountId)?.configDir;
     if (raw === undefined) continue;
     const { home, invalid } = namedHome(raw);
     if (invalid) {

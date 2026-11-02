@@ -187,6 +187,7 @@ describe("removeAgentAccount (#16040)", () => {
           { id: "work", name: "Work", accountId: account.id, env: { FOO: "1" } },
           { id: "home", name: "Home", accountId: other.account.id },
           { id: "plain", name: "Plain" },
+          { id: "review", name: "Review", accountId: account.id },
         ],
       },
     });
@@ -197,6 +198,7 @@ describe("removeAgentAccount (#16040)", () => {
       { id: "work", name: "Work", env: { FOO: "1" } },
       { id: "home", name: "Home", accountId: other.account.id },
       { id: "plain", name: "Plain" },
+      { id: "review", name: "Review" },
     ]);
   });
 });

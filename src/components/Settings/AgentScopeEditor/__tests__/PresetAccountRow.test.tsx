@@ -48,6 +48,16 @@ describe("PresetAccountRow (#16133)", () => {
     expect(onChange).toHaveBeenCalledWith("personal");
   });
 
+  it("takes a pin away when Not pinned is picked", async () => {
+    const { onChange } = renderRow({ id: "work", name: "Work", accountId: "company" }, [
+      COMPANY,
+      PERSONAL,
+    ]);
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Account" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "Not pinned" }));
+    expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+
   it("shows a pin as changed and takes it away on reset", () => {
     const { onChange } = renderRow({ id: "work", name: "Work", accountId: "company" }, [COMPANY]);
     expect(screen.getByRole("combobox", { name: "Account" }).textContent).toContain("Company");

@@ -10,6 +10,7 @@ import {
   combineInlineModes,
   resolveDangerousMode,
   resolveInlineMode,
+  resolveEffectivePresetId,
   type AgentSettingsEntry,
 } from "../types/agentSettings.js";
 
@@ -402,6 +403,27 @@ export function getMergedPreset(
     return undefined;
   }
   return merged.find((f) => f.id === presetId);
+}
+
+/**
+ * The saved preset a plain launch settles on, from an agent's merged presets:
+ * the worktree's pick, else the agent's default, which also stands in for a
+ * worktree pick that's gone, as `buildAgentLaunchPlan` falls back. Lets a
+ * picker mark the account that preset pins (#16133) where the launch will.
+ */
+export function resolveSettledSavedPreset(
+  presets: readonly AgentPreset[],
+  entry: AgentSettingsEntry | null | undefined,
+  worktreeId: string | null | undefined
+): AgentPreset | undefined {
+  const savedId = resolveEffectivePresetId(entry, worktreeId);
+  if (!savedId) return undefined;
+  const saved = presets.find((preset) => preset.id === savedId);
+  if (saved) return saved;
+  const agentDefault = entry?.presetId;
+  return agentDefault && agentDefault !== savedId
+    ? presets.find((preset) => preset.id === agentDefault)
+    : undefined;
 }
 
 export function applyPresetBehaviorOverrides(

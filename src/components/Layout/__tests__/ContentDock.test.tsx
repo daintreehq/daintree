@@ -428,6 +428,10 @@ describe("ContentDock regression test", () => {
     expect(dispatch.mock.calls[0]?.[1]).not.toHaveProperty("presetId");
 
     dispatch.mockClear();
+    dockLaunchProps.current?.onLaunchAgent("claude", undefined, { accountId: "company" });
+    expect(dispatch.mock.calls[0]?.[1]).toMatchObject({ accountId: "company" });
+
+    dispatch.mockClear();
     dockLaunchProps.current?.onLaunchAgent("claude", "fast");
     expect(dispatch.mock.calls[0]?.[1]).not.toHaveProperty("accountId");
   });
