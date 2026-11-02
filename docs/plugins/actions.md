@@ -494,6 +494,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
 | `terminal.sessionFile.get` | Get agent session file | safe | `terminalId` |
 | `terminal.setHoldOnRestart` | Hold agent on restart | safe | `hold`, `terminalId` |
+| `terminal.setWhenDone` | Set when done | safe | `choice`, `terminalId` |
 | `terminal.startHeld` | Start held pane | confirm | `start`, `terminalId` |
 | `terminal.stashInput` | Stash input | safe | — |
 | `terminal.toggleDock` | Toggle dock | safe | `terminalId?` |

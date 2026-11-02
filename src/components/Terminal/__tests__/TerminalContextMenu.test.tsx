@@ -235,6 +235,7 @@ vi.mock("@/components/Terminal/TerminalHandOver", async (importOriginal) => ({
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -1285,6 +1286,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
       "---",
       "Watch terminal",
       "Fleet ›",
+      "When done ›",
       "---",
       "Move ›",
       "Maximize",
@@ -1370,6 +1372,35 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     const root = level(menuTree());
     expect(root.indexOf(shown)).toBe(root.indexOf("Fleet ›") - 1);
     expect(root).not.toContain(hidden);
+  });
+
+  it("offers When done on a live agent pane and dispatches every pick, the current one too (#16171)", () => {
+    useTerminalWhenDoneStore.setState({ choices: { "panel-1": "close" } });
+    renderMenu(agentPane);
+    act(() => {
+      document
+        .querySelector('[data-context-trigger="panel-1"]')!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+
+    for (const [label, choice] of [
+      ["Keep open", "keep"],
+      ["Move to background", "background"],
+      ["Close, keeping the session", "close"],
+    ] as const) {
+      fireEvent.click(screen.getByText(label));
+      expect(dispatch).toHaveBeenLastCalledWith(
+        "terminal.setWhenDone",
+        { terminalId: "panel-1", choice },
+        expect.anything()
+      );
+    }
+    useTerminalWhenDoneStore.setState({ choices: {} });
+  });
+
+  it("offers no When done on a pane with no live agent", () => {
+    renderMenu({ ...agentPane, detectedAgentId: undefined });
+    expect(screen.queryByText("When done")).toBeNull();
   });
 
   it("runs the watch and fleet rows from where they now sit", () => {

@@ -10,6 +10,8 @@ import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBindi
 import { isForegroundDispatch } from "./dispatchSource";
 import { PanelPlacementResultSchema, throwTerminalMiss } from "./terminalPlacement";
 import { TerminalRestoredSchema } from "./schemas";
+import { TERMINAL_WHEN_DONE_CHOICES } from "@shared/types/ipc/terminalWhenDone";
+import { terminalWhenDoneClient } from "@/clients/terminalWhenDoneClient";
 import {
   AGENT_SESSION_FILE_AGENT_IDS,
   AGENT_SESSION_FILE_OBSERVATIONS,
@@ -701,6 +703,27 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.toggleInputLock", args, ctx),
+  }));
+
+  actions.set("terminal.setWhenDone", () => ({
+    id: "terminal.setWhenDone",
+    title: "Set when done",
+    description:
+      "Choose what an agent terminal does once its agent reports done: keep it, move it to the background, or close it with its session resumable. Arming sends the agent the handback instruction.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Arming sends the agent text, which belongs behind a plugin's input capability.
+    denyPluginDispatch: true,
+    keywords: ["handback", "finished", "auto close", "background", "complete"],
+    argsSchema: z.object({
+      terminalId: z.string().min(1).describe("The agent terminal."),
+      choice: z.enum(TERMINAL_WHEN_DONE_CHOICES).describe("keep is the default and disarms."),
+    }),
+    run: async ({ terminalId, choice }) => {
+      await terminalWhenDoneClient.set(terminalId, choice);
+    },
   }));
 
   actions.set("terminal.forceResume", () => ({

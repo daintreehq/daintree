@@ -127,6 +127,18 @@ export function useTerminalMenuCommands({
         return;
       }
 
+      if (actionId.startsWith("when-done:")) {
+        const choice = actionId.slice("when-done:".length);
+        if (choice === "keep" || choice === "background" || choice === "close") {
+          void actionService.dispatch(
+            "terminal.setWhenDone",
+            { terminalId, choice },
+            { source: sourceRef.current }
+          );
+        }
+        return;
+      }
+
       if (actionId.startsWith("recall-voice-target:")) {
         const targetPanelId = actionId.slice("recall-voice-target:".length);
         void actionService.dispatch(

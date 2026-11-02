@@ -449,6 +449,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.redraw",
   "terminal.forceResume",
   "terminal.toggleInputLock",
+  "terminal.setWhenDone",
   "terminal.viewInfo",
   "terminal.restartService",
   "watchdog.restart",

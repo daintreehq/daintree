@@ -14,12 +14,15 @@ import type { PluginPanelMenuItem } from "@/components/Panel/genericPanelMenu";
 import { pluginMenuCommandId } from "@/components/Panel/genericPanelMenu";
 import {
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import type { TerminalWhenDone } from "@shared/types/ipc/terminalWhenDone";
 import {
   RestartOnPresetSubmenu,
   type RestartOnPresetRequest,
@@ -58,9 +61,15 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { CirclePause, FolderTree } from "@/components/icons";
+import { CirclePause, FlagTriangleRight, FolderTree } from "@/components/icons";
 import { ICON_CLASS, type MenuActionHandler } from "./menuShared";
 import type { useFleetRunMenuState } from "./useFleetRunMenuState";
+
+const WHEN_DONE_ROWS: ReadonlyArray<{ choice: TerminalWhenDone; label: string }> = [
+  { choice: "keep", label: "Keep open" },
+  { choice: "background", label: "Move to background" },
+  { choice: "close", label: "Close, keeping the session" },
+];
 
 /** Copy, paste and what the pointer or the selection found in the output. */
 export function TerminalSelectionMenuItems({
@@ -213,6 +222,7 @@ export function TerminalFleetMenuItems({
   fleetRun,
   detectedAgentId,
   isWatched,
+  whenDone,
   onRequestPark,
   onAction,
 }: {
@@ -222,6 +232,8 @@ export function TerminalFleetMenuItems({
   fleetRun: ReturnType<typeof useFleetRunMenuState>;
   detectedAgentId: string | undefined;
   isWatched: boolean;
+  /** The pane's When done choice (#16171); absent where it can't be armed. */
+  whenDone?: TerminalWhenDone;
   onRequestPark: () => void;
   onAction: MenuActionHandler;
 }) {
@@ -338,6 +350,29 @@ export function TerminalFleetMenuItems({
                 {handBackState === "unseen" ? "Mark as read" : "Mark as unread"}
               </ContextMenuItem>
             )}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      )}
+      {detectedAgentId && whenDone !== undefined && (
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <FlagTriangleRight className={ICON_CLASS} aria-hidden="true" />
+            When done
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {/* Each pick acts, the current one too: picking it again renews
+                the agent's instruction. */}
+            <ContextMenuRadioGroup value={whenDone}>
+              {WHEN_DONE_ROWS.map((row) => (
+                <ContextMenuRadioItem
+                  key={row.choice}
+                  value={row.choice}
+                  onSelect={() => onAction(`when-done:${row.choice}`)}
+                >
+                  {row.label}
+                </ContextMenuRadioItem>
+              ))}
+            </ContextMenuRadioGroup>
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
