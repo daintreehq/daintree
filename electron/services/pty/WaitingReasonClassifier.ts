@@ -132,6 +132,16 @@ const LIMIT_ERROR_BANNER_PATTERNS: RegExp[] = [
   /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠⎿-]*(?:(?:error|warning)\s*:?\s*)?(?:\(?\d{3}\)?:?\s*)?(?:quota (?:exceeded|reached)|too many requests)\b/i,
 ];
 
+// What the transcript above an agent's input row is read for (#16093): the
+// depletion banners the pane observation trusts on a working screen. The broad
+// markers below turn up in an agent's own summary of a finished turn
+// ("Added retry handling for ECONNRESET"), and read there they would hold
+// every send to that pane.
+const TRANSCRIPT_ERROR_PATTERNS: RegExp[] = [
+  ...RATE_LIMIT_PATTERNS,
+  ...LIMIT_ERROR_BANNER_PATTERNS,
+];
+
 // Blocking-error markers. Precision over recall: only phrasings that rarely
 // appear in agent prose while it is working normally. Bare "error:"/"failed"
 // stay out — compiler output scrolling past a settling agent would
@@ -225,18 +235,20 @@ export function classifyWaitingReason(
   }
 
   // Priority 2: the agent settled right after a blocking error. With its input
-  // row known, the window is the transcript above it: the input's own frame
-  // and glyph don't take rows a wrapped banner needs.
-  const errorCandidates =
-    composerRow !== undefined && composerRow >= 0 && composerRow < lines.length
-      ? lines
-          .slice(Math.max(0, composerRow - rows), composerRow)
-          .map((l) => stripAnsi(l))
-          .filter((l) => l.trim().length > 0 && !PROMPT_CHROME_LINE.test(l))
-          .slice(-ERROR_SCAN_LINES)
-      : nonEmpty.slice(-ERROR_SCAN_LINES);
+  // row known, the window is the transcript above it, so the input's own frame
+  // and glyph don't take rows a wrapped banner needs, read for depletion
+  // banners only.
+  const inputRowKnown = composerRow !== undefined && composerRow >= 0 && composerRow < lines.length;
+  const errorCandidates = inputRowKnown
+    ? lines
+        .slice(Math.max(0, composerRow - rows), composerRow)
+        .map((l) => stripAnsi(l))
+        .filter((l) => l.trim().length > 0 && !PROMPT_CHROME_LINE.test(l))
+        .slice(-ERROR_SCAN_LINES)
+    : nonEmpty.slice(-ERROR_SCAN_LINES);
+  const errorPatterns = inputRowKnown ? TRANSCRIPT_ERROR_PATTERNS : ERROR_PATTERNS;
   for (const line of errorCandidates) {
-    if (ERROR_PATTERNS.some((p) => p.test(line))) {
+    if (errorPatterns.some((p) => p.test(line))) {
       return "error";
     }
   }

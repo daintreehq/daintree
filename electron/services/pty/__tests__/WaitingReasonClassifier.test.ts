@@ -449,6 +449,21 @@ describe("classifyWaitingReason with the input row known (#16093)", () => {
     ).toBe("error");
   });
 
+  it.each([
+    ["names an error code", ["● Added retry handling for ECONNRESET and ETIMEDOUT."]],
+    [
+      "follows a recovered failure",
+      [
+        "  ⎿  Error: connect ECONNREFUSED 127.0.0.1:5432",
+        "● Started Postgres; the tests pass now.",
+      ],
+    ],
+    ["mentions an auth failure", ["● The 401 now reads as unauthorized instead of crashing."]],
+  ])("reads a finished turn that %s as a prompt wait", (_label, transcript) => {
+    const lines = [...transcript, "", RULE, "❯ ", RULE, "  ⏵⏵ accept edits on"];
+    expect(classify(lines)).toBe("prompt");
+  });
+
   it("reads a boxed input row the same way", () => {
     const box = (inner: string) => `│ ${inner.padEnd(58)} │`;
     const lines = [

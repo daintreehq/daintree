@@ -258,6 +258,27 @@ describe("updateAgentState", () => {
     expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "waiting", at: 9_000 });
   });
 
+  it("dates a re-read reason over an observation saved without a time", () => {
+    seedAgent();
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        a: {
+          ...s.panelsById.a,
+          agentState: "waiting",
+          waitingReason: "error",
+          lastAgentObservation: { agentState: "waiting" },
+        } as PtyPanelData,
+      },
+    }));
+
+    usePanelStore
+      .getState()
+      .updateAgentState("a", "waiting", undefined, 9_000, "heuristic", 0.9, "prompt");
+
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "waiting", at: 9_000 });
+  });
+
   it("writes what a batch deferred when it closes, even with no panels to add", () => {
     seedAgent();
     const token = usePanelStore.getState().beginHydrationBatch();

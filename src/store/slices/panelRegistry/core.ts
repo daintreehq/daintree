@@ -410,7 +410,8 @@ export const createCorePanelActions = (
         lastStateChange !== undefined &&
         agentState !== "directing" &&
         (priorObservation?.agentState !== agentState ||
-          (nextWaitingReason !== terminal.waitingReason && lastStateChange > priorObservation.at))
+          (nextWaitingReason !== terminal.waitingReason &&
+            lastStateChange > (priorObservation.at ?? 0)))
           ? { agentState, at: lastStateChange }
           : undefined;
       // Written as it is observed, since nothing else saves while an agent works
