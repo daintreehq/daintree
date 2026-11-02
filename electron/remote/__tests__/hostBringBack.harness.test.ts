@@ -96,7 +96,6 @@ vi.mock("../client/remoteShell.js", async (importOriginal) => {
   };
 });
 
-import { waitUntil } from "./harness/poll.js";
 import { makeShortTempRoot } from "./harness/privateSshd.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
 import { HostModeOffError, createDirectTransport } from "../client/transport.js";
@@ -157,6 +156,8 @@ function probeOutput(host: HostSide): string {
 }
 
 const isAppStart = (script: string) => script.includes("open -n -g -a");
+/** Only a launch in Host mode brings up the host's listener; the app alone wouldn't. */
+const startsHostMode = (script: string) => isAppStart(script) && /\s--host-mode(\s|$)/.test(script);
 
 /**
  * A harness whose transport behaves as ssh's does when it gets in: the
@@ -191,7 +192,7 @@ async function harnessFor(host: HostSide): Promise<RemoteHarness> {
   });
   const hostMode = requireRemoteService("hostMode");
   remote.answer = async (script) => {
-    if (isAppStart(script)) {
+    if (startsHostMode(script)) {
       await hostMode.startListening();
       host.listening = true;
       host.stopped = false;
@@ -199,11 +200,10 @@ async function harnessFor(host: HostSide): Promise<RemoteHarness> {
     }
     return script.includes("@@dt:uname") ? probeOutput(host) : "";
   };
-  await harness.connect();
-  // Daintree there goes; its Shell hears that it is shutting down.
+  // Daintree there isn't running when this Shell first looks (a reboot, or a
+  // quit while nobody watched), so no link heard it going.
   await hostMode.stopListening();
   host.listening = false;
-  await waitUntil(() => !harness.isConnected(), "the Shell to see the host go");
   return harness;
 }
 
@@ -211,8 +211,9 @@ describe("bringing a host back over the harness (#16170)", () => {
   it("starts Daintree in Host mode on a host quit there on purpose, once, and the link comes up", async () => {
     const host: HostSide = { enabled: true, stopped: true, listening: false };
     h = await harnessFor(host);
-    // Said to be shutting down: the link's own retries never start it again.
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Quit on purpose: an ordinary dial checks, and leaves it stopped.
+    await expect(h.shell().client.connectAndWait(HOST_ID, 10_000)).resolves.toBe("host-mode-off");
+    expect(remote.scripts.some((script) => script.includes("@@dt:uname"))).toBe(true);
     expect(remote.scripts.filter(isAppStart)).toEqual([]);
 
     const bringBack = requireRemoteService("hostBringBack");
@@ -229,6 +230,7 @@ describe("bringing a host back over the harness (#16170)", () => {
     });
     expect(h.manager.connectionState(HOST_ID).status).toBe("connected");
     expect(remote.scripts.filter(isAppStart)).toHaveLength(1);
+    expect(remote.scripts.filter(startsHostMode)).toHaveLength(1);
     // Started as it was set up: nothing switched on, saved or installed there.
     expect(remote.scripts.some((script) => script.includes("--enable-host-mode"))).toBe(false);
     // The attempt is over: a later call is a new one, and finds the link up.

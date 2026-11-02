@@ -135,7 +135,7 @@ export function HostDetail({
   const bringing = bringBacks.isPending(descriptor.id);
   const bringBackSaid = bringing
     ? null
-    : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor);
+    : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor, connection);
   const name = useCommittedField(descriptor.name, (value) =>
     remoteHostsClient.update({ hostId: descriptor.id, name: value })
   );

@@ -84,6 +84,8 @@ export function HostWakeSetup({ descriptor }: { descriptor: HostDescriptor }) {
           spellCheck={false}
           autoComplete="off"
           value={mac}
+          // Held while a save is on its way, so what it answers never replaces newer typing.
+          disabled={saving}
           touched={macTouched}
           error={macError}
           onChange={(event) => setMac(event.target.value)}
@@ -97,6 +99,7 @@ export function HostWakeSetup({ descriptor }: { descriptor: HostDescriptor }) {
           spellCheck={false}
           autoComplete="off"
           value={lan}
+          disabled={saving}
           touched={lanTouched}
           error={lanError}
           onChange={(event) => setLan(event.target.value)}

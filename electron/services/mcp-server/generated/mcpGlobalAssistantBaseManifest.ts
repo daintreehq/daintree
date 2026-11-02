@@ -18,7 +18,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "Try to bring back a host whose link is down: a wake first where one is set up here, then Daintree started there if its Host mode is on. Never changes its settings. Waits up to 2 min; calls meanwhile join it. Answers with what was observed.",
+      "Bring back a host whose link is down: wake it where a wake is set up here, then start Daintree there if its Host mode is on. Up to 2 min; repeat calls join. Answers with what was observed.",
     enabled: true,
     id: "host.bringBack",
     inputSchema: {
@@ -94,13 +94,11 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                 },
                 reached: {
                   type: "boolean",
-                  description: "ssh got in during the attempt.",
                 },
                 startRequested: {
                   type: "boolean",
                 },
                 observed: {
-                  description: "What was last seen: ssh's or the start's own words.",
                   type: ["string", "null"],
                 },
                 elapsedMs: {

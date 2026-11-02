@@ -445,6 +445,9 @@ describe("HostSetupService", () => {
         })
       ).resolves.toBe("started");
       expect(started(scripts)).toBe(true);
+      expect(scripts.filter((c) => c.includes("open -n -g -a"))).toEqual([
+        expect.stringContaining(" --args --host-mode"),
+      ]);
       expect(refusals).toEqual([]);
       // Started as it was set up: nothing switched on or saved there.
       expect(scripts.some((c) => c.includes("--enable-host-mode"))).toBe(false);

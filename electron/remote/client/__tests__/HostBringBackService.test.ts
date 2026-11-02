@@ -14,6 +14,7 @@ const HOST = "studio";
 const SSH_TIMEOUT = "ssh: connect to host studio port 22: Operation timed out";
 const DEADLINE_MS = 120_000;
 const NUDGE_MS = 5_000;
+const SETTLE_MS = 30_000;
 
 function descriptor(
   options: { wake?: HostWakeSetup; connection?: HostConnection } = {}
@@ -33,7 +34,7 @@ function descriptor(
   };
 }
 
-const WAKE = { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" };
+const WAKE = { mac: "0a:1b:2c:3d:4e:5f", lan: "192.168.1.0/24" };
 const ROUTE: WakeRoute = {
   kind: "route",
   localAddress: "192.168.1.20",
@@ -63,7 +64,7 @@ interface Setup {
   host?: HostDescriptor | null;
   state?: HostConnectionState;
   route?: WakeRoute;
-  sendWake?: () => Promise<void>;
+  sendWake?: (signal: AbortSignal) => Promise<void>;
   /** What the link reports right after the redial; connecting unless given. */
   afterRedial?: HostConnectionState;
 }
@@ -76,6 +77,7 @@ function world(setup: Setup = {}) {
   const calls: string[] = [];
   let holds = 0;
   let allowed = 0;
+  const wakes: Array<{ mac: string; route: WakeRoute; signal: AbortSignal }> = [];
   const setLink = (next: HostConnectionState) => {
     state = next;
     for (const listener of [...linkListeners]) listener(HOST, next);
@@ -109,12 +111,14 @@ function world(setup: Setup = {}) {
       return () => startListeners.delete(listener);
     },
     wakeRoute: () => setup.route ?? ROUTE,
-    sendWake: async () => {
+    sendWake: async (mac, route, signal) => {
       calls.push("wake");
-      await setup.sendWake?.();
+      wakes.push({ mac, route, signal });
+      await setup.sendWake?.(signal);
     },
     deadlineMs: DEADLINE_MS,
     nudgeMs: NUDGE_MS,
+    restartSettleMs: SETTLE_MS,
   });
   return {
     service,
@@ -126,6 +130,11 @@ function world(setup: Setup = {}) {
     remove: () => {
       host = null;
     },
+    retarget: (connection: HostConnection) => {
+      if (host) host = { ...host, connection };
+    },
+    wakes,
+    allowed: () => allowed,
     /** Everything an attempt held is let go. */
     released: () =>
       holds === 0 && allowed === 0 && linkListeners.size === 0 && startListeners.size === 0,
@@ -198,7 +207,7 @@ describe("HostBringBackService", () => {
     expect(w.calls).not.toContain("wake");
   });
 
-  it("still dials when the wake can't be sent, and says the wake failed", async () => {
+  it("still dials when the wake can't be sent, and says why no wake went", async () => {
     const w = world({
       host: descriptor({ wake: WAKE }),
       sendWake: () => Promise.reject(new Error("EADDRNOTAVAIL")),
@@ -207,7 +216,81 @@ describe("HostBringBackService", () => {
     await flush();
     expect(w.calls).toEqual(["hold", "wake", "redial"]);
     w.setLink(unreachable(SSH_TIMEOUT));
-    await expect(answer).resolves.toMatchObject({ status: "not_wakeable", wake: "failed" });
+    await expect(answer).resolves.toMatchObject({
+      status: "not_wakeable",
+      wake: "failed",
+      observed: "EADDRNOTAVAIL",
+    });
+  });
+
+  it("sends the host's own adapter its wake along this machine's route, cancelled with the attempt", async () => {
+    const w = world({ host: descriptor({ wake: WAKE }) });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    expect(w.wakes).toHaveLength(1);
+    expect(w.wakes[0]).toMatchObject({ mac: WAKE.mac, route: ROUTE });
+    expect(w.wakes[0]!.signal.aborted).toBe(false);
+    w.setLink(CONNECTED);
+    await answer;
+    expect(w.wakes[0]!.signal.aborted).toBe(true);
+  });
+
+  it("dials nothing when the person disconnects, or re-points the host, while the wake is on its way", async () => {
+    for (const change of ["disconnect", "retarget"] as const) {
+      let delivered!: () => void;
+      const w = world({
+        host: descriptor({ wake: WAKE }),
+        state: unreachable(SSH_TIMEOUT),
+        sendWake: () => new Promise<void>((resolve) => (delivered = resolve)),
+      });
+      const answer = w.service.bringBack(HOST);
+      await flush();
+      if (change === "disconnect") w.setLink({ status: "disconnected" });
+      else w.retarget({ kind: "ssh", target: "mini.local" });
+      delivered();
+      await flush();
+      await expect(answer, change).resolves.toMatchObject({ status: "cancelled" });
+      expect(w.calls, change).not.toContain("redial");
+      expect(w.allowed(), change).toBe(0);
+      expect(w.released(), change).toBe(true);
+    }
+  });
+
+  it("keeps trying a host whose Daintree answered and refused, rather than calling it unwakeable", async () => {
+    const w = world();
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    w.setLink({ ...unreachable("Host refused the connection: busy"), answered: true });
+    await vi.advanceTimersByTimeAsync(NUDGE_MS);
+    expect(w.service.isBringingBack(HOST)).toBe(true);
+    w.setLink(CONNECTED);
+    await expect(answer).resolves.toMatchObject({ status: "connected", reached: true });
+  });
+
+  it("leaves a host that said it was shutting down to come back by itself before starting it", async () => {
+    const shuttingDown: HostConnectionState = {
+      ...unreachable("no Daintree listening there"),
+      restarting: true,
+    };
+    const back = world({ state: shuttingDown });
+    const answer = back.service.bringBack(HOST);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+    expect(back.calls).not.toContain("redial");
+    expect(back.allowed()).toBe(0);
+    back.setLink(CONNECTED);
+    await expect(answer).resolves.toMatchObject({ status: "connected" });
+    expect(back.calls).not.toContain("redial");
+
+    const quit = world({ state: shuttingDown });
+    const later = quit.service.bringBack(HOST);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(quit.calls).toContain("redial");
+    expect(quit.allowed()).toBe(1);
+    quit.emitStart({ kind: "checking" });
+    quit.emitStart({ kind: "start-requested" });
+    quit.emitStart({ kind: "running", started: true });
+    quit.setLink(CONNECTED);
+    await expect(later).resolves.toMatchObject({ status: "started" });
   });
 
   it("answers started only once a start it saw listened and the link came up", async () => {
@@ -304,7 +387,7 @@ describe("HostBringBackService", () => {
     await flush();
     w.setLink({
       status: "version-mismatch",
-      mismatch: { kind: "protocol", local: "1", remote: "2" },
+      mismatch: { kind: "protocol", local: 1, remote: 2 },
       remote: { ...CONNECTED.handshake, protocolVersion: 2 },
     });
     await expect(answer).resolves.toMatchObject({ status: "version_mismatch" });

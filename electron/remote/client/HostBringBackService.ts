@@ -7,6 +7,7 @@ import {
 } from "../../../shared/types/hostWake.js";
 import {
   isLocalHostId,
+  sameHostConnection,
   type HostConnectionState,
   type HostDescriptor,
   type HostId,
@@ -24,6 +25,12 @@ import type { WakeRoute } from "./wakeOnLan.js";
 export const BRING_BACK_DEADLINE_MS = 120_000;
 /** How often a link waiting out its backoff is told to try now, during an attempt. */
 export const BRING_BACK_NUDGE_MS = 5_000;
+/**
+ * How long an attempt leaves a host that said it was shutting down to come
+ * back by itself before starting it: an update relaunches it within this, and
+ * a start meanwhile could race the update's own.
+ */
+export const BRING_BACK_RESTART_SETTLE_MS = 30_000;
 
 export interface HostBringBackDeps {
   host(hostId: HostId): HostDescriptor | null;
@@ -47,6 +54,7 @@ export interface HostBringBackDeps {
   now?: () => number;
   deadlineMs?: number;
   nudgeMs?: number;
+  restartSettleMs?: number;
 }
 
 const REFUSALS: Record<HostStartRefusal, string | null> = {
@@ -69,6 +77,13 @@ function clip(text: string | null): string | null {
 
 function linkUp(state: HostConnectionState): boolean {
   return state.status === "connected" || state.status === "driven-elsewhere";
+}
+
+/** The host's own word that it is shutting down, still within the time it would take to come back. */
+function restarting(state: HostConnectionState): boolean {
+  return (
+    (state.status === "connecting" || state.status === "unreachable") && state.restarting === true
+  );
 }
 
 /**
@@ -108,7 +123,7 @@ export class HostBringBackService {
       });
     }
     if (this.disposed) {
-      throw new AppError({ code: "UNAVAILABLE", message: "Remote Hosts is stopping" });
+      throw new AppError({ code: "CANCELLED", message: "Remote Hosts is stopping" });
     }
     const attempt = this.run(descriptor);
     this.attempts.set(hostId, attempt);
@@ -136,12 +151,16 @@ export class HostBringBackService {
     const startedAt = now();
     const ssh = descriptor.connection.kind === "ssh";
     let wake: HostWakeResult = "not_needed";
+    let wakeError: string | null = null;
     let reached = false;
     let startRequested = false;
     let started = false;
     let observed: string | null = null;
+    /** This attempt's own dial began; until then the link's states are its earlier ones. */
+    let dialStarted = false;
     let dialing = false;
     let settled = false;
+    let lastStatus = deps.linkState(hostId).status;
     const abort = new AbortController();
     const cleanups: Array<() => void> = [];
 
@@ -157,12 +176,14 @@ export class HostBringBackService {
             console.error("[HostBringBack] Cleanup failed:", error);
           }
         }
+        // Why no wake went is what matters when nothing else got through.
+        const said = status === "not_wakeable" && wakeError !== null ? wakeError : observed;
         resolve({
           status,
           wake,
           reached,
           startRequested,
-          observed: clip(observed),
+          observed: clip(said),
           elapsedMs: Math.max(0, now() - startedAt),
         });
       };
@@ -181,10 +202,12 @@ export class HostBringBackService {
       );
       cleanups.push(() => clearTimeout(deadline));
       cleanups.push(deps.hold(hostId));
-      cleanups.push(deps.allowStart(hostId));
 
       const onLink = (state: HostConnectionState): void => {
         if (settled) return;
+        const previous = lastStatus;
+        lastStatus = state.status;
+        if (state.status === "unreachable" && state.answered === true) reached = true;
         switch (state.status) {
           case "connected":
           case "driven-elsewhere":
@@ -192,7 +215,7 @@ export class HostBringBackService {
             finish(started ? "started" : wake === "sent" ? "woken" : "connected");
             return;
           case "connecting":
-            dialing = true;
+            if (dialStarted) dialing = true;
             return;
           case "version-mismatch":
             if (!dialing) return;
@@ -200,8 +223,9 @@ export class HostBringBackService {
             finish("version_mismatch");
             return;
           case "disconnected":
-            // Disconnected, removed or re-pointed while being brought back.
-            if (dialing) finish("cancelled");
+            // Disconnected, removed or re-pointed while being brought back, the
+            // wake still on its way included: never dialled against that.
+            if (dialing || previous !== "disconnected") finish("cancelled");
             return;
           case "unreachable":
             if (!dialing) return;
@@ -215,13 +239,17 @@ export class HostBringBackService {
               finish("unreachable");
               return;
             }
-            // Nothing more to try: no wake went, and the dial didn't get in.
-            if (!reached && wake !== "sent") finish(ssh ? "not_wakeable" : "unreachable");
+            // Nothing more to try: no wake went, and the dial got nowhere the
+            // host answered from (a host saying it is restarting has).
+            if (!reached && wake !== "sent" && state.restarting !== true) {
+              finish(ssh ? "not_wakeable" : "unreachable");
+            }
             return;
           case "local":
             return;
         }
       };
+      cleanups.push(deps.onLinkState((id, state) => id === hostId && onLink(state)));
 
       const onStart = (event: HostStartEvent): void => {
         if (settled) return;
@@ -249,13 +277,16 @@ export class HostBringBackService {
         }
       };
 
-      const dial = (): void => {
+      const startDial = (): void => {
         if (settled) return;
-        if (!deps.host(hostId)) {
+        const current = deps.host(hostId);
+        // Removed, or pointed at another machine: this attempt was for the old one.
+        if (!current || !sameHostConnection(current.connection, descriptor.connection)) {
           finish("cancelled");
           return;
         }
-        cleanups.push(deps.onLinkState((id, state) => id === hostId && onLink(state)));
+        dialStarted = true;
+        cleanups.push(deps.allowStart(hostId));
         cleanups.push(deps.observeStarts(hostId, onStart));
         try {
           deps.redial(hostId);
@@ -263,6 +294,7 @@ export class HostBringBackService {
           finish("cancelled");
           return;
         }
+        if (settled) return;
         const state = deps.linkState(hostId);
         // A dial always reports connecting first; anything else means none started.
         if (state.status !== "connecting" && !linkUp(state)) {
@@ -280,32 +312,47 @@ export class HostBringBackService {
         cleanups.push(() => clearInterval(nudge));
       };
 
+      // A host that said it was shutting down gets a while to come back by
+      // itself, as an update does, before anything starts it.
+      const afterSettle = (): void => {
+        if (settled) return;
+        const wait =
+          (deps.restartSettleMs ?? BRING_BACK_RESTART_SETTLE_MS) - Math.max(0, now() - startedAt);
+        if (wait <= 0 || !restarting(deps.linkState(hostId))) {
+          startDial();
+          return;
+        }
+        const timer = setTimeout(startDial, wait);
+        cleanups.push(() => clearTimeout(timer));
+      };
+
       const setup = ssh ? descriptor.wake : undefined;
       if (!ssh) {
-        dial();
+        afterSettle();
         return;
       }
       if (!setup) {
         wake = "not_set_up";
-        dial();
+        afterSettle();
         return;
       }
       const route = deps.wakeRoute(setup);
       if (route.kind === "not_on_lan") {
         wake = "not_on_lan";
-        dial();
+        afterSettle();
         return;
       }
       void deps.sendWake(setup.mac, route, abort.signal).then(
         () => {
+          if (settled) return;
           wake = "sent";
-          dial();
+          afterSettle();
         },
         (error: unknown) => {
           if (settled) return;
           wake = "failed";
-          observed = formatErrorMessage(error, "The wake couldn't be sent");
-          dial();
+          wakeError = formatErrorMessage(error, "The wake couldn't be sent");
+          afterSettle();
         }
       );
     });

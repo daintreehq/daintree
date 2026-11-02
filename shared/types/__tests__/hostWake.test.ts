@@ -11,9 +11,9 @@ import {
 describe("parseWakeMac", () => {
   it.each([
     ["AA:BB:CC:DD:EE:F0", "aa:bb:cc:dd:ee:f0"],
-    ["aa-bb-cc-dd-ee-f0", "aa:bb:cc:dd:ee:f0"],
-    ["aabb.ccdd.eef0", "aa:bb:cc:dd:ee:f0"],
-    [" aabbccddeef0 ", "aa:bb:cc:dd:ee:f0"],
+    ["0a-1b-2c-3d-4e-5f", "0a:1b:2c:3d:4e:5f"],
+    ["3c22.fb12.3456", "3c:22:fb:12:34:56"],
+    [" 001122334455 ", "00:11:22:33:44:55"],
   ])("reads %s", (text, mac) => {
     expect(parseWakeMac(text)).toBe(mac);
   });

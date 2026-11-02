@@ -106,12 +106,16 @@ export function useHostBringBacks() {
   };
 }
 
-/** The sentence a row shows for its last press, or null when there is nothing to say. */
+/**
+ * The sentence a row shows for its last press, or null when there is nothing
+ * to say: none once the link is up, however it came back.
+ */
 export function bringBackMessage(
   outcome: BringBackOutcome | null,
-  descriptor: HostDescriptor
+  descriptor: HostDescriptor,
+  connection: HostConnectionState
 ): string | null {
-  if (outcome === null) return null;
+  if (outcome === null || connection.status === "connected") return null;
   if ("error" in outcome) return outcome.error;
   return describeBringBack(outcome.answer, descriptor.name, descriptor.wake?.lan ?? null);
 }

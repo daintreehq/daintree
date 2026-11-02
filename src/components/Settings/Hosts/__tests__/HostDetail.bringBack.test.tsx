@@ -91,6 +91,35 @@ describe("HostDetail Bring back (#16170)", () => {
     );
   });
 
+  it("drops what an attempt said once the link comes up some other way", async () => {
+    client.bringBack.mockResolvedValue(answer({ status: "timed_out", elapsedMs: 120_000 }));
+    const { rerender } = render(<HostDetail entry={entry()} onBack={() => {}} />);
+    await act(async () => {
+      fireEvent.click(bringBackButton());
+    });
+    expect(screen.getByRole("alert").textContent).toContain("wasn't back within 120 s");
+    rerender(
+      <HostDetail
+        entry={entry(
+          {},
+          {
+            status: "connected",
+            rttMs: 3,
+            handshake: {
+              version: "1.0.0",
+              commit: "abc",
+              protocolVersion: 1,
+              platform: "darwin",
+              arch: "arm64",
+            },
+          }
+        )}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("says nothing more once the host is back: its status says so", async () => {
     client.bringBack.mockResolvedValue(answer({ status: "started", startRequested: true }));
     render(<HostDetail entry={entry()} onBack={() => {}} />);
@@ -144,6 +173,52 @@ describe("HostDetail wake setup (#16170)", () => {
       fireEvent.click(screen.getByRole("button", { name: "Remove wake" }));
     });
     expect(client.update).toHaveBeenCalledWith({ hostId: "studio-01", wake: null });
+  });
+
+  it("follows a wake saved elsewhere into untouched fields, and keeps one being edited", () => {
+    const { rerender } = render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.change(field("Hardware address"), { target: { value: "00:11:22:33:44:55" } });
+    rerender(
+      <HostDetail
+        entry={entry({ wake: { mac: "aa:bb:cc:dd:ee:f0", lan: "10.0.0.0/24" } })}
+        onBack={() => {}}
+      />
+    );
+    expect(field("Hardware address").value).toBe("00:11:22:33:44:55");
+    expect(field("LAN").value).toBe("10.0.0.0/24");
+  });
+
+  it("is clean once saved, and stays clean for another spelling of what is saved", async () => {
+    const saved = { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" };
+    client.update.mockImplementation(async () => entry({ wake: saved }).descriptor);
+    const { rerender } = render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.change(field("Hardware address"), { target: { value: "AA-BB-CC-DD-EE-F0" } });
+    fireEvent.change(field("LAN"), { target: { value: "192.168.1.30/24" } });
+    await act(async () => {
+      fireEvent.click(save());
+    });
+    rerender(<HostDetail entry={entry({ wake: saved })} onBack={() => {}} />);
+    expect(field("Hardware address").value).toBe(saved.mac);
+    expect(save().disabled).toBe(true);
+    fireEvent.change(field("Hardware address"), { target: { value: "aabb.ccdd.eef0" } });
+    expect(save().disabled).toBe(true);
+  });
+
+  it("holds the fields while a save is on its way, so its answer never replaces newer typing", async () => {
+    let answer!: (value: unknown) => void;
+    client.update.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.change(field("Hardware address"), { target: { value: "aa:bb:cc:dd:ee:f0" } });
+    fireEvent.change(field("LAN"), { target: { value: "192.168.1.0/24" } });
+    await act(async () => {
+      fireEvent.click(save());
+    });
+    expect(field("Hardware address").disabled).toBe(true);
+    expect(field("LAN").disabled).toBe(true);
+    await act(async () => {
+      answer(entry({ wake: { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" } }).descriptor);
+    });
+    expect(field("Hardware address").disabled).toBe(false);
   });
 
   it("is only offered for a host reached over SSH", () => {

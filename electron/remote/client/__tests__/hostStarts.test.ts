@@ -225,24 +225,34 @@ describe("HostStarts", () => {
     ]);
   });
 
-  it("says nothing of a check whose dial was abandoned", async () => {
+  it("says nothing of a check whose dial was abandoned, whatever it comes to", async () => {
     const events: HostStartEvent[] = [];
-    let finish!: () => void;
+    const finishes: Array<() => void> = [];
     const starts = new HostStarts({
       setup: {
-        ensureHostRunning: async () => {
-          await new Promise<void>((resolve) => (finish = resolve));
-          return "not-startable";
+        ensureHostRunning: async (_connection, _signal, onStart, options) => {
+          const call = finishes.length;
+          await new Promise<void>((resolve) => finishes.push(resolve));
+          // What a check that ran on regardless would report.
+          onStart?.();
+          options?.onRefused?.("host-mode-off");
+          if (call === 1) throw new Error("ssh went away");
+          return "started";
         },
       },
       onChange: () => {},
     });
     starts.observe("studio-01", (event) => events.push(event));
-    const abort = new AbortController();
-    const ensuring = starts.ensureRunning("studio-01", studio, abort.signal);
-    abort.abort();
-    finish();
-    await ensuring;
-    expect(events).toEqual([{ kind: "checking" }]);
+    const first = new AbortController();
+    const started = starts.ensureRunning("studio-01", studio, first.signal);
+    const second = new AbortController();
+    const failed = starts.ensureRunning("studio-01", studio, second.signal);
+    expect(events).toEqual([{ kind: "checking" }, { kind: "checking" }]);
+    first.abort();
+    second.abort();
+    for (const finish of finishes) finish();
+    await started;
+    await failed.catch(() => undefined);
+    expect(events).toEqual([{ kind: "checking" }, { kind: "checking" }]);
   });
 });

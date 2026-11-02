@@ -364,6 +364,11 @@ export type HostConnectionState =
       /** As on `connecting`: the host said it was shutting down, and is still retried. */
       restarting?: true;
       /**
+       * The host's Daintree answered the attempt that failed (it refused the
+       * link, or closed a session it had just opened): ssh and the link got there.
+       */
+      answered?: true;
+      /**
        * Not retrying on its own: what was seen (ssh couldn't log in, Host mode
        * is off) doesn't change by trying again soon, so it waits for a
        * Connect. A host a window shows whose Daintree isn't listening is

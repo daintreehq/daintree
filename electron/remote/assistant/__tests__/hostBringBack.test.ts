@@ -31,6 +31,13 @@ describe("host.bringBack for this machine's assistants (#16170)", () => {
       answer: ANSWER,
     });
     expect(d.bringBack).toHaveBeenCalledWith("studio");
+    // Each ending has its own next step.
+    const refused = await runHostBringBack(
+      deps({ bringBack: vi.fn(async () => ({ ...ANSWER, status: "not_startable" as const })) }),
+      { hostId: "studio" }
+    );
+    expect(refused.detail).toBe(HOST_BRING_BACK_DETAILS.not_startable);
+    expect(refused.detail).not.toBe(HOST_BRING_BACK_DETAILS.woken);
   });
 
   it("tries nothing for this machine, a host it doesn't know, or one whose control is off", async () => {

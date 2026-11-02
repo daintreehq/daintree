@@ -233,7 +233,7 @@ export default function HostsSettingsTab() {
                 const bringing = bringBacks.isPending(descriptor.id);
                 const said = bringing
                   ? null
-                  : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor);
+                  : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor, connection);
                 return (
                   <SettingsRow
                     key={descriptor.id}
