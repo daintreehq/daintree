@@ -11,12 +11,20 @@ import {
   importIdentity,
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
-import type { DecisionsHostLink } from "../../../types/decisionsHosts.js";
+import type { DecisionsHostRuntime } from "../../../../shared/types/decisionsHosts.js";
+import type {
+  DecisionsHostLink,
+  OwnerStateAnnouncement,
+} from "../../../types/decisionsHosts.js";
 import { HostEnrollments } from "../../../services/decisions/hostEnrollmentHost.js";
 import type { LinkSession } from "../../link/session.js";
 import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests__/linkTestUtils.js";
 import { DecisionsHostsClient } from "../client.js";
-import { installDecisionsHostWith, type DecisionsHostEnrollment } from "../host.js";
+import {
+  installDecisionsHostWith,
+  type DecisionsHostEnrollment,
+  type DecisionsHostLifetime,
+} from "../host.js";
 import { DECISIONS_LINK_METHOD_LOCALITY, DecisionsLinkMethod } from "../linkMethods.js";
 import { makeOwner, memoryKeys } from "./ownerFixture.js";
 
@@ -48,6 +56,7 @@ function linkOver(session: LinkSession, hold = vi.fn(() => () => {})): Decisions
     onSessionOpened: () => () => {},
     onHostsChanged: () => () => {},
     hold,
+    ownerState: () => null,
   });
   const link = client.linkFor(HOST);
   if (!link) throw new Error("no link");
@@ -431,5 +440,172 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     const { client } = await pair();
     const link = linkOver(client);
     await expect(link.request({ attempt: "short", label: HOST })).rejects.toThrow();
+  });
+});
+
+describe("an enrolled Host's own Decisions over its link (#16022)", () => {
+  const OWNER: OwnerStateAnnouncement = {
+    installationId: "inst_owner_0123456789",
+    ownerDeviceId: "dev_owner_desktop_01",
+    enabled: true,
+  };
+  const RUNNING: DecisionsHostRuntime = {
+    state: "running",
+    deviceId: "dev_host_studio_01",
+    connection: "connected",
+  };
+
+  /** The Host's lifetime as a fake: what it was told, and a report the test sets and announces. */
+  function hostLifetime(enrolledOwner: string | null = OWNER.ownerDeviceId) {
+    const applied: OwnerStateAnnouncement[] = [];
+    const listeners = new Set<() => void>();
+    let report: DecisionsHostRuntime = RUNNING;
+    const lifetime: DecisionsHostLifetime = {
+      apply: async (state) => {
+        applied.push(state);
+        report = state.enabled
+          ? RUNNING
+          : { state: "owner-off", deviceId: RUNNING.deviceId, since: 1_000 };
+        return report;
+      },
+      reportFor: () => report,
+      onChanged: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const load = vi.fn(async () => lifetime);
+    return {
+      applied,
+      load,
+      source: {
+        enrolledBy: (owner: { ownerDeviceId: string }) => owner.ownerDeviceId === enrolledOwner,
+        load,
+      },
+      /** The Host's Decisions changed by itself, as a reconnect would. */
+      change(next: DecisionsHostRuntime) {
+        report = next;
+        for (const listener of listeners) listener();
+      },
+      listening: () => listeners.size,
+    };
+  }
+
+  function serveLifetime(session: LinkSession, lifetime: ReturnType<typeof hostLifetime>) {
+    const enrollment = vi.fn(async () => {
+      throw new Error("enrollment isn't asked for here");
+    });
+    const uninstall = installDecisionsHostWith(
+      { sessions: [{ session }], onSession: () => () => {} },
+      enrollment,
+      lifetime.source
+    );
+    uninstalls.push(uninstall);
+    return { enrollment, uninstall };
+  }
+
+  function shellOver(session: LinkSession, ownerState: () => OwnerStateAnnouncement | null) {
+    const client = new DecisionsHostsClient({
+      hosts: () => [{ hostId: HOST, name: HOST }],
+      sessionFor: (hostId) => (hostId === HOST ? session : null),
+      onSessionOpened: () => () => {},
+      onHostsChanged: () => () => {},
+      hold: () => () => {},
+      ownerState,
+      now: () => 5_000,
+    });
+    const changed = vi.fn();
+    client.onHostsChanged(changed);
+    uninstalls.push(client.start());
+    return { client, changed };
+  }
+
+  it("is served by the Host, and its reports by the Shell", () => {
+    expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.OWNER_STATE]).toBe("host");
+    expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.HOST_RUNTIME]).toBe("shell");
+  });
+
+  it("tells the Host the owner's switch as the link comes up, and keeps what it reports", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    const { client: shell, changed } = shellOver(client, () => OWNER);
+
+    await vi.waitFor(() =>
+      expect(shell.runtimeOf(HOST)).toEqual({ runtime: RUNNING, at: 5_000, live: true })
+    );
+    expect(lifetime.applied).toEqual([OWNER]);
+    expect(changed).toHaveBeenCalled();
+
+    // The Host's own changes reach the Shell as they happen, each once.
+    const reconnecting: DecisionsHostRuntime = {
+      ...RUNNING,
+      connection: "reconnecting",
+      nextAttemptAt: 9_000,
+    };
+    lifetime.change(reconnecting);
+    lifetime.change(reconnecting);
+    await vi.waitFor(() => expect(shell.runtimeOf(HOST)?.runtime).toEqual(reconnecting));
+
+    // The switch changing here is announced again.
+    const off = { ...OWNER, enabled: false };
+    let state: OwnerStateAnnouncement = OWNER;
+    const second = await pair();
+    const lifetimeTwo = hostLifetime();
+    serveLifetime(second.host, lifetimeTwo);
+    const { client: shellTwo } = shellOver(second.client, () => state);
+    await vi.waitFor(() => expect(lifetimeTwo.applied).toEqual([OWNER]));
+    state = off;
+    shellTwo.announceOwnerState();
+    await vi.waitFor(() =>
+      expect(shellTwo.runtimeOf(HOST)?.runtime).toEqual({
+        state: "owner-off",
+        deviceId: RUNNING.deviceId,
+        since: 1_000,
+      })
+    );
+    expect(lifetimeTwo.applied).toEqual([OWNER, off]);
+
+    // A closed link leaves the last report standing, as one from before it closed.
+    host.close("test");
+    await vi.waitFor(() => expect(shell.runtimeOf(HOST)?.live).toBe(false));
+    expect(shell.runtimeOf(HOST)?.runtime).toEqual(reconnecting);
+  });
+
+  it("loads nothing of Decisions on a Host this owner never enrolled", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime("dev_someone_else_01");
+    serveLifetime(host, lifetime);
+    const { client: shell } = shellOver(client, () => OWNER);
+
+    await vi.waitFor(() =>
+      expect(shell.runtimeOf(HOST)?.runtime).toEqual({ state: "not-enrolled" })
+    );
+    expect(lifetime.load).not.toHaveBeenCalled();
+  });
+
+  it("announces nothing from a computer with no owner identity", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    const call = vi.spyOn(client, "call");
+    const { client: shell } = shellOver(client, () => null);
+    shell.announceOwnerState();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(call).not.toHaveBeenCalled();
+    expect(lifetime.load).not.toHaveBeenCalled();
+    expect(shell.runtimeOf(HOST)).toBeNull();
+  });
+
+  it("stops following the Host's Decisions once its listener stops", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    const { uninstall } = serveLifetime(host, lifetime);
+    shellOver(client, () => OWNER);
+    await vi.waitFor(() => expect(lifetime.listening()).toBe(1));
+
+    await uninstall();
+    expect(lifetime.listening()).toBe(0);
   });
 });

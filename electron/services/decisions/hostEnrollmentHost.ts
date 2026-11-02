@@ -103,7 +103,14 @@ export class HostEnrollments {
     return this.step(async (keys) => {
       try {
         const report = reportOf(await keys.load());
-        if (report.kind === "host") this.held(report);
+        if (report.kind === "host") {
+          this.held({
+            relayOrigin: report.relayOrigin,
+            installationId: report.installationId,
+            deviceId: report.deviceId,
+            ownerDeviceId: report.ownerDeviceId,
+          });
+        }
         return report;
       } catch (error) {
         return {

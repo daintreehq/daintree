@@ -9,6 +9,7 @@ import type {
   HostRequestResult,
 } from "../../../types/decisionsHosts.js";
 import type { DecisionsRelayRequestFailure } from "../../../../shared/types/decisions.js";
+import type { DecisionsHostRuntimeObservation } from "../../../../shared/types/decisionsHosts.js";
 import { HostEnroller, type HostEnrollerOwner } from "../hostEnrollment.js";
 import { HostRecords } from "../hostEnrollmentRecords.js";
 
@@ -139,6 +140,15 @@ class FakePort implements DecisionsHostsPort {
   onHostsChanged() {
     return () => {};
   }
+
+  /** What each Host last reported of its own Decisions (#16022). */
+  readonly runtimes = new Map<string, DecisionsHostRuntimeObservation>();
+
+  runtimeOf(hostId: string) {
+    return this.runtimes.get(hostId) ?? null;
+  }
+
+  announceOwnerState() {}
 
   /** The host's link comes up, as the Remote Hosts client says it. */
   connect(hostId: string, link = new FakeLink()): FakeLink {
@@ -584,5 +594,32 @@ describe("HostEnroller", () => {
     expect(second.asked).toEqual(["status", "request"]);
     expect(await stateOf("studio")).toEqual({ state: "revoked" });
     expect((await owner!.records!.get("studio"))?.revokedAt).toEqual(expect.any(Number));
+  });
+
+  it("shows what an enrolled Host last reported of its own Decisions beside its enrollment", async () => {
+    enroller.start();
+    port.connect("studio");
+    await settle();
+    port.runtimes.set("studio", {
+      runtime: { state: "running", deviceId: "dev_host_000000001", connection: "connected" },
+      at: 1_000,
+      live: true,
+    });
+
+    const listed = await enroller.list();
+    expect(listed).toMatchObject({
+      result: "listed",
+      hosts: [
+        {
+          hostId: "studio",
+          enrollment: { state: "enrolled" },
+          runtime: {
+            runtime: { state: "running", connection: "connected" },
+            at: 1_000,
+            live: true,
+          },
+        },
+      ],
+    });
   });
 });

@@ -390,6 +390,16 @@ describe("RelayConnection", () => {
     h.connection.stop();
   });
 
+  it("runs only the role it was made for: an owner's keys never connect as a Host's (#16022)", async () => {
+    const h = await harness({ overrides: { role: "desktop-host" } });
+
+    h.connection.start();
+
+    expect(await h.status("not-connected")).toEqual({ state: "not-connected", problem: "keys" });
+    expect(h.relay.tickets).toHaveLength(0);
+    expect(h.relay.sockets).toHaveLength(0);
+  });
+
   it("pages a replay: persists and acks each event, asks for the next segment, then goes live", async () => {
     const h = await harness();
     h.connection.start();

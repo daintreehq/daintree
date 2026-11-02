@@ -147,4 +147,45 @@ describe("HostEnrollments", () => {
     expect(keys.state.opened).toBe(3);
     expect(keys.state.closed).toBe(3);
   });
+
+  it("says which Host identity it holds once accepted and on every read, for its own Decisions to run as", async () => {
+    const keys = memoryKeys();
+    const onHeld = vi.fn();
+    const enrollment = new HostEnrollments({ openKeys: keys.open, onHeld });
+    const owner = await makeOwner();
+    const link = {};
+
+    await enrollment.status();
+    expect(onHeld).not.toHaveBeenCalled();
+
+    const requested = await enrollment.request(link, {
+      attempt: "attempt_0000000001",
+      label: "studio",
+    });
+    if (requested.step !== "requested") throw new Error("not requested");
+    const { response } = await enrollHost(owner.client, requested.request);
+    const accepted = await enrollment.accept(link, { attempt: "attempt_0000000001", response });
+    if (accepted.step !== "accepted") throw new Error("not accepted");
+
+    const held = {
+      relayOrigin: owner.stored.config.relayOrigin,
+      installationId: owner.installationId,
+      deviceId: accepted.deviceId,
+      ownerDeviceId: owner.deviceId,
+    };
+    expect(onHeld.mock.calls).toEqual([[held]]);
+    await enrollment.status();
+    expect(onHeld.mock.calls).toEqual([[held], [held]]);
+  });
+
+  it("says nothing is held for an owner's own identity, or a refused enrollment", async () => {
+    const owner = await makeOwner();
+    const keys = memoryKeys(owner.stored);
+    const onHeld = vi.fn();
+    const enrollment = new HostEnrollments({ openKeys: keys.open, onHeld });
+
+    await enrollment.status();
+    await enrollment.accept({}, { attempt: "attempt_0000000001", response: "not an enrollment" });
+    expect(onHeld).not.toHaveBeenCalled();
+  });
 });

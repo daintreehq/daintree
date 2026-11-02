@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
+// An enrolled Host's record (#16022), the store's `decisionsHost`.
+const savedHost = vi.hoisted(() => ({ value: undefined as unknown }));
 const loads = vi.hoisted(() => ({
   constructed: 0,
   failNextConstruct: false,
@@ -245,7 +247,12 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
  */
 /** The revocation hook the entry hands each service it makes. */
 const entryHooks = vi.hoisted(() => ({
-  onRelayRevoked: null as ((relay: import("../relayConnection.js").RelayBinding) => void) | null,
+  onRelayRevoked: null as
+    | ((
+        relay: import("../relayConnection.js").RelayBinding,
+        role?: import("../DecisionsService.js").DecisionsRole
+      ) => void)
+    | null,
   delivery: null as import("../DecisionsService.js").DecisionsServiceOptions["delivery"] | null,
 }));
 
@@ -278,9 +285,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 vi.mock("../../../store.js", () => ({
   store: {
-    get: vi.fn((key: string) => (key === "decisions" ? saved.value : undefined)),
+    get: vi.fn((key: string) =>
+      key === "decisions" ? saved.value : key === "decisionsHost" ? savedHost.value : undefined
+    ),
     set: vi.fn((key: string, value: unknown) => {
       if (key === "decisions") saved.value = value;
+      if (key === "decisionsHost") savedHost.value = value;
     }),
   },
 }));
@@ -375,8 +385,10 @@ function pushedStatuses(): Array<Record<string, unknown>> {
 const CANCELLED = { name: "AppError", code: "CANCELLED" };
 import {
   _resetDecisionsForTesting,
+  applyOwnerState,
   checkRelay,
   claimRelay,
+  decisionsHostRuntimeFor,
   decisionsLaunchPort,
   deleteLocalData,
   deleteRelayData,
@@ -390,6 +402,8 @@ import {
   getDecisionsStatus,
   listHosts,
   getSetupCheck,
+  noteHostIdentity,
+  onDecisionsHostRuntimeChanged,
   peekDecisionsService,
   restoreIdentity,
   setAutoEnrollHosts,
@@ -433,6 +447,7 @@ describe("Decisions entry", () => {
     statGate.hold = null;
     statGate.started = 0;
     saved.value = undefined;
+    savedHost.value = undefined;
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
     loads.closing = null;
@@ -2054,6 +2069,224 @@ describe("Decisions entry", () => {
     });
   });
 
+  describe("enrolled Remote Host (#16022)", () => {
+    const OWNER = { installationId: RELAY.installationId, ownerDeviceId: "dev_owner_0001" };
+    const HOST_RECORD = {
+      relayOrigin: RELAY.relayOrigin,
+      installationId: RELAY.installationId,
+      deviceId: "dev_host_00001",
+      ownerDeviceId: OWNER.ownerDeviceId,
+      hostId: "host_on_studio",
+      ownerOffAt: null,
+      revokedAt: null,
+      credentialsRemovedAt: null,
+    };
+    const BINDING = {
+      relayOrigin: HOST_RECORD.relayOrigin,
+      installationId: HOST_RECORD.installationId,
+      deviceId: HOST_RECORD.deviceId,
+    };
+    const SOURCE = {
+      identity: () => null,
+      live: () => null,
+      store: {} as never,
+      policy: {} as never,
+    };
+
+    it("runs as the enrolled Host its record names, with this computer's switch off", async () => {
+      savedHost.value = HOST_RECORD;
+      await startDecisionsIfEnabled();
+
+      const service = peekDecisionsService()!;
+      expect(service.getRole()).toBe("host");
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.options).toMatchObject({ relay: BINDING, role: "desktop-host" });
+      // Its panes' questions carry the Host's own id, and their answers are typed against it.
+      connections[0]!.options.onQuestionsReady!(SOURCE);
+      expect(openedRoutes[0]!.sources.hostId()).toBe(HOST_RECORD.hostId);
+      expect(connections[0]!.options.delivery!.hostId()).toBe(HOST_RECORD.hostId);
+      // The switch here is still this computer's own, and off.
+      expect((await getDecisionsStatus()).state).toBe("off");
+      expect(saved.value).toBeUndefined();
+      openedRoutes[0]!.letGo();
+      await stopDecisions();
+    });
+
+    it("hands agents launched on the Host the route's port", async () => {
+      savedHost.value = HOST_RECORD;
+      const port = decisionsLaunchPort();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      connections[0]!.options.onQuestionsReady!(SOURCE);
+
+      await expect(port).resolves.toBe(4100);
+      openedRoutes[0]!.letGo();
+      await stopDecisions();
+    });
+
+    it("starts nothing for a Host its owner turned off, and makes no service on a machine never enrolled", async () => {
+      await startDecisionsIfEnabled();
+      await expect(decisionsLaunchPort()).resolves.toBeNull();
+      expect(peekDecisionsService()).toBeNull();
+
+      savedHost.value = { ...HOST_RECORD, ownerOffAt: 100 };
+      await startDecisionsIfEnabled();
+      await expect(decisionsLaunchPort()).resolves.toBeNull();
+      expect(connections).toHaveLength(0);
+      expect(decisionsHostRuntimeFor(OWNER)).toEqual({
+        state: "owner-off",
+        deviceId: HOST_RECORD.deviceId,
+        since: 100,
+      });
+    });
+
+    it("is turned off and on by its owner's Shell alone, keeping its keys while off", async () => {
+      savedHost.value = HOST_RECORD;
+      writeFileSync(keyFile.path, "sealed");
+      await startDecisionsIfEnabled();
+
+      // Another owner's Shell isn't heard, and hears nothing of this Host.
+      await expect(
+        applyOwnerState({ ...OWNER, ownerDeviceId: "dev_other_0001", enabled: false })
+      ).resolves.toEqual({ state: "not-enrolled" });
+      expect(connections[0]!.stopped).toBe(0);
+
+      await expect(applyOwnerState({ ...OWNER, enabled: false })).resolves.toEqual({
+        state: "owner-off",
+        deviceId: HOST_RECORD.deviceId,
+        since: expect.any(Number),
+      });
+      expect(connections[0]!.stopped).toBe(1);
+      expect(peekDecisionsService()!.getRole()).toBeNull();
+      expect(savedHost.value).toMatchObject({ ownerOffAt: expect.any(Number) });
+      expect(existsSync(keyFile.path)).toBe(true);
+      // Off stays off across a restart.
+      await startDecisionsIfEnabled();
+      expect(connections).toHaveLength(1);
+
+      connections.length = 0;
+      await expect(applyOwnerState({ ...OWNER, enabled: true })).resolves.toMatchObject({
+        state: "running",
+        deviceId: HOST_RECORD.deviceId,
+      });
+      expect(savedHost.value).toMatchObject({ ownerOffAt: null });
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.started).toBe(1);
+      await stopDecisions();
+    });
+
+    it("stops when the relay revokes it, removes its keys and stored questions, and says why", async () => {
+      savedHost.value = HOST_RECORD;
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+      await startDecisionsIfEnabled();
+      const changes = vi.fn();
+      onDecisionsHostRuntimeChanged(changes);
+
+      entryHooks.onRelayRevoked!(BINDING, "host");
+
+      await vi.waitFor(() =>
+        expect(decisionsHostRuntimeFor(OWNER)).toEqual({
+          state: "revoked",
+          deviceId: HOST_RECORD.deviceId,
+          since: expect.any(Number),
+          credentialsRemoved: true,
+        })
+      );
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(storedRows.count).toBe(0);
+      expect(peekDecisionsService()!.getRole()).toBeNull();
+      expect(changes).toHaveBeenCalled();
+      // The owner's own setting is never written for it.
+      expect(saved.value).toBeUndefined();
+      // Revoked stays stopped: neither a restart nor its owner starts it again.
+      connections.length = 0;
+      await startDecisionsIfEnabled();
+      await applyOwnerState({ ...OWNER, enabled: true });
+      expect(connections).toHaveLength(0);
+    });
+
+    it("finishes removing a revoked Host's keys at the next start when it couldn't before", async () => {
+      savedHost.value = { ...HOST_RECORD, revokedAt: 50 };
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 1;
+
+      await startDecisionsIfEnabled();
+
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(storedRows.count).toBe(0);
+      expect(savedHost.value).toMatchObject({ revokedAt: 50, credentialsRemovedAt: expect.any(Number) });
+      // Nothing connected on the way.
+      expect(connections).toHaveLength(0);
+    });
+
+    it("takes up an identity it holds, and drops a replaced device's questions but keeps its host id", async () => {
+      const held = {
+        relayOrigin: HOST_RECORD.relayOrigin,
+        installationId: HOST_RECORD.installationId,
+        deviceId: HOST_RECORD.deviceId,
+        ownerDeviceId: OWNER.ownerDeviceId,
+      };
+      await noteHostIdentity(held);
+      const first = savedHost.value as typeof HOST_RECORD;
+      expect(first).toMatchObject({ ...held, ownerOffAt: null, revokedAt: null });
+      expect(first.hostId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+      expect(connections).toHaveLength(1);
+
+      // The same device again, as each status read finds it, changes nothing.
+      await applyOwnerState({ ...OWNER, enabled: false });
+      await noteHostIdentity(held);
+      expect(savedHost.value).toMatchObject({ ownerOffAt: expect.any(Number) });
+
+      storedRows.count = 2;
+      await noteHostIdentity({ ...held, deviceId: "dev_host_00002" });
+      expect(storedRows.count).toBe(0);
+      expect(savedHost.value).toMatchObject({
+        deviceId: "dev_host_00002",
+        hostId: first.hostId,
+        ownerOffAt: null,
+      });
+      expect(connections.at(-1)!.options.relay.deviceId).toBe("dev_host_00002");
+      await stopDecisions();
+    });
+
+    it("gives way to this computer's own switch, and comes back when it is off again", async () => {
+      savedHost.value = HOST_RECORD;
+      await startDecisionsIfEnabled();
+      expect(peekDecisionsService()!.getRole()).toBe("host");
+
+      saved.value = { consentedAt: 5 };
+      await setDecisionsEnabled(true);
+      expect(peekDecisionsService()!.getRole()).toBe("owner");
+      expect(connections[0]!.stopped).toBe(1);
+
+      await setDecisionsEnabled(false);
+      expect(peekDecisionsService()!.getRole()).toBe("host");
+      expect(connections.at(-1)!.options.role).toBe("desktop-host");
+      await stopDecisions();
+    });
+
+    it("tells connected Hosts whenever this computer's switch changes", async () => {
+      const announceOwnerState = vi.fn();
+      const withdraw = setDecisionsHostsPort({
+        hosts: () => [],
+        linkFor: () => null,
+        onLinkOpened: () => () => {},
+        onHostsChanged: () => () => {},
+        runtimeOf: () => null,
+        announceOwnerState,
+      });
+      try {
+        saved.value = { consentedAt: 5, ...RELAY };
+        await setDecisionsEnabled(true);
+        expect(announceOwnerState).toHaveBeenCalledTimes(1);
+        await setDecisionsEnabled(false);
+        expect(announceOwnerState).toHaveBeenCalledTimes(2);
+      } finally {
+        withdraw();
+      }
+    });
+  });
+
   describe("Remote Hosts (#16021)", () => {
     /** A Host from before enrollment, so a run ends at its first step. */
     function olderHostLink() {
@@ -2079,6 +2312,8 @@ describe("Decisions entry", () => {
           return () => opened.delete(listener);
         },
         onHostsChanged: () => () => {},
+        runtimeOf: () => null,
+        announceOwnerState: vi.fn(),
       };
       const withdraw = setDecisionsHostsPort(port);
       return {

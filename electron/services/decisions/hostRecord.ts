@@ -14,7 +14,6 @@ import {
 export interface DecisionsHostRecordStore {
   get(key: "decisionsHost"): unknown;
   set(key: "decisionsHost", value: DecisionsHostRecord): void;
-  delete(key: "decisionsHost"): void;
 }
 
 /**

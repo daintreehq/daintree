@@ -76,7 +76,6 @@ import {
   writeHostRecord,
 } from "./hostRecord.js";
 import { openDecisionsMcpRoute, type DecisionsMcpRouteSources } from "./mcpRoute.js";
-import { openDecisionsRows } from "./openLocalStore.js";
 import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
@@ -1277,11 +1276,10 @@ export function noteHostIdentity(held: HeldHost): Promise<void> {
       return;
     }
     if (previous !== null) {
-      const running = await settledService();
-      if (running?.getRole() === "host") await running.stop();
       try {
-        const rows = await openDecisionsRows();
-        if (rows.exist()) rows.erase();
+        const running = await getDecisionsService();
+        if (running.getRole() === "host") await running.stop();
+        await running.eraseStoredRows();
       } catch (err) {
         // The new device's lifetime shows the store as another relay's, which is what it is.
         console.warn("[Decisions] A replaced Host device's questions couldn't be removed:", err);

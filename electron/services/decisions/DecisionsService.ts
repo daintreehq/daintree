@@ -513,6 +513,22 @@ export class DecisionsService {
     });
   }
 
+  /**
+   * Deletes the stored rows, keeping the key file, while no lifetime runs: a
+   * Remote Host's replaced device's questions (#16022), which only the device
+   * that asked could have had answered.
+   */
+  eraseStoredRows(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.disposed) return;
+      if (this.settings !== null) {
+        throw new Error("Decisions is running, so its stored rows can't be deleted");
+      }
+      const rows = await this.openRows();
+      if (rows.exist()) rows.erase();
+    });
+  }
+
   /** Ends the enabled lifetime, keeping everything stored. Another `start` may follow. */
   stop(): Promise<void> {
     return this.enqueue(() => this.release(true));
