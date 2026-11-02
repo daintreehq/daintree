@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { AgentState } from "@shared/types/agent";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
+  BLOCKED_DEBOUNCE_MS,
   getGroupAmbientAgentState,
-  useDockBlockedState,
 } from "@/components/Layout/useDockBlockedState";
 import { useUnseenAsks } from "@/hooks/useRunFleetBand";
 import {
@@ -42,17 +43,56 @@ export function useGridGroupHiddenFailure(
   panels: readonly PanelInstance[],
   activeTabId: string
 ): boolean {
-  const hiddenFailure = (state: PanelFailureState, sources: readonly RecordFailureSource[]) =>
-    panels.some(
+  const hiddenWith = (state: PanelFailureState, sources: readonly RecordFailureSource[]) =>
+    panels.filter(
       (panel) =>
         panel.id !== activeTabId &&
         isPtyPanel(panel) &&
         hasUnseenRecordFailure(state, panel.id, sources)
     );
-  const held = usePanelFailureStore((state) => hiddenFailure(state, HELD_SOURCES));
-  const waiting = usePanelFailureStore((state) => hiddenFailure(state, WAIT_SOURCES));
-  // An error wait draws through the debounce its own pane's edge does, so a
-  // wait that passes in a moment never flashes the group red.
-  const waitShown = useDockBlockedState(waiting ? "waiting" : undefined) === "waiting";
-  return held || waitShown;
+  const held = usePanelFailureStore((state) => hiddenWith(state, HELD_SOURCES).length > 0);
+  const waitingIds = usePanelFailureStore(
+    useShallow((state) => hiddenWith(state, WAIT_SOURCES).map((panel) => panel.id))
+  );
+  // An error wait draws through the debounce its own pane's edge does, timed
+  // per tab, so a wait that passes in a moment never flashes the group red.
+  const sustained = useSustainedIds(waitingIds, BLOCKED_DEBOUNCE_MS);
+  return held || waitingIds.some((id) => sustained.has(id));
+}
+
+/** The ids that have stayed in `ids` for `delayMs`, each timed from when it joined. */
+function useSustainedIds(ids: readonly string[], delayMs: number): ReadonlySet<string> {
+  const [sustained, setSustained] = useState<ReadonlySet<string>>(() => new Set());
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const tracked = timers.current;
+    const current = new Set(ids);
+    for (const [id, timer] of tracked) {
+      if (current.has(id)) continue;
+      clearTimeout(timer);
+      tracked.delete(id);
+    }
+    for (const id of current) {
+      if (tracked.has(id)) continue;
+      tracked.set(
+        id,
+        setTimeout(() => setSustained((prev) => new Set(prev).add(id)), delayMs)
+      );
+    }
+    setSustained((prev) => {
+      const kept = [...prev].filter((id) => current.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [ids, delayMs]);
+
+  useEffect(() => {
+    const tracked = timers.current;
+    return () => {
+      for (const timer of tracked.values()) clearTimeout(timer);
+      tracked.clear();
+    };
+  }, []);
+
+  return sustained;
 }

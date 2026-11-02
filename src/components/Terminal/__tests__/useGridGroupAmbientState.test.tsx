@@ -229,20 +229,69 @@ describe("useGridGroupHiddenFailure", () => {
         { initialProps: { panels: [browser, waiting] as PanelInstance[] } }
       );
       // A wait that passes in a moment never flashes the group.
-      act(() => vi.advanceTimersByTime(500));
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
       expect(result.current).toBe(false);
       records([browser, working]);
       rerender({ panels: [browser, working] });
-      act(() => vi.advanceTimersByTime(1_000));
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
       expect(result.current).toBe(false);
 
       records([browser, waiting]);
       rerender({ panels: [browser, waiting] });
-      act(() => vi.advanceTimersByTime(1_000));
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
       expect(result.current).toBe(true);
 
       lookAt("hidden");
       expect(result.current).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times each hidden tab's error wait on its own, and drops one the moment it ends", () => {
+    vi.useFakeTimers();
+    try {
+      const erroring = (id: string) => tab(id, { agentState: "waiting", waitingReason: "error" });
+      const working = (id: string) => tab(id, { agentState: "working" });
+      const rendered: boolean[] = [];
+      let panels: PanelInstance[] = [browser, working("a"), working("b")];
+      const { rerender } = renderHook(
+        ({ tabs }) => {
+          const shown = useGridGroupHiddenFailure(tabs, "shown");
+          rendered.push(shown);
+          return shown;
+        },
+        { initialProps: { tabs: panels } }
+      );
+      const write = (next: PanelInstance[], thenMs: number) => {
+        panels = next;
+        records(panels);
+        rerender({ tabs: panels });
+        act(() => {
+          vi.advanceTimersByTime(thenMs);
+        });
+      };
+
+      // Each wait passes inside the debounce, though together they span longer.
+      write([browser, erroring("a"), working("b")], 600);
+      write([browser, erroring("a"), erroring("b")], 50);
+      write([browser, working("a"), erroring("b")], 350);
+      write([browser, working("a"), working("b")], 1_000);
+      expect(rendered).not.toContain(true);
+
+      write([browser, working("a"), erroring("b")], 1_000);
+      expect(rendered.at(-1)).toBe(true);
+
+      // No render claims the wait once it has ended.
+      rendered.length = 0;
+      write([browser, working("a"), working("b")], 0);
+      expect(rendered).not.toContain(true);
     } finally {
       vi.useRealTimers();
     }
