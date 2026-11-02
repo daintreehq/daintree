@@ -1,15 +1,20 @@
+import { z } from "zod";
 import { AppError } from "../../utils/errorTypes.js";
 import type { IpcContext } from "../types.js";
 import type {
   GlobalAssistantAttachment,
   GlobalAssistantView,
+  WindowGlobalAssistantPanel,
 } from "../../../shared/types/ipc/help.js";
 import type { AgentState } from "../../../shared/types/agent.js";
-import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { AgentDirectorySubjectSchema } from "../../../shared/types/agentDirectory.js";
+import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
 import { events } from "../../services/events.js";
 import type { GlobalAssistantService } from "../../services/GlobalAssistantService.js";
 import { getGlobalAssistantService } from "../../services/globalAssistant.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
+import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
 
@@ -235,4 +240,50 @@ export async function handleDiscardGlobalAssistant(
   requireGeneration(instance, expectedGeneration);
   await instance.discard();
   return globalAssistantView(instance);
+}
+
+const WindowGlobalAssistantPanelSchema = z.object({
+  showing: z.boolean(),
+  target: AgentDirectorySubjectSchema.nullable(),
+});
+
+/** The sender's own window's view manager, when the sender is one of that window's views. */
+function senderViewManager(ctx: IpcContext): ProjectViewManager | null {
+  const windowId = ctx.senderWindow?.id;
+  if (windowId === undefined) return null;
+  const manager = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+  if (!manager || manager.getProjectIdForWebContents(ctx.webContentsId) === null) return null;
+  return manager;
+}
+
+/**
+ * Whether the sender's window last showed the global assistant in its panel
+ * (#16099). Every switch entry point — the switcher, a notification, File →
+ * Recent Projects — lands the incoming view here, which is why it's held in
+ * main and read by the view rather than handed over by whoever switched.
+ */
+export async function handleGetWindowGlobalAssistantPanel(
+  ctx: IpcContext
+): Promise<WindowGlobalAssistantPanel | null> {
+  return senderViewManager(ctx)?.getGlobalAssistantPanel() ?? null;
+}
+
+/**
+ * The sender's panel, for its window to carry over a project switch. Ignored
+ * from any view but the one the window shows: a late report from a view just
+ * switched away from must not overwrite what the incoming view said.
+ */
+export async function handleReportWindowGlobalAssistantPanel(
+  ctx: IpcContext,
+  panel: WindowGlobalAssistantPanel
+): Promise<void> {
+  const parsed = WindowGlobalAssistantPanelSchema.safeParse(panel);
+  if (
+    !parsed.success ||
+    (parsed.data.target !== null &&
+      (parsed.data.target.scope.kind !== "global" || !isLocalHostId(parsed.data.target.hostId)))
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant panel state." });
+  }
+  senderViewManager(ctx)?.recordGlobalAssistantPanel(ctx.webContentsId, parsed.data);
 }

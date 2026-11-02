@@ -25,6 +25,8 @@ export const HELP_METHOD_CHANNELS = {
   releaseGlobalAssistantInput: "help:global-assistant-release-input",
   restartGlobalAssistant: "help:global-assistant-restart",
   discardGlobalAssistant: "help:global-assistant-discard",
+  getWindowGlobalAssistantPanel: "help:window-global-assistant-panel",
+  reportWindowGlobalAssistantPanel: "help:report-window-global-assistant-panel",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HELP_METHOD_CHANNELS;

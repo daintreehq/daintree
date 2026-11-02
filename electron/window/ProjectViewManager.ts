@@ -47,6 +47,7 @@ import type {
   ProjectFocusOnActivateIntent,
   ProjectSwitchTrace,
 } from "../../shared/types/ipc/project.js";
+import type { WindowGlobalAssistantPanel } from "../../shared/types/ipc/help.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   isLocalHostId,
@@ -503,6 +504,9 @@ export class ProjectViewManager {
     projectId: string;
     intent: ProjectFocusOnActivateIntent;
   } | null = null;
+  // Window-scoped, not per project, so it outlives every view it is handed to,
+  // eviction included. Null until this window's active view first says.
+  private globalAssistantPanel: WindowGlobalAssistantPanel | null = null;
   disposed = false;
   private holdReleaseCleanup: (() => void) | null = null;
   /** One-shot latch so a persistently broken activity callback can't flood the log. */
@@ -957,6 +961,31 @@ export class ProjectViewManager {
 
   getProjectIdForWebContents(webContentsId: number): string | null {
     return this.webContentsToProject.get(webContentsId) ?? null;
+  }
+
+  /**
+   * Whether this window's Assistant panel was last on the global assistant
+   * (#16099), for the view a switch brings in to show the same. Null before any
+   * view of this window has said.
+   */
+  getGlobalAssistantPanel(): WindowGlobalAssistantPanel | null {
+    return this.globalAssistantPanel;
+  }
+
+  /**
+   * Take the window's panel state from the view on screen, and only from it: a
+   * cached view, or the outgoing view a cold switch still shows while the
+   * incoming one loads, no longer speaks for the window. Returns whether it was
+   * taken.
+   */
+  recordGlobalAssistantPanel(webContentsId: number, panel: WindowGlobalAssistantPanel): boolean {
+    if (this.disposed || this.win.isDestroyed()) return false;
+    const projectId = this.activeProjectId;
+    if (!projectId || !isLocalHostId(parseHostScopedKey(projectId).hostId)) return false;
+    const active = this.views.get(projectId)?.view.webContents;
+    if (!active || active.isDestroyed() || active.id !== webContentsId) return false;
+    this.globalAssistantPanel = panel;
+    return true;
   }
 
   /**
@@ -1797,6 +1826,7 @@ export class ProjectViewManager {
 
   dispose(): void {
     this.disposed = true;
+    this.globalAssistantPanel = null;
     this.holdReleaseCleanup?.();
     this.holdReleaseCleanup = null;
     // Before any teardown below: an in-flight restore holds a half-built entry

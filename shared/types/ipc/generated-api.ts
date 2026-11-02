@@ -668,6 +668,9 @@ export interface GeneratedElectronAPI {
     getStarterPrompts(
       ...args: IpcInvokeMap["help:get-starter-prompts"]["args"]
     ): Promise<IpcInvokeMap["help:get-starter-prompts"]["result"]>;
+    getWindowGlobalAssistantPanel(
+      ...args: IpcInvokeMap["help:window-global-assistant-panel"]["args"]
+    ): Promise<IpcInvokeMap["help:window-global-assistant-panel"]["result"]>;
     listPastSessions(
       ...args: IpcInvokeMap["help:list-past-sessions"]["args"]
     ): Promise<IpcInvokeMap["help:list-past-sessions"]["result"]>;
@@ -692,6 +695,9 @@ export interface GeneratedElectronAPI {
     reportPanelOpen(
       ...args: IpcInvokeMap["help:report-panel-open"]["args"]
     ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;
+    reportWindowGlobalAssistantPanel(
+      ...args: IpcInvokeMap["help:report-window-global-assistant-panel"]["args"]
+    ): Promise<IpcInvokeMap["help:report-window-global-assistant-panel"]["result"]>;
     restartGlobalAssistant(
       ...args: IpcInvokeMap["help:global-assistant-restart"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-restart"]["result"]>;

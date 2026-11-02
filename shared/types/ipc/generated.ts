@@ -2156,6 +2156,10 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string, isOpen: boolean, isVisible?: boolean | undefined];
     result: void;
   };
+  "help:report-window-global-assistant-panel": {
+    args: [panel: import("./help.js").WindowGlobalAssistantPanel];
+    result: void;
+  };
   "help:restore-pending-hibernation": {
     args: [projectId: string, claimId: string, rawSlot?: number | undefined];
     result: boolean;
@@ -2171,6 +2175,10 @@ export interface GeneratedIpcInvokeMap {
   "help:unmark-terminal": {
     args: [terminalId: string];
     result: void;
+  };
+  "help:window-global-assistant-panel": {
+    args: [];
+    result: import("./help.js").WindowGlobalAssistantPanel | null;
   };
   "host-files:get-picker-roots": {
     args: [];

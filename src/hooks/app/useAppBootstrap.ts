@@ -7,6 +7,7 @@ import { useGettingStartedChecklist } from "./useGettingStartedChecklist";
 import { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 import { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 import { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
+import { useWindowGlobalAssistantPanel } from "./useWindowGlobalAssistantPanel";
 import { useCanopyResumeRequests } from "./useCanopyResumeRequests";
 import { useSleptProjectTransition } from "./useSleptProjectTransition";
 import { useDroppedViewRestore } from "./useDroppedViewRestore";
@@ -84,6 +85,8 @@ export function useAppBootstrap() {
   // local `agent.focusNextWaiting` dispatch until hydration completes (the
   // paint signal arrives before panel state is loaded — a direct dispatch
   // would silently no-op against an empty panelStore).
+  // The global assistant stays on screen across this window's project switches.
+  useWindowGlobalAssistantPanel();
   useFocusOnActivateIntent(isStateLoaded);
   // Canopy's Trash resumes a closed agent in this project's grid.
   useCanopyResumeRequests(isStateLoaded);
