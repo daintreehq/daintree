@@ -1,4 +1,5 @@
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
+import type { HostWakeSetup } from "./hostWake.js";
 
 /**
  * Remote Hosts: shared vocabulary for the Shell (the machine you sit at) and
@@ -312,6 +313,12 @@ export interface HostDescriptor {
    * its resource is torn down. Absent for every host the user added.
    */
   ownerWorktreeId?: string;
+  /**
+   * How this machine can wake the host from the network (#16170), as the
+   * person recorded it; absent when nothing is set up. Dropped with the
+   * observations when the host is pointed at another target.
+   */
+  wake?: HostWakeSetup;
 }
 
 export type HostConnectionState =
@@ -356,6 +363,11 @@ export type HostConnectionState =
       hostModeOff?: true;
       /** As on `connecting`: the host said it was shutting down, and is still retried. */
       restarting?: true;
+      /**
+       * The host's Daintree answered the attempt that failed (it refused the
+       * link, or closed a session it had just opened): ssh and the link got there.
+       */
+      answered?: true;
       /**
        * Not retrying on its own: what was seen (ssh couldn't log in, Host mode
        * is off) doesn't change by trying again soon, so it waits for a

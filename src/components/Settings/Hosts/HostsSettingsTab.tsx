@@ -15,6 +15,7 @@ import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
 import { HostsCopySettingsSection } from "./HostsCopySettingsSection";
 import { connectionLabel, platformLabel, removeHostOutcome } from "./hostLabels";
+import { bringBackMessage, canBringBack, useHostBringBacks, wakeLabel } from "./hostBringBack";
 import {
   onHostSettingsRequest,
   takePendingHostSettings,
@@ -47,6 +48,7 @@ export default function HostsSettingsTab() {
     connection: HostConnection;
   } | null>(null);
   const [forgetError, setForgetError] = useState<string | null>(null);
+  const bringBacks = useHostBringBacks();
   // Leaving a host's details puts focus back on the Details button it came
   // from (or, once removed, the list's Add host); entering from the keyboard
   // puts it on the header's way back.
@@ -226,58 +228,80 @@ export default function HostsSettingsTab() {
           ) : (
             [...hosts]
               .sort((a, b) => hostNameCollator.compare(a.descriptor.name, b.descriptor.name))
-              .map(({ descriptor, connection }) => (
-                <SettingsRow
-                  key={descriptor.id}
-                  label={descriptor.name}
-                  description={
-                    <>
-                      {formatHostConnection(descriptor.connection)} ·{" "}
-                      {descriptor.platform
-                        ? platformLabel(descriptor.platform, null)
-                        : "Not seen yet"}
-                      <br />
-                      {connectionLabel(connection)}
-                    </>
-                  }
-                  control={
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        aria-label={`Details for ${descriptor.name}`}
-                        data-host-details={descriptor.id}
-                        onClick={(event) => {
-                          setFocusBackFor(event.detail === 0 ? descriptor.id : null);
-                          setDetailHostId(descriptor.id);
-                        }}
-                      >
-                        Details
-                      </Button>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
+              .map(({ descriptor, connection }) => {
+                const wake = wakeLabel(descriptor);
+                const bringing = bringBacks.isPending(descriptor.id);
+                const said = bringing
+                  ? null
+                  : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor, connection);
+                return (
+                  <SettingsRow
+                    key={descriptor.id}
+                    label={descriptor.name}
+                    description={
+                      <>
+                        {formatHostConnection(descriptor.connection)} ·{" "}
+                        {descriptor.platform
+                          ? platformLabel(descriptor.platform, null)
+                          : "Not seen yet"}
+                        <br />
+                        {connectionLabel(connection)}
+                        {wake && <> · {wake}</>}
+                      </>
+                    }
+                    error={said ? <span role="alert">{said}</span> : undefined}
+                    control={
+                      <div className="flex items-center gap-1.5">
+                        {(bringing || canBringBack(connection)) && (
+                          // Wakes it where a wake is set up, then starts Daintree there if it can.
                           <Button
-                            variant="ghost-danger"
-                            size="icon-sm"
-                            aria-label={`Remove ${descriptor.name} from this device`}
-                            onClick={() => {
-                              setForgetError(null);
-                              setForgetTarget({
-                                id: descriptor.id,
-                                name: descriptor.name,
-                                connection: descriptor.connection,
-                              });
-                            }}
+                            variant="outline"
+                            size="sm"
+                            data-host-bring-back={descriptor.id}
+                            aria-label={`Bring back ${descriptor.name}`}
+                            loading={bringing}
+                            onClick={() => bringBacks.bringBack(descriptor.id)}
                           >
-                            <Trash2 aria-hidden="true" />
+                            Bring back
                           </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Remove host</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  }
-                />
-              ))
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`Details for ${descriptor.name}`}
+                          data-host-details={descriptor.id}
+                          onClick={(event) => {
+                            setFocusBackFor(event.detail === 0 ? descriptor.id : null);
+                            setDetailHostId(descriptor.id);
+                          }}
+                        >
+                          Details
+                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost-danger"
+                              size="icon-sm"
+                              aria-label={`Remove ${descriptor.name} from this device`}
+                              onClick={() => {
+                                setForgetError(null);
+                                setForgetTarget({
+                                  id: descriptor.id,
+                                  name: descriptor.name,
+                                  connection: descriptor.connection,
+                                });
+                              }}
+                            >
+                              <Trash2 aria-hidden="true" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Remove host</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    }
+                  />
+                );
+              })
           )}
         </SettingsGroup>
       </SettingsSection>

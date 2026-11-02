@@ -197,6 +197,9 @@ export const CORE_TIER_TOOLS = [
   // One notice when a host's link or capacity is first seen meeting a
   // condition (#14463): passive, and it acts on nothing when it fires.
   "host.watch",
+  // Waking a host whose link is down and starting Daintree there where its
+  // Host mode is on (#16170): never its settings.
+  "host.bringBack",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -344,6 +347,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.ensureProject",
   "host.settings",
   "host.watch",
+  "host.bringBack",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];

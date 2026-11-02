@@ -114,6 +114,8 @@ export interface HostControlInstallDeps {
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   /** Dials a host this Shell holds no link to, for `host.list` to observe it connected. */
   connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
+  /** The Shell's attempt to bring back a host whose link is down (#16170). */
+  bringBack?: HostCallRuntimeDeps["bringBack"];
   /** The person's "assistant control" switch for a host: whether its assistant reaches it (#13493). */
   isHostControlEnabled(hostId: HostId): boolean;
   /**
@@ -188,6 +190,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     hosts: () => deps.observeHosts(),
     listHostProjects: deps.listHostProjects,
     connect: deps.connect,
+    ...(deps.bringBack ? { bringBack: deps.bringBack } : {}),
     // From provisioning, before the run is confirmed: the view a session was opened in.
     // The global assistant (#14161) is this machine's own with no view at all.
     inLocalView: (helpSessionId) => {

@@ -972,7 +972,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 174_433): the user-preset create and edit take `accountId`, so an
   // assistant pins the account a preset launches on the way Settings does.
   // In-app only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 174_700;
+  // 174_700 → 176_000 for #16170, measured at 175_922 B (+1_323 over develop's
+  // 174_599): `host.bringBack`, so an assistant can try to bring back a host
+  // whose link is down instead of only waiting for it. Nearly all of it is the
+  // output schema, the host tools' outcome envelope plus what the attempt
+  // observed (its end, the wake, whether ssh got in and a start went, ssh's
+  // own words). Assistant-only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 176_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

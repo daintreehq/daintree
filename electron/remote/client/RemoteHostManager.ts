@@ -476,6 +476,7 @@ export class HostConnection {
           detail: state.detail,
           ...(state.hostModeOff && state.retryAt === null ? { hostModeOff: true as const } : {}),
           ...(state.restarting ? { restarting: true as const } : {}),
+          ...(state.answered ? { answered: true as const } : {}),
           ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
         };
       case "version-mismatch":

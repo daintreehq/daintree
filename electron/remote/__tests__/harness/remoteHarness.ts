@@ -38,7 +38,7 @@ import {
   stopRemoteHosts,
   type StartRemoteHostsOptions,
 } from "../../boot.js";
-import type { initRemoteHostsClient } from "../../client/initClient.js";
+import type { EnsureHostRunning, initRemoteHostsClient } from "../../client/initClient.js";
 import type { RemoteHostManager } from "../../client/RemoteHostManager.js";
 import { createDirectTransport, type LinkTransport } from "../../client/transport.js";
 import type { HostServer } from "../../host/HostServer.js";
@@ -148,8 +148,10 @@ export interface RemoteHarnessOptions {
    * How the Shell reaches the host, given the client's own directory (the one
    * the port forwards take their ControlMaster from). A direct socket to the
    * host's discovery file unless given; `dropLink`/`restoreLink` need that one.
+   * `ensureRunning` is the Shell's own start step (`HostStarts`), for a
+   * transport that finds no Daintree serving, as ssh's does.
    */
-  createTransport?: (clientDir: string) => LinkTransport;
+  createTransport?: (clientDir: string, ensureRunning: EnsureHostRunning) => LinkTransport;
   sshTarget?: string;
   /** Graces for the host's drive lease, short enough for a test to wait out; the app's unless given. */
   lease?: Pick<DriveLeaseServiceOptions, "releaseGraceMs" | "restoredReservationGraceMs">;
@@ -260,7 +262,11 @@ async function buildHarness(
   let allowConnect = true;
   const direct = createDirectTransport({ discoveryPath: location.discoveryPath });
   const clientDir = path.join(harnessState.userDataDir, "rh");
-  const transport: LinkTransport = options.createTransport?.(clientDir) ?? {
+  // The Shell's start step, as boot hands it to the host's transport.
+  let ensureRunning: EnsureHostRunning | null = null;
+  const transport: LinkTransport = options.createTransport?.(clientDir, (signal) =>
+    ensureRunning ? ensureRunning(signal) : Promise.resolve(false)
+  ) ?? {
     async open(signal) {
       if (!allowConnect) throw new Error("host unreachable");
       const connection = await direct.open(signal);
@@ -274,7 +280,10 @@ async function buildHarness(
   const bootOptions: StartRemoteHostsOptions = {
     hostMode: true,
     hostLocation: location,
-    createTransport: () => transport,
+    createTransport: (_descriptor, ensure) => {
+      ensureRunning = ensure;
+      return transport;
+    },
   };
   teardowns.push(() => stopRemoteHosts());
   await startRemoteHosts(bootOptions);

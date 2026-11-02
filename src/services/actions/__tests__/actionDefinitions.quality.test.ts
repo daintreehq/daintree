@@ -579,7 +579,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // Daintree would drop at launch is refused, and that only the user's own
   // presets can change; the create adds that it doesn't become the default, the
   // edit how a patch clears a field. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 25_220;
+  // 25_220 → 25_350 for `host.bringBack` (#16170), measured at 25_336 B (+188
+  // over develop's 25_148). The prose has to say what it tries in which order
+  // (a wake, then a start where Host mode is on), that it is bounded, that
+  // repeat calls join, and that it answers with observations. Assistant-only,
+  // off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 25_350;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1635,6 +1640,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.ensureProject": { hostId: "h-placeholder" },
       "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
       "host.watch": { operation: "list" },
+      "host.bringBack": { hostId: "h-placeholder" },
       "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },

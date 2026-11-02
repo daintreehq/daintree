@@ -5,6 +5,7 @@ import {
   AssistantHostSettingsPatchFieldsSchema,
 } from "./hostSettings.js";
 import { HostThrowawayCallSchema } from "./hostThrowaway.js";
+import { HostBringBackAnswerSchema } from "./hostWake.js";
 
 /**
  * This Shell's reach into its Remote Hosts for its own assistants (#13493,
@@ -57,12 +58,22 @@ export const HOST_SETTINGS_TOOL = "host.settings";
  */
 export const HOST_WATCH_TOOL = "host.watch";
 
+/**
+ * Tries to bring back a host whose link is down (#16170): a wake sent first
+ * where one is set up and this machine is on the host's LAN, then a dial that
+ * starts Daintree there in Host mode where its Host mode is on. Bounded, one
+ * attempt per host that later calls join, and answered with what was
+ * observed. Never changes the host's settings or turns Host mode on.
+ */
+export const HOST_BRING_BACK_TOOL = "host.bringBack";
+
 export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
+  HOST_BRING_BACK_TOOL,
 ]);
 
 /** Most projects `host.list` names for one host in one answer: a page. */
@@ -620,11 +631,26 @@ export const HostWatchResultSchema = z.object({
 });
 export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
 
+export const HostBringBackArgsSchema = z.object({ hostId: hostIdSchema });
+export type HostBringBackArgs = z.infer<typeof HostBringBackArgsSchema>;
+
+export const HostBringBackResultSchema = z.object({
+  ...outcomeFields,
+  /** What the attempt observed; null when the host couldn't be tried (not found, control off). */
+  answer: HostBringBackAnswerSchema.nullable(),
+});
+export type HostBringBackResult = z.infer<typeof HostBringBackResultSchema>;
+
 /** Why a host tool refused outright: the caller isn't this machine's assistant, or its arguments don't parse. */
 export type HostControlRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
 export type HostControlToolResult =
-  HostListResult | HostCallResult | HostEnsureProjectResult | HostSettingsResult | HostWatchResult;
+  | HostListResult
+  | HostCallResult
+  | HostEnsureProjectResult
+  | HostSettingsResult
+  | HostWatchResult
+  | HostBringBackResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

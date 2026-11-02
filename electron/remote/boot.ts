@@ -11,7 +11,7 @@ import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
 import { isRemoteHostSupported } from "./buildGate.js";
-import { initRemoteHostsClient } from "./client/initClient.js";
+import { initRemoteHostsClient, type EnsureHostRunning } from "./client/initClient.js";
 import { defaultCommandRunner } from "./client/commandRunner.js";
 import { closeSshMasters, exitStaleSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
@@ -23,7 +23,7 @@ import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js"
 import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
 import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
-import { getRemoteService } from "./runtime.js";
+import { getRemoteService, requireRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
@@ -80,8 +80,12 @@ export { setRemoteHostsWindowOpener } from "./client/initClient.js";
 export interface StartRemoteHostsOptions {
   /** Host mode is on for this launch: listen for remote Shells. */
   hostMode: boolean;
-  /** How the Shell reaches a host; system ssh unless given (the integration harness dials a local socket). */
-  createTransport?: (descriptor: HostDescriptor) => LinkTransport;
+  /**
+   * How the Shell reaches a host; system ssh unless given (the integration
+   * harness dials a local socket). `ensureRunning` is the start a transport
+   * calls when ssh reaches the host with no Daintree serving.
+   */
+  createTransport?: (descriptor: HostDescriptor, ensureRunning: EnsureHostRunning) => LinkTransport;
   /** Where Host mode listens; the platform's socket path unless given. */
   hostLocation?: HostSocketLocation;
   /**
@@ -362,6 +366,8 @@ function startClient(options: StartRemoteHostsOptions): void {
         client.manager.touch(hostId);
         await client.client.connectAndWait(hostId, timeoutMs);
       },
+      // The same attempt the host's row joins (#16170).
+      bringBack: (hostId) => requireRemoteService("hostBringBack").bringBack(hostId),
       isHostControlEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantControlEnabled === true,
       // What `host.watch` hears (#14463): nothing a host isn't already sending.

@@ -1,5 +1,7 @@
 import type { ActionRegistry } from "../actionTypes";
 import {
+  HostBringBackArgsSchema,
+  HostBringBackResultSchema,
   HostCallArgsSchema,
   HostCallResultSchema,
   HostEnsureProjectArgsSchema,
@@ -29,8 +31,9 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * hosts over the link from main, and this machine's other projects in
  * process under its own id, `local` (#14024). Delegating to a host's assistant is agent
  * messaging run through `host.call` (#13496), and a host's own named settings
- * are read and changed through `host.settings` (#14167), and `host.watch`
- * wakes an assistant once a host's link or capacity is seen to change (#14463).
+ * are read and changed through `host.settings` (#14167), `host.watch`
+ * wakes an assistant once a host's link or capacity is seen to change (#14463),
+ * and `host.bringBack` tries to bring back a host whose link is down (#16170).
  * `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
@@ -156,5 +159,30 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.watch"),
+  }));
+
+  actions.set("host.bringBack", () => ({
+    id: "host.bringBack",
+    title: "Bring back a host",
+    description:
+      "Bring back a host whose link is down: wake it where a wake is set up here, then start Daintree there if its Host mode is on. Up to 2 min; repeat calls join. Answers with what was observed.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "wake", "start", "reconnect", "asleep"],
+    palette: { mode: "hidden" },
+    argsSchema: HostBringBackArgsSchema,
+    resultSchema: HostBringBackResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A repeat joins the attempt under way, or finds the host back.
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.bringBack"),
   }));
 }

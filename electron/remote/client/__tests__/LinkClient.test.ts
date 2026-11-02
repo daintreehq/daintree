@@ -1656,7 +1656,12 @@ describe("LinkClient connections opened from what earlier links learned (#15895)
         if (answers[0] === "unauthorized") {
           expect(client.getState()).toMatchObject({
             detail: "Host refused the connection: unauthorized",
+            // The host's Daintree said it (#16170).
+            answered: true,
           });
+        } else {
+          // Closed with nothing said: nothing shows the host's Daintree was there.
+          expect(client.getState()).not.toHaveProperty("answered");
         }
       } finally {
         await client?.stop();
@@ -1709,7 +1714,7 @@ describe("LinkClient connections opened from what earlier links learned (#15895)
         client.start();
         await waitFor(() => client!.getState().status === "unreachable");
         expect(host.opens).toEqual([false]);
-        expect(client.getState()).toMatchObject({ detail });
+        expect(client.getState()).toMatchObject({ detail, answered: true });
       } finally {
         await client?.stop();
         client = null;

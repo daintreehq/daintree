@@ -6,6 +6,7 @@ import {
   HOST_WATCH_STATUSES,
 } from "../../../shared/types/hostControl.js";
 import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
+import { HOST_BRING_BACK_STATUSES, HOST_WAKE_RESULTS } from "../../../shared/types/hostWake.js";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
@@ -131,6 +132,8 @@ function finiteNumber(value: unknown): number | null {
 const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
 const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_CONTROL_OUTCOMES);
 const ENSURE_ACCEPTABLE: ReadonlySet<string> = new Set(HOST_ENSURE_ACCEPTABLE);
+const HOST_BRING_BACK_STATUS_SET: ReadonlySet<string> = new Set(HOST_BRING_BACK_STATUSES);
+const HOST_WAKE_RESULT_SET: ReadonlySet<string> = new Set(HOST_WAKE_RESULTS);
 
 function auditHostId(value: unknown): string | null {
   return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
@@ -298,6 +301,23 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.bringBack",
+    // How the attempt ended and what it did, never ssh's words, the host's adapter or its LAN (#16170).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const answer = asRecord(record.answer);
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        status: fromSet(answer?.status, HOST_BRING_BACK_STATUS_SET),
+        wake: fromSet(answer?.wake, HOST_WAKE_RESULT_SET),
+        reached: answer?.reached === true,
+        startRequested: answer?.startRequested === true,
+        elapsedMs: finiteNumber(answer?.elapsedMs),
+      };
+    },
+  ],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -342,6 +362,7 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       };
     },
   ],
+  ["host.bringBack", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
   [
     "host.list",
     // Which host and whether it searched or paged, never the words searched for.

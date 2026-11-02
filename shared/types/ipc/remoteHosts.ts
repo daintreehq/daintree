@@ -14,6 +14,7 @@ import type {
   OperationProgress,
 } from "../remoteHosts.js";
 import type { ProjectFocusOnActivateIntent } from "./project.js";
+import type { HostWakeSetup } from "../hostWake.js";
 import type { AppErrorCode } from "../appError.js";
 
 export interface AddHostPayload {
@@ -29,6 +30,8 @@ export interface UpdateHostPayload {
   connection?: HostConnection;
   notificationsEnabled?: boolean;
   assistantControlEnabled?: boolean;
+  /** The host's wake setup (#16170); null removes it. */
+  wake?: HostWakeSetup | null;
 }
 
 export interface WindowHostInfo {

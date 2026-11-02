@@ -72,6 +72,11 @@ export type LinkClientState =
       /** See {@link LinkClient.restartAnnounced}. */
       restarting?: true;
       /**
+       * The host's Daintree answered this attempt (it refused the HELLO, or
+       * closed a session it had just opened): whatever failed, it got there.
+       */
+      answered?: true;
+      /**
        * Epoch ms of the next attempt; null when retrying can't help (ssh
        * couldn't log in, Host mode is off there) and the link waits for
        * {@link LinkClient.retryNow}.
@@ -477,11 +482,13 @@ export class LinkClient {
           return;
         }
         this.fail(
-          `Host refused the connection: ${reject.reason}${reject.detail ? ` (${reject.detail})` : ""}`
+          `Host refused the connection: ${reject.reason}${reject.detail ? ` (${reject.detail})` : ""}`,
+          { answered: true }
         );
         return;
       }
-      this.fail(outcome.reason);
+      // A GOODBYE in place of the WELCOME is the host's own answer; a stream that just ended isn't.
+      this.fail(outcome.reason, session.closedWith?.by === "remote" ? { answered: true } : {});
       return;
     }
   }
@@ -602,7 +609,7 @@ export class LinkClient {
     if (session.isClosed) {
       if (session.closedWith) this.noteClose(session.closedWith);
       void this.release(connection);
-      this.fail(session.closedWith?.reason ?? "closed");
+      this.fail(session.closedWith?.reason ?? "closed", { answered: true });
       return;
     }
     const previousSessionId = this.sessionId;
@@ -716,7 +723,8 @@ export class LinkClient {
         // Reconnect straight away after a session that had been up for a
         // while; one that dies right after the handshake goes through backoff
         // so a host that accepts and immediately drops us isn't hammered.
-        if (this.now() - establishedAt < SHORT_SESSION_MS) this.fail(info.reason);
+        if (this.now() - establishedAt < SHORT_SESSION_MS)
+          this.fail(info.reason, { answered: true });
         else void this.connect();
       });
     });
@@ -779,7 +787,7 @@ export class LinkClient {
 
   private fail(
     detail: string | null,
-    options: { hostModeOff?: boolean; parked?: boolean; failure?: string } = {}
+    options: { hostModeOff?: boolean; parked?: boolean; failure?: string; answered?: boolean } = {}
   ): void {
     this.failures++;
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
@@ -809,6 +817,7 @@ export class LinkClient {
       detail,
       ...(options.hostModeOff ? { hostModeOff: true as const } : {}),
       ...(announced && !options.parked ? { restarting: true as const } : {}),
+      ...(options.answered ? { answered: true as const } : {}),
       retryAt: options.parked ? null : this.now() + delay,
     });
     if (options.parked) return;

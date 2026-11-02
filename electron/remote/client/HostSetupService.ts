@@ -88,6 +88,15 @@ const START_LISTEN_TIMEOUT_MS = 60_000;
  */
 const UNSTARTABLE_HOLD_MS = 10 * 60_000;
 
+/**
+ * Why a host reached with no Daintree serving wasn't started: ssh didn't
+ * answer the check, Daintree isn't installed, Host mode is off (or was never
+ * set up to start), it was quit there on purpose, a recent check said so (the
+ * hold), or an install or removal of the host is under way here.
+ */
+export type HostStartRefusal =
+  "unreached" | "not-installed" | "host-mode-off" | "quit" | "held" | "busy";
+
 function targetKey(connection: HostConnection): string {
   let key: string;
   switch (connection.kind) {
@@ -322,55 +331,67 @@ export class HostSetupService {
    * a host the last full probe found can't be started.
    * `onStart` is called just before the start goes to the host. Throws why it
    * couldn't start (no logged-in session on a Mac, a failed service).
+   *
+   * `explicit` is someone asking for this host back (#16170): it starts a
+   * Daintree that was quit there on purpose and looks again past the hold,
+   * but never one whose Host mode is off. `onRefused` hears why nothing was
+   * started, as the probe found it.
    */
   async ensureHostRunning(
     connection: HostConnection,
     signal?: AbortSignal,
-    onStart?: () => void
+    onStart?: () => void,
+    options: { explicit?: boolean; onRefused?: (refusal: HostStartRefusal) => void } = {}
   ): Promise<"listening" | "started" | "not-startable"> {
-    if (this.isInstallRunning(connection) || this.deps.isRetiring?.(connection)) {
+    const refused = (refusal: HostStartRefusal): "not-startable" => {
+      if (!signal?.aborted) options.onRefused?.(refusal);
       return "not-startable";
+    };
+    if (this.isInstallRunning(connection) || this.deps.isRetiring?.(connection)) {
+      return refused("busy");
     }
     const now = this.deps.now ?? Date.now;
     const key = connectionKey(connection);
     const refusedAt = this.unstartable.get(key);
-    if (refusedAt !== undefined) {
+    if (refusedAt !== undefined && options.explicit !== true) {
       const since = now() - refusedAt;
       // A time ahead of the clock (it moved back) says nothing about how long ago.
-      if (since >= 0 && since < UNSTARTABLE_HOLD_MS) return "not-startable";
+      if (since >= 0 && since < UNSTARTABLE_HOLD_MS) return refused("held");
       this.unstartable.delete(key);
     }
     const rechecks = this.rechecks.get(key) ?? 0;
-    const unstartable = (): "not-startable" => {
+    const unstartable = (refusal: HostStartRefusal): "not-startable" => {
       if (rechecks === (this.rechecks.get(key) ?? 0) && !signal?.aborted) {
         this.unstartable.set(key, now());
       }
-      return "not-startable";
+      return refused(refusal);
     };
     const channel = this.shellFor(connection);
     const outcome = await this.probeOutcome(connection, channel, signal);
     const probe = outcome.result;
     // Nothing was learned: the next failed dial looks again.
-    if (!outcome.parsed || !probe.reachable) return "not-startable";
-    if (!probe.install) return unstartable();
+    if (!outcome.parsed || !probe.reachable) return refused("unreached");
+    if (!probe.install) return unstartable("not-installed");
     if (probe.hostModeListening) return "listening";
-    if (probe.hostModeState?.enabled === false) return unstartable();
-    // Quit there on purpose: starting it again would undo that.
-    if (probe.hostModeState?.stopped === true) return unstartable();
+    if (probe.hostModeState?.enabled === false) return unstartable("host-mode-off");
+    // Quit there on purpose: starting it again would undo that, unless someone asks.
+    if (probe.hostModeState?.stopped === true && options.explicit !== true) {
+      return unstartable("quit");
+    }
     const script =
       probe.platform === "darwin" && probe.hostModeState?.enabled === true
         ? macStartScript(probe.install.path)
         : probe.platform === "linux" && probe.advice.hostModeUnit === true
           ? LINUX_START_SCRIPT
           : null;
-    if (!script) return unstartable();
+    if (!script) return unstartable("host-mode-off");
     // Last look before changing anything on the host.
     if (
       signal?.aborted ||
       this.isInstallRunning(connection) ||
       this.deps.isRetiring?.(connection)
     ) {
-      return "not-startable";
+      return refused("busy");
     }
     const label = formatHostConnection(connection);
     onStart?.();

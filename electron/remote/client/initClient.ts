@@ -89,11 +89,14 @@ import { readOrCreateDeviceId } from "./deviceId.js";
 import { machineDisplayName } from "../../utils/machineName.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
+import { HostBringBackService } from "./HostBringBackService.js";
+import { sendWakePacket, wakeRouteFor } from "./wakeOnLan.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
     remoteHostsClient: RemoteHostsClient;
     hostSetup: HostSetupService;
+    hostBringBack: HostBringBackService;
   }
 }
 
@@ -219,9 +222,12 @@ function managerFor(windowId: number) {
   return pvm;
 }
 
+/** What a host's transport calls to start Daintree there when ssh reaches it with none serving. */
+export type EnsureHostRunning = (signal: AbortSignal) => Promise<boolean>;
+
 export interface RemoteHostsClientHooks {
   /** How each host is reached; system ssh unless given. */
-  createTransport?: (descriptor: HostDescriptor) => LinkTransport;
+  createTransport?: (descriptor: HostDescriptor, ensureRunning: EnsureHostRunning) => LinkTransport;
   /** The first time a host is actually used (see RemoteHostsClientOptions.onFirstUse). */
   onFirstUse?: () => void;
   /** A window now shows a remote project view: newly created, or a cached one reactivated. */
@@ -791,17 +797,23 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const awakeSince = (since: number) => sleep.getAwakeTimeSince(since);
   const manager = new RemoteHostManager({
     registry,
-    createTransport:
-      hooks.createTransport ??
-      ((descriptor) =>
-        transportFor(
-          descriptor.connection,
-          clientDir,
-          // A dial while the host is removed or re-pointed (a notification, an
-          // update's reconnect) would hold the old distro after its release.
-          { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
-          (signal) => starts.ensureRunning(descriptor.id, descriptor.connection, signal)
-        )),
+    createTransport: (descriptor) => {
+      const ensureRunning: EnsureHostRunning = (signal) =>
+        starts.ensureRunning(descriptor.id, descriptor.connection, signal);
+      // Someone asking for the host back may start it whatever the link allows (#16170).
+      return starts.transport(
+        descriptor.id,
+        hooks.createTransport?.(descriptor, ensureRunning) ??
+          transportFor(
+            descriptor.connection,
+            clientDir,
+            // A dial while the host is removed or re-pointed (a notification, an
+            // update's reconnect) would hold the old distro after its release.
+            { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
+            ensureRunning
+          )
+      );
+    },
     handshake: getLocalHandshakeInfo,
     client: {
       // Per launch: a session only resumes within one run of this app.
@@ -847,13 +859,32 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     isAttemptingStart: (hostId) => starts.isAttempting(hostId),
     isInstalling: (connection) => setup.isInstallRunning(connection),
     onRetry: (hostId) => recheckStart(hostId),
+    // Before the link goes: an attempt to bring it back would dial it again.
+    onLetGo: (hostId) => bringBack.cancel(hostId),
   });
   const starts = new HostStarts({
     setup: {
-      ensureHostRunning: (connection, signal, onStart) =>
-        setup.ensureHostRunning(connection, signal, onStart),
+      ensureHostRunning: (connection, signal, onStart, options) =>
+        setup.ensureHostRunning(connection, signal, onStart, options),
     },
     onChange: (hostId) => client.refreshPendingSwitches(hostId),
+  });
+  // One attempt per host to bring it back, shared by its row and the assistants (#16170).
+  const bringBack = new HostBringBackService({
+    host: (hostId) => registry.get(hostId),
+    linkState: (hostId) => manager.connectionState(hostId),
+    onLinkState: (listener) => manager.onStateChange(listener),
+    redial: (hostId) => {
+      client.connect({ hostId, restart: true });
+    },
+    nudge: (hostId) => {
+      client.connect({ hostId });
+    },
+    hold: (hostId) => manager.hold(hostId),
+    allowStart: (hostId) => starts.allowExplicit(hostId),
+    observeStarts: (hostId, listener) => starts.observe(hostId, listener),
+    wakeRoute: (wake) => wakeRouteFor(wake),
+    sendWake: (mac, route, signal) => sendWakePacket(mac, route, { signal }),
   });
   const recheckStart = (hostId: HostId): void => {
     const descriptor = registry.get(hostId);
@@ -950,6 +981,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
+  const unregisterBringBack = registerRemoteService("hostBringBack", bringBack);
   // Views restored before Remote Hosts started read an empty list, and nothing
   // else tells them the configured hosts until one is dialled or edited.
   broadcastLocal({ type: "hosts-changed", hosts: client.list() });
@@ -970,6 +1002,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregister();
       unregisterWindowHosts();
       unregisterSetup();
+      unregisterBringBack();
+      // Before the links close: an attempt would read their closing as its host going.
+      bringBack.dispose();
       stopTitleRefresh();
       setRemoteHostNameResolver(() => null);
       await client.dispose();
