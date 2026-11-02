@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   detectPrompt,
   detectPromptLexeme,
+  findEmptyComposerRow,
   DEFAULT_PROMPT_PATTERNS,
   type PromptDetectorConfig,
 } from "../PromptDetector.js";
@@ -168,5 +169,44 @@ describe("detectPromptLexeme", () => {
 
   it("handles ANSI-colored input", () => {
     expect(detectPromptLexeme("\x1b[32mContinue?\x1b[0m").isPrompt).toBe(true);
+  });
+});
+
+describe("findEmptyComposerRow (#16093)", () => {
+  const RULE = "─".repeat(40);
+  const CLAUDE_PROMPT = [/^\s*>\s*/, /^\s*❯\s*/];
+
+  it("finds the empty input row between its rules", () => {
+    const lines = ["● Done.", "", RULE, "❯ ", RULE, "  ⏵⏵ accept edits on"];
+    expect(findEmptyComposerRow(lines, CLAUDE_PROMPT)).toBe(3);
+  });
+
+  it("finds an empty boxed input row", () => {
+    const lines = ["● Done.", `╭${RULE}╮`, `│ >${" ".repeat(37)}│`, `╰${RULE}╯`];
+    expect(findEmptyComposerRow(lines, CLAUDE_PROMPT)).toBe(2);
+  });
+
+  it("takes the lowest input row on screen", () => {
+    const lines = [RULE, "❯ ", RULE, "● Resumed.", RULE, "❯", RULE];
+    expect(findEmptyComposerRow(lines, CLAUDE_PROMPT)).toBe(5);
+  });
+
+  it("reads through ANSI styling", () => {
+    const lines = [`\x1b[2m${RULE}\x1b[0m`, "\x1b[1m❯\x1b[0m\u00a0", `\x1b[2m${RULE}\x1b[0m`];
+    expect(findEmptyComposerRow(lines, CLAUDE_PROMPT)).toBe(1);
+  });
+
+  it.each([
+    ["a draft", [RULE, "❯ fix the tests", RULE]],
+    ["a selector row", [RULE, "❯ 1. Yes", RULE]],
+    ["a banner behind a pointer", [RULE, "❯ You've hit your usage limit.", RULE]],
+    ["a bare glyph with no frame", ["● Done.", "❯ ", "  ⏵⏵ accept edits on"]],
+    ["a frame on one side only", ["● Done.", "❯ ", RULE]],
+  ])("finds none for %s", (_label, lines) => {
+    expect(findEmptyComposerRow(lines, CLAUDE_PROMPT)).toBeUndefined();
+  });
+
+  it("never takes a pattern that matches nothing visible", () => {
+    expect(findEmptyComposerRow([RULE, "   ", RULE], [/^\s*/])).toBeUndefined();
   });
 });

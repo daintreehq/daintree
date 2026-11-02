@@ -5,6 +5,10 @@ import { HandbackTracker } from "../HandbackTracker.js";
 import type { TerminalInfo } from "../types.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import * as detector from "../HandbackDetector.js";
+import {
+  ASSISTANT_SEND_GATE,
+  evaluateWakeGate,
+} from "../../../../shared/utils/terminalWakeGate.js";
 
 vi.mock("../HandbackDetector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../HandbackDetector.js")>();
@@ -364,6 +368,119 @@ describe("AgentStateService", () => {
     expect(terminal.waitingReason).toBe("question");
     expect(stateChanges).toHaveLength(1);
     expect(stateChanges[0]?.waitingReason).toBe("question");
+  });
+
+  describe("reason-only updates (#16093)", () => {
+    function settledOnError() {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "waiting",
+        waitingReason: "error",
+        lastStateChange: 1_000,
+        detectedAgentId: "claude",
+        hasPty: true,
+      } as Partial<TerminalInfo>);
+      const stateChanges: Array<{
+        state: string;
+        previousState: string;
+        waitingReason?: string;
+        timestamp: number;
+      }> = [];
+      const activityEvents: unknown[] = [];
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push({
+          state: payload.state,
+          previousState: payload.previousState,
+          waitingReason: payload.waitingReason,
+          timestamp: payload.timestamp,
+        });
+      });
+      events.on("terminal:activity", (payload) => activityEvents.push(payload));
+      return { service, terminal, stateChanges, activityEvents };
+    }
+
+    it("publishes the new reason as a waiting → waiting change", () => {
+      const { service, terminal, stateChanges, activityEvents } = settledOnError();
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt: 5_000,
+      });
+
+      expect(terminal.agentState).toBe("waiting");
+      expect(terminal.waitingReason).toBe("prompt");
+      expect(terminal.lastStateChange).toBe(5_000);
+      expect(stateChanges).toEqual([
+        { state: "waiting", previousState: "waiting", waitingReason: "prompt", timestamp: 5_000 },
+      ]);
+      expect(activityEvents).toHaveLength(1);
+    });
+
+    it("admits a send typed after the error settle once the prompt is re-read", () => {
+      const { service, terminal } = settledOnError();
+      // Escape pressed into the limit screen.
+      terminal.lastTypedInputAt = 2_000;
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
+        kind: "blocked",
+        reason: "error",
+      });
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt: 3_500,
+      });
+
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({ kind: "ready" });
+    });
+
+    it("still holds a send for input that landed after the screen was read", () => {
+      const { service, terminal } = settledOnError();
+      terminal.lastTypedInputAt = 4_000;
+
+      service.updateWaitingReason(terminal, "prompt", 3_500);
+
+      expect(terminal.waitingReason).toBe("prompt");
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
+        kind: "hold",
+        reason: "typing",
+      });
+    });
+
+    it.each([
+      ["the agent is not waiting", { agentState: "working" as const }, "prompt" as const, 5_000],
+      ["the reason is unchanged", {}, "error" as const, 5_000],
+      ["a later settle already read the screen", { lastStateChange: 6_000 }, "prompt" as const, 5_000],
+    ])("changes nothing when %s", (_label, overrides, reason, observedAt) => {
+      const { service, terminal, stateChanges, activityEvents } = settledOnError();
+      Object.assign(terminal, overrides);
+      const before = { ...terminal };
+
+      expect(service.updateWaitingReason(terminal, reason, observedAt)).toBe(false);
+
+      expect(terminal.agentState).toBe(before.agentState);
+      expect(terminal.waitingReason).toBe(before.waitingReason);
+      expect(terminal.lastStateChange).toBe(before.lastStateChange);
+      expect(stateChanges).toHaveLength(0);
+      expect(activityEvents).toHaveLength(0);
+    });
+
+    it("never drives a transition, even for an agent that is not waiting", () => {
+      const { service, terminal, stateChanges } = settledOnError();
+      terminal.agentState = "working";
+      terminal.waitingReason = undefined;
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt: 5_000,
+      });
+
+      expect(terminal.agentState).toBe("working");
+      expect(terminal.waitingReason).toBeUndefined();
+      expect(stateChanges).toHaveLength(0);
+    });
   });
 
   // #5773 — Runtime-detected agents (plain terminals where a CLI was detected

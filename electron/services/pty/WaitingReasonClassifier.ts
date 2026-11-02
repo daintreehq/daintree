@@ -190,12 +190,17 @@ const ERROR_SCAN_LINES = 4;
 /**
  * Why an agent that went idle is waiting, from the bottom `rows` of its screen
  * once a trailing task checklist is set aside; `lines` may carry the checklist's
- * rows on top of them (`WAITING_REASON_CHECKLIST_ROWS`).
+ * rows on top of them (`WAITING_REASON_CHECKLIST_ROWS`). `composerRow`, when
+ * the caller found the agent's input row in `lines`, keeps what is drawn below
+ * it out of the error window (#16093): a status footer such as "Usage limit
+ * reached · …" can outlive the limit it reported, and only the transcript above
+ * the input row says how the turn ended.
  */
 export function classifyWaitingReason(
   lines: string[],
   isPromptDetected: boolean,
-  rows = WAITING_REASON_SCAN_LINE_COUNT
+  rows = WAITING_REASON_SCAN_LINE_COUNT,
+  composerRow?: number
 ): WaitingReason {
   const strippedLines = withoutTrailingChecklist(
     lines.map((l) => stripAnsi(l)),
@@ -220,7 +225,13 @@ export function classifyWaitingReason(
   }
 
   // Priority 2: the agent settled right after a blocking error.
-  const errorCandidates = nonEmpty.slice(-ERROR_SCAN_LINES);
+  const errorLines =
+    composerRow !== undefined && composerRow >= 0 && composerRow < lines.length
+      ? lines.slice(Math.max(0, composerRow + 1 - rows), composerRow + 1).map((l) => stripAnsi(l))
+      : strippedLines;
+  const errorCandidates = errorLines
+    .filter((l) => l.trim().length > 0)
+    .slice(-ERROR_SCAN_LINES);
   for (const line of errorCandidates) {
     if (ERROR_PATTERNS.some((p) => p.test(line))) {
       return "error";

@@ -93,7 +93,43 @@ export function detectPrompt(
   return { isPrompt: false, confidence: 0 };
 }
 
-const LEXEME_BRACKET_CONFIRM = /[[(]\s*[yY](?:es)?\s*\/\s*[nN](?:o)?\s*[\])]/;
+// The frame around an agent's input row: the rules Claude Code draws above and
+// below it, or the top and bottom edges of an older boxed input.
+const COMPOSER_FRAME_ROW = /^\s*[╭╰┌└]?[─━]{3,}/;
+
+/**
+ * The row of `lines` that is an agent's input row, empty, inside its frame
+ * (#16093), searched from the bottom: a prompt pattern with nothing typed
+ * after it, and a frame row directly above and below. A draft, a selector row
+ * ("❯ 1. Yes") and a banner behind a pointer ("❯ You've hit…") are never one,
+ * and a screen with no such row has none.
+ */
+export function findEmptyComposerRow(
+  lines: readonly string[],
+  promptPatterns: readonly RegExp[]
+): number | undefined {
+  const clean = lines.map((line) => stripAnsi(line));
+  for (let i = clean.length - 2; i >= 1; i--) {
+    if (!COMPOSER_FRAME_ROW.test(clean[i - 1]!) || !COMPOSER_FRAME_ROW.test(clean[i + 1]!)) {
+      continue;
+    }
+    const row = clean[i]!.replace(/^\s*[│┃]/, "").replace(/[│┃]\s*$/, "");
+    for (const pattern of promptPatterns) {
+      const match = row.match(pattern);
+      if (
+        match?.index !== undefined &&
+        match[0].trim().length > 0 &&
+        row.slice(0, match.index).trim() === "" &&
+        row.slice(match.index + match[0].length).trim() === ""
+      ) {
+        return i;
+      }
+    }
+  }
+  return undefined;
+}
+
+const LEXEME_BRACKET_CONFIRM =/[[(]\s*[yY](?:es)?\s*\/\s*[nN](?:o)?\s*[\])]/;
 const LEXEME_TRAILING_QUESTION = /\?\s*$/;
 const LEXEME_KEYWORD_COLON =
   /(?:password|passphrase|username|token|host|enter|select|choose|confirm|input)\s*:\s*$/i;

@@ -30,6 +30,7 @@ import {
 import {
   detectPrompt,
   detectPromptLexeme,
+  findEmptyComposerRow,
   DEFAULT_PROMPT_PATTERNS,
   type PromptDetectorConfig,
 } from "./pty/PromptDetector.js";
@@ -197,6 +198,13 @@ export interface ActivityStateMetadata {
   waitingReason?: WaitingReason;
   sessionCost?: number;
   sessionTokens?: number;
+  /**
+   * Set only on a reason-only update (#16093): an idle agent's screen changed
+   * and settled without it going busy, and this is when the settled screen
+   * was read for `waitingReason`, with its input row in view and empty. No
+   * state transition goes with it.
+   */
+  rereadAt?: number;
 }
 
 export class ActivityMonitor {
@@ -249,6 +257,11 @@ export class ActivityMonitor {
   private lastVisibleChangeAt = 0;
   private visibleWorkingScannedAt = 0;
   private visibleWorkingMatch: PatternDetectionResult | undefined;
+  // The reason this idle period was last given, and when the screen was last
+  // read for it (#16093). A screen that changes while the agent stays idle is
+  // read again once it settles past that read.
+  private idleWaitingReason: WaitingReason | undefined;
+  private waitingReasonReadAt = 0;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
@@ -983,11 +996,65 @@ export class ActivityMonitor {
    * rather than counted against the window.
    */
   private classifyReason(lines: string[], isPromptDetected: boolean): WaitingReason {
+    return this.readWaitingScreen(lines, isPromptDetected).reason;
+  }
+
+  // The agent's empty input row bounds the error window when it is in view,
+  // so a footer drawn below it can't label the wait.
+  private readWaitingScreen(
+    lines: string[],
+    isPromptDetected: boolean
+  ): { reason: WaitingReason; composerRow: number | undefined } {
     const rows = Math.max(lines.length, WAITING_REASON_SCAN_LINE_COUNT);
     const wanted = rows + WAITING_REASON_CHECKLIST_ROWS;
     const read =
       this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
-    return classifyWaitingReason(read, isPromptDetected, rows);
+    const composerRow = findEmptyComposerRow(read, this.promptDetectorConfig.promptPatterns);
+    return {
+      reason: classifyWaitingReason(read, isPromptDetected, rows, composerRow),
+      composerRow,
+    };
+  }
+
+  // An idle agent's reason was read once, when it settled (#16093). A screen
+  // that changes without it going busy (a footer redrawn after Escape cancels
+  // a limit wait) never reached the classifier again, so a reason computed at
+  // that settle held for as long as the agent stayed idle. Once the change has
+  // settled the screen is read again, and only a screen showing the agent's
+  // input row, empty, can change the reason: the update carries a new settle
+  // for the send gate, which must never land over a draft. Time alone never
+  // re-reads anything.
+  private rereadWaitingReason(now: number): void {
+    if (this.state !== "idle" || this.completionTimer.emitted || !this.getVisibleLines) return;
+    const changedAt = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
+    if (changedAt <= this.waitingReasonReadAt) return;
+    // The snapshot cache's settle window: long enough for the headless
+    // mirror to parse the last chunk and any redraw it set off.
+    if (now - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS) return;
+    if (
+      this.isResizeSuppressed(now) ||
+      this.isFocusSuppressed(now) ||
+      this.inputTracker.isRecentUserInput(now) ||
+      this.inputTracker.pendingInputUntil > 0
+    ) {
+      return;
+    }
+    this.waitingReasonReadAt = now;
+    const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
+    const promptResult = detectPrompt(
+      lines,
+      this.promptDetectorConfig,
+      this.getCursorLine?.() ?? null,
+      { allowHistoryScan: true }
+    );
+    const { reason, composerRow } = this.readWaitingScreen(lines, promptResult.isPrompt);
+    if (composerRow === undefined || reason === this.idleWaitingReason) return;
+    this.idleWaitingReason = reason;
+    this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+      trigger: "pattern",
+      waitingReason: reason,
+      rereadAt: now,
+    });
   }
 
   // The viewport can keep mutating after these signals without new PTY data
@@ -1443,6 +1510,7 @@ export class ActivityMonitor {
 
       if (this.state === "idle") {
         this.recoverFromVisibleWorking(now);
+        this.rereadWaitingReason(now);
       }
 
       // Completion detection runs every cycle while busy — mirrors the
@@ -1856,6 +1924,8 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = Date.now();
       this.patternBuf.clear();
+      this.idleWaitingReason = undefined;
+      this.waitingReasonReadAt = this.idleSince;
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "pattern",
         patternConfidence: 0.85,
@@ -1933,6 +2003,8 @@ export class ActivityMonitor {
       // outside the 6-line prompt window.
       waitingReason = this.classifyReason(lines, promptResult.isPrompt);
     }
+    this.idleWaitingReason = waitingReason;
+    this.waitingReasonReadAt = now;
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",
       waitingReason,
