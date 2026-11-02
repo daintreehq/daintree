@@ -494,11 +494,10 @@ describe("a recipe step's launch armed with When done (#16172)", () => {
       launchGeneration: 4,
       spawnedAt: SPAWNED_AT,
     });
-    expect(state.broadcast).toHaveBeenCalledWith(
-      PROJECT,
-      CHANNELS.TERMINAL_WHEN_DONE_CHANGED,
-      { terminalId: TERMINAL, choice: "close" }
-    );
+    expect(state.broadcast).toHaveBeenCalledWith(PROJECT, CHANNELS.TERMINAL_WHEN_DONE_CHANGED, {
+      terminalId: TERMINAL,
+      choice: "close",
+    });
 
     reportDone("launch");
     await settle();

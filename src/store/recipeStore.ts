@@ -1571,7 +1571,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               env: finalEnv,
               exitBehavior: terminal.exitBehavior,
               ...(firstPrompt && { launchPrompt: firstPrompt }),
-              ...(handbackCode !== undefined && whenDone !== undefined && { handbackCode, whenDone }),
+              ...(handbackCode !== undefined &&
+                whenDone !== undefined && { handbackCode, whenDone }),
               spawnedBy,
               focusPolicy,
               bypassLimits: true,

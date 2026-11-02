@@ -108,10 +108,7 @@ const ALLOWED_EXIT_BEHAVIORS: ReadonlySet<string> = new Set<string>(["keep", "tr
 
 // "keep" (and an empty string) is accepted and read as no setting: keep is the
 // default and is never stored (#16172).
-const ALLOWED_WHEN_DONE: ReadonlySet<string> = new Set<string>([
-  "",
-  ...TERMINAL_WHEN_DONE_CHOICES,
-]);
+const ALLOWED_WHEN_DONE: ReadonlySet<string> = new Set<string>(["", ...TERMINAL_WHEN_DONE_CHOICES]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
