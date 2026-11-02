@@ -383,6 +383,17 @@ describe("HostCallRuntime host.call (#13493)", () => {
     await runtime.call("a", { ...launch, newCallId: ownId }, { tier: "full" });
     expect(noteAnswered).toHaveBeenCalledTimes(1);
     expect(noteAnswered).toHaveBeenCalledWith(expect.objectContaining({ askedAt: 30_000 }));
+
+    // The same id on another host is another call, with a time of its own.
+    hosts = [host(), host({ hostId: "other", name: "other-01" })];
+    control.add("other");
+    relayCall.mockResolvedValueOnce(launched);
+    noteAnswered.mockClear();
+    clock = 50_000;
+    await runtime.call("a", { ...launch, hostId: "other", newCallId: ownId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "other", askedAt: 50_000 })
+    );
   });
 });
 

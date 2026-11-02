@@ -1268,13 +1268,6 @@ export class HelpSessionService {
 
     this.sessionsByToken.set(token, record);
     this.sessionsById.set(sessionId, record);
-    if (input.startedBy?.kind === "schedule") {
-      const { scheduleId, runId } = input.startedBy;
-      this.scheduledRunBySession.set(sessionId, { scheduleId, runId });
-      if (this.scheduledRunBySession.size > SCHEDULED_RUN_SESSIONS_KEPT) {
-        this.scheduledRunBySession.delete(this.scheduledRunBySession.keys().next().value as string);
-      }
-    }
 
     if (settings.daintreeControl && port) {
       try {
@@ -1298,7 +1291,7 @@ export class HelpSessionService {
       } catch (err) {
         record.revoked = true;
         this.sessionsByToken.delete(token);
-        this.sessionsById.delete(sessionId);
+        this.dropSessionRecord(record);
         // The probe connects with this bearer, so a session may already be
         // bound to its ownership principal (#12993). Revoke it with the token.
         try {
@@ -1433,6 +1426,18 @@ export class HelpSessionService {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked || record.ending) return null;
     return { projectId: record.projectId, slot: record.slot };
+  }
+
+  /** A session's record goes; a schedule's run it was started for is remembered (#16169). */
+  private dropSessionRecord(record: HelpSessionRecord): void {
+    this.sessionsById.delete(record.sessionId);
+    if (record.startedBy?.kind !== "schedule") return;
+    const { scheduleId, runId } = record.startedBy;
+    this.scheduledRunBySession.delete(record.sessionId);
+    this.scheduledRunBySession.set(record.sessionId, { scheduleId, runId });
+    if (this.scheduledRunBySession.size > SCHEDULED_RUN_SESSIONS_KEPT) {
+      this.scheduledRunBySession.delete(this.scheduledRunBySession.keys().next().value as string);
+    }
   }
 
   /**
@@ -1592,7 +1597,7 @@ export class HelpSessionService {
     const displacedDuringCapture = record.revoked;
 
     record.revoked = true;
-    this.sessionsById.delete(sessionId);
+    this.dropSessionRecord(record);
     this.sessionsByToken.delete(record.token);
 
     // Single-backend invariant (#7509): kill the bound PTY now so the orphan
@@ -2055,7 +2060,7 @@ export class HelpSessionService {
     for (const prior of priors) {
       prior.revoked = true;
       this.sessionsByToken.delete(prior.token);
-      this.sessionsById.delete(prior.sessionId);
+      this.dropSessionRecord(prior);
       // #9639: if this displaced session owns an in-flight capture, release
       // ownership so its late finalize can't write the old resume ID over the
       // fresh session now taking this lane. The entry itself stays (#13205):
