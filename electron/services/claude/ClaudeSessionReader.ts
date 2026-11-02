@@ -112,6 +112,22 @@ async function findTranscript(
   location: ClaudeSessionLocation,
   signal: AbortSignal | undefined
 ): Promise<{ file: string; rootReal: string } | null> {
+  const found = await findTranscripts(location, signal, 1);
+  return found ? { file: found.files[0], rootReal: found.rootReal } : null;
+}
+
+/**
+ * Up to `limit` candidates for the transcript. The derived directory is taken
+ * alone when it holds the file; past it, every project directory is searched
+ * until `limit` turn up. Asked for more than one, a directory that refused to
+ * be read throws even after a match, since the search can no longer show the
+ * match is the only one.
+ */
+async function findTranscripts(
+  location: ClaudeSessionLocation,
+  signal: AbortSignal | undefined,
+  limit: number
+): Promise<{ files: string[]; rootReal: string } | null> {
   const { projectsRoot, cwd, sessionId } = location;
   let rootReal: string;
   try {
@@ -127,7 +143,7 @@ async function findTranscript(
     (await lstatOrNull(path.join(direct, name))) &&
     (await isContainedDirectory(direct, rootReal))
   ) {
-    return { file: path.join(direct, name), rootReal };
+    return { files: [path.join(direct, name)], rootReal };
   }
 
   let entries: string[];
@@ -140,6 +156,7 @@ async function findTranscript(
   // One directory that refuses to be read does not stop the search, but it
   // does stop a miss from meaning the file is not there.
   let failure: unknown;
+  const files: string[] = [];
   for (const entry of entries) {
     signal?.throwIfAborted();
     if (entry === "." || entry === ".." || entry.includes(path.sep)) continue;
@@ -150,10 +167,41 @@ async function findTranscript(
       failure ??= error;
       continue;
     }
-    if (await isContainedDirectory(dir, rootReal)) return { file: path.join(dir, name), rootReal };
+    if (await isContainedDirectory(dir, rootReal)) {
+      files.push(path.join(dir, name));
+      if (files.length >= limit) return { files, rootReal };
+    }
   }
-  if (failure !== undefined) throw failure;
-  return null;
+  if (failure !== undefined && (files.length === 0 || limit > 1)) throw failure;
+  return files.length > 0 ? { files, rootReal } : null;
+}
+
+export type ClaudeTranscriptLocation =
+  | { status: "found"; file: string }
+  | { status: "missing" }
+  | { status: "ambiguous" }
+  | { status: "unverified" };
+
+/**
+ * Where the transcript for this session id is (#16097), found the way the
+ * readers above find it and opened only to verify it, never read. `missing`
+ * when Claude Code hasn't written it, which it does with the first message;
+ * `ambiguous` when the search turns up two, rather than taking the first.
+ */
+export async function locateClaudeTranscript(
+  location: ClaudeSessionLocation,
+  signal?: AbortSignal
+): Promise<ClaudeTranscriptLocation> {
+  if (!isSafeSessionId(location.sessionId)) return { status: "missing" };
+  signal?.throwIfAborted();
+  const found = await findTranscripts(location, signal, 2);
+  if (!found) return { status: "missing" };
+  if (found.files.length > 1) return { status: "ambiguous" };
+  const [file] = found.files;
+  const opened = await openVerified(file, found.rootReal);
+  if (!opened) return { status: "unverified" };
+  await opened.handle.close();
+  return { status: "found", file };
 }
 
 function isWithin(rootReal: string, target: string): boolean {

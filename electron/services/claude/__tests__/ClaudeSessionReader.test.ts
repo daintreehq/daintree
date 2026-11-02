@@ -30,6 +30,7 @@ vi.mock("fs/promises", async (importOriginal) => {
 });
 import {
   fitWithinResponseCap,
+  locateClaudeTranscript,
   readClaudeLastMessage,
   readClaudeRecentReplies,
   tailWithinJsonBytes,
@@ -1052,6 +1053,52 @@ describe("readClaudeLastMessage — which file", () => {
     });
 
     expect(ok(result).message?.text).toBe("Via the link.");
+  });
+});
+
+describe("locateClaudeTranscript (#16097)", () => {
+  const locate = () => locateClaudeTranscript({ projectsRoot, cwd: CWD, sessionId: SESSION });
+
+  it("names the transcript in the cwd's own directory without reading it", async () => {
+    const file = await seed([assistant("msg_1", [text("Reply.")])]);
+    const reads: string[] = [];
+    fsHook.beforeOpen = async (target) => {
+      reads.push(target);
+    };
+
+    expect(await locate()).toEqual({ status: "found", file });
+    // Opened once, to verify the descriptor, and closed again.
+    expect(reads).toEqual([file]);
+  });
+
+  it("finds it by session id when the cwd slug does not match", async () => {
+    const file = await seed([assistant("msg_1", [text("Reply.")])], { slug: "-moved-folder" });
+
+    expect(await locate()).toEqual({ status: "found", file });
+  });
+
+  it("names none when the search turns up the id twice", async () => {
+    await seed([assistant("msg_1", [text("One.")])], { slug: "-folder-a" });
+    await seed([assistant("msg_1", [text("Two.")])], { slug: "-folder-b" });
+
+    expect(await locate()).toEqual({ status: "ambiguous" });
+  });
+
+  it("says missing before the first message, and for an id that could steer the path", async () => {
+    expect(await locate()).toEqual({ status: "missing" });
+    expect(
+      await locateClaudeTranscript({ projectsRoot, cwd: CWD, sessionId: "../../etc/passwd" })
+    ).toEqual({ status: "missing" });
+  });
+
+  it("refuses a transcript that is a symlink", async () => {
+    const elsewhere = path.join(root, "elsewhere.jsonl");
+    await writeFile(elsewhere, assistant("msg_1", [text("Not this session's.")]) + "\n");
+    const dir = path.join(projectsRoot, deriveProjectSlug(CWD));
+    await mkdir(dir, { recursive: true });
+    await symlink(elsewhere, path.join(dir, `${SESSION}.jsonl`));
+
+    expect(await locate()).toEqual({ status: "unverified" });
   });
 });
 
