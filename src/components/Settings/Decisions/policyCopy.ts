@@ -54,5 +54,5 @@ export function proxyAllowlistText(gates: readonly DecisionsWorkflowGate[]): str
       : human.length === gates.length
         ? `A question under a registered gate (${human.join(", ")}) still needs your own answer.`
         : `A question under ${human.join(", ")} still needs your own answer.`;
-  return `Lets a question without a registered workflow gate accept an answer from a decision model, when the agent that asked allows one. ${gated} No decision model is connected yet. Off by default.`;
+  return `Lets a question without a registered workflow gate accept an answer from the decision model on this computer, when the agent that asked allows one. ${gated} The model answers only once it has been evaluated against your own past answers, and its answers are labelled as a proxy's. Off by default.`;
 }

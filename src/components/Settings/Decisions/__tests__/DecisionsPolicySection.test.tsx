@@ -410,7 +410,7 @@ describe("policy copy", () => {
     expect(proxyAllowlistText([REVIEW, lenient])).not.toContain("x/y");
     expect(proxyAllowlistText([lenient])).toContain("follows that gate's rule");
     for (const gates of [[], [REVIEW]]) {
-      expect(proxyAllowlistText(gates)).toContain("No decision model is connected yet");
+      expect(proxyAllowlistText(gates)).toContain("evaluated against your own past answers");
     }
   });
 });

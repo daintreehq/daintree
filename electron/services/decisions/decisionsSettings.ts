@@ -1,5 +1,7 @@
 import {
+  DECISIONS_MODEL_ADAPTERS,
   DECISIONS_SETUP_CHECK_STEPS,
+  type DecisionsModelAdapter,
   type DecisionsRecoveryKitRecord,
   type DecisionsSettings,
   type DecisionsSetupCheckRecord,
@@ -30,6 +32,8 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     recoveryKit: null,
     autoEnrollHosts: true,
     setupCheck: null,
+    modelLearning: false,
+    modelAdapter: null,
   };
 }
 
@@ -116,6 +120,13 @@ function namesIdentity(
   );
 }
 
+/** One of the CLIs the decision model knows by name; anything else is none chosen. */
+function modelAdapter(value: unknown): DecisionsModelAdapter | null {
+  return (DECISIONS_MODEL_ADAPTERS as readonly unknown[]).includes(value)
+    ? (value as DecisionsModelAdapter)
+    : null;
+}
+
 function isSetupCheckStep(value: unknown): value is DecisionsSetupCheckStep {
   return (DECISIONS_SETUP_CHECK_STEPS as readonly unknown[]).includes(value);
 }
@@ -191,6 +202,8 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     // On unless turned off: a setting saved before the field existed enrolls.
     autoEnrollHosts: value.autoEnrollHosts !== false,
     setupCheck: setupCheckRecord(value.setupCheck, { relayOrigin, installationId, deviceId }),
+    modelLearning: value.modelLearning === true,
+    modelAdapter: modelAdapter(value.modelAdapter),
   };
 }
 

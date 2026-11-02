@@ -3,12 +3,14 @@ import {
   RelayClient,
   RelayError,
   loadIdentity,
+  type DecisionLearner,
   type DesktopRole,
   type Identity,
   type InboundEvent,
   type KeyStore,
   type LocalStore,
   type PolicyRegistry,
+  type ProxyEngine,
   type SocketState,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
@@ -75,6 +77,13 @@ export interface QuestionSource {
   readonly attachments?: QuestionAttachments;
 }
 
+/** What a lifetime's attempts take from its decision model. */
+export interface DecisionModelHooks {
+  learner: DecisionLearner;
+  /** The armed proxy now; null while none is. */
+  proxy(): ProxyEngine | null;
+}
+
 export interface RelayConnectionOptions {
   relay: RelayBinding;
   /**
@@ -97,6 +106,14 @@ export interface RelayConnectionOptions {
    * attachments are refused.
    */
   attachments?: QuestionAttachments;
+  /**
+   * The decision model (#16026), for the owner's lifetime. Every attempt's
+   * bridge offers the learner each answer a person gives, and asks the proxy
+   * armed when the attempt began (none, while it isn't armed) about each
+   * question it publishes that may take a proxy answer. A change of proxy
+   * reaches the bridge through `modelChanged`.
+   */
+  model?: DecisionModelHooks;
   onStatus(status: RelayConnectionStatus): void;
   /** The relay revoked this identity. Called once, after which nothing reconnects. */
   onRevoked(): void;
@@ -153,6 +170,8 @@ interface Attempt {
   bridge: DecisionsBridge | null;
   /** Its bridge finished starting: it has reconciled what an earlier run left and runs its pump. */
   started: boolean;
+  /** The decision model's proxy its bridge asks, as armed when it began; null for none. */
+  proxy: ProxyEngine | null;
   socket: ObservedSocket | null;
   closeCode: number | null;
   helloTimer: ReturnType<typeof setTimeout> | null;
@@ -307,6 +326,22 @@ export class RelayConnection {
     return true;
   }
 
+  /**
+   * The decision model's proxy changed (#16026): armed, disarmed or another
+   * model. A bridge asks the proxy it was made with, so an attempt made with
+   * another gives way to a fresh one now, its socket coming back on a new
+   * ticket, and nothing it was still asking can publish (its store refuses
+   * it from here). Between attempts there is nothing to do: the next one
+   * begins with the proxy as it is then.
+   */
+  modelChanged(): void {
+    const current = this.current;
+    if (this.ended || current === null) return;
+    if (current.proxy === (this.o.model?.proxy() ?? null)) return;
+    this.retire(current);
+    this.begin();
+  }
+
   private async prepare(): Promise<void> {
     let identity: Identity;
     try {
@@ -425,6 +460,7 @@ export class RelayConnection {
       controller: new AbortController(),
       bridge: null,
       started: false,
+      proxy: this.o.model?.proxy() ?? null,
       socket: null,
       closeCode: null,
       helloTimer: null,
@@ -465,6 +501,8 @@ export class RelayConnection {
         ...(this.o.attachments
           ? { resolver: this.o.attachments.resolver, spool: this.o.attachments.spool }
           : {}),
+        ...(this.o.model ? { learner: this.o.model.learner } : {}),
+        ...(attempt.proxy ? { proxy: attempt.proxy } : {}),
         client,
         webSocket: (url) => this.openSocket(attempt, url),
         ...(this.o.pumpIntervalMs !== undefined ? { pumpIntervalMs: this.o.pumpIntervalMs } : {}),
