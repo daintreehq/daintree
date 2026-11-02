@@ -368,9 +368,7 @@ describe("EnvironmentVariablesEditor save controls", () => {
     rerender(<EnvironmentVariablesEditor {...props} isOpen />);
 
     expect(screen.getByLabelText<HTMLInputElement>(/^Value of /).value).toBe("a");
-    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(
-      true
-    );
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   // Save hands the trimmed rows to the form, which passes them back as new rows.
