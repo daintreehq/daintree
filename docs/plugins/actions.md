@@ -22,7 +22,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.focusNextWorking` | Focus next working agent | safe | — |
 | `agent.focusPreviousAgent` | Focus previous agent | safe | — |
 | `agent.getState` | Get agent state | safe | `agentId` |
-| `agent.launch` | Launch agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
+| `agent.launch` | Launch agent | safe | `agentId`, `accountId?`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
 | `agent.listAvailable` | List available agents | safe | — |
 | `agent.listModels` | List agent models | safe | `agentId?` |
 | `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
@@ -486,6 +486,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename terminal | safe | `name?`, `terminalId?` |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
+| `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `terminalId?` |
 | `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `keepConversation?`, `terminalId?` |
 | `terminal.restartService` | Restart terminal service | safe | — |
 | `terminal.resumeSessions` | Resume session… | safe | — |

@@ -583,8 +583,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // so `closedIds` alone told a cancelling caller the work had stopped. The
   // result schema is closed, so the field must be advertised or a client's
   // validator refuses the answer; its descriptions were trimmed first.
-  // 57_700 → 57_850 for #16040, measured at 57_823 B (+134 over develop's
-  // 57_689): `agent.launch` takes `accountId`, so a caller can launch on one of
+  // 57_700 → 57_850 for #16040, measured at 57_828 B (+134 over develop's
+  // 57_694): `agent.launch` takes `accountId`, so a caller can launch on one of
   // the agent's accounts, chosen apart from its preset, or explicitly on the
   // CLI's default login.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 57_850;
@@ -965,8 +965,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // limit, what it said, its reset and the pane and time it showed, with the
   // label that it isn't a live account reading. Assistant-only, so the
   // external ceiling does not move.
-  // 174_200 → 174_500 for #16040, measured at 174_428 B (+268 over develop's
-  // 174_160): `agent.launch`'s `accountId`, carried in-app for the
+  // 174_200 → 174_500 for #16040, measured at 174_433 B (+268 over develop's
+  // 174_165): `agent.launch`'s `accountId`, carried in-app for the
   // external⊆in-app subset invariant.
   const MAX_COHORT_PAYLOAD_BYTES = 174_500;
 

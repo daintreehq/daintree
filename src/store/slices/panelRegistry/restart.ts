@@ -1974,12 +1974,15 @@ async function respawnAgentOnPreset(
         : filedLaunchCwd(get, id, terminal);
 
     let spawnCommand = commandToRun;
+    // Only a preset switch or hop keeps a conversation (#16045), and both have
+    // their preset by here; an account switch never asks to.
+    const keptOnName = nextPreset?.name ?? "that preset";
     if (keepConversation) {
       resumedSessionId =
         (captureTrusted ? capturedSessionId : null) ?? terminal.agentSessionId ?? undefined;
       if (!resumedSessionId) {
         throw new Error(
-          `The conversation's id didn't turn up, so nothing was started on ${nextPreset.name}.`
+          `The conversation's id didn't turn up, so nothing was started on ${keptOnName}.`
         );
       }
       // Never degraded to resume-latest or a new conversation: the switch
@@ -1992,7 +1995,7 @@ async function respawnAgentOnPreset(
       );
       if (!resumeCommand) {
         throw new Error(
-          `Couldn't build the command to reopen the conversation on ${nextPreset.name}.`
+          `Couldn't build the command to reopen the conversation on ${keptOnName}.`
         );
       }
       spawnCommand = resumeCommand;
@@ -2044,14 +2047,15 @@ async function respawnAgentOnPreset(
         agentSessionId: keptSessionId,
         conversationCwd: keptConversationCwd,
         firstPrompt: keptSessionId ? t.firstPrompt : undefined,
-        presetSwitchResume: keptSessionId
-          ? {
-              agentId: effectiveAgentId,
-              sessionId: keptSessionId,
-              presetId: nextPreset.id,
-              prior: priorLaunch,
-            }
-          : undefined,
+        presetSwitchResume:
+          keptSessionId && nextPreset
+            ? {
+                agentId: effectiveAgentId,
+                sessionId: keptSessionId,
+                presetId: nextPreset.id,
+                prior: priorLaunch,
+              }
+            : undefined,
         // About the run this respawn replaces.
         agentResumeOffer: undefined,
         isRestarting: true,
