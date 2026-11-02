@@ -1210,6 +1210,7 @@ describe("RelayConnection", () => {
     h.connection.start();
     await h.status("not-connected");
     expect(ready).not.toHaveBeenCalled();
+  });
 
   describe("key rotations (#16010)", () => {
     /** The owner identity with epoch 2 staged for a rotation the relay may not have taken. */
