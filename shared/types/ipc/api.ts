@@ -1179,6 +1179,21 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (push: import("./schedules.js").ScheduledRunClosedPush) => void
     ): () => void;
   };
+  // set / list come from GeneratedElectronAPI; the rest is main asking this view (#16171).
+  terminalWhenDone: GeneratedElectronAPI["terminalWhenDone"] & {
+    onChanged(
+      callback: (change: import("./terminalWhenDone.js").TerminalWhenDoneChange) => void
+    ): () => void;
+    /** Main asking this view to move or remove an armed terminal's pane. */
+    onFinishRequest(
+      callback: (request: import("./terminalWhenDone.js").TerminalWhenDoneFinishRequest) => void
+    ): () => void;
+    /** Main asking whether someone is using a pane; answer each once with {@link sendInUseReply}. */
+    onInUseQuery(
+      callback: (query: import("./terminalWhenDone.js").TerminalWhenDoneInUseQuery) => void
+    ): () => void;
+    sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {

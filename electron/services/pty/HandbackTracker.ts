@@ -13,9 +13,10 @@ import type { HandbackInstruction } from "../../../shared/types/handback.js";
 export interface HandbackRequest {
   code: string;
   /**
-   * Present for a scheduled run's launch prompt (#15982), whose instruction
-   * offers a `needs-you` marker beside `done`. Every other request is looked
-   * for in its `done` form alone, as the agent was asked.
+   * Present for a scheduled run's launch prompt (#15982) and for a prompt to a
+   * terminal armed with a When done choice (#16171), whose instruction offers
+   * a `needs-you` marker beside `done`. Every other request is looked for in
+   * its `done` form alone, as the agent was asked.
    */
   instruction?: Extract<HandbackInstruction, "run">;
   /** Token of the submission that asked, when it carried one (#12337). */
@@ -84,7 +85,11 @@ export class HandbackTracker {
    * its `pty_written`, or `undefined` when there is nothing it could retire or
    * deliver — so an ordinary submit into a terminal with no request stays free.
    */
-  noteSubmission(code?: string, submissionToken?: string): (() => void) | undefined {
+  noteSubmission(
+    code?: string,
+    submissionToken?: string,
+    instruction?: HandbackInstruction
+  ): (() => void) | undefined {
     if (code === undefined && this.requests.length === 0) return undefined;
     const seq = this.takeSeq();
     if (code !== undefined) {
@@ -93,6 +98,7 @@ export class HandbackTracker {
         seq,
         delivered: false,
         ...(submissionToken !== undefined ? { submissionToken } : {}),
+        ...(instruction === "run" ? { instruction } : {}),
       });
     }
     return () => this.markWritten(seq);

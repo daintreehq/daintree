@@ -1626,6 +1626,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
+      "terminal.setWhenDone": { terminalId: "t-placeholder", choice: "keep" },
       "assistant.list": {},
       "assistant.start": {},
       "agent.readQuota": {},

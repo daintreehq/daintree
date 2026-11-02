@@ -1516,6 +1516,16 @@ export const CHANNELS = {
   SCHEDULES_FINISH_REQUEST: "schedules:finish-request",
   SCHEDULES_RUN_CLOSED: "schedules:run-closed",
 
+  // An agent terminal's When done choice (#16171)
+  TERMINAL_WHEN_DONE_SET: "terminal-when-done:set",
+  TERMINAL_WHEN_DONE_LIST: "terminal-when-done:list",
+  TERMINAL_WHEN_DONE_CHANGED: "terminal-when-done:changed",
+  // Main asks the views of a project to move or remove an armed terminal's pane
+  TERMINAL_WHEN_DONE_FINISH_REQUEST: "terminal-when-done:finish-request",
+  // Main asks each view whether someone is using a pane before moving it
+  TERMINAL_WHEN_DONE_IN_USE_QUERY: "terminal-when-done:in-use-query",
+  TERMINAL_WHEN_DONE_IN_USE_REPLY: "terminal-when-done:in-use-reply",
+
   // Decisions, as main observes it (#16001). The owner's machine only.
   DECISIONS_GET_STATUS: "decisions:get-status",
   // One pane's Decisions state, for its chrome to show on mount (#16016).

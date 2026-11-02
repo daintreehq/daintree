@@ -251,6 +251,13 @@ interface TerminalInfoResponse {
  * saw it replaced; `spawnedAt` names the incarnation (absent only from a host
  * that didn't send it).
  */
+/** What {@link PtyClient.setSubmitDecorator} installs; null leaves a submission as it was. */
+export type PtySubmitDecorator = (
+  id: string,
+  text: string,
+  handbackCode: string | undefined
+) => { text: string; handbackCode: string; handbackInstruction: "run" } | null;
+
 export interface PtyIncarnationExit {
   terminalId: string;
   spawnedAt?: number;
@@ -383,6 +390,7 @@ function takesFirstSend(options: PtyHostSpawnOptions | undefined): boolean {
 export class PtyClient extends EventEmitter {
   private config: ResolvedPtyClientConfig;
   private isDisposed = false;
+  private submitDecorator: PtySubmitDecorator | null = null;
   private hostsExited: Promise<boolean> = Promise.resolve(true);
   /** Retired shards whose hosts are still tearing down; quit waits on them too. */
   private readonly retiringHostExits = new Set<Promise<boolean>>();
@@ -1612,10 +1620,22 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * Rewrites submissions to terminals armed with a When done choice (#16171),
+   * so every prompt any caller sends one carries its own fresh code. Installed
+   * only while a terminal is armed.
+   */
+  setSubmitDecorator(decorator: PtySubmitDecorator | null): void {
+    this.submitDecorator = decorator;
+  }
+
+  /**
    * `promptAsWritten` is the text as its caller wrote it, before Daintree added
    * anything of its own (a provenance stamp), for the run's first-prompt record
    * (#15521). Absent, it is `text` without the handback instruction for
    * `handbackCode`. `null` marks a submission that is nobody's prompt.
+   *
+   * `handbackInstruction` is `run` when `text` already carries the instruction
+   * that offers `needs-you`; such a submission is never decorated again.
    */
   submit(
     id: string,
@@ -1624,8 +1644,23 @@ export class PtyClient extends EventEmitter {
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
-    promptAsWritten?: string | null
+    promptAsWritten?: string | null,
+    handbackInstruction?: "run"
   ): void {
+    if (handbackInstruction === undefined && this.submitDecorator !== null) {
+      const armed = this.submitDecorator(id, text, handbackCode);
+      if (armed !== null) {
+        // The first-prompt record is the caller's text, before either
+        // instruction; null still marks a send that is nobody's prompt.
+        if (promptAsWritten === undefined) {
+          promptAsWritten =
+            handbackCode !== undefined ? withoutHandbackInstruction(text, handbackCode) : text;
+        }
+        text = armed.text;
+        handbackCode = armed.handbackCode;
+        handbackInstruction = armed.handbackInstruction;
+      }
+    }
     const firstPrompt = this.firstPromptCandidate(id, text, handbackCode, promptAsWritten);
     this.shardForTerminal(id).send({
       type: "submit",
@@ -1633,6 +1668,9 @@ export class PtyClient extends EventEmitter {
       text,
       submissionToken,
       handbackCode,
+      ...(handbackCode !== undefined && handbackInstruction === "run"
+        ? { handbackInstruction }
+        : {}),
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
       ...(firstPrompt !== undefined ? { firstPrompt } : {}),

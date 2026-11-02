@@ -18,6 +18,8 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   getPanelKindRegistrySnapshot,
@@ -388,6 +390,10 @@ function TerminalContextMenuBody({
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
+  // Read only while the menu is live, so a closed menu pays nothing for it.
+  const whenDoneChoice = useTerminalWhenDoneStore((s) =>
+    isMenuLive ? s.choices[terminalId] : undefined
+  );
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
@@ -885,6 +891,9 @@ function TerminalContextMenuBody({
             fleetRun={fleetRun}
             detectedAgentId={terminal.detectedAgentId}
             isWatched={isWatched}
+            whenDone={
+              terminalPty && !isEphemeralPanel(terminal) ? (whenDoneChoice ?? "keep") : undefined
+            }
             onRequestPark={handleRequestPark}
             onAction={handleAction}
           />

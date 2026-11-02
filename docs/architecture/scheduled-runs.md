@@ -318,6 +318,7 @@ A run handed back as `done` applies its schedule's `onDone`, as the launch read 
 - **Views own their panes.** Main asks every local view of the project, cached ones thawed first, over `schedules:finish-request`; a view acts only on a pane whose `scheduledRun` is that run, and leaves one the user already took out of the grid and dock. Main writes the saved layout as well, since a view that opened while main was launching the run may hold no pane for it; a view that does saves the same placement from its own store. A project driven only from another machine's Shell is out of scope, as Remote Hosts are.
 - **After the launch.** The policy is armed once the launch has finished, its pane committed and saved, so moving the pane can't race the launch writing it; a run that handed back before then is acted on as it is armed. A run deleted with its schedule or project is forgotten. Nothing moves while Daintree is quitting.
 - The pane axis isn't written yet: with no producer for `open`, recording only the policy's moves would mislead.
+- Any other agent terminal can be armed with the same choice from its menu (`terminal-when-done.md`). It shares the close and background operations (`electron/services/pty/terminalDoneOperations.ts`) and the retiring-capture report, never the run history: a run settles only on its own launch code.
 
 ## Firing due schedules
 

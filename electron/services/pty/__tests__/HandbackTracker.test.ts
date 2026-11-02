@@ -50,6 +50,17 @@ describe("HandbackTracker", () => {
     ]);
   });
 
+  it("marks a submission to an armed terminal as offering needs-you, and nothing else (#16171)", () => {
+    const tracker = new HandbackTracker(noScreen);
+    tracker.noteSubmission("armed0", "token-a", "run")?.();
+    expect(tracker.deliveredRequests()).toEqual([
+      { code: "armed0", submissionToken: "token-a", seq: 1, delivered: true, instruction: "run" },
+    ]);
+
+    tracker.noteSubmission("plain0", undefined, "handback")?.();
+    expect(tracker.deliveredRequests()).toEqual([{ code: "plain0", seq: 2, delivered: true }]);
+  });
+
   it("retires earlier requests when a later submission reaches the pty", () => {
     const tracker = new HandbackTracker(noScreen);
     tracker.registerDelivered("first0");

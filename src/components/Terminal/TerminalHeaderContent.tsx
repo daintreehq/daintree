@@ -21,6 +21,7 @@ import {
 } from "./terminalHeaderChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
+import { TerminalWhenDoneBadge } from "./TerminalWhenDoneBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { TerminalDecisionsChip } from "./TerminalDecisionsChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -405,6 +406,9 @@ export function TerminalHeaderContent({
 
       {/* Pane-observed rate-limit banner (#12797). Self-gating and expiring. */}
       {hasPtyKind && <TerminalRateLimitBadge terminalId={id} />}
+
+      {/* What the pane does once its agent reports done (#16171). Self-gating. */}
+      {hasPtyKind && <TerminalWhenDoneBadge terminalId={id} />}
 
       {/* Command Pill - shows currently running command (inline with title).
           The row's one chip box; the command truncates inside it. */}

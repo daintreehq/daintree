@@ -1,19 +1,17 @@
 import { CHANNELS } from "../../ipc/channels.js";
 import { getActiveShutdown } from "../../lifecycle/shutdownCoordinator.js";
-import { thawThenSend } from "../../utils/thawThenSend.js";
-import { getPtyClient } from "../../window/serviceRefs.js";
-import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import { events } from "../events.js";
 import { projectStore } from "../ProjectStore.js";
-import { attributeClose } from "../pty/closeAttribution.js";
-import { getLifecycleLedger } from "../pty/lifecycleLedger.js";
+import {
+  closeTerminalKeepingSession,
+  sendToLocalProjectViews,
+} from "../pty/terminalDoneOperations.js";
 import {
   backgroundViewlessTerminal,
   forgetViewlessTerminal,
 } from "../viewless/projectStateAuthoring.js";
 import type { ScheduledRunFinishRequest } from "../../../shared/types/ipc/schedules.js";
 import type { ScheduledRun } from "../../../shared/types/scheduledRuns.js";
-import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 import { peekScheduledRunRecorder } from "./index.js";
 import {
   ScheduledRunDonePolicy,
@@ -27,81 +25,24 @@ import {
  * the run may hold none, so the saved layout is written as well.
  */
 function askViews(target: ArmedScheduledRun, action: ScheduledRunFinishRequest["action"]): void {
-  const views = getWebContentsForProject(target.projectId);
   const request: ScheduledRunFinishRequest = {
     runId: target.runId,
     terminalId: target.terminalId,
     action,
   };
-  for (const view of views) {
-    // A cached view may be frozen, and a frozen renderer runs nothing.
-    thawThenSend(
-      view,
-      () => true,
-      () => {
-        try {
-          view.send(CHANNELS.SCHEDULES_FINISH_REQUEST, request);
-        } catch {
-          // A view torn down mid-send has no pane left to move.
-        }
-      }
-    );
-  }
+  sendToLocalProjectViews(target.projectId, CHANNELS.SCHEDULES_FINISH_REQUEST, request);
 }
 
 /**
- * Closes the run's terminal the way a quit does: a graceful kill that asks the
- * agent to leave and captures its session id, journaled and recorded on the
- * run, never the trash a view's close puts it in. False when the run's own
- * incarnation is no longer the one running under its id.
+ * Closes the run's terminal the way a quit does, recorded on the run through
+ * the captured session. False when the run's own incarnation is no longer the
+ * one running under its id.
  */
-async function closeRunTerminal(target: ArmedScheduledRun, run: ScheduledRun): Promise<boolean> {
-  const ptyClient = getPtyClient();
-  if (!ptyClient) return false;
-  const info = await ptyClient.getTerminalAsync(target.terminalId).catch(() => null);
-  if (!info || run.terminalSpawnedAt === null || info.spawnedAt !== run.terminalSpawnedAt) {
-    return false;
-  }
-  // Every spawn mints its generation here in main, so a restart asked for
-  // while the host answered shows as a newer one. Checked with no await before
-  // the kill is sent, which then reaches the host ahead of any later spawn.
-  const launchGeneration = getLifecycleLedger().currentGeneration(target.terminalId);
-  if (
-    info.launchGeneration !== undefined &&
-    launchGeneration !== undefined &&
-    info.launchGeneration !== launchGeneration
-  ) {
-    return false;
-  }
-  const sessionId = await ptyClient.gracefulKill(target.terminalId);
-  // A restart asked for while the agent was leaving is the user's: its
-  // terminal and pane stay. Checked again with no await before acting.
-  const restarted = getLifecycleLedger().currentGeneration(target.terminalId) !== launchGeneration;
-  // A terminal whose agent had already exited isn't killed by a graceful close.
-  if (info.isExited === true && !restarted) {
-    ptyClient.kill(target.terminalId, "scheduled-run-done");
-  }
-  if (sessionId && info.launchAgentId && info.isAssistantTerminal !== true) {
-    events.emit("agent-session:captured", {
-      terminalId: target.terminalId,
-      launchGeneration,
-      boundary: "kill",
-      record: {
-        sessionId,
-        agentId: info.launchAgentId,
-        worktreeId: info.worktreeId ?? null,
-        title:
-          (info.titleMode === "user" ? info.title : (info.lastObservedTitle ?? info.title)) ?? null,
-        projectId: info.projectId ?? null,
-        agentLaunchFlags: info.agentLaunchFlags,
-        agentModelId: info.agentModelId,
-        cwd: info.cwd,
-        ...scheduledRunForRecord(info),
-        ...attributeClose(info, "kill"),
-      },
-    });
-  }
-  return !restarted;
+function closeRunTerminal(target: ArmedScheduledRun, run: ScheduledRun): Promise<boolean> {
+  return closeTerminalKeepingSession(
+    { terminalId: target.terminalId, spawnedAt: run.terminalSpawnedAt },
+    "scheduled-run-done"
+  );
 }
 
 async function applyDonePolicy(

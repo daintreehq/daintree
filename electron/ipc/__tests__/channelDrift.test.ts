@@ -111,6 +111,10 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // result of a scheduled run's launch (#15978). Paired with the
   // `schedules:launch-request` event declared in IpcEventMap.
   "schedules:launch-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply saying whether
+  // someone is using a pane (#16171). Paired with the
+  // `terminal-when-done:in-use-query` event declared in IpcEventMap.
+  "terminal-when-done:in-use-reply",
   // fire-and-forget — renderer→main `ipcRenderer.send` batches of plugin view
   // cost observations, and the subscribe/unsubscribe edges of the perf snapshot
   // feed (paired with `plugin:perf-snapshots-changed` in IpcEventMap).
