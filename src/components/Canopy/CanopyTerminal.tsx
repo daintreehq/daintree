@@ -97,8 +97,6 @@ const GESTURE_EVENTS = [
   "compositionend",
   "paste",
   "mousedown",
-  // Hover, for a program that asks for every motion (mode 1003).
-  "mousemove",
   "mouseup",
   "wheel",
 ] as const;
@@ -564,6 +562,14 @@ export function CanopyTerminal({
       dragDocument.addEventListener("mouseup", followDrag, true);
     };
     frame.addEventListener("mousedown", startDrag, true);
+    // Hover, for a program that asks for every motion (mode 1003). Motion with a
+    // button held is a drag, which counts only when it began here: one begun
+    // elsewhere can cross the view while xterm still follows a drag whose
+    // release never arrived.
+    const markHover = (event: globalThis.MouseEvent) => {
+      if (event.buttons === 0) markGesture(event);
+    };
+    frame.addEventListener("mousemove", markHover, true);
     // A sideways gesture over a grid wider than the pane scrolls the pane. xterm
     // swallows every wheel event while the program reports the mouse — and would
     // pass a diagonal one on as vertical wheel input — so it is taken first.
@@ -826,6 +832,7 @@ export function CanopyTerminal({
       unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
       frame.removeEventListener("mousedown", startDrag, true);
+      frame.removeEventListener("mousemove", markHover, true);
       endDrag();
       frame.removeEventListener("wheel", sideways, true);
       if (gestureTimer !== null) clearTimeout(gestureTimer);
