@@ -41,7 +41,10 @@ const DESIGN_REVIEW_FINAL: WorkflowGate = {
 const TRUSTED_WORKFLOW_GATES: readonly WorkflowGate[] = [DESIGN_REVIEW_FINAL];
 
 /** The saved settings the trusted policy is made from. */
-export type PolicySettings = Pick<DecisionsSettings, "proxyAllowlisted" | "defaultQuestionExpiryMs">;
+export type PolicySettings = Pick<
+  DecisionsSettings,
+  "proxyAllowlisted" | "defaultQuestionExpiryMs"
+>;
 
 /**
  * The policy an enabled lifetime asks every question under: the trusted

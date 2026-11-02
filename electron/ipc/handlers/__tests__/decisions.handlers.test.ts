@@ -89,15 +89,13 @@ const decisionsEntry = vi.hoisted(() => ({
     maxQuestionExpiryMs: 2,
     revision: 1,
   })),
-  setDecisionsDefaultQuestionExpiry: vi.fn(
-    async (ms: number | null): Promise<DecisionsPolicy> => ({
-      gates: [],
-      proxyAllowlisted: false,
-      defaultQuestionExpiryMs: ms,
-      maxQuestionExpiryMs: null,
-      revision: 1,
-    })
-  ),
+  setDecisionsDefaultQuestionExpiry: vi.fn(async (ms: number | null): Promise<DecisionsPolicy> => ({
+    gates: [],
+    proxyAllowlisted: false,
+    defaultQuestionExpiryMs: ms,
+    maxQuestionExpiryMs: null,
+    revision: 1,
+  })),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
     async (

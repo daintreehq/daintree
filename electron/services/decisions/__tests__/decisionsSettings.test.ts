@@ -116,7 +116,17 @@ describe("sanitizeDecisionsSettings", () => {
     }
     // Anything else, the library's own limits included, would make the policy
     // refuse to start, so it reads as the default rather than surviving.
-    for (const value of [0, -1, 59_999, 60_000, 1.5, 2 * DEFAULT_QUESTION_EXPIRY_MS, "never", NaN, {}]) {
+    for (const value of [
+      0,
+      -1,
+      59_999,
+      60_000,
+      1.5,
+      2 * DEFAULT_QUESTION_EXPIRY_MS,
+      "never",
+      NaN,
+      {},
+    ]) {
       expect(
         sanitizeDecisionsSettings({ ...connected, defaultQuestionExpiryMs: value })
           .defaultQuestionExpiryMs,

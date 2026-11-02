@@ -47,6 +47,7 @@ import { openDb } from "../../persistence/db.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { DecisionsAttachments } from "../attachmentSpool.js";
 import { createTrustedPolicy } from "../workflowGates.js";
+import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { QuestionBridge } from "../questionBridge.js";
 import type { QuestionSource } from "../relayConnection.js";
 
@@ -297,7 +298,7 @@ async function harness(
     relay: RELAY,
     store,
     keys,
-    policy: createTrustedPolicy({ proxyAllowlisted: false }),
+    policy: createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }),
     onStatus: (status) => {
       statuses.push(status);
       for (const waiter of [...waiters]) {
@@ -487,7 +488,7 @@ describe("RelayConnection", () => {
   });
 
   it("asks every attempt's bridge to apply the one policy it was given, never a fresh one", async () => {
-    const policy = createTrustedPolicy({ proxyAllowlisted: false });
+    const policy = createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false });
     const used: unknown[] = [];
     const start = vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(async function (
       this: DecisionsBridge
