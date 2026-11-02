@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
-import { ArrowDown, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import {
+  ArrowDown,
+  CircleStop,
+  OctagonX,
+  RefreshCw,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type { HostPlatform } from "@shared/types/remoteHosts";
 import { isDevPreviewKind } from "@shared/types/panel";
@@ -17,6 +24,7 @@ import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { terminalClient } from "@/clients/terminalClient";
 import { processesClient } from "@/clients/processesClient";
 import { systemClient } from "@/clients/systemClient";
@@ -27,17 +35,21 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
   closedProcessKey,
+  cwdLeaf,
   describeCleanupReport,
   describeClosedMembers,
   describeMembers,
   describeTerminalBuffer,
   describeTerminalKind,
   formatAgo,
-  formatApproxMemory,
-  formatCpu,
+  formatBufferCell,
+  formatCpuCell,
+  formatMemoryCell,
   groupClosedProcesses,
   groupProcessesByProject,
+  groupTopMetric,
   indexTerminalBuffers,
+  processName,
   type ClosedProcessGroup,
   type ProcessSort,
   type TerminalBufferReading,
@@ -46,6 +58,7 @@ import {
   terminalTitle,
   trashSecondsLeft,
   unaccountedCores,
+  UNOWNED_GROUP_KEY,
 } from "./processesView";
 import { formatCores } from "./ProjectResourceBadge.utils";
 import {
@@ -198,14 +211,60 @@ function describeClosedKillShortfall(
   return `Ended ${ended} of ${pluralize(requested, "process", "processes")}. ${parts.join(" ")}`;
 }
 
-/**
- * Every row and the column heading share one grid, so CPU and memory line up
- * down the whole list whatever the row kind; a row with no action keeps the
- * action column empty rather than letting its readings slide right.
- */
-const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_5rem_4.5rem_8rem] items-center gap-x-3";
+/** The order rows and groups were drawn in when the pointer or focus arrived. */
+interface HeldOrder {
+  sort: ProcessSort;
+  sections: string[];
+  rows: Record<string, string[]>;
+}
 
-function SortButton({
+/** `items` in `keys`' order; anything `keys` doesn't name follows, in its own order. */
+function inHeldOrder<T extends { key: string }>(items: T[], keys: readonly string[]): T[] {
+  const rank = new Map(keys.map((key, index) => [key, index]));
+  return items
+    .map((item, index) => ({ item, index, rank: rank.get(item.key) ?? keys.length + index }))
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ item }) => item);
+}
+
+/** `held` with any key `next` has that it lacks appended, or `held` itself when nothing is new. */
+function mergeHeldOrder(held: HeldOrder, next: HeldOrder): HeldOrder {
+  const addMissing = (have: readonly string[], want: readonly string[]) => {
+    const missing = want.filter((key) => !have.includes(key));
+    return missing.length === 0 ? null : [...have, ...missing];
+  };
+  let changed = false;
+  const sections = addMissing(held.sections, next.sections);
+  if (sections) changed = true;
+  const rows: Record<string, string[]> = { ...held.rows };
+  for (const [key, keys] of Object.entries(next.rows)) {
+    const merged = addMissing(held.rows[key] ?? [], keys);
+    if (merged) {
+      rows[key] = merged;
+      changed = true;
+    }
+  }
+  return changed ? { sort: held.sort, sections: sections ?? held.sections, rows } : held;
+}
+
+/** "No project" stays last in a held order too, wherever it was when the hold began. */
+function unownedLast<T extends { key: string }>(sections: T[]): T[] {
+  const unowned = sections.filter((section) => section.key === UNOWNED_GROUP_KEY);
+  return unowned.length === 0
+    ? sections
+    : [...sections.filter((section) => section.key !== UNOWNED_GROUP_KEY), ...unowned];
+}
+
+/**
+ * One row per process tree, on a native table: the columns line up down the
+ * whole list whatever the row kind, the sort lives on the header cells where
+ * assistive technology looks for it, and a row with nothing to end leaves its
+ * action cell empty rather than letting its readings slide right.
+ */
+const CELL = "py-1 align-middle";
+const NUM_CELL = `${CELL} whitespace-nowrap pl-3 text-right tabular-nums`;
+
+function SortHeader({
   current,
   sort,
   onSelect,
@@ -214,80 +273,127 @@ function SortButton({
   current: ProcessSort;
   sort: ProcessSort;
   onSelect: (sort: ProcessSort) => void;
-  children: string;
+  children: ReactNode;
 }): ReactElement {
   const active = current === sort;
   return (
-    <button
-      type="button"
-      aria-pressed={active}
-      aria-label={`Sort by ${children}, highest first`}
-      onClick={() => onSelect(sort)}
-      className={cn(
-        "justify-self-end whitespace-nowrap rounded-[var(--radius-sm)] px-1 text-right text-xs",
-        "transition-colors hover:text-text-primary",
-        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline",
-        active ? "font-medium text-text-primary" : "text-text-secondary"
-      )}
+    <th
+      scope="col"
+      aria-sort={active ? "descending" : "none"}
+      className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)] pl-3 text-right font-normal"
     >
-      {children}
-      {active && <ArrowDown aria-hidden="true" className="ml-0.5 inline h-3 w-3" />}
-    </button>
+      <button
+        type="button"
+        onClick={() => onSelect(sort)}
+        className={cn(
+          "-mr-1 inline-flex min-h-6 items-center justify-end gap-0.5 whitespace-nowrap rounded-[var(--radius-sm)] px-1 text-xs",
+          "transition-colors hover:text-text-primary",
+          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline",
+          active ? "font-medium text-text-primary" : "text-text-secondary"
+        )}
+      >
+        {/* Before the label, so a right-aligned header ends where its numbers
+            do whether or not it is the active sort. */}
+        {active && <ArrowDown aria-hidden="true" className="h-3 w-3" />}
+        {children}
+      </button>
+    </th>
   );
 }
 
-function Reading({ label, value }: { label: string; value: string | null }): ReactElement {
+/** A reading in its column, or an em dash for one the census didn't take. */
+function Reading({
+  label,
+  value,
+  primary = false,
+  missing = "not sampled",
+}: {
+  label: string;
+  value: string | null;
+  primary?: boolean;
+  /** Why there is no value, for whoever can't see the dash. */
+  missing?: string;
+}): ReactElement {
   return (
-    <span className="whitespace-nowrap text-right text-xs tabular-nums text-text-secondary">
+    <td className={cn(NUM_CELL, primary ? "text-text-primary" : "text-text-secondary")}>
       <span className="sr-only">{label} </span>
       {value ?? (
         <>
           <span aria-hidden="true">—</span>
-          <span className="sr-only">not sampled</span>
+          <span className="sr-only">{missing}</span>
         </>
       )}
-    </span>
-  );
-}
-
-function SampleReadings({ sample }: { sample: ProcessTreeSample | null }): ReactElement {
-  return (
-    <>
-      <Reading label="CPU" value={sample ? formatCpu(sample.cpuPercent) : null} />
-      <Reading label="Memory" value={sample ? formatApproxMemory(sample.memoryKb) : null} />
-    </>
+    </td>
   );
 }
 
 /**
- * Type, process names and PID, PID last. The line names at most three
- * processes; the full list, and anything the row's width clips, is one
- * disclosure away by hover or focus.
+ * The row's identity on one line: its title, then what tells it apart from a
+ * sibling of the same name. Everything else the row knows (its processes, PID,
+ * buffer geometry) is one disclosure away by hover or focus, because a line per
+ * fact is what made every row three lines tall.
  */
-function IdentityLine({
-  parts,
-  full,
+function IdentityCell({
+  title,
+  tail,
+  detail,
+  state,
 }: {
-  parts: Array<string | null>;
-  full: Array<string | null>;
+  title: string;
+  tail: Array<string | null>;
+  detail: Array<string | null>;
+  state?: ReactElement | null;
 }): ReactElement {
-  const text = parts.filter((part): part is string => part !== null).join(" · ");
-  const fullText = full.filter((part): part is string => part !== null).join(" · ");
+  const tailText = tail.filter((part): part is string => part !== null).join(" · ");
+  const shown = tailText ? `${title} · ${tailText}` : title;
+  const full = [title, ...detail].filter((part): part is string => part !== null).join(" · ");
   return (
-    <TruncatedTooltip content={fullText} isTruncated={text !== fullText ? true : undefined}>
-      <div className="truncate text-xs text-text-secondary">{text}</div>
-    </TruncatedTooltip>
+    <td className={`${CELL} min-w-0 pr-1`}>
+      <div className="flex min-w-0 items-center gap-2">
+        <TruncatedTooltip content={full} isTruncated={full !== shown ? true : undefined}>
+          <span className="min-w-0 truncate">
+            <span className="text-text-primary">{title}</span>
+            {tailText && <span className="ml-2 text-xs text-text-secondary">{tailText}</span>}
+          </span>
+        </TruncatedTooltip>
+        {state}
+      </div>
+    </td>
   );
 }
 
-function RowTitle({ title, state }: { title: string; state?: ReactElement | null }) {
+/** A row's end action: one quiet glyph, named in full by its tooltip and accessible name. */
+function RowAction({
+  label,
+  name,
+  icon: Icon,
+  killId,
+  onSelect,
+}: {
+  label: string;
+  name: string;
+  icon: LucideIcon;
+  killId: string;
+  onSelect: () => void;
+}): ReactElement {
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <TruncatedTooltip content={title}>
-        <span className="truncate text-sm text-text-primary">{title}</span>
-      </TruncatedTooltip>
-      {state}
-    </div>
+    <td className={`${CELL} pl-2 text-right`}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={name}
+            onClick={onSelect}
+            data-process-kill={killId}
+            className="text-text-secondary hover:text-text-primary"
+          >
+            <Icon aria-hidden="true" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="left">{label}</TooltipContent>
+      </Tooltip>
+    </td>
   );
 }
 
@@ -325,6 +431,9 @@ export function ProcessesDialog({
     TerminalBufferReading
   > | null>(null);
   const [isKilling, setIsKilling] = useState(false);
+  const [pointerInTable, setPointerInTable] = useState(false);
+  const [focusInTable, setFocusInTable] = useState(false);
+  const [heldOrder, setHeldOrder] = useState<HeldOrder | null>(null);
   const [killError, setKillError] = useState<string | null>(null);
   // Killed rows stay hidden until the next read stops listing them: the kill
   // lands before the census notices. Keyed by PTY generation, so a pane that
@@ -348,6 +457,11 @@ export function ProcessesDialog({
 
   useEffect(() => {
     openGenerationRef.current += 1;
+    // Closing can take the table away with the pointer still over it, and no
+    // pointerleave follows; a fresh opening starts with nothing held.
+    setPointerInTable(false);
+    setFocusInTable(false);
+    setHeldOrder(null);
     // A kill still out belongs to the generation just ended and will not report back here.
     setIsKilling(false);
     if (!isOpen || !canKill) {
@@ -453,19 +567,6 @@ export function ProcessesDialog({
     snapshot !== null &&
     !truncated &&
     terminals.length + plugins.length + closedGroups.length === 0;
-  // In the order the rows render, so focus after a kill lands on a neighbour.
-  const listedIds = groups.flatMap((group) =>
-    group.rows.map((row) =>
-      row.kind === "live" ? row.terminal.id : `${CLOSED_KILL_PREFIX}${row.closed.key}`
-    )
-  );
-
-  const neighboursOf = (id: string): string[] => {
-    const at = listedIds.indexOf(id);
-    if (at < 0) return listedIds;
-    return [...listedIds.slice(at + 1), ...listedIds.slice(0, at).reverse()];
-  };
-
   const requestKill = (terminal: ProcessInventoryTerminal) => {
     setKillError(null);
     const generation = openGenerationRef.current;
@@ -592,6 +693,11 @@ export function ProcessesDialog({
 
   const sampleAge =
     snapshot && snapshot.sampledAt > 0 ? Math.max(0, now - snapshot.sampledAt) : null;
+  const stale = sampleAge !== null && sampleAge >= STALE_AFTER_MS;
+
+  const showBuffers = terminalBuffers !== null;
+  const columnCount = 4 + (showBuffers ? 1 : 0) + (canKill ? 1 : 0);
+  const emptyCell = <td className={CELL} />;
 
   const renderTerminal = (terminal: ProcessInventoryTerminal, projectLabel: string) => {
     const title = terminalTitle(terminal);
@@ -601,95 +707,103 @@ export function ProcessesDialog({
       ? devSessionTerminalIds.has(terminal.id)
       : isDevPreviewKind(terminal.kind);
     const action = stops ? "Stop dev server" : "Kill terminal";
-    const members = terminal.sample ? describeMembers(terminal.sample, 3) : null;
     const pid = terminal.rootPid !== null ? `PID ${terminal.rootPid}` : null;
     const buffer = terminalBuffers?.get(terminal.id);
+    const leaf = cwdLeaf(terminal.cwd);
+    // The working directory names the worktree, which is what tells four
+    // "Claude" rows in one project apart; a title that already says it keeps it.
+    const where = leaf && !title.includes(leaf) ? leaf : null;
     return (
-      <li
+      <tr
         key={terminal.id}
-        className={`${ROW_GRID} min-h-12 border-t border-border-subtle py-1.5 first:border-t-0`}
+        className="h-9 border-t border-border-subtle"
         data-testid="process-row"
         data-terminal-id={terminal.id}
       >
-        <div className="min-w-0">
-          <RowTitle
-            title={title}
-            state={
-              terminal.isTrashed ? (
-                <Badge tone="warning">
-                  <Trash2 aria-hidden="true" />
-                  {secondsLeft === null ? "In trash" : `In trash · ends in ${secondsLeft}s`}
-                </Badge>
-              ) : null
-            }
+        <IdentityCell
+          title={title}
+          tail={[kind === title ? null : kind, where]}
+          detail={[
+            kind === title ? null : kind,
+            where,
+            terminal.sample ? describeMembers(terminal.sample, Infinity) : null,
+            pid,
+            buffer ? describeTerminalBuffer(buffer) : null,
+          ]}
+          state={
+            terminal.isTrashed ? (
+              <Badge tone="outline">
+                <Trash2 aria-hidden="true" className="text-status-warning" />
+                {secondsLeft === null ? "In trash" : `In trash · ${secondsLeft}s`}
+              </Badge>
+            ) : null
+          }
+        />
+        <Reading label="PID" value={terminal.rootPid !== null ? String(terminal.rootPid) : null} />
+        <Reading
+          label="CPU cores"
+          value={terminal.sample ? formatCpuCell(terminal.sample.cpuPercent) : null}
+          primary
+        />
+        <Reading
+          label="Memory"
+          value={terminal.sample ? formatMemoryCell(terminal.sample.memoryKb) : null}
+          primary
+        />
+        {showBuffers && (
+          <Reading
+            label="Buffer"
+            value={buffer ? formatBufferCell(buffer.estimatedBytes) : null}
           />
-          <IdentityLine
-            parts={[kind === title ? null : kind, members, pid]}
-            full={[
-              kind === title ? null : kind,
-              terminal.sample ? describeMembers(terminal.sample, Infinity) : null,
-              pid,
-            ]}
-          />
-          {buffer && (
-            <TruncatedTooltip content={describeTerminalBuffer(buffer)}>
-              <div
-                className="truncate text-xs text-text-secondary"
-                data-testid="terminal-buffer-reading"
-              >
-                {describeTerminalBuffer(buffer)}
-              </div>
-            </TruncatedTooltip>
-          )}
-        </div>
-        <SampleReadings sample={terminal.sample} />
-        {canKill ? (
-          <div className="flex justify-end">
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label={`${action} '${title}' in ${projectLabel}`}
-              onClick={() => requestKill(terminal)}
-              data-process-kill={terminal.id}
-            >
-              {action}
-            </Button>
-          </div>
-        ) : (
-          <span aria-hidden="true" />
         )}
-      </li>
+        {canKill && (
+          <RowAction
+            label={action}
+            name={`${action} '${where ? `${title} · ${where}` : title}'${pid ? ` (${pid})` : ""} in ${projectLabel}`}
+            icon={stops ? CircleStop : OctagonX}
+            killId={terminal.id}
+            onSelect={() => requestKill(terminal)}
+          />
+        )}
+      </tr>
     );
   };
 
   const renderPlugin = (process: ProcessInventoryPluginProcess) => {
     const title = pluginProcessTitle(process);
-    const members =
-      process.sample && process.sample.members.length > 0
-        ? describeMembers(process.sample, 3)
-        : null;
     const owner =
       process.source === "plugin-worker" ? "Plugin worker" : `Run by ${process.pluginId}`;
     return (
-      <li
+      <tr
         key={`${process.source}:${process.id}`}
-        className={`${ROW_GRID} min-h-12 border-t border-border-subtle py-1.5 first:border-t-0`}
+        className="h-9 border-t border-border-subtle"
         data-testid="plugin-process-row"
       >
-        <div className="min-w-0">
-          <RowTitle title={title} />
-          <IdentityLine
-            parts={[owner, members, `PID ${process.pid}`]}
-            full={[
-              owner,
-              members && process.sample ? describeMembers(process.sample, Infinity) : null,
-              `PID ${process.pid}`,
-            ]}
-          />
-        </div>
-        <SampleReadings sample={process.sample} />
-        <span aria-hidden="true" />
-      </li>
+        <IdentityCell
+          title={title}
+          tail={[owner]}
+          detail={[
+            owner,
+            process.sample && process.sample.members.length > 0
+              ? describeMembers(process.sample, Infinity)
+              : null,
+            `PID ${process.pid}`,
+          ]}
+        />
+        <Reading label="PID" value={String(process.pid)} />
+        <Reading
+          label="CPU cores"
+          value={process.sample ? formatCpuCell(process.sample.cpuPercent) : null}
+          primary
+        />
+        <Reading
+          label="Memory"
+          value={process.sample ? formatMemoryCell(process.sample.memoryKb) : null}
+          primary
+        />
+        {showBuffers && emptyCell}
+        {canKill && emptyCell}
+      </tr>
     );
   };
 
@@ -698,58 +812,144 @@ export function ProcessesDialog({
     const killId = `${CLOSED_KILL_PREFIX}${group.key}`;
     const action = count === 1 ? "Kill process" : `Kill ${count} processes`;
     const only = count === 1 ? group.processes[0] : undefined;
-    const state =
-      count > 1 ? `${pluralize(count, "process", "processes")} still running` : "Still running";
-    const pid = only ? `PID ${only.pid}` : null;
+    const members = describeClosedMembers(group.processes);
     return (
-      <li
-        key={group.key}
-        className={`${ROW_GRID} min-h-12 border-t border-border-subtle py-1.5 first:border-t-0`}
-        data-testid="closed-process-row"
-      >
-        <div className="min-w-0">
-          <RowTitle
-            title={group.title}
-            state={<Badge>Terminal closed {formatAgo(now - group.closedAt)}</Badge>}
-          />
-          <IdentityLine
-            parts={[state, describeClosedMembers(group.processes), pid]}
-            full={[
-              state,
-              only
-                ? describeClosedMembers(group.processes, Infinity)
-                : group.processes
-                    .map((process) => `${process.comm || "process"} (PID ${process.pid})`)
-                    .join(", "),
-              pid,
-            ]}
-          />
-        </div>
+      <tr key={group.key} className="h-9 border-t border-border-subtle" data-testid="closed-process-row">
+        <IdentityCell
+          title={group.title}
+          // The count is on the group heading, the action's name and the confirm;
+          // here it only pushed the process names off the row.
+          tail={[members]}
+          detail={[
+            count > 1 ? `${pluralize(count, "process", "processes")} still running` : "Still running",
+            only
+              ? describeClosedMembers(group.processes, Infinity)
+              : group.processes
+                  .map((process) => `${processName(process.comm) ?? "process"} (PID ${process.pid})`)
+                  .join(", "),
+          ]}
+          state={<Badge tone="outline">Closed {formatAgo(now - group.closedAt)}</Badge>}
+        />
         <Reading
-          label="CPU"
-          value={group.cpuPercent === null ? null : formatCpu(group.cpuPercent)}
+          label="PID"
+          value={only ? String(only.pid) : null}
+          missing={`${count} processes`}
+        />
+        <Reading
+          label="CPU cores"
+          value={group.cpuPercent === null ? null : formatCpuCell(group.cpuPercent)}
+          primary
         />
         <Reading
           label="Memory"
-          value={group.memoryKb === null ? null : formatApproxMemory(group.memoryKb)}
+          value={group.memoryKb === null ? null : formatMemoryCell(group.memoryKb)}
+          primary
         />
-        {canKill ? (
-          <div className="flex justify-end">
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label={`Kill ${pluralize(count, "process", "processes")} from '${group.title}'`}
-              onClick={() => requestClosedKill(group)}
-              data-process-kill={killId}
-            >
-              {action}
-            </Button>
-          </div>
-        ) : (
-          <span aria-hidden="true" />
+        {showBuffers && emptyCell}
+        {canKill && (
+          <RowAction
+            label={action}
+            name={`Kill ${pluralize(count, "process", "processes")} from '${group.title}'`}
+            icon={OctagonX}
+            killId={killId}
+            onSelect={() => requestClosedKill(group)}
+          />
         )}
-      </li>
+      </tr>
     );
+  };
+
+  // Projects and the plugin list ranked together by their heaviest row under
+  // the active sort; "No project" stays last whatever it weighs.
+  const pluginTop = plugins.reduce(
+    (max, process) =>
+      Math.max(max, process.sample ? (sort === "cpu" ? process.sample.cpuPercent : process.sample.memoryKb) : -1),
+    -1
+  );
+  const sections: Array<{
+    key: string;
+    label: string;
+    counts: string;
+    top: number;
+    rows: Array<{ key: string; node: ReactNode }>;
+  }> =
+    groups.map((group) => {
+      const leftover = group.closed.reduce((sum, closed) => sum + closed.processes.length, 0);
+      return {
+        key: group.key,
+        label: group.label,
+        counts: [
+          group.terminals.length > 0 ? pluralize(group.terminals.length, "terminal") : null,
+          leftover > 0 ? `${pluralize(leftover, "process", "processes")} left running` : null,
+        ]
+          .filter((part): part is string => part !== null)
+          .join(" · "),
+        top: groupTopMetric(group, sort),
+        rows: group.rows.map((row) =>
+          row.kind === "live"
+            ? { key: row.terminal.id, node: renderTerminal(row.terminal, group.label) }
+            : { key: `closed:${row.closed.key}`, node: renderClosedGroup(row.closed) }
+        ),
+      };
+    });
+  if (plugins.length > 0) {
+    const at = sections.findIndex(
+      (section) => section.key === UNOWNED_GROUP_KEY || section.top < pluginTop
+    );
+    sections.splice(at < 0 ? sections.length : at, 0, {
+      key: "plugins",
+      label: "Plugins",
+      counts: pluralize(plugins.length, "process", "processes"),
+      top: pluginTop,
+      rows: plugins.map((process) => ({
+        key: `${process.source}:${process.id}`,
+        node: renderPlugin(process),
+      })),
+    });
+  }
+
+  // While the pointer or focus is in the table, rows and groups keep the order
+  // they had when it arrived: a 4s poll that re-ranks them would otherwise slide
+  // another terminal under the action the user is reaching for. Readings keep
+  // updating; an explicit sort change applies at once, and the ranking catches
+  // up when the table is left.
+  const tableShown = !unsupported && snapshot !== null && !isEmpty;
+  const interacting = tableShown && (pointerInTable || focusInTable);
+  const naturalOrder: HeldOrder = {
+    sort,
+    sections: sections.map((section) => section.key),
+    rows: Object.fromEntries(
+      sections.map((section) => [section.key, section.rows.map((row) => row.key)])
+    ),
+  };
+  if (!interacting && heldOrder !== null) setHeldOrder(null);
+  else if (interacting && (heldOrder === null || heldOrder.sort !== sort)) {
+    setHeldOrder(naturalOrder);
+  }
+  // Rows and groups that arrive while the order is held join it once, at the
+  // end, so the next poll can't swap them under the pointer either.
+  if (interacting && heldOrder !== null && heldOrder.sort === sort) {
+    const merged = mergeHeldOrder(heldOrder, naturalOrder);
+    if (merged !== heldOrder) setHeldOrder(merged);
+  }
+  const order = interacting && heldOrder?.sort === sort ? heldOrder : null;
+  const shownSections = order
+    ? unownedLast(inHeldOrder(sections, order.sections)).map((section) => ({
+        ...section,
+        rows: inHeldOrder(section.rows, order.rows[section.key] ?? []),
+      }))
+    : sections;
+
+  // In the order the rows are drawn (held or not), so focus after a kill lands
+  // on the neighbour the user can see. Plugin rows have no action to land on.
+  const listedIds = shownSections.flatMap((section) =>
+    section.key === "plugins" ? [] : section.rows.map((row) => row.key)
+  );
+
+  const neighboursOf = (id: string): string[] => {
+    const at = listedIds.indexOf(id);
+    if (at < 0) return listedIds;
+    return [...listedIds.slice(at + 1), ...listedIds.slice(0, at).reverse()];
   };
 
   const closedTarget = closedKillTarget;
@@ -762,6 +962,14 @@ export function ProcessesDialog({
     ? ` in ${target.terminal.projectName ?? "an unknown project"}`
     : "";
   const targetCount = target?.terminal.sample?.processCount ?? null;
+  const targetLeaf = target ? cwdLeaf(target.terminal.cwd) : null;
+  // The PID beside the consequence, so the body names the very process the
+  // question (which carries the worktree) is about.
+  const targetWhich =
+    target && target.terminal.rootPid !== null ? ` (PID ${target.terminal.rootPid})` : "";
+  // Four "Claude" rows can share a project, so the question names the worktree too.
+  const targetName =
+    targetLeaf && !targetTitle.includes(targetLeaf) ? `${targetTitle} · ${targetLeaf}` : targetTitle;
 
   return (
     <>
@@ -779,16 +987,7 @@ export function ProcessesDialog({
           <AppDialog.CloseButton />
         </AppDialog.Header>
         <AppDialog.Body>
-          <div ref={bodyRef} className="flex flex-col gap-4">
-            <p className="text-xs leading-snug text-text-secondary">
-              Every terminal and plugin process across all projects, including ones whose panel
-              isn't on screen. Readings are sampled, and memory is counted per process, so memory
-              two processes share is counted twice.
-              {terminalBuffers !== null &&
-                " A terminal's buffer is estimated from its lines × columns × 12 bytes per cell, and is part of Daintree's own memory rather than its processes'."}
-              {hostPlatform === "linux" &&
-                " On Linux, a terminal's CPU is the average since it started, not what it's using now."}
-            </p>
+          <div ref={bodyRef} className="flex flex-col gap-3">
             {!canKill && (
               <p className="text-xs leading-snug text-text-secondary">
                 This window isn't attached to this host, so processes are listed here but not ended.
@@ -801,8 +1000,9 @@ export function ProcessesDialog({
             )}
             {readFailed && (
               <Callout
-                severity="warning"
+                severity={snapshot ? "warning" : "error"}
                 size="compact"
+                role="status"
                 action={
                   <Button variant="ghost" size="sm" onClick={() => void fetchRef.current()}>
                     <RefreshCw aria-hidden="true" />
@@ -845,7 +1045,7 @@ export function ProcessesDialog({
                 {cleanup.text}
               </Callout>
             )}
-            {unsupported ? null : snapshot === null && !readFailed ? (
+            {unsupported || (snapshot === null && readFailed) ? null : snapshot === null ? (
               <Skeleton label="Loading processes" className="space-y-2">
                 <SkeletonBone className="h-4 w-full" />
                 <SkeletonBone className="h-4 w-5/6" />
@@ -853,88 +1053,124 @@ export function ProcessesDialog({
               </Skeleton>
             ) : isEmpty ? (
               <p className="text-sm text-text-secondary">
-                No terminals or plugin processes are running.
+                {/* Only a complete, current reading may say nothing is running; a
+                    partial or stale one says what it saw, beside its warning. */}
+                {snapshot.complete && snapshot.samplesAvailable && !readFailed && !stale
+                  ? "No terminals or plugin processes are running."
+                  : `No processes were listed in the last reading${
+                      stale && sampleAge !== null ? `, ${formatAgo(sampleAge)}` : ""
+                    }.`}
               </p>
             ) : (
-              <div className="flex flex-col gap-4">
-                <div
-                  className={`${ROW_GRID} sticky top-0 z-10 -mb-2 border-b border-border-subtle bg-surface-dialog py-1.5 text-xs text-text-secondary`}
+              <>
+                <table
+                  className="w-full table-fixed border-collapse text-sm"
+                  onPointerEnter={() => setPointerInTable(true)}
+                  onPointerLeave={() => setPointerInTable(false)}
+                  onFocus={() => setFocusInTable(true)}
+                  onBlur={(event) => {
+                    if (
+                      !(
+                        event.relatedTarget instanceof Node &&
+                        event.currentTarget.contains(event.relatedTarget)
+                      )
+                    ) {
+                      setFocusInTable(false);
+                    }
+                  }}
                 >
-                  <span className="truncate">
-                    {sampleAge !== null && sampleAge >= STALE_AFTER_MS
-                      ? `Sampled ${Math.round(sampleAge / 1000)}s ago`
-                      : null}
-                  </span>
-                  <SortButton current={sort} sort="cpu" onSelect={setSort}>
-                    CPU
-                  </SortButton>
-                  <SortButton current={sort} sort="memory" onSelect={setSort}>
-                    Memory
-                  </SortButton>
-                  <span aria-hidden="true" />
-                </div>
-                {unaccounted !== null && (
-                  <p
-                    className="text-xs leading-snug text-text-secondary"
-                    data-testid="cpu-unaccounted"
-                  >
-                    Roughly {formatCores(unaccounted)} of the host's busy CPU isn't matched by the
-                    rows below. Row readings are averages, not current use, so treat this as an
-                    estimate.
-                  </p>
-                )}
-                {groups.map((group) => {
-                  const headingId = `processes-group-${group.key.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-                  const leftover = group.closed.reduce(
-                    (sum, closed) => sum + closed.processes.length,
-                    0
-                  );
-                  const counts = [
-                    group.terminals.length > 0
-                      ? pluralize(group.terminals.length, "terminal")
-                      : null,
-                    leftover > 0
-                      ? `${pluralize(leftover, "process", "processes")} left running`
-                      : null,
-                  ].filter((part): part is string => part !== null);
-                  return (
-                    <section key={group.key} aria-labelledby={headingId}>
-                      <h3
-                        id={headingId}
-                        className="mb-0.5 flex items-baseline justify-between gap-2 text-xs font-medium text-text-primary"
+                  <caption className="sr-only">
+                    By project, the heaviest project and row first
+                  </caption>
+                  <colgroup>
+                    <col />
+                    <col className="w-16" />
+                    <col className="w-22" />
+                    <col className="w-20" />
+                    {showBuffers && <col className="w-20" />}
+                    {canKill && <col className="w-9" />}
+                  </colgroup>
+                  {/* Stuck at the scrollport edge, above the body's top padding, so no
+                      band of scrolled rows shows over it; the rule travels with it. */}
+                  <thead className="sticky -top-2 z-10">
+                    <tr className="text-xs text-text-secondary">
+                      <th
+                        scope="col"
+                        className="truncate bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)] text-left font-normal"
                       >
-                        <TruncatedTooltip content={group.label}>
-                          <span className="truncate">{group.label}</span>
-                        </TruncatedTooltip>
-                        <span className="shrink-0 font-normal text-text-secondary">
-                          {counts.join(" · ")}
-                        </span>
-                      </h3>
-                      <ul>
-                        {group.rows.map((row) =>
-                          row.kind === "live"
-                            ? renderTerminal(row.terminal, group.label)
-                            : renderClosedGroup(row.closed)
-                        )}
-                      </ul>
-                    </section>
-                  );
-                })}
-                {plugins.length > 0 && (
-                  <section aria-labelledby="processes-group-plugins">
-                    <h3
-                      id="processes-group-plugins"
-                      className="mb-0.5 flex items-baseline justify-between gap-2 text-xs font-medium text-text-primary"
-                    >
-                      <span className="truncate">Plugins</span>
-                      <span className="shrink-0 font-normal text-text-secondary">
-                        {pluralize(plugins.length, "process", "processes")}
-                      </span>
-                    </h3>
-                    <ul>{plugins.map(renderPlugin)}</ul>
-                  </section>
-                )}
-              </div>
+                        Name
+                        {stale && sampleAge !== null && <span>{` · sampled ${formatAgo(sampleAge)}`}</span>}
+                      </th>
+                      <th scope="col" className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)] pl-3 text-right font-normal">
+                        PID
+                      </th>
+                      <SortHeader current={sort} sort="cpu" onSelect={setSort}>
+                        CPU (cores)
+                      </SortHeader>
+                      <SortHeader current={sort} sort="memory" onSelect={setSort}>
+                        Memory
+                      </SortHeader>
+                      {showBuffers && (
+                        <th
+                          scope="col"
+                          className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)] pl-3 text-right font-normal"
+                        >
+                          Buffer, est.
+                        </th>
+                      )}
+                      {canKill && (
+                        <th scope="col" className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)]">
+                          <span className="sr-only">Actions</span>
+                        </th>
+                      )}
+                    </tr>
+                  </thead>
+                  {shownSections.map((section, index) => {
+                    const headingId = `processes-group-${section.key.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+                    return (
+                      <tbody key={section.key} aria-labelledby={headingId}>
+                        <tr>
+                          <th
+                            id={headingId}
+                            scope="rowgroup"
+                            colSpan={columnCount}
+                            className={cn(
+                              "pb-1 text-left text-sm font-medium text-text-primary",
+                              index === 0 ? "pt-2" : "pt-5"
+                            )}
+                          >
+                            <span className="flex min-w-0 items-baseline gap-2">
+                              <TruncatedTooltip content={section.label}>
+                                <span className="min-w-0 truncate">{section.label}</span>
+                              </TruncatedTooltip>
+                              <span className="shrink-0 text-xs font-normal text-text-secondary">
+                                {section.counts}
+                              </span>
+                            </span>
+                          </th>
+                        </tr>
+                        {section.rows.map((row) => row.node)}
+                      </tbody>
+                    );
+                  })}
+                </table>
+                <div className="space-y-1 border-t border-border-subtle pt-2 text-2xs leading-snug text-text-secondary">
+                  {unaccounted !== null && (
+                    <p data-testid="cpu-unaccounted">
+                      About {formatCores(unaccounted)} of the host's busy CPU isn't from the rows
+                      above. Row CPU is an average, so this is an estimate.
+                    </p>
+                  )}
+                  <p>
+                    Readings are sampled. Memory counts each process in full, so memory two
+                    processes share is counted twice.
+                    {showBuffers &&
+                      " Buffer is the scrollback Daintree holds for a terminal, estimated from its size, and is part of Daintree's own memory."}
+                    {hostPlatform === "linux" &&
+                      " On Linux, a terminal's CPU is the average since it started, not what it's using now."}
+                  </p>
+                </div>
+              </>
             )}
           </div>
         </AppDialog.Body>
@@ -944,11 +1180,15 @@ export function ProcessesDialog({
         restoreFocusTo={resolveConfirmFocus}
         onClose={() => setKillTarget(null)}
         variant="destructive"
-        title={target?.via === "dev-session" ? `Stop '${targetTitle}'?` : `Kill '${targetTitle}'?`}
+        title={
+          target?.via === "dev-session"
+            ? `Stop '${targetName}'?`
+            : `Kill '${targetName}'?`
+        }
         description={
           target?.via === "dev-session"
-            ? `Stops the dev server for this preview${targetWhere}.`
-            : `Ends this terminal${targetWhere}${
+            ? `Stops the dev server for this preview${targetWhich}${targetWhere}.`
+            : `Ends this terminal${targetWhich}${targetWhere}${
                 targetCount !== null && targetCount > 1
                   ? ` and the ${pluralize(targetCount - 1, "process", "processes")} running in it`
                   : ""

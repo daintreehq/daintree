@@ -133,5 +133,9 @@ export function hostRowLabel(host: ProjectHost, summary: HostProjectSummary | nu
       ? `${name}, no agents observed`
       : `${name}: ${describeObserved(summary.observed)} (observed)`;
   }
+  if (status.kind === "away") {
+    // The row shows no words for a link that is down, so its name carries all of them.
+    return `${name}, ${lowerFirst(describeLinkTrouble(host) ?? status.text)}`;
+  }
   return status.kind === "counts" ? name : `${name}, ${status.text.toLowerCase()}`;
 }
