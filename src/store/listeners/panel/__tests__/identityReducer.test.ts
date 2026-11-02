@@ -44,11 +44,14 @@ describe("reduceAgentDetected", () => {
     expect(result?.patch ?? {}).not.toHaveProperty("agentResumeOffer");
   });
 
-  it("answers a refused preset switch's offer once a new agent starts (#16045)", () => {
+  it.each([
+    ["preset switch's (#16045)", { kind: "preset" as const, presetId: "company" }],
+    ["account switch's (#16135)", { kind: "account" as const, accountId: null }],
+  ])("answers a refused %s offer once a new agent starts", (_label, target) => {
     const attempt = {
       agentId: "codex",
       sessionId: "s1",
-      presetId: "company",
+      target,
       prior: { cwd: "/repo" },
     };
     const detected = {

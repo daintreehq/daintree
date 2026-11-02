@@ -2320,7 +2320,7 @@ describe("restartTerminalOnPreset", () => {
       expect(pane().presetSwitchResume).toMatchObject({
         agentId: "claude",
         sessionId: "sess-captured",
-        presetId: "work",
+        target: { kind: "preset", presetId: "work" },
         prior: {
           agentPresetId: "personal",
           env: { CODEX_HOME: "/home/me/.codex", STALE_ONLY_ON_OLD: "1" },
@@ -2661,6 +2661,160 @@ describe("accounts on restart and switch (#16040)", () => {
     expect(pane().agentAccountId).toBe("company");
     expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
     expect(pane().restartError?.context?.phase).toBe("account-switch");
+  });
+
+  describe("keeping the conversation (#16135)", () => {
+    const toPersonal = { id: "personal", envVar: "CLAUDE_CONFIG_DIR", configDir: PERSONAL };
+
+    async function resumeBuilds(): Promise<void> {
+      const { buildResumeCommand } = await import("@shared/types");
+      vi.mocked(buildResumeCommand).mockImplementation(
+        (_agentId: string, sessionId: string) => `claude --resume ${sessionId}`
+      );
+    }
+
+    it("reopens the captured conversation under the new account's folder, preset kept", async () => {
+      seed({ title: "Claude [Z.ai]", titleMode: "custom" });
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result).toEqual({ success: true, resumedSessionId: "sess-captured" });
+      expect(mockGracefulKill).toHaveBeenCalledWith("test-1", { forRestart: true });
+      expect(mockKill).not.toHaveBeenCalled();
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("claude --resume sess-captured");
+      expect(payload.agentSessionId).toBe("sess-captured");
+      expect(payload.env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
+      expect(payload.agentPresetId).toBe("zai");
+      expect(pane()).toMatchObject({
+        agentSessionId: "sess-captured",
+        agentAccountId: "personal",
+        agentPresetId: "zai",
+        title: "Claude [Z.ai]",
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: PERSONAL },
+      });
+      expect(pane().presetSwitchResume).toEqual({
+        agentId: "claude",
+        sessionId: "sess-captured",
+        target: { kind: "account", accountId: "personal" },
+        prior: expect.objectContaining({
+          agentPresetId: "zai",
+          agentAccountId: "company",
+          env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: COMPANY },
+          cwd: "/some/path",
+        }),
+      });
+    });
+
+    it("watches a move to the default login on a pane with no preset", async () => {
+      seed({ agentPresetId: undefined, originalPresetId: undefined });
+      await resumeBuilds();
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", null, { keepConversation: true });
+
+      expect(result.resumedSessionId).toBe("sess-1");
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("claude --resume sess-1");
+      // No folder override is left behind: the default login is the CLI's own.
+      expect(payload.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+      expect(pane().env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+      expect(pane().agentAccountId).toBeUndefined();
+      expect(pane().presetSwitchResume).toMatchObject({
+        target: { kind: "account", accountId: null },
+        prior: { agentAccountId: "company" },
+      });
+    });
+
+    it.each([
+      ["a saved account by its name", toPersonal, "on Personal."],
+      ["the default login", null, "on the default login."],
+      ["an account the settings no longer name", { ...toPersonal, id: "gone" }, "on that account."],
+    ])("names %s when no id turns up", async (_label, target, named) => {
+      seed({ agentSessionId: undefined });
+      await resumeBuilds();
+      const { agentSettingsClient } = await import("@/clients");
+      vi.mocked(agentSettingsClient.get).mockResolvedValue({
+        agents: {
+          claude: {
+            accounts: [
+              { id: "company", name: "Company", configDir: COMPANY },
+              { id: "personal", name: "Personal", configDir: PERSONAL },
+            ],
+          },
+        },
+      });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", target, { keepConversation: true });
+
+      expect(result.error?.endsWith(named)).toBe(true);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing when no id turns up, and says which account it was for", async () => {
+      seed({ agentSessionId: undefined });
+      await resumeBuilds();
+      const { agentSettingsClient } = await import("@/clients");
+      vi.mocked(agentSettingsClient.get).mockResolvedValue({
+        agents: {
+          claude: { accounts: [{ id: "personal", name: "Personal", configDir: PERSONAL }] },
+        },
+      });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("on Personal");
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentAccountId).toBe("company");
+      expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+      expect(pane().presetSwitchResume).toBeUndefined();
+      expect(pane().restartError?.context?.phase).toBe("account-switch");
+    });
+
+    it("refuses an agent whose refusal it can't recognise before touching the process", async () => {
+      seed({ launchAgentId: "gemini" });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result).toEqual({
+        success: false,
+        error: "agent can't keep its conversation on another account",
+      });
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentAccountId).toBe("company");
+    });
+
+    it("puts the old account back with the captured id when the spawn fails", async () => {
+      seed();
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+      mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result).toEqual({ success: false, error: "spawn failed" });
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(pane().agentAccountId).toBe("company");
+      expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+      expect(pane().agentSessionId).toBe("sess-captured");
+      expect(pane().presetSwitchResume).toBeUndefined();
+    });
   });
 });
 

@@ -334,14 +334,16 @@ export interface PanelRegistrySlice {
   ) => Promise<PresetRespawnResult>;
   /**
    * Respawn an agent pane in place on another account (#16040), keeping its
-   * preset, model and flags. Always a new conversation for now: the preset
-   * switch's `keepConversation` (#16045) isn't offered here yet. `null` is
-   * the CLI's default login. The account's folder replaces the one in the
-   * saved launch layer so a cold restore comes back on it.
+   * preset, model and flags. A new conversation by default: a session stored
+   * in one account's folder usually can't be found from another's.
+   * `keepConversation` (#16135) asks the CLI to reopen the same one instead.
+   * `null` is the CLI's default login. The account's folder replaces the one
+   * in the saved launch layer so a cold restore comes back on it.
    */
   restartTerminalOnAccount: (
     id: string,
-    account: AccountSwitchTarget
+    account: AccountSwitchTarget,
+    options?: PresetRespawnOptions
   ) => Promise<PresetRespawnResult>;
   /** Open a terminal's Scratchpad column (#12835), or expand a collapsed one. */
   showScratchpad: (id: string) => void;

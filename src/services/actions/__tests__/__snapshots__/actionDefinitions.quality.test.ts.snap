@@ -6123,8 +6123,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "terminal",
     "danger": "confirm",
-    "dangerRationale": "Ends the agent's conversation and respawns it on another account. Scrollback is lost.",
-    "description": "Respawn an agent terminal in place on another of its agent's accounts, keeping its preset. Always starts a new conversation and discards the scrollback, so it runs only when confirmed.",
+    "dangerRationale": "Interrupts the agent and respawns it on another account, in a new conversation unless asked to keep it. Scrollback is lost.",
+    "description": "Respawn an agent terminal in place on another of its agent's accounts, keeping its preset. Starts a new conversation unless keepConversation, and discards the scrollback, so it runs only when confirmed.",
     "examples": undefined,
     "id": "terminal.restartOnAccount",
     "keywords": [

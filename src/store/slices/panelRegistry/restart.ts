@@ -55,12 +55,18 @@ import {
 } from "@/config/agents";
 import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 import { agentPresetTitle } from "@shared/utils/agentLaunchPlan";
-import { keepPaneAccount, paneAccountEnv, withAccountEnv } from "@shared/utils/agentAccounts";
+import {
+  keepPaneAccount,
+  paneAccountEnv,
+  sanitizeAgentAccounts,
+  withAccountEnv,
+} from "@shared/utils/agentAccounts";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import {
   isPtyPanel,
+  type ConversationSwitchTarget,
   type PanelInstance,
   type PanelTitleMode,
   type PresetSwitchPriorLaunch,
@@ -1696,8 +1702,8 @@ export const createRestartActions = (
   restartTerminalOnPreset: (id, presetId, options) =>
     respawnAgentOnPreset(set, get, id, presetId, { kind: "switch" }, options),
 
-  restartTerminalOnAccount: (id, account) =>
-    respawnAgentOnPreset(set, get, id, undefined, { kind: "account", account }),
+  restartTerminalOnAccount: (id, account, options) =>
+    respawnAgentOnPreset(set, get, id, undefined, { kind: "account", account }, options),
 });
 
 /**
@@ -1775,7 +1781,10 @@ async function respawnAgentOnPreset(
   // would leave a failed resume looking like any other exit (#16045).
   const keepConversation = options?.keepConversation === true;
   if (keepConversation && !supportsConversationKeepingSwitch(effectiveAgentId)) {
-    return { success: false, error: "agent can't keep its conversation on another preset" };
+    return {
+      success: false,
+      error: `agent can't keep its conversation on another ${mode.kind === "account" ? "account" : "preset"}`,
+    };
   }
   // An account switch keeps the pane's own preset; the others name the next one.
   const nextPresetId = mode.kind === "account" ? terminal.agentPresetId : requestedPresetId;
@@ -1974,9 +1983,15 @@ async function respawnAgentOnPreset(
         : filedLaunchCwd(get, id, terminal);
 
     let spawnCommand = commandToRun;
-    // Only a preset switch or hop keeps a conversation (#16045), and both have
-    // their preset by here; an account switch never asks to.
-    const keptOnName = nextPreset?.name ?? "that preset";
+    // Where the kept conversation was meant to reopen: a switch or hop has its
+    // preset by here (#16045), and an account switch names its account (#16135).
+    const keptOnName =
+      mode.kind === "account"
+        ? mode.account
+          ? (sanitizeAgentAccounts(entry.accounts).find((saved) => saved.id === mode.account?.id)
+              ?.name ?? "that account")
+          : "the default login"
+        : (nextPreset?.name ?? "that preset");
     if (keepConversation) {
       resumedSessionId =
         (captureTrusted ? capturedSessionId : null) ?? terminal.agentSessionId ?? undefined;
@@ -1999,6 +2014,14 @@ async function respawnAgentOnPreset(
       spawnCommand = resumeCommand;
     }
     const keptSessionId = keepConversation ? resumedSessionId : undefined;
+    // What a refusal of the kept conversation is checked against: the account
+    // an account switch moved to, its preset or none left as it was.
+    const switchTarget: ConversationSwitchTarget | undefined =
+      mode.kind === "account"
+        ? { kind: "account", accountId: nextAccountId ?? null }
+        : nextPreset
+          ? { kind: "preset", presetId: nextPreset.id }
+          : undefined;
     const keptConversationCwd =
       keptSessionId && conversationHome && conversationHome !== launchCwd
         ? conversationHome
@@ -2046,11 +2069,11 @@ async function respawnAgentOnPreset(
         conversationCwd: keptConversationCwd,
         firstPrompt: keptSessionId ? t.firstPrompt : undefined,
         presetSwitchResume:
-          keptSessionId && nextPreset
+          keptSessionId && switchTarget
             ? {
                 agentId: effectiveAgentId,
                 sessionId: keptSessionId,
-                presetId: nextPreset.id,
+                target: switchTarget,
                 prior: priorLaunch,
               }
             : undefined,

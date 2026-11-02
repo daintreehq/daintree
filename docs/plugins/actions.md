@@ -486,7 +486,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename terminal | safe | `name?`, `terminalId?` |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
-| `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `terminalId?` |
+| `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `keepConversation?`, `terminalId?` |
 | `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `keepConversation?`, `terminalId?` |
 | `terminal.restartService` | Restart terminal service | safe | — |
 | `terminal.resumeSessions` | Resume session… | safe | — |

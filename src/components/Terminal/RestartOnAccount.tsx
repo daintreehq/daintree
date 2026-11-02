@@ -1,5 +1,6 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { UserRound } from "@/components/icons";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ContextMenuItem,
@@ -10,8 +11,11 @@ import {
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { actionService } from "@/services/ActionService";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { usePanelStore } from "@/store/panelStore";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { ActionSource } from "@shared/types/actions";
+import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
+import { isPtyPanel } from "@shared/types/panel";
 import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import {
   DestructiveConsequence,
@@ -33,19 +37,21 @@ function quoted(name: string | undefined, fallback: string): string {
 }
 
 /**
- * Asked every time, as a preset switch is: the conversation doesn't follow
- * the pane to another account's folder yet (#16045).
+ * Asked every time, as a preset switch is: the conversation follows the pane
+ * to another account's folder only when the user asks it to (#16135).
  */
 export function buildRestartOnAccountCopy(
   terminalTitle: string | undefined,
   accountName: string,
-  agentWorking: boolean
+  agentWorking: boolean,
+  keepConversation = false
 ): DestructiveConfirmCopy {
   return {
     title: `Restart ${quoted(terminalTitle, "terminal")} on ${quoted(accountName, "another account")}?`,
     lead: agentWorking ? "Its agent is working and will be interrupted." : undefined,
-    description:
-      "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded.",
+    description: keepConversation
+      ? "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the pane offers a new one or the way back."
+      : "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded.",
     confirmLabel: "Restart on account",
   };
 }
@@ -131,19 +137,42 @@ export interface RestartOnAccountRequest {
   account: RestartAccountChoice;
 }
 
-/** Confirms and dispatches `terminal.restartOnAccount`. */
-export function RestartOnAccountConfirmDialog({
-  request,
-  onClose,
-  sourceRef,
-}: {
+interface RestartOnAccountConfirmDialogProps {
   request: RestartOnAccountRequest | null;
   onClose: () => void;
   /** Read at confirm time: the menu records how it was opened as it opens. */
   sourceRef: { readonly current: ActionSource };
-}) {
+}
+
+/** Confirms and dispatches `terminal.restartOnAccount`. */
+export function RestartOnAccountConfirmDialog({
+  request,
+  ...rest
+}: RestartOnAccountConfirmDialogProps) {
+  // Mounted per request, so the opt-in starts unchecked on every opening.
+  if (!request) return null;
+  return <RestartOnAccountConfirm request={request} {...rest} />;
+}
+
+function RestartOnAccountConfirm({
+  request,
+  onClose,
+  sourceRef,
+}: RestartOnAccountConfirmDialogProps & { request: RestartOnAccountRequest }) {
+  const keepId = useId();
+  const [keepConversation, setKeepConversation] = useState(false);
+  // Offered where a refusal can be recognised, as on a preset switch (#16045).
+  const canKeep = usePanelStore((state) => {
+    const panel = state.panelsById[request.terminalId];
+    return (
+      panel !== undefined &&
+      isPtyPanel(panel) &&
+      supportsConversationKeepingSwitch(panel.launchAgentId)
+    );
+  });
+  const keep = canKeep && keepConversation;
+
   const handleConfirm = useCallback(() => {
-    if (!request) return;
     const source = sourceRef.current;
     onClose();
     void restartPanesOnPreset(
@@ -152,18 +181,23 @@ export function RestartOnAccountConfirmDialog({
       (pane) =>
         actionService.dispatch(
           "terminal.restartOnAccount",
-          { terminalId: pane.id, accountId: request.account.id, confirmed: true },
+          {
+            terminalId: pane.id,
+            accountId: request.account.id,
+            confirmed: true,
+            ...(keep ? { keepConversation: true } : {}),
+          },
           { source }
         ),
       () => `Restarting on ${request.account.name}`
     );
-  }, [request, onClose, sourceRef]);
+  }, [request, onClose, sourceRef, keep]);
 
-  if (!request) return null;
   const copy = buildRestartOnAccountCopy(
     request.terminalTitle,
     request.account.name,
-    request.agentWorking
+    request.agentWorking,
+    keep
   );
   return (
     <ConfirmDialog
@@ -174,6 +208,17 @@ export function RestartOnAccountConfirmDialog({
       confirmLabel={copy.confirmLabel}
       variant="destructive"
       onConfirm={handleConfirm}
-    />
+    >
+      {canKeep && (
+        <label htmlFor={keepId} className="flex items-center gap-2 text-sm text-text-primary">
+          <Checkbox
+            id={keepId}
+            checked={keepConversation}
+            onCheckedChange={(checked) => setKeepConversation(checked === true)}
+          />
+          Keep this conversation
+        </label>
+      )}
+    </ConfirmDialog>
   );
 }
