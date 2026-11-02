@@ -19,15 +19,28 @@ export interface ClaudeUsageMessage {
 /** Trailing rows read, as for the rate-limit banner: one far up is old news. */
 const SCAN_LINES = 12;
 
+/**
+ * How far short of the pane's right edge a footer warning may end. Claude
+ * draws it flush right behind a column of padding, and a wide glyph elsewhere
+ * on the row reads as one character for its two columns.
+ */
+const RIGHT_EDGE_SLACK = 8;
+
 // The gutter, box and pointer glyphs banners sit behind, as RATE_LIMIT_PATTERNS
 // knows them.
 const CHROME = String.raw`[\s•●■▪*>❯›⟩│┃╎╭╰─⚠⎿-]*`;
+// Border glyphs Claude may draw after a notification ("… ▔").
+const TRAILING_BORDER = String.raw`[\s▔▁─━╮╯╗╝│┃]*`;
 const WINDOW = String.raw`(5[ -]?hour|session|weekly|opus|sonnet|fable)`;
 const YOUVE = String.raw`you(?:['’]ve|\s+have)`;
 // A message ends its row or runs into " · resets …" / " · <hint>" segments;
 // anything else after the limit is a sentence about one.
-const TAIL = String.raw`(?:\s*$|\s*[·∙•]\s*(.*)$)`;
-const SEGMENT_SPLIT = /\s*[·∙•]\s*/;
+const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[·∙•]\s*(.*)$)`;
+const SEGMENT_SEPARATOR = /[·∙•]/;
+const TRAILING_BORDER_RUN = new RegExp(`${TRAILING_BORDER}$`, "u");
+// Claude's own segments never quote; code holding a message as a string does.
+const CODE_DELIMITER = /["`]/;
+const MESSAGE_START = /^(?:you|over|approaching)\b/i;
 
 interface Form {
   pattern: RegExp;
@@ -107,50 +120,83 @@ function windowOf(named: string): ClaudeUsageWindow {
   return word.startsWith("5") ? "5-hour limit" : WINDOW_LABELS[word]!;
 }
 
+interface MessageStart {
+  text: string;
+  /** Begins after a column gap rather than at the row's start. */
+  atGap: boolean;
+}
+
 /**
- * Where on a row a message may start: the row's own start, or after a column
- * gap, since Claude draws its warning at the right of the prompt footer beside
- * "? for shortcuts" or a mode indicator.
+ * Where on a row a message may start: the row's own start, or, on a row that
+ * reaches the pane's right edge, right after a column gap. That is where
+ * Claude draws its warning, flush right in the prompt footer beside "? for
+ * shortcuts" or a mode; a message after a gap anywhere else is someone's text.
  */
-function columnStarts(row: string): string[] {
-  const starts = [row];
+function messageStarts(row: string, cols: number | undefined): MessageStart[] {
+  const starts: MessageStart[] = [{ text: row, atGap: false }];
+  if (cols === undefined || row.trimEnd().length < cols - RIGHT_EDGE_SLACK) return starts;
   for (const gap of row.matchAll(/\S {2,}(?=\S)/g)) {
-    starts.push(row.slice(gap.index + gap[0].length));
+    const text = row.slice(gap.index + gap[0].length);
+    if (MESSAGE_START.test(text)) starts.push({ text, atGap: true });
   }
   return starts;
 }
 
-function resetSegment(rest: string | undefined): { text: string; last: boolean } | null {
-  if (rest === undefined) return null;
-  const segments = rest.split(SEGMENT_SPLIT);
-  const index = segments.findIndex((segment) => /^resets\s+\S/i.test(segment));
-  if (index < 0) return null;
-  return {
-    text: segments[index]!.replace(/^resets\s+/i, "").trim(),
-    last: index === segments.length - 1,
-  };
+function segmentsOf(rest: string | undefined): string[] {
+  if (rest === undefined) return [];
+  return rest
+    .replace(TRAILING_BORDER_RUN, "")
+    .split(SEGMENT_SEPARATOR)
+    .map((segment) => segment.trim());
 }
 
-function matchRow(row: string, next: string | undefined): ClaudeUsageMessage | null {
+/**
+ * A reset a narrow pane wrapped onto the next row: the rest of its time, or
+ * the zone after it. Only a join that reads as a reset is taken, and one that
+ * already reads only gains a zone, so an unrelated row under the message never
+ * changes what it says.
+ */
+function carriedReset(text: string, next: string): string | null {
+  const own = parseResetText(text);
+  if (own !== null && own.zone !== undefined) return null;
+  const carried = segmentsOf(next.trim())[0] ?? "";
+  if (carried === "") return null;
+  for (const joined of [`${text} ${carried}`.trim(), `${text}${carried}`]) {
+    const parsed = parseResetText(joined);
+    if (parsed !== null && (own === null || parsed.zone !== undefined)) return joined;
+  }
+  return null;
+}
+
+function matchRow(
+  row: string,
+  next: string | undefined,
+  cols: number | undefined
+): ClaudeUsageMessage | null {
   if (!/limit/i.test(row)) return null;
-  for (const start of columnStarts(row)) {
+  for (const start of messageStarts(row, cols)) {
     for (const form of FORMS) {
-      const match = form.pattern.exec(start);
+      const match = form.pattern.exec(start.text);
       if (match === null) continue;
       const percentForm = PERCENT_FORMS.has(form.statement);
       const named = percentForm ? match[2]! : match[1]!;
-      const rest = percentForm ? match[3] : match[2];
-      const reset = resetSegment(rest);
-      if (form.needsReset && reset === null) continue;
+      const segments = segmentsOf(percentForm ? match[3] : match[2]);
+      if (segments.some((segment) => CODE_DELIMITER.test(segment))) continue;
+      const resetIndex = segments.findIndex((segment) => /^resets(?:\s|$)/i.test(segment));
+      if (form.needsReset && resetIndex < 0) continue;
       const usedPercent = percentForm ? Number(match[1]) : null;
       if (usedPercent !== null && usedPercent > 100) continue;
-      let resetText = reset?.text ?? null;
-      // A narrow pane wraps the reset onto the next row. Only a join that
-      // reads as a reset is kept, so an unrelated row under it never changes
-      // what this message is.
-      if (reset?.last && next !== undefined && parseResetText(reset.text) === null) {
-        const joined = `${reset.text} ${next.trim().split(SEGMENT_SPLIT)[0] ?? ""}`;
-        if (parseResetText(joined) !== null) resetText = joined;
+      let resetText: string | null = null;
+      if (resetIndex >= 0) {
+        resetText = segments[resetIndex]!.slice("resets".length).trim();
+        if (resetIndex === segments.length - 1 && next !== undefined) {
+          resetText = carriedReset(resetText, next) ?? resetText;
+        }
+        // Claude truncates a footer warning that doesn't fit with "…"; any
+        // other reset that doesn't read means the row isn't its footer.
+        if (start.atGap && parseResetText(resetText) === null && !resetText.endsWith("…")) {
+          continue;
+        }
       }
       return { window: windowOf(named), statement: form.statement, usedPercent, resetText };
     }
@@ -162,13 +208,16 @@ function matchRow(row: string, next: string | undefined): ClaudeUsageMessage | n
  * The Claude Code usage messages at the tail of a viewport, one per window,
  * the lowest on screen winning. Anchored like the rate-limit patterns, so a
  * row that only mentions a limit — prose, a diff, a quoted fixture — is never
- * read as one.
+ * read as one. `cols` is the pane's width, which places a footer warning.
  */
-export function scanClaudeUsageMessages(lines: readonly string[]): ClaudeUsageMessage[] {
+export function scanClaudeUsageMessages(
+  lines: readonly string[],
+  cols?: number
+): ClaudeUsageMessage[] {
   const tail = lines.slice(-SCAN_LINES).map((line) => stripAnsi(line));
   const byWindow = new Map<ClaudeUsageWindow, ClaudeUsageMessage>();
   for (let i = 0; i < tail.length; i++) {
-    const message = matchRow(tail[i]!, tail[i + 1]);
+    const message = matchRow(tail[i]!, tail[i + 1], cols);
     if (message !== null) byWindow.set(message.window, message);
   }
   return [...byWindow.values()];
@@ -258,29 +307,35 @@ function wallAsUtc(wall: WallTime): number {
   return Date.UTC(wall.year, wall.month, wall.day, wall.hour, wall.minute);
 }
 
-/** The instant a zone's clock reads `wall`, settled over the zone's offset. */
-function instantOf(wall: WallTime, format: Intl.DateTimeFormat): number {
+const DAY_MS = 86_400_000;
+
+/**
+ * Every instant a zone's clock reads `wall`, earliest first: none in a
+ * daylight-saving gap, two in a fold. Each candidate takes the zone's offset
+ * from a day either side and is kept only if the clock reads `wall` there.
+ */
+function instantsOf(wall: WallTime, format: Intl.DateTimeFormat): number[] {
   const target = wallAsUtc(wall);
-  let guess = target;
-  for (let i = 0; i < 3; i++) {
-    const next = target - (wallAsUtc(wallTime(guess, format)) - guess);
-    if (next === guess) break;
-    guess = next;
+  const instants = new Set<number>();
+  for (const probe of [target - DAY_MS, target, target + DAY_MS]) {
+    const instant = target - (wallAsUtc(wallTime(probe, format)) - probe);
+    if (wallAsUtc(wallTime(instant, format)) === target) instants.add(instant);
   }
-  return guess;
+  return [...instants].sort((a, b) => a - b);
 }
 
 /**
- * Leeway for a time-only reset that has just passed: Claude prints a bare time
- * only for a reset within a day, so one earlier than this is tomorrow's.
+ * How far past a bare reset time a message may be seen and still mean today's.
+ * Claude prints the reset's minute without its seconds, and the pane is read a
+ * moment after it prints, so a time further back than this is tomorrow's.
  */
-const JUST_PASSED_MS = 10 * 60_000;
+const JUST_PASSED_MS = 2 * 60_000;
 
 /**
  * The epoch ms a printed reset names, read in the zone Claude printed beside
  * it (this machine's when it printed none), against when it was seen: a bare
  * time is its next showing, a date without a year is this year's. Null for a
- * reset that doesn't read as one.
+ * reset that doesn't read as one, or names a time the zone's clock skips.
  */
 export function resolveResetsAt(resetText: string | null, observedAt: number): number | null {
   if (resetText === null) return null;
@@ -289,13 +344,14 @@ export function resolveResetsAt(resetText: string | null, observedAt: number): n
   const format = zoneFormat(reset.zone);
   if (format === null) return null;
   const seen = wallTime(observedAt, format);
+  const earliest = observedAt - JUST_PASSED_MS;
   if (reset.month === null) {
-    const today = instantOf({ ...seen, hour: reset.hour, minute: reset.minute }, format);
-    if (today >= observedAt - JUST_PASSED_MS) return today;
-    return instantOf(
-      { ...seen, day: seen.day + 1, hour: reset.hour, minute: reset.minute },
-      format
-    );
+    for (const days of [0, 1]) {
+      const wall = { ...seen, day: seen.day + days, hour: reset.hour, minute: reset.minute };
+      const next = instantsOf(wall, format).find((instant) => instant >= earliest);
+      if (next !== undefined) return next;
+    }
+    return null;
   }
   const wall: WallTime = {
     year: reset.year ?? seen.year,
@@ -306,5 +362,7 @@ export function resolveResetsAt(resetText: string | null, observedAt: number): n
   };
   // "Feb 30" rolls into March under Date.UTC; that isn't a date Claude prints.
   if (new Date(Date.UTC(wall.year, wall.month, wall.day)).getUTCDate() !== wall.day) return null;
-  return instantOf(wall, format);
+  const instants = instantsOf(wall, format);
+  // A fold shows the time twice: the showing still to come, else the later.
+  return instants.find((instant) => instant >= earliest) ?? instants.at(-1) ?? null;
 }

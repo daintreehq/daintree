@@ -435,12 +435,17 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
     return seen;
   }
 
+  // Claude's footer on the 80-column pane: hints left, its warning flush right.
+  const footerRow = (message: string) => {
+    const left = "  ? for shortcuts";
+    return `${left}${" ".repeat(79 - left.length - message.length)}${message}\r\n`;
+  };
   const footer = (percent: number) =>
-    `  ? for shortcuts        You've used ${percent}% of your weekly limit · resets Nov 2 at 6pm (Australia/Sydney)\r\n`;
+    footerRow(`You've used ${percent}% of your weekly limit · resets 6pm (UTC)`);
 
   it("reports the parsed fields of a footer warning, never its text", async () => {
     const seen = collect();
-    const terminal = createTerminal({ launchAgentId: "claude", cols: 160 });
+    const terminal = createTerminal({ launchAgentId: "claude" });
 
     ptyOnDataCallback!(footer(87));
     await vi.advanceTimersByTimeAsync(250);
@@ -451,7 +456,8 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
         window: "weekly limit",
         statement: "used",
         usedPercent: 87,
-        resetsAt: Date.UTC(2026, 10, 2, 7, 0),
+        // 6pm UTC has passed today, so it's tomorrow's.
+        resetsAt: Date.UTC(2026, 10, 2, 18, 0),
         observedAt: expect.any(Number),
         timestamp: seen[0]?.observedAt,
       },
@@ -463,14 +469,32 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
     terminal.dispose();
   });
 
+  it("leaves a warning after a gap short of the pane's edge alone", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!("  ? for shortcuts  Approaching weekly limit · resets 6pm (UTC)\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
+    // The same message flush right is Claude's footer.
+    ptyOnDataCallback!(footerRow("Approaching weekly limit · resets 6pm (UTC)"));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
   it("reports a message once while it stays, and again when it changes", async () => {
     const seen = collect();
-    const terminal = createTerminal({ launchAgentId: "claude", cols: 160 });
+    const terminal = createTerminal({ launchAgentId: "claude" });
 
     ptyOnDataCallback!(footer(87));
     await vi.advanceTimersByTimeAsync(250);
-    ptyOnDataCallback!("more output\r\n");
-    await vi.advanceTimersByTimeAsync(250);
+    // On screen past the cooldown, through repaints, it is one observation.
+    for (let i = 0; i < 3; i++) {
+      ptyOnDataCallback!(`more output ${i}\r\n${footer(87)}`);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
     expect(seen).toHaveLength(1);
 
     // A repaint that drops it for a frame is the same message.
@@ -482,21 +506,27 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
 
     ptyOnDataCallback!(footer(91));
     await vi.advanceTimersByTimeAsync(250);
-    expect(seen.map((payload) => payload.usedPercent)).toEqual([87, 91]);
+    ptyOnDataCallback!(footerRow("Over 90% of your weekly limit used · resets 6pm (UTC)"));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen.map((payload) => [payload.statement, payload.usedPercent])).toEqual([
+      ["used", 87],
+      ["used", 91],
+      ["over", 90],
+    ]);
 
     // Gone a while, then shown again, it is seen again.
     ptyOnDataCallback!("line\r\n".repeat(30));
     await vi.advanceTimersByTimeAsync(60_000);
-    ptyOnDataCallback!(footer(91));
+    ptyOnDataCallback!(footerRow("Over 90% of your weekly limit used · resets 6pm (UTC)"));
     await vi.advanceTimersByTimeAsync(250);
-    expect(seen.map((payload) => payload.usedPercent)).toEqual([87, 91, 91]);
+    expect(seen).toHaveLength(4);
 
     terminal.dispose();
   });
 
   it("reports each limit on its own", async () => {
     const seen = collect();
-    const terminal = createTerminal({ launchAgentId: "claude", cols: 160 });
+    const terminal = createTerminal({ launchAgentId: "claude" });
 
     ptyOnDataCallback!(footer(87));
     await vi.advanceTimersByTimeAsync(250);
@@ -514,12 +544,12 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
 
   it("reads Claude Code panes only", async () => {
     const seen = collect();
-    const codex = createTerminal({ launchAgentId: "codex", cols: 160 });
+    const codex = createTerminal({ launchAgentId: "codex" });
     ptyOnDataCallback!(footer(87));
     await vi.advanceTimersByTimeAsync(250);
     codex.dispose();
 
-    const shell = createTerminal({ cols: 160 });
+    const shell = createTerminal();
     ptyOnDataCallback!(footer(87));
     await vi.advanceTimersByTimeAsync(250);
     shell.dispose();
@@ -529,7 +559,7 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
 
   it("goes by the agent detected in a pane launched as Claude", async () => {
     const seen = collect();
-    const terminal = createTerminal({ launchAgentId: "claude", cols: 160 });
+    const terminal = createTerminal({ launchAgentId: "claude" });
     const info = (terminal as unknown as { terminalInfo: { detectedAgentId?: string } })
       .terminalInfo;
     info.detectedAgentId = "codex";
@@ -541,9 +571,26 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
     terminal.dispose();
   });
 
+  it("stops reading once Claude has exited the pane", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    const info = (terminal as unknown as { terminalInfo: { agentState?: string } }).terminalInfo;
+    info.agentState = "exited";
+    ptyOnDataCallback!(footer(91));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
   it("ignores a Claude pane's prose about a limit", async () => {
     const seen = collect();
-    const terminal = createTerminal({ launchAgentId: "claude", cols: 160 });
+    const terminal = createTerminal({ launchAgentId: "claude" });
 
     ptyOnDataCallback!("⏺ The footer says you've used 87% of your weekly limit · resets Nov 2\r\n");
     ptyOnDataCallback!("⚠ Heads up, you have less than 10% of your weekly limit left.\r\n");

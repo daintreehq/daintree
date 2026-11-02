@@ -1993,7 +1993,8 @@ export class TerminalProcess {
       return;
     }
     const visible = new Set<ClaudeUsageWindow>();
-    for (const message of scanClaudeUsageMessages(lines)) {
+    const cols = this.readPtyGeometry().cols ?? undefined;
+    for (const message of scanClaudeUsageMessages(lines, cols)) {
       visible.add(message.window);
       const key = `${message.statement}|${message.usedPercent}|${message.resetText}`;
       const last = seen.get(message.window);
