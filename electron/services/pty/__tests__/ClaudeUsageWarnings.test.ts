@@ -241,9 +241,7 @@ describe("resolveResetsAt", () => {
     expect(resolveResetsAt("Nov 3 at 12pm (UTC)", sydneyMorning)).toBe(
       Date.UTC(2026, 10, 3, 12, 0)
     );
-    expect(resolveResetsAt("Nov 3 at 12am (UTC)", sydneyMorning)).toBe(
-      Date.UTC(2026, 10, 3, 0, 0)
-    );
+    expect(resolveResetsAt("Nov 3 at 12am (UTC)", sydneyMorning)).toBe(Date.UTC(2026, 10, 3, 0, 0));
   });
 
   it("reads a bare time as its next showing", () => {
