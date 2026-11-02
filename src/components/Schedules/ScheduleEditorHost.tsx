@@ -7,6 +7,7 @@ import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import { ScheduleEditorDialog } from "./ScheduleEditorDialog";
 import { NEW_SCHEDULE_SELECTOR, scheduleActionSelector } from "./ScheduleList";
 import { useScheduleOsJob } from "./useScheduleOsJob";
+import { useProjectSchedules } from "./useProjectSchedules";
 import { useWorktreeChoices } from "./useWorktreeChoices";
 
 /** Re-read on each minute boundary, so the next runs it previews stay current. */
@@ -58,6 +59,10 @@ export function ScheduleEditorHost() {
   const { choices } = useWorktreeChoices();
   const agents = useFirstAgentOptions();
   const osJob = useScheduleOsJob(editor !== null, editor?.key ?? null);
+  // The project's switches decide whether "Run when Daintree isn't running"
+  // counts. Read here, not handed over by the tab, which Settings can unmount
+  // under an open editor, and kept current if another window turns them.
+  const { state: project } = useProjectSchedules(editor !== null);
   const now = useWallClock(editor?.key ?? 0, untilNextMinute);
   // Where focus goes once the editor closes, when its opener is the wrong place.
   const focusAfterRef = useRef<(() => HTMLElement | null) | null>(null);
@@ -115,6 +120,7 @@ export function ScheduleEditorHost() {
       worktrees={choices}
       now={now}
       osJobContext={osJob.status?.context ?? null}
+      projectSwitches={project.snapshot?.switches ?? null}
       restoreFocusTo={restoreTarget}
       onSaved={handleSaved}
       // Read while the row is still on screen: main's push can remove it before the delete answers.

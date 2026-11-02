@@ -40,6 +40,8 @@ import type { ScheduleRunsState } from "./useScheduleRuns";
 interface ScheduleRunsProps {
   schedule: Schedule;
   now: number;
+  /** The project's own switch for its schedules (#16166); off, none runs on its own. */
+  schedulesOn: boolean;
   /** The schedule's worktree label, or null for the main checkout. */
   worktreeLabel: string | null;
   presetName: string | null;
@@ -339,15 +341,17 @@ function useRunAnnouncement(
 
 function EmptyRuns({
   schedule,
+  schedulesOn,
   next,
   now,
 }: {
   schedule: Schedule;
+  schedulesOn: boolean;
   next: number | null;
   now: number;
 }) {
   const timeZone = schedule.cadence.timeZone;
-  if (schedule.enabled && next !== null) {
+  if (next !== null) {
     return (
       <EmptyState
         variant="zero-data"
@@ -365,9 +369,11 @@ function EmptyRuns({
       icon={<History />}
       title="Start the first run"
       description={
-        schedule.enabled
-          ? "Its cadence never comes round, so it won't run on its own. Run now starts a run."
-          : "This schedule is paused. Run now starts a run without turning it on."
+        !schedule.enabled
+          ? "This schedule is paused. Run now starts a run without turning it on."
+          : !schedulesOn
+            ? "Schedules are off for this project, so it won't run on its own. Run now starts a run."
+            : "Its cadence never comes round, so it won't run on its own. Run now starts a run."
       }
     />
   );
@@ -376,6 +382,7 @@ function EmptyRuns({
 export function ScheduleRuns({
   schedule,
   now,
+  schedulesOn,
   worktreeLabel,
   presetName,
   presetMissing,
@@ -394,7 +401,7 @@ export function ScheduleRuns({
   const timeZone = schedule.cadence.timeZone;
   const foreignZone = timeZone !== machineTimeZone();
   const words = cadenceWords(schedule.cadence);
-  const next = schedule.enabled ? nextRunAt(schedule.cadence, now) : null;
+  const next = schedule.enabled && schedulesOn ? nextRunAt(schedule.cadence, now) : null;
   const { runs, status } = runsState;
   const announcement = useRunAnnouncement(runs, status === "ready", requestedRunIds);
 
@@ -488,6 +495,8 @@ export function ScheduleRuns({
           <span className="sr-only">Next run: </span>
           {!schedule.enabled ? (
             <p className="text-sm text-text-secondary">Paused</p>
+          ) : !schedulesOn ? (
+            <p className="text-sm text-text-secondary">Schedules off</p>
           ) : next === null ? (
             <p className="text-sm text-text-secondary">Never</p>
           ) : (
@@ -564,7 +573,7 @@ export function ScheduleRuns({
           <SkeletonBone className="h-12 w-full" />
         </Skeleton>
       ) : runs.length === 0 && status === "ready" ? (
-        <EmptyRuns schedule={schedule} next={next} now={now} />
+        <EmptyRuns schedule={schedule} schedulesOn={schedulesOn} next={next} now={now} />
       ) : runs.length > 0 ? (
         <div
           ref={listRef}
