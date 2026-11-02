@@ -484,9 +484,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     !paneSignals.isRestarting &&
     !isExited;
   // Amber is the fleet band's `needs-you` and nothing else: an unread Canopy
-  // ask. The edge reads it through the header glyph's own resolver, so the two
-  // come and go together. A prompt that asks nothing, a hand-back, and any
-  // pane the fleet hasn't reported draw no amber.
+  // ask. The edge reads it through the header glyph's own resolver, so the
+  // glyph's amber and the edge come and go together. A prompt that asks
+  // nothing, a hand-back, and any pane the fleet hasn't reported draw no amber.
   // Only a live pane can ask. An error wait is never asking: it is failed
   // while the run is alive and nothing once a restart or exit replaces it.
   const ownCanAsk = paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
@@ -574,6 +574,19 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ) ??
       false);
 
+  // The glyph is an agent pane's permanent status, so its slot is never left
+  // empty where the display state withholds one (#16138): an exit the pane has
+  // seen draws exited, a restart idle, and anything else what the pane last
+  // observed. For the glyph only — `headerAgentState`, `data-agent-state` and
+  // the edges keep the observation.
+  const indicatorAgentState: AgentState =
+    headerAgentState ??
+    (paneSignals.isRestarting
+      ? "idle"
+      : isExited === true || ownAgentState === "exited"
+        ? "exited"
+        : (ownAgentState ?? "idle"));
+
   // The agent state glyph goes to PanelHeader's far-right box, past the close
   // button, and is never folded into the metadata row.
   const resolvedAgentIndicator = useMemo(() => {
@@ -581,7 +594,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       return (
         <TerminalAgentIndicator
           id={id}
-          agentState={headerAgentState}
+          agentState={indicatorAgentState}
           activity={activity}
           isExited={isExited}
           exitCode={exitCode}
@@ -594,7 +607,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isAgentTerminal,
     reservesAgentSlot,
     id,
-    headerAgentState,
+    indicatorAgentState,
     activity,
     isExited,
     exitCode,

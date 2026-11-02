@@ -59,8 +59,10 @@ export function isNeedsYouPane(
  * amber ring, a hand-back or an unread wait is the unread mark, a read one is
  * finished, and an error wait is blocked. Everything else — a prompt that asks
  * nothing, a seen ask, the user's own park or snooze, or no fleet report yet —
- * draws no glyph, since none of them is news. Work in flight keeps the state
- * observed. The grid edge reads its amber from here too, so the two agree.
+ * resolves to nothing, since none of them is news: list rows leave it unmarked,
+ * and the pane header, whose glyph is its permanent status, draws its own grey
+ * waiting ring. Work in flight keeps the state observed. The grid edge reads
+ * its amber from here too, so the two agree.
  */
 export function resolvePaneSessionPresentation(
   displayState: AgentState | undefined,
