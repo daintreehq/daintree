@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifySessionMeta,
   findPaneCodexProcess,
+  isCodexExecutable,
   parseCensus,
   parseLsofFields,
   probeCodexSessionFile,
@@ -142,12 +143,40 @@ describe("findPaneCodexProcess", () => {
     });
   });
 
+  it("looks past a wrapper named like Codex to the real binary under it", () => {
+    const wrapped = [
+      censusLine(100, 1, "-bash"),
+      censusLine(101, 100, "codex-wrapper"),
+      censusLine(102, 101, "node"),
+      censusLine(103, 102, "codex"),
+    ].join("\n");
+    expect(findPaneCodexProcess(parseCensus(wrapped), 100)).toMatchObject({
+      status: "found",
+      process: { pid: 103 },
+    });
+  });
+
   it("refuses a tree too big to search whole", () => {
     const lines = [censusLine(100, 1, "-zsh")];
     for (let i = 0; i < 300; i += 1) lines.push(censusLine(1000 + i, 100, "sleep"));
     expect(findPaneCodexProcess(parseCensus(lines.join("\n")), 100)).toEqual({
       status: "too-big",
     });
+  });
+});
+
+describe("isCodexExecutable", () => {
+  it("takes the native binary and a legacy package's per-target names, truncated or not", () => {
+    expect(isCodexExecutable(NATIVE)).toBe(true);
+    expect(isCodexExecutable("codex-aarch64-apple-darwin")).toBe(true);
+    // Linux keeps 15 bytes of `codex-x86_64-unknown-linux-musl`.
+    expect(isCodexExecutable("codex-x86_64-un")).toBe(true);
+  });
+
+  it("takes nothing else that starts with codex", () => {
+    expect(isCodexExecutable("codex-wrapper")).toBe(false);
+    expect(isCodexExecutable("codex-x86_64")).toBe(false);
+    expect(isCodexExecutable("node")).toBe(false);
   });
 });
 
@@ -423,21 +452,44 @@ describe("probeCodexSessionFile", () => {
 });
 
 describe.skipIf(process.platform === "win32")("runListing", () => {
-  it("hands back the output and the exit status", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function alive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it("hands back the output and the exit status, signalling nothing once it has exited", async () => {
+    const kill = vi.spyOn(process, "kill");
     await expect(
       runListing("sh", ["-c", "printf 'p1\\n'; exit 1"], { timeoutMs: 5_000, maxBytes: 1024 })
     ).resolves.toEqual({ stdout: "p1\n", exitCode: 1 });
+    expect(kill).not.toHaveBeenCalled();
   });
 
-  it("kills the whole group when the listing runs out of time", async () => {
-    const marker = path.join(codexHome, "survivor");
-    // The helper outlives the shell unless its group is killed with it.
-    const script = `(sleep 1; touch '${marker}') & sleep 5`;
-    await expect(
-      runListing("sh", ["-c", script], { timeoutMs: 100, maxBytes: 1024 })
-    ).rejects.toThrow(/timed out/);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    await expect(stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  it("kills the whole group, once, when the listing runs out of time", async () => {
+    const pidFile = path.join(codexHome, "helper.pid");
+    // The helper reports in before the deadline and outlives the shell unless
+    // its group is killed with it.
+    const script = `sleep 30 & echo $! > '${pidFile}'; wait`;
+    const kill = vi.spyOn(process, "kill");
+    let helper: number | null = null;
+    try {
+      await expect(
+        runListing("sh", ["-c", script], { timeoutMs: 1_500, maxBytes: 1024 })
+      ).rejects.toThrow(/timed out/);
+      helper = Number((await readFile(pidFile, "utf8")).trim());
+      expect(kill.mock.calls.filter(([pid]) => pid < 0)).toHaveLength(1);
+      await vi.waitFor(() => expect(alive(helper as number)).toBe(false), { timeout: 5_000 });
+    } finally {
+      if (helper !== null && alive(helper)) process.kill(helper, "SIGKILL");
+    }
   });
 
   it("refuses output past its cap", async () => {

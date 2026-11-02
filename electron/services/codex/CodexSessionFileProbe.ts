@@ -68,19 +68,12 @@ export interface CodexSessionFileProbeDeps {
   run?: ListingRunner;
 }
 
-function killGroup(child: ChildProcess): void {
-  if (!child.pid) return;
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch {
-    // The group is already gone.
-  }
-}
-
 /**
  * Runs a listing in a process group of its own, so a timeout or an overflow
  * takes everything it started with it: `lsof` can leave a helper blocked on an
- * unreachable mount.
+ * unreachable mount. The group is signalled once, and only while the listing
+ * is still running: once it has exited and been reaped, its id can name
+ * someone else's group.
  */
 export const runListing: ListingRunner = (file, args, { timeoutMs, maxBytes }) =>
   new Promise((resolve, reject) => {
@@ -102,6 +95,17 @@ export const runListing: ListingRunner = (file, args, { timeoutMs, maxBytes }) =
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
+    // Set once the group is signalled or the listing has exited: no signal after either.
+    let released = false;
+    const killGroup = () => {
+      if (released || !child.pid) return;
+      released = true;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // The group is already gone.
+      }
+    };
     const settle = (outcome: () => void) => {
       if (settled) return;
       settled = true;
@@ -109,25 +113,27 @@ export const runListing: ListingRunner = (file, args, { timeoutMs, maxBytes }) =
       outcome();
     };
     const timer = setTimeout(() => {
-      killGroup(child);
+      killGroup();
       settle(() => reject(new Error(`${file} timed out`)));
     }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer) => {
       if (settled) return;
       size += chunk.length;
       if (size > maxBytes) {
-        killGroup(child);
+        killGroup();
         settle(() => reject(new Error(`${file} output passed its cap`)));
         return;
       }
       chunks.push(chunk);
     });
     child.on("error", (error) => {
-      killGroup(child);
+      killGroup();
       settle(() => reject(error));
     });
+    child.on("exit", () => {
+      released = true;
+    });
     child.on("close", (code, signal) => {
-      killGroup(child);
       settle(() => {
         if (code === null) reject(new Error(`${file} ended on ${signal ?? "a signal"}`));
         else resolve({ stdout: Buffer.concat(chunks).toString("utf8"), exitCode: code });
@@ -149,16 +155,37 @@ export function parseCensus(psOutput: string): Map<number, CensusEntry> {
     const match = CENSUS_LINE.exec(line);
     if (!match) continue;
     const pid = Number(match[1]);
-    census.set(pid, { pid, ppid: Number(match[2]), started: match[3], comm: match[4] });
+    const [, , ppid, started, comm] = match;
+    if (ppid === undefined || started === undefined || comm === undefined) continue;
+    census.set(pid, { pid, ppid: Number(ppid), started, comm });
   }
   return census;
 }
 
-/** The native Codex binary: `codex`, or `codex-<target>` in older packages. The npm launcher runs as `node`. */
+/** The names older npm packages gave the native binary, one per target. */
+const LEGACY_CODEX_BINARIES = [
+  "codex-aarch64-apple-darwin",
+  "codex-x86_64-apple-darwin",
+  "codex-aarch64-unknown-linux-musl",
+  "codex-x86_64-unknown-linux-musl",
+  "codex-aarch64-unknown-linux-gnu",
+  "codex-x86_64-unknown-linux-gnu",
+];
+/** Linux keeps the first 15 bytes of a process name. */
+const LINUX_COMM_LENGTH = 15;
+
+/**
+ * The native Codex binary: `codex`, or a legacy package's per-target name. The
+ * npm launcher runs as `node`, and any other `codex-*` (a user's wrapper) is
+ * not taken for Codex, so it can't hide the real one beneath it.
+ */
 export function isCodexExecutable(comm: string): boolean {
   let name = path.basename(comm.replace(/\\/g, "/")).toLowerCase();
   if (name.startsWith("-")) name = name.slice(1);
-  return name === "codex" || name.startsWith("codex-");
+  if (name === "codex") return true;
+  return LEGACY_CODEX_BINARIES.some(
+    (binary) => binary === name || (name.length === LINUX_COMM_LENGTH && binary.startsWith(name))
+  );
 }
 
 export type PaneCodexProcess =
@@ -185,8 +212,9 @@ export function findPaneCodexProcess(
     const found = level
       .map((pid) => census.get(pid))
       .filter((entry): entry is CensusEntry => !!entry && isCodexExecutable(entry.comm));
-    if (found.length > 1) return { status: "ambiguous" };
-    if (found.length === 1) return { status: "found", process: found[0]! };
+    const [only, another] = found;
+    if (another) return { status: "ambiguous" };
+    if (only) return { status: "found", process: only };
     const next: number[] = [];
     for (const pid of level) {
       for (const child of children.get(pid) ?? []) {
@@ -259,7 +287,7 @@ export function rolloutThreadId(filePath: string): string | null {
   ) {
     return null;
   }
-  return match[1]!.toLowerCase();
+  return match[1]?.toLowerCase() ?? null;
 }
 
 function isWriteAccess(access: string): boolean {
@@ -383,9 +411,10 @@ export async function probeCodexSessionFile(
     const census = await listCensus(run, ["-A", "-o", CENSUS_COLUMNS]);
     if (!census) return unknownSessionFile("probe-failed");
     const found = findPaneCodexProcess(census, rootPid);
-    if (found.status === "none") return unknownSessionFile("not-observed");
-    if (found.status === "ambiguous") return unknownSessionFile("ambiguous");
-    if (found.status === "too-big") return unknownSessionFile("probe-failed");
+    if (found.status !== "found") {
+      if (found.status === "none") return unknownSessionFile("not-observed");
+      return unknownSessionFile(found.status === "ambiguous" ? "ambiguous" : "probe-failed");
+    }
     codex = found.process;
   } catch {
     return unknownSessionFile("probe-failed");
