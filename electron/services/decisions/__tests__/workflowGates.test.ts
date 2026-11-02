@@ -31,7 +31,6 @@ import {
   serializeDeviceKeys,
   sha256Hex,
   verifyRecordAndEnvelope,
-  type CryptoEnvelope,
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import {
@@ -40,6 +39,7 @@ import {
   applyAction,
   bytesToBase64Url,
   type ActionKind,
+  type CryptoEnvelope,
   type DeviceCert,
   type Requirement,
 } from "@daintreehq/decisions-protocol";
