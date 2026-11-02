@@ -19,13 +19,21 @@ describe("HostRecords", () => {
     await records.markEnrolled("studio", "dev_host_1", 100);
     await records.markRevoked("studio", "dev_host_1", 200);
     await records.markRevoked("studio", "dev_host_1", 300);
-    expect(await records.get("studio")).toEqual({ deviceId: "dev_host_1", enrolledAt: 100, revokedAt: 200 });
+    expect(await records.get("studio")).toEqual({
+      deviceId: "dev_host_1",
+      enrolledAt: 100,
+      revokedAt: 200,
+    });
 
     // Read back by a fresh keeper, as after a restart.
     const reopened = new HostRecords(meta, "inst_one_000000001");
     expect((await reopened.get("studio"))?.revokedAt).toBe(200);
     await reopened.markEnrolled("studio", "dev_host_2", 400);
-    expect(await reopened.get("studio")).toEqual({ deviceId: "dev_host_2", enrolledAt: 400, revokedAt: null });
+    expect(await reopened.get("studio")).toEqual({
+      deviceId: "dev_host_2",
+      enrolledAt: 400,
+      revokedAt: null,
+    });
   });
 
   it("reads another installation's records, or a damaged one, as none", async () => {
@@ -41,7 +49,10 @@ describe("HostRecords", () => {
     });
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const damaged = new HostRecords(memoryMeta({ [HOST_RECORDS_META_KEY]: "{not json" }), "inst_one_000000001");
+    const damaged = new HostRecords(
+      memoryMeta({ [HOST_RECORDS_META_KEY]: "{not json" }),
+      "inst_one_000000001"
+    );
     expect((await damaged.read()).size).toBe(0);
     warn.mockRestore();
   });

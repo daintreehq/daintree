@@ -274,7 +274,14 @@ describe("HostEnroller", () => {
     expect(listed).toMatchObject({
       result: "listed",
       autoEnroll: false,
-      hosts: [{ hostId: "studio", connected: true, enrollment: { state: "not-enrolled" }, canEnroll: true }],
+      hosts: [
+        {
+          hostId: "studio",
+          connected: true,
+          enrollment: { state: "not-enrolled" },
+          canEnroll: true,
+        },
+      ],
     });
 
     const done = await enroller.enroll("studio");
@@ -319,7 +326,9 @@ describe("HostEnroller", () => {
     enrolled.identity = hostIdentity("dev_host_enrolled_1");
     port.connect("studio", enrolled);
     const elsewhere = new FakeLink();
-    elsewhere.identity = hostIdentity("dev_other_00000001", { installationId: "inst_other_0000001" });
+    elsewhere.identity = hostIdentity("dev_other_00000001", {
+      installationId: "inst_other_0000001",
+    });
     port.connect("lab", elsewhere);
     const own = new FakeLink();
     own.identity = { kind: "owner" };

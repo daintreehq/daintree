@@ -80,7 +80,8 @@ function failure(
   detail?: string
 ): DecisionsHostEnrollment {
   const bounded = boundedDetail(detail);
-  const value: DecisionsHostFailure = bounded === undefined ? { reason, at } : { reason, detail: bounded, at };
+  const value: DecisionsHostFailure =
+    bounded === undefined ? { reason, at } : { reason, detail: bounded, at };
   return { state: "failed", failure: value };
 }
 
@@ -329,11 +330,12 @@ export class HostEnroller {
       const revokedIds = new Set(
         devices.filter((d) => d.revoked_at !== null).map((d) => d.device_id)
       );
-      const seenRevoked = mine && revokedIds.has(identity.deviceId)
-        ? identity.deviceId
-        : record?.deviceId && revokedIds.has(record.deviceId)
-          ? record.deviceId
-          : null;
+      const seenRevoked =
+        mine && revokedIds.has(identity.deviceId)
+          ? identity.deviceId
+          : record?.deviceId && revokedIds.has(record.deviceId)
+            ? record.deviceId
+            : null;
       if (seenRevoked !== null && record?.revokedAt == null) {
         try {
           record = await records.markRevoked(hostId, seenRevoked, this.now());
@@ -429,7 +431,11 @@ export class HostEnroller {
   }
 
   private labelFor(hostId: string): string {
-    const name = this.port?.hosts().find((host) => host.hostId === hostId)?.name.trim() || hostId;
+    const name =
+      this.port
+        ?.hosts()
+        .find((host) => host.hostId === hostId)
+        ?.name.trim() || hostId;
     return name.length > MAX_LABEL_LENGTH ? name.slice(0, MAX_LABEL_LENGTH) : name;
   }
 
@@ -450,7 +456,8 @@ export class HostEnroller {
       else if (connected || always) enrollment = { state: "unchecked" };
     }
     if (enrollment === null) return null;
-    const busy = this.runs.has(hostId) || enrollment.state === "checking" || enrollment.state === "enrolling";
+    const busy =
+      this.runs.has(hostId) || enrollment.state === "checking" || enrollment.state === "enrolling";
     return {
       hostId,
       name: name || hostId,
@@ -460,7 +467,9 @@ export class HostEnroller {
     };
   }
 
-  private callFailure(outcome: Extract<HostCallOutcome<unknown>, { ok: false }>): DecisionsHostEnrollment {
+  private callFailure(
+    outcome: Extract<HostCallOutcome<unknown>, { ok: false }>
+  ): DecisionsHostEnrollment {
     switch (outcome.failure) {
       case "needs-update":
         return { state: "needs-update" };

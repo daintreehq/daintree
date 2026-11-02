@@ -112,9 +112,9 @@ const decisionsEntry = vi.hoisted(() => ({
     autoEnroll: true,
     hosts: [],
   })),
-  enrollDecisionsHost: vi.fn(
-    async (_hostId: string): Promise<DecisionsHostEnrollResult> => ({ result: "not-connected" })
-  ),
+  enrollDecisionsHost: vi.fn(async (_hostId: string): Promise<DecisionsHostEnrollResult> => ({
+    result: "not-connected",
+  })),
   setAutoEnrollHosts: vi.fn(async (enabled: boolean): Promise<DecisionsHostsResult> => ({
     result: "listed",
     autoEnroll: enabled,
@@ -732,7 +732,13 @@ describe("decisions IPC", () => {
   it("takes only a host id to enroll, and only a boolean for automatic enrollment", () => {
     const enrollSchema = decisionsNamespace.ops.enrollHost.schema as SafeParse;
     expect(enrollSchema.safeParse({ hostId: "studio" }).success).toBe(true);
-    for (const value of [undefined, "studio", { hostId: "" }, { hostId: "x".repeat(257) }, { hostId: "studio", replace: "dev" }]) {
+    for (const value of [
+      undefined,
+      "studio",
+      { hostId: "" },
+      { hostId: "x".repeat(257) },
+      { hostId: "studio", replace: "dev" },
+    ]) {
       expect(enrollSchema.safeParse(value).success).toBe(false);
     }
     const autoSchema = decisionsNamespace.ops.setAutoEnrollHosts.schema as SafeParse;

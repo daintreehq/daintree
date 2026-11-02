@@ -59,7 +59,9 @@ function failureOf<T>(error: unknown): HostCallOutcome<T> {
   }
   const message = (error as { message?: unknown } | null)?.message;
   const detail = boundedDetail(typeof message === "string" ? message : undefined);
-  return detail === undefined ? { ok: false, failure: "failed" } : { ok: false, failure: "failed", detail };
+  return detail === undefined
+    ? { ok: false, failure: "failed" }
+    : { ok: false, failure: "failed", detail };
 }
 
 /**
@@ -87,7 +89,11 @@ class HostLink implements DecisionsHostLink {
   }
 
   async status(): Promise<HostCallOutcome<HostIdentityReport>> {
-    const answered = await this.call({ step: "status" }, HostStatusResultSchema, HOST_STATUS_TIMEOUT_MS);
+    const answered = await this.call(
+      { step: "status" },
+      HostStatusResultSchema,
+      HOST_STATUS_TIMEOUT_MS
+    );
     return answered.ok ? { ok: true, value: answered.value.identity } : answered;
   }
 
@@ -157,7 +163,9 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   }
 
   onLinkOpened(listener: (hostId: string, link: DecisionsHostLink) => void): () => void {
-    return this.deps.onSessionOpened((hostId, session) => listener(hostId, this.linkOf(hostId, session)));
+    return this.deps.onSessionOpened((hostId, session) =>
+      listener(hostId, this.linkOf(hostId, session))
+    );
   }
 
   onHostsChanged(listener: () => void): () => void {

@@ -139,7 +139,12 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
 
     // Nothing private crossed the link in the clear: not the Host's halves, and
     // not the owner's keys or content key, which reach the Host only sealed.
-    const crossed = JSON.stringify([requested, accepted, decodeHostRequest(requested.request), response]);
+    const crossed = JSON.stringify([
+      requested,
+      accepted,
+      decodeHostRequest(requested.request),
+      response,
+    ]);
     for (const secret of [...privateParts(saved!), ...privateParts(owner.stored)]) {
       expect(crossed).not.toContain(secret);
     }
@@ -267,7 +272,10 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     const other = await pair();
     serve(other.host, new HostEnrollments({ openKeys: memoryKeys().open }));
     const otherLink = linkOver(other.client);
-    const elsewhere = await otherLink.request({ attempt: "attempt_0000000002", label: "studio-04" });
+    const elsewhere = await otherLink.request({
+      attempt: "attempt_0000000002",
+      label: "studio-04",
+    });
     if (!elsewhere.ok || elsewhere.value.step !== "requested") throw new Error("not requested");
     const { response } = await enrollHost(owner.client, elsewhere.value.request);
 
@@ -287,7 +295,10 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     owner.revoke(revoked.config.deviceId);
 
     // Another owner naming it is refused, and the identity stays.
-    const stranger = await makeOwner({ installationId: "inst_stranger_0123", deviceId: "dev_stranger_0001" });
+    const stranger = await makeOwner({
+      installationId: "inst_stranger_0123",
+      deviceId: "dev_stranger_0001",
+    });
     const refused = await enrollOver(link, stranger, {
       attempt: "attempt_0000000002",
       replace: revoked.config.deviceId,

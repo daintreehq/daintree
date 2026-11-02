@@ -79,7 +79,8 @@ export type HostAcceptResult = { step: "accepted"; deviceId: string } | HostEnro
  * - `unexpected-answer`: an answer in a shape this side doesn't read.
  * - `failed`: the Host's handler failed (`detail`).
  */
-export type HostCallFailure = "needs-update" | "disconnected" | "outcome-unknown" | "unexpected-answer" | "failed";
+export type HostCallFailure =
+  "needs-update" | "disconnected" | "outcome-unknown" | "unexpected-answer" | "failed";
 
 export type HostCallOutcome<T> =
   { ok: true; value: T } | { ok: false; failure: HostCallFailure; detail?: string };

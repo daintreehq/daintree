@@ -63,9 +63,9 @@ describe("sanitizeDecisionsSettings", () => {
         String(value)
       ).toBe(true);
     }
-    expect(sanitizeDecisionsSettings({ ...connected, autoEnrollHosts: false }).autoEnrollHosts).toBe(
-      false
-    );
+    expect(
+      sanitizeDecisionsSettings({ ...connected, autoEnrollHosts: false }).autoEnrollHosts
+    ).toBe(false);
     // Turning it off survives a rewrite, with nothing else changed.
     const { store, current } = memoryStore({ ...connected, autoEnrollHosts: false });
     writeDecisionsSettings(store, readDecisionsSettings(store));

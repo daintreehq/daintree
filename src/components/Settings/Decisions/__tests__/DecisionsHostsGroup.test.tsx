@@ -51,10 +51,16 @@ afterEach(() => {
   cleanup();
 });
 
-async function renderGroup(props: { enabled?: boolean; revision?: number; onEnrolledChange?: () => void } = {}) {
+async function renderGroup(
+  props: { enabled?: boolean; revision?: number; onEnrolledChange?: () => void } = {}
+) {
   const view = render(
     <TooltipProvider>
-      <DecisionsHostsGroup enabled={props.enabled ?? true} revision={props.revision ?? 1} onEnrolledChange={props.onEnrolledChange} />
+      <DecisionsHostsGroup
+        enabled={props.enabled ?? true}
+        revision={props.revision ?? 1}
+        onEnrolledChange={props.onEnrolledChange}
+      />
     </TooltipProvider>
   );
   await act(async () => {});
@@ -62,7 +68,9 @@ async function renderGroup(props: { enabled?: boolean; revision?: number; onEnro
 }
 
 function autoSwitch(): HTMLButtonElement {
-  return screen.getByRole("switch", { name: /Enroll Remote Hosts automatically/ }) as HTMLButtonElement;
+  return screen.getByRole("switch", {
+    name: /Enroll Remote Hosts automatically/,
+  }) as HTMLButtonElement;
 }
 
 function enrollButtons(): HTMLButtonElement[] {
@@ -87,7 +95,12 @@ describe("Remote Hosts under Devices", () => {
             enrollment: { state: "enrolled", deviceId: "dev_lab" },
             canEnroll: false,
           }),
-          host({ hostId: "old", name: "old", enrollment: { state: "needs-update" }, canEnroll: false }),
+          host({
+            hostId: "old",
+            name: "old",
+            enrollment: { state: "needs-update" },
+            canEnroll: false,
+          }),
         ],
         false
       )
@@ -107,7 +120,10 @@ describe("Remote Hosts under Devices", () => {
       host: host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false }),
     });
     listHosts.mockResolvedValueOnce(
-      listed([host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false })], false)
+      listed(
+        [host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false })],
+        false
+      )
     );
     const onEnrolledChange = vi.fn();
     await renderGroup({ onEnrolledChange });
@@ -151,7 +167,9 @@ describe("Remote Hosts under Devices", () => {
   });
 
   it("reads the Hosts again with each status push, which carries an enrollment's progress", async () => {
-    listHosts.mockResolvedValueOnce(listed([host({ enrollment: { state: "enrolling" }, canEnroll: false })]));
+    listHosts.mockResolvedValueOnce(
+      listed([host({ enrollment: { state: "enrolling" }, canEnroll: false })])
+    );
     const view = await renderGroup({ revision: 1 });
     expect(document.querySelector("#decisions-host-studio")?.textContent).toContain("Enrolling…");
 
@@ -176,7 +194,9 @@ describe("Remote Host copy", () => {
     expect(hostEnrollmentText(failed, true)).toContain("Tried again when it next connects");
     expect(hostEnrollmentText(failed, false)).not.toContain("Tried again");
     // A full relay won't take it on the next connection either.
-    const full = host({ enrollment: { state: "failed", failure: { reason: "relay-full", at: 1 } } });
+    const full = host({
+      enrollment: { state: "failed", failure: { reason: "relay-full", at: 1 } },
+    });
     expect(hostEnrollmentText(full, true)).not.toContain("Tried again");
   });
 
@@ -218,7 +238,11 @@ describe("an enrolled Remote Host in the device list", () => {
     ];
     listDevices.mockResolvedValue({ result: "listed", devices });
     listHosts.mockResolvedValue(listed([]));
-    const status: DecisionsStatus = { state: "connected", relayOrigin: "https://r.example", revision: 1 };
+    const status: DecisionsStatus = {
+      state: "connected",
+      relayOrigin: "https://r.example",
+      revision: 1,
+    };
     render(
       <TooltipProvider>
         <DecisionsDevicesSection status={status} />

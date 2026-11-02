@@ -98,8 +98,7 @@ export interface DecisionsHost {
  * has enrolled or seen revoked. `not-set-up`: no relay identity of an owner here.
  */
 export type DecisionsHostsResult =
-  | { result: "listed"; autoEnroll: boolean; hosts: DecisionsHost[] }
-  | { result: "not-set-up" };
+  { result: "listed"; autoEnroll: boolean; hosts: DecisionsHost[] } | { result: "not-set-up" };
 
 export interface EnrollDecisionsHostPayload {
   hostId: string;
@@ -107,6 +106,4 @@ export interface EnrollDecisionsHostPayload {
 
 /** Enroll on one Host: what became of it, or why it couldn't start. */
 export type DecisionsHostEnrollResult =
-  | { result: "done"; host: DecisionsHost }
-  | { result: "not-connected" }
-  | { result: "not-set-up" };
+  { result: "done"; host: DecisionsHost } | { result: "not-connected" } | { result: "not-set-up" };

@@ -130,8 +130,11 @@ function makeHostEnroller(): HostEnroller {
 }
 let hostEnroller = makeHostEnroller();
 /** One record keeper per store and installation, so its writes run one at a time. */
-let hostRecords: { store: DaintreeLocalStore; installationId: string; records: HostRecords } | null =
-  null;
+let hostRecords: {
+  store: DaintreeLocalStore;
+  installationId: string;
+  records: HostRecords;
+} | null = null;
 
 function hostRecordsFor(localStore: DaintreeLocalStore, installationId: string): HostRecords {
   if (hostRecords?.store !== localStore || hostRecords.installationId !== installationId) {

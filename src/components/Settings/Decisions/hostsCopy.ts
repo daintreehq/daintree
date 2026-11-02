@@ -83,7 +83,9 @@ export function hostEnrollmentText(host: DecisionsHost, autoEnroll: boolean): st
 }
 
 /** Why the Hosts couldn't be listed, from a read that answered. */
-export function hostsUnlistedText(read: Exclude<DecisionsHostsResult, { result: "listed" }>): string {
+export function hostsUnlistedText(
+  read: Exclude<DecisionsHostsResult, { result: "listed" }>
+): string {
   switch (read.result) {
     case "not-set-up":
       return "No relay is set up on this computer. Connect one above first.";

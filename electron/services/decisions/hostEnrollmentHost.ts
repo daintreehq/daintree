@@ -39,7 +39,9 @@ function isHostIdentity(stored: StoredIdentity): boolean {
 
 function refused(reason: HostEnrollRefusalReason, detail?: string): HostEnrollRefusal {
   const bounded = boundedDetail(detail);
-  return bounded === undefined ? { step: "refused", reason } : { step: "refused", reason, detail: bounded };
+  return bounded === undefined
+    ? { step: "refused", reason }
+    : { step: "refused", reason, detail: bounded };
 }
 
 function reportOf(stored: StoredIdentity | null): HostIdentityReport {
