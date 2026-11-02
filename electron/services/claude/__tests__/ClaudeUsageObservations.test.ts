@@ -31,7 +31,12 @@ describe("ClaudeUsageObservations", () => {
     );
 
     expect(readClaudeUsageObservations()).toEqual([
-      reading({ terminalId: "t1", window: "5-hour limit", statement: "reached", usedPercent: null }),
+      reading({
+        terminalId: "t1",
+        window: "5-hour limit",
+        statement: "reached",
+        usedPercent: null,
+      }),
       reading({ terminalId: "t2", usedPercent: 87, observedAt: 2_000 }),
     ]);
   });

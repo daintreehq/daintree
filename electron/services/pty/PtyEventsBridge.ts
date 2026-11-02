@@ -94,7 +94,10 @@ function claudeUsageObservation(
   if (typeof terminalId !== "string" || terminalId === "") return null;
   if (!(CLAUDE_USAGE_WINDOWS as readonly string[]).includes(window)) return null;
   if (!(CLAUDE_USAGE_STATEMENTS as readonly string[]).includes(statement)) return null;
-  if (usedPercent !== null && !(isFiniteNumber(usedPercent) && usedPercent >= 0 && usedPercent <= 100)) {
+  if (
+    usedPercent !== null &&
+    !(isFiniteNumber(usedPercent) && usedPercent >= 0 && usedPercent <= 100)
+  ) {
     return null;
   }
   if (resetsAt !== null && !isFiniteNumber(resetsAt)) return null;

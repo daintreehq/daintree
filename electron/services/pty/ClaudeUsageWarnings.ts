@@ -84,10 +84,7 @@ const FORMS: readonly Form[] = [
   },
   // Older builds lead with the window: "5-hour limit reached ∙ resets 3pm".
   {
-    pattern: new RegExp(
-      String.raw`^${CHROME}(5[ -]?hour|session)\s+limit\s+reached${TAIL}`,
-      "i"
-    ),
+    pattern: new RegExp(String.raw`^${CHROME}(5[ -]?hour|session)\s+limit\s+reached${TAIL}`, "i"),
     statement: "reached",
     needsReset: true,
   },

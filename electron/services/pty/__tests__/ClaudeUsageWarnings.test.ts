@@ -144,9 +144,9 @@ describe("scanClaudeUsageMessages", () => {
   });
 
   it("leaves an unrelated row under a cut-off reset out of it", () => {
-    expect(
-      scan("You've used 87% of your weekly limit · resets Nov 2 at", "  ✻ Thinking…")
-    ).toEqual([{ window: "weekly limit", statement: "used", usedPercent: 87, resetText: "Nov 2 at" }]);
+    expect(scan("You've used 87% of your weekly limit · resets Nov 2 at", "  ✻ Thinking…")).toEqual(
+      [{ window: "weekly limit", statement: "used", usedPercent: 87, resetText: "Nov 2 at" }]
+    );
   });
 });
 
@@ -185,9 +185,7 @@ describe("resolveResetsAt", () => {
 
   it("keeps a bare time that passed moments ago as today's", () => {
     const justAfter = Date.UTC(2026, 10, 2, 4, 3);
-    expect(resolveResetsAt("3pm (Australia/Sydney)", justAfter)).toBe(
-      Date.UTC(2026, 10, 2, 4, 0)
-    );
+    expect(resolveResetsAt("3pm (Australia/Sydney)", justAfter)).toBe(Date.UTC(2026, 10, 2, 4, 0));
   });
 
   it("settles across a daylight-saving change", () => {
