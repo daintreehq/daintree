@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -456,10 +457,11 @@ describe.skipIf(process.platform === "win32")("runListing", () => {
     vi.restoreAllMocks();
   });
 
+  /** Running, by `ps`: a zombie no one has reaped yet counts as gone. */
   function alive(pid: number): boolean {
     try {
-      process.kill(pid, 0);
-      return true;
+      const state = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+      return state.trim() !== "" && !state.trim().startsWith("Z");
     } catch {
       return false;
     }
@@ -485,8 +487,10 @@ describe.skipIf(process.platform === "win32")("runListing", () => {
         runListing("sh", ["-c", script], { timeoutMs: 1_500, maxBytes: 1024 })
       ).rejects.toThrow(/timed out/);
       helper = Number((await readFile(pidFile, "utf8")).trim());
-      expect(kill.mock.calls.filter(([pid]) => pid < 0)).toHaveLength(1);
       await vi.waitFor(() => expect(alive(helper as number)).toBe(false), { timeout: 5_000 });
+      // With every member gone the listing has closed too, so a late signal would be in by now.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(kill.mock.calls.filter(([pid]) => pid < 0)).toHaveLength(1);
     } finally {
       if (helper !== null && alive(helper)) process.kill(helper, "SIGKILL");
     }
