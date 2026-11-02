@@ -1386,6 +1386,65 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     );
   });
 
+  it("holds an armed resume while Global is on screen and fires it once back on the lane (#16099)", async () => {
+    // Armed on the lane with the panel still closed, then Global is chosen
+    // before the panel opens: nothing launches behind it.
+    helpPanelState.isOpen = false;
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
+    });
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+
+    helpPanelState.globalSelected = true;
+    helpPanelState.isOpen = true;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+
+    helpPanelState.globalSelected = false;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123" })
+    );
+  });
+
   it("consumes the pending entry via takePendingHibernation and RESUMES (peek→take→resume handoff)", async () => {
     // The cold-restore peek is non-consuming; the real handoff is the
     // controller's atomic takePendingHibernation, which seeds the hibernate slot

@@ -616,7 +616,7 @@ describe("helpPanelStore persistence migration", () => {
       it("shows Global in one update, without asking for the keyboard", async () => {
         installLocalStorage({});
         const { useHelpPanelStore: store } = await import("../helpPanelStore");
-        store.getState().requestFocus();
+        store.getState().openSlot();
         store.getState().requestFocus();
         const focusRequest = store.getState().focusRequest;
         const seen: Array<{ isOpen: boolean; globalSelected: boolean }> = [];
@@ -629,9 +629,10 @@ describe("helpPanelStore persistence migration", () => {
 
         // Never an open panel on a project lane, which that lane could launch into.
         expect(seen).toEqual([{ isOpen: true, globalSelected: true }]);
+        // The lane behind it is kept to come back to.
         expect(store.getState()).toMatchObject({
           globalTarget: target,
-          activeSlot: 0,
+          activeSlot: 1,
           focusRequest,
           globalFocusHandledThrough: focusRequest,
         });
@@ -651,9 +652,17 @@ describe("helpPanelStore persistence migration", () => {
         store.getState().applyWindowGlobalPanel({ showing: true, target: { ...target } });
 
         expect(store.getState()).toBe(before);
-        // Another run of Global is a different target, and is taken.
+        // A successor run, or following whichever runs, is another target, and is taken.
+        store.getState().applyWindowGlobalPanel({
+          showing: true,
+          target: { ...target, incarnation: 3 },
+        });
+        expect(store.getState().globalTarget).toMatchObject({ incarnation: 3 });
         store.getState().applyWindowGlobalPanel({ showing: true, target: null });
         expect(store.getState().globalTarget).toBeNull();
+        const following = store.getState();
+        store.getState().applyWindowGlobalPanel({ showing: true, target: null });
+        expect(store.getState()).toBe(following);
       });
 
       it("closes Global the window closed, keeping it selected for the next open", async () => {

@@ -252,8 +252,7 @@ function senderViewManager(ctx: IpcContext): ProjectViewManager | null {
   const windowId = ctx.senderWindow?.id;
   if (windowId === undefined) return null;
   const manager = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
-  if (!manager || manager.getProjectIdForWebContents(ctx.webContentsId) === null) return null;
-  return manager;
+  return manager?.ownsView(ctx.webContentsId) ? manager : null;
 }
 
 /**

@@ -172,6 +172,9 @@ function renderPane(isVisible = true) {
 
 const flush = () => act(async () => {});
 
+/** Long enough for the pane's per-frame focus attempts to land on their target. */
+const FOCUS_ATTEMPT_WAIT_MS = 50;
+
 /** A refusal as it arrives from main: an AppError's user message packed into `Error.message`. */
 function refusedBy(code: string, userMessage: string): Error {
   return new Error(`[AppError|${code}|${encodeURIComponent(userMessage)}] internal detail`);
@@ -265,14 +268,15 @@ describe("GlobalAssistantPane (#14454)", () => {
   });
 
   it("takes the keyboard when shown, unless a project switch brought it back (#16099)", async () => {
-    const frames = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+    const frames = () =>
+      act(() => new Promise<void>((resolve) => setTimeout(resolve, FOCUS_ATTEMPT_WAIT_MS)));
     installHelp(viewOf());
     const shownByHand = renderPane();
     await flush();
     await frames();
     expect(document.activeElement).toBe(screen.getByTestId("help-global-start"));
     shownByHand.unmount();
-    (document.activeElement as HTMLElement | null)?.blur();
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 
     // As `applyWindowGlobalPanel` leaves it: the request it found counts as served.
     useHelpPanelStore.setState({ globalFocusHandledThrough: 0 });

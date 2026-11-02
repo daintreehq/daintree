@@ -26,7 +26,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { AgentState } from "../../shared/types/agent.js";
 import * as PaintGateController from "./ProjectViewPaintGateController.js";
 import { performSwitch } from "./ProjectViewSwitchController.js";
-import { cleanupEntry } from "./ProjectViewLifecycleController.js";
+import { cleanupEntry, getUnboundOutgoingView } from "./ProjectViewLifecycleController.js";
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import { notifyProjectPresenceChanged } from "./projectPresenceChanges.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
@@ -979,13 +979,31 @@ export class ProjectViewManager {
    * taken.
    */
   recordGlobalAssistantPanel(webContentsId: number, panel: WindowGlobalAssistantPanel): boolean {
-    if (this.disposed || this.win.isDestroyed()) return false;
-    const projectId = this.activeProjectId;
-    if (!projectId || !isLocalHostId(parseHostScopedKey(projectId).hostId)) return false;
-    const active = this.views.get(projectId)?.view.webContents;
-    if (!active || active.isDestroyed() || active.id !== webContentsId) return false;
+    if (this.presentingWebContentsId() !== webContentsId) return false;
     this.globalAssistantPanel = panel;
     return true;
+  }
+
+  /** Whether `webContentsId` is one of this window's views, its welcome view included. */
+  ownsView(webContentsId: number): boolean {
+    return (
+      this.webContentsToProject.has(webContentsId) ||
+      getUnboundOutgoingView(this)?.webContents.id === webContentsId
+    );
+  }
+
+  /**
+   * The view that speaks for this window's panel: the active local project
+   * view, or the welcome view while no project is open, since Global can be
+   * shown there and carried into the first project the window opens.
+   */
+  private presentingWebContentsId(): number | null {
+    if (this.disposed || this.win.isDestroyed()) return null;
+    const projectId = this.activeProjectId;
+    if (projectId === null) return getUnboundOutgoingView(this)?.webContents.id ?? null;
+    if (!isLocalHostId(parseHostScopedKey(projectId).hostId)) return null;
+    const active = this.views.get(projectId)?.view.webContents;
+    return active && !active.isDestroyed() ? active.id : null;
   }
 
   /**

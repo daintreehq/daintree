@@ -282,6 +282,57 @@ describe("ProjectViewManager — the window's global assistant panel (#16099)", 
     expect(manager.getGlobalAssistantPanel()).toEqual(closed);
   });
 
+  it("takes it from the welcome view until the window's first project opens", async () => {
+    const win = createMockWindow();
+    const welcome = { webContents: createMockWebContents() };
+    const welcomeId = welcome.webContents.id;
+    win.contentView.children.push(welcome);
+    const fresh = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 5,
+    });
+    expect(fresh.ownsView(welcomeId)).toBe(true);
+    expect(fresh.recordGlobalAssistantPanel(welcomeId, shownGlobal)).toBe(true);
+
+    await fresh.switchTo("proj-a", "/path/a");
+    await flushImmediates();
+    // The mock's removeChildView doesn't take it out of the tree; the real one does.
+    win.contentView.children.splice(0, win.contentView.children.length);
+
+    expect(fresh.getGlobalAssistantPanel()).toEqual(shownGlobal);
+    expect(fresh.ownsView(welcomeId)).toBe(false);
+    expect(fresh.recordGlobalAssistantPanel(welcomeId, closed)).toBe(false);
+    fresh.dispose();
+  });
+
+  it("stops taking it from the outgoing view as soon as a cold switch starts", async () => {
+    await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
+    const a = wcIdOf("proj-a");
+    manager.recordGlobalAssistantPanel(a, shownGlobal);
+    let release!: (outcome: "signal") => void;
+    vi.mocked(manager.waitForPaint).mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve))
+    );
+
+    const switching = manager.switchTo("proj-b", "/path/b");
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+
+    // proj-a is still on screen as the bridge, but proj-b speaks for the window now.
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(manager.recordGlobalAssistantPanel(a, closed)).toBe(false);
+    expect(manager.getGlobalAssistantPanel()).toEqual(shownGlobal);
+    expect(manager.recordGlobalAssistantPanel(wcIdOf("proj-b"), closed)).toBe(true);
+
+    release("signal");
+    await switching;
+    expect(manager.getGlobalAssistantPanel()).toEqual(closed);
+  });
+
   it("takes nothing from a view of another host's project", async () => {
     await manager.switchTo("proj-a", "/path/a");
     await flushImmediates();

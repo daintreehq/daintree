@@ -126,6 +126,18 @@ describe("useWindowGlobalAssistantPanel (#16099)", () => {
     expect(reported()).toEqual([closed]);
   });
 
+  it("lets a request for the lane already on screen stand over the record", async () => {
+    useHelpPanelStore.getState().setOpen(true);
+    renderHook(() => useWindowGlobalAssistantPanel());
+    // Cmd+L, or an "Open in Assistant" landing on the lane this view already shows.
+    act(() => useHelpPanelStore.getState().requestFocus());
+
+    await answer(shown);
+
+    expect(useHelpPanelStore.getState()).toMatchObject({ isOpen: true, globalSelected: false });
+    expect(reported()).toEqual([closed]);
+  });
+
   it("reports each change of Global's showing or target, and only those", async () => {
     renderHook(() => useWindowGlobalAssistantPanel());
     await answer(null);
@@ -136,13 +148,20 @@ describe("useWindowGlobalAssistantPanel (#16099)", () => {
       useHelpPanelStore.getState().setOpen(true);
     });
     act(() => useHelpPanelStore.getState().requestFocus());
+    // A successor run under the same terminal is another target.
+    act(() => useHelpPanelStore.getState().selectGlobal({ ...target, incarnation: 4 }));
     act(() => useHelpPanelStore.getState().selectGlobal(null));
     act(() => useHelpPanelStore.getState().setOpen(false));
     // A lane opening is this project's own, and Global stays closed.
     act(() => useHelpPanelStore.getState().setActiveSlot(0));
     act(() => useHelpPanelStore.getState().setOpen(true));
 
-    expect(reported()).toEqual([shown, { showing: true, target: null }, closed]);
+    expect(reported()).toEqual([
+      shown,
+      { showing: true, target: { ...target, incarnation: 4 } },
+      { showing: true, target: null },
+      closed,
+    ]);
   });
 
   it("closes stale Global on returning from the cache once the window closed it", async () => {
@@ -180,6 +199,22 @@ describe("useWindowGlobalAssistantPanel (#16099)", () => {
     expect(getPanel).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores a read from before the cache that lands after the view is back", async () => {
+    renderHook(() => useWindowGlobalAssistantPanel());
+    act(() => emit("cached"));
+    act(() => emit("active"));
+    // A reveal while the newer read is out asks nothing more.
+    act(() => emit("revealed"));
+    expect(getPanel).toHaveBeenCalledTimes(2);
+
+    await answer(shown, 0);
+    expect(useHelpPanelStore.getState().isOpen).toBe(false);
+    expect(reportPanel).not.toHaveBeenCalled();
+
+    await answer(null, 1);
+    expect(reported()).toEqual([closed]);
+  });
+
   it("starts reading only once a view restored in the background comes on screen", async () => {
     lifecycle.cached = true;
     renderHook(() => useWindowGlobalAssistantPanel());
@@ -198,6 +233,19 @@ describe("useWindowGlobalAssistantPanel (#16099)", () => {
       useHelpPanelStore.getState().setOpen(true);
     });
     expect(getPanel).not.toHaveBeenCalled();
+    expect(reportPanel).not.toHaveBeenCalled();
+  });
+
+  it("stops reporting once unmounted after it has synced", async () => {
+    const { unmount } = renderHook(() => useWindowGlobalAssistantPanel());
+    await answer(null);
+    reportPanel.mockClear();
+    unmount();
+
+    act(() => {
+      useHelpPanelStore.getState().selectGlobal(target);
+      useHelpPanelStore.getState().setOpen(true);
+    });
     expect(reportPanel).not.toHaveBeenCalled();
   });
 

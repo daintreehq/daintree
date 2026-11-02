@@ -294,10 +294,10 @@ describe("window global assistant panel IPC handlers (#16099)", () => {
     },
   };
 
-  function fakeManager(viewIds: number[]) {
+  function fakeManager(viewIds: number[], record: unknown = shown) {
     return {
-      getProjectIdForWebContents: (id: number) => (viewIds.includes(id) ? `proj-${id}` : null),
-      getGlobalAssistantPanel: vi.fn(() => shown),
+      ownsView: (id: number) => viewIds.includes(id),
+      getGlobalAssistantPanel: vi.fn(() => record),
       recordGlobalAssistantPanel: vi.fn(() => true),
     };
   }
@@ -307,11 +307,12 @@ describe("window global assistant panel IPC handlers (#16099)", () => {
   });
 
   it("answers a view with its own window's record, and nothing else", async () => {
-    const first = fakeManager([10]);
-    windows.managers.set(1, first);
-    windows.managers.set(2, fakeManager([20]));
+    const otherRecord = { showing: false, target: null };
+    windows.managers.set(1, fakeManager([10]));
+    windows.managers.set(2, fakeManager([20], otherRecord));
 
     expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, 1))).toEqual(shown);
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(20, 2))).toEqual(otherRecord);
     // A webContents that isn't one of the window's views, or no window at all.
     expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(20, 1))).toBeNull();
     expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, null))).toBeNull();
@@ -333,6 +334,15 @@ describe("window global assistant panel IPC handlers (#16099)", () => {
       target: null,
     });
     expect(first.recordGlobalAssistantPanel).toHaveBeenCalledTimes(1);
+
+    await handlers.handleReportWindowGlobalAssistantPanel(ctx(20, 2), {
+      showing: true,
+      target: null,
+    });
+    expect(second.recordGlobalAssistantPanel).toHaveBeenCalledWith(20, {
+      showing: true,
+      target: null,
+    });
   });
 
   it("refuses a panel that isn't this machine's global assistant", async () => {

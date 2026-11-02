@@ -22,7 +22,9 @@ function samePresentation(a: HelpPanelSnapshot, b: HelpPanelSnapshot): boolean {
     a.isOpen === b.isOpen &&
     a.globalSelected === b.globalSelected &&
     a.globalTarget === b.globalTarget &&
-    a.activeSlot === b.activeSlot
+    a.activeSlot === b.activeSlot &&
+    // Asking for the lane already on screen changes nothing above, and is still a choice.
+    a.focusRequest === b.focusRequest
   );
 }
 
