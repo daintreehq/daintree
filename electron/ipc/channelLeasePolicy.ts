@@ -186,6 +186,7 @@ export const CHANNEL_LEASE_POLICY = {
   "drive-lease:take-over": "free",
   "editor:get-config": "free",
   "editor:set-config": "free",
+  "editor:clear-project-preference": "free",
   // Reads the worktree and watches what it read; nothing it does changes the project.
   "element-picker:describe-project": "free",
   "element-picker:hold-sources": "free",

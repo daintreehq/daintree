@@ -351,6 +351,9 @@ export const CHANNEL_LOCALITY = {
   "element-picker:workspace-open": "host",
   "editor:get-config": "hybrid",
   "editor:set-config": "hybrid",
+  // The default is this machine's: the editor it names launches here.
+  "editor:set-default": "shell",
+  "editor:clear-project-preference": "hybrid",
   "error:get-pending": "shell",
   "error:notify": "shell",
   "error:open-logs": "shell",

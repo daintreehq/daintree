@@ -16,6 +16,7 @@ import type { HostDescriptor } from "../shared/types/remoteHosts.js";
 import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
 import type { DecisionsSettings } from "../shared/types/decisions.js";
 import type { DecisionsHostRecord } from "../shared/types/decisionsHosts.js";
+import type { EditorConfig } from "../shared/types/editor.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -938,6 +939,13 @@ export interface StoreSchema {
    * with no numbered migration; absent means not enrolled.
    */
   decisionsHost?: DecisionsHostRecord;
+  /**
+   * The external editor a project with no saved editor of its own launches
+   * (#16162). This machine's, since the editor runs where you sit. Additive key
+   * with no numbered migration: absent means automatic selection, and every
+   * read goes through `readDefaultEditor`.
+   */
+  defaultEditor?: EditorConfig;
   /** Client-side behaviour while a window is attached to a remote host. */
   remoteHostsPreferences?: { interceptCtrlVImages: boolean };
   /**

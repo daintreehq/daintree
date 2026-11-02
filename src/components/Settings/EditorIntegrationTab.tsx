@@ -44,13 +44,46 @@ const EDITOR_LABELS: Record<KnownEditorId, string> = {
   custom: "Custom…",
 };
 
+const DEFAULT_CUSTOM_TEMPLATE = "{file}:{line}:{col}";
+
+function editorLabel(editor: EditorConfig): string {
+  return editor.id === "custom"
+    ? `Custom (${editor.customCommand ?? "no command"})`
+    : EDITOR_LABELS[editor.id];
+}
+
+/**
+ * A stored config as draft fields, kept as stored: a custom editor saved without
+ * a template drafts an empty one, so an untouched draft matches what is saved.
+ */
+function draftFieldsOf(config: EditorConfig) {
+  return {
+    id: config.id,
+    command: config.customCommand ?? "",
+    template: config.id === "custom" ? (config.customTemplate ?? "") : DEFAULT_CUSTOM_TEMPLATE,
+  };
+}
+
+function sameEditor(a: EditorConfig | null, b: EditorConfig): boolean {
+  if (!a || a.id !== b.id) return false;
+  if (b.id !== "custom") return true;
+  return (
+    (a.customCommand ?? "") === (b.customCommand ?? "") &&
+    (a.customTemplate ?? "") === (b.customTemplate ?? "")
+  );
+}
+
 export function EditorIntegrationTab() {
   const [discoveredEditors, setDiscoveredEditors] = useState<DiscoveredEditor[]>([]);
+  // The project's own choice, and this machine's default for projects without one.
   const [preferredEditor, setPreferredEditor] = useState<EditorConfig | null>(null);
+  const [defaultEditor, setDefaultEditor] = useState<EditorConfig | null>(null);
   const [selectedId, setSelectedId] = useState<KnownEditorId>("vscode");
   const [customCommand, setCustomCommand] = useState("");
-  const [customTemplate, setCustomTemplate] = useState("{file}:{line}:{col}");
+  const [customTemplate, setCustomTemplate] = useState(DEFAULT_CUSTOM_TEMPLATE);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSettingDefault, setIsSettingDefault] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [isRescanning, setIsRescanning] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -72,6 +105,9 @@ export function EditorIntegrationTab() {
   const activeProjectId = useProjectStore((s) => s.currentProject?.id);
   const activeProjectPath = useProjectStore((s) => s.currentProject?.path);
   const activeProjectName = useProjectStore((s) => s.currentProject?.name);
+  // A write that lands after the project changed belongs to the old project's view.
+  const isCurrentProject = (projectId: string) =>
+    isMountedRef.current && useProjectStore.getState().currentProject?.id === projectId;
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -87,15 +123,19 @@ export function EditorIntegrationTab() {
     setIsLoadingConfig(true);
     editorClient
       .getConfig(activeProjectId)
-      .then(({ preferredEditor: pref, discoveredEditors: discovered }) => {
+      .then(({ preferredEditor: pref, defaultEditor: fallback, discoveredEditors: discovered }) => {
         if (cancelled || !isMountedRef.current) return;
         setIsLoadingConfig(false);
         setDiscoveredEditors(discovered);
-        if (pref) {
-          setPreferredEditor(pref);
-          setSelectedId(pref.id);
-          setCustomCommand(pref.customCommand ?? "");
-          setCustomTemplate(pref.customTemplate ?? "{file}:{line}:{col}");
+        setPreferredEditor(pref ?? null);
+        setDefaultEditor(fallback ?? null);
+        // The draft starts at what a launch would try first.
+        const effective = pref ?? fallback ?? null;
+        if (effective) {
+          const draft = draftFieldsOf(effective);
+          setSelectedId(draft.id);
+          setCustomCommand(draft.command);
+          setCustomTemplate(draft.template);
         } else {
           // Auto-select first available
           const first = discovered.find((d) => d.available);
@@ -137,33 +177,93 @@ export function EditorIntegrationTab() {
     }
   };
 
-  const handleSave = async () => {
-    if (!activeProjectId || isSaving || isLoadingConfig || loadError) return;
+  const draftEditor: EditorConfig = {
+    id: selectedId,
+    customCommand: selectedId === "custom" ? customCommand.trim() || undefined : undefined,
+    customTemplate: selectedId === "custom" ? customTemplate.trim() || undefined : undefined,
+  };
+
+  const isBusy = isSaving || isSettingDefault || isResetting;
+
+  /** The draft, or null after flagging the empty command a custom editor needs. */
+  const validDraft = (): EditorConfig | null => {
     if (selectedId === "custom" && !customCommand.trim()) {
       setCommandError("Enter the command that opens your editor");
-      return;
+      return null;
     }
+    return draftEditor;
+  };
+
+  const handleSave = async () => {
+    if (!activeProjectId || isBusy || isLoadingConfig || loadError) return;
+    const editor = validDraft();
+    if (!editor) return;
+    const projectId = activeProjectId;
     setIsSaving(true);
     setSaveError(null);
     try {
-      const editor: EditorConfig = {
-        id: selectedId,
-        customCommand: selectedId === "custom" ? customCommand.trim() || undefined : undefined,
-        customTemplate: selectedId === "custom" ? customTemplate.trim() || undefined : undefined,
-      };
-      await editorClient.setConfig({ editor, projectId: activeProjectId });
+      await editorClient.setConfig({ editor, projectId });
       // Main writes preferredEditor straight into the project settings file, so
       // every renderer-side copy is now stale. Both must be refreshed before
       // anything else reads or re-saves the whole settings object (#12326).
-      invalidateProjectSettingsCache(activeProjectId);
-      patchCachedProjectSettings(activeProjectId, { preferredEditor: editor });
-      if (!isMountedRef.current) return;
+      invalidateProjectSettingsCache(projectId);
+      patchCachedProjectSettings(projectId, { preferredEditor: editor });
+      if (!isCurrentProject(projectId)) return;
       setPreferredEditor(editor);
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isCurrentProject(projectId)) return;
       setSaveError(formatErrorMessage(err, "Failed to save editor preference"));
     } finally {
       if (isMountedRef.current) setIsSaving(false);
+    }
+  };
+
+  // The default is this machine's fallback; no project's saved choice changes,
+  // so neither project settings cache is touched.
+  const handleSetDefault = async () => {
+    if (!activeProjectId || isBusy || isLoadingConfig || loadError) return;
+    const editor = validDraft();
+    if (!editor) return;
+    setIsSettingDefault(true);
+    setSaveError(null);
+    try {
+      await editorClient.setDefault({ editor });
+      if (!isMountedRef.current) return;
+      setDefaultEditor(editor);
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      setSaveError(formatErrorMessage(err, "Failed to set the default editor"));
+    } finally {
+      if (isMountedRef.current) setIsSettingDefault(false);
+    }
+  };
+
+  // Clears the project's choice so it follows the default again, rather than
+  // copying today's default into it.
+  const handleResetToDefault = async () => {
+    if (!activeProjectId || isBusy || isLoadingConfig || loadError) return;
+    const projectId = activeProjectId;
+    setIsResetting(true);
+    setSaveError(null);
+    setTestResult(null);
+    try {
+      await editorClient.clearProjectPreference({ projectId });
+      invalidateProjectSettingsCache(projectId);
+      patchCachedProjectSettings(projectId, { preferredEditor: undefined });
+      if (!isCurrentProject(projectId)) return;
+      setPreferredEditor(null);
+      setCommandError(null);
+      if (defaultEditor) {
+        const draft = draftFieldsOf(defaultEditor);
+        setSelectedId(draft.id);
+        setCustomCommand(draft.command);
+        setCustomTemplate(draft.template);
+      }
+    } catch (err) {
+      if (!isCurrentProject(projectId)) return;
+      setSaveError(formatErrorMessage(err, "Failed to reset the editor"));
+    } finally {
+      if (isMountedRef.current) setIsResetting(false);
     }
   };
 
@@ -227,14 +327,22 @@ export function EditorIntegrationTab() {
     </li>
   );
 
-  // No saved preference yet counts as dirty: the auto-selected editor is only a
-  // suggestion until it is saved, and main falls back to discovery order until then.
-  const isDirty =
-    !preferredEditor ||
-    preferredEditor.id !== selectedId ||
-    (selectedId === "custom" &&
-      ((preferredEditor.customCommand ?? "") !== customCommand.trim() ||
-        (preferredEditor.customTemplate ?? "") !== customTemplate.trim()));
+  // No saved preference yet counts as dirty: saving pins the draft to this
+  // project even when it matches the default, so it stops following the default.
+  const isDirty = !sameEditor(preferredEditor, draftEditor);
+  const effectiveEditor = preferredEditor ?? defaultEditor;
+  const draftIsEffective = sameEditor(effectiveEditor, draftEditor);
+  const draftIsDefault = sameEditor(defaultEditor, draftEditor);
+
+  const editorRowDescription = isLoadingConfig
+    ? undefined
+    : preferredEditor
+      ? defaultEditor
+        ? `Saved for this project. Default on this machine: ${editorLabel(defaultEditor)}`
+        : "Saved for this project. No default set on this machine"
+      : defaultEditor
+        ? `Using the default on this machine: ${editorLabel(defaultEditor)}`
+        : "No default set: Daintree tries $VISUAL, $EDITOR, then the first editor it finds";
 
   if (!activeProjectId) {
     return (
@@ -248,11 +356,17 @@ export function EditorIntegrationTab() {
     <SettingsSection
       id="editor-external"
       title="External editor"
-      description={`For ${activeProjectName ?? "this project"} only. The editor that "Open in editor" launches from the diff viewer and worktree cards.`}
+      description={`The editor that "Open in editor" launches from the diff viewer and worktree cards. Save chooses it for ${activeProjectName ?? "this project"}; Set default chooses it for projects without their own.`}
     >
       <SettingsGroup>
         <SettingsRow
           label="Editor"
+          description={editorRowDescription}
+          isModified={!isLoadingConfig && Boolean(preferredEditor)}
+          onReset={isBusy || loadError ? undefined : () => void handleResetToDefault()}
+          resetAriaLabel={
+            defaultEditor ? "Reset editor to default" : "Reset editor to automatic selection"
+          }
           control={({ labelId, descriptionId, disabled }) => (
             <>
               <Tooltip>
@@ -445,13 +559,13 @@ export function EditorIntegrationTab() {
               <InlineError>Failed to open</InlineError>
             ) : isLoadingConfig ? null : preferredEditor ? (
               <span>
-                Saved:{" "}
-                <span className="font-medium">
-                  {preferredEditor.id === "custom"
-                    ? `Custom (${preferredEditor.customCommand ?? "no command"})`
-                    : EDITOR_LABELS[preferredEditor.id]}
-                </span>
+                Saved: <span className="font-medium">{editorLabel(preferredEditor)}</span>
                 {isDirty && " · Unsaved changes"}
+              </span>
+            ) : defaultEditor ? (
+              <span>
+                Using default: <span className="font-medium">{editorLabel(defaultEditor)}</span>
+                {!draftIsDefault && " · Unsaved changes"}
               </span>
             ) : (
               "Not saved yet — Daintree uses the first editor it finds"
@@ -463,24 +577,38 @@ export function EditorIntegrationTab() {
               Retry
             </Button>
           )}
-          {/* Test opens the SAVED preference (main resolves it from the project), so it
-              stays off while the draft differs rather than testing something else. */}
+          {/* Test opens what main resolves for the project (its saved editor, else the
+              default), so it stays off while the draft differs rather than testing
+              something else. */}
           <Button
             variant="outline"
             size="sm"
             onClick={handleTest}
             loading={isTesting}
-            disabled={!preferredEditor || isDirty}
+            disabled={!draftIsEffective}
           >
             <ExternalLink aria-hidden="true" />
             Test saved editor
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSetDefault}
+            loading={isSettingDefault}
+            disabled={
+              isLoadingConfig || !activeProjectId || draftIsDefault || Boolean(loadError) || isBusy
+            }
+          >
+            Set default
           </Button>
           <Button
             variant="contrast"
             size="sm"
             onClick={handleSave}
             loading={isSaving}
-            disabled={isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError)}
+            disabled={
+              isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError) || isBusy
+            }
           >
             Save
           </Button>

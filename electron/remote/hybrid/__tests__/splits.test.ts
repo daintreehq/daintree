@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
     crashConfig: { autoRestoreOnCrash: false },
   })),
   readHydrateTerminalConfig: vi.fn(() => ({ fontSize: 15, scrollbackLines: 111 })),
-  storeGet: vi.fn((key: string) =>
+  storeGet: vi.fn((key: string): unknown =>
     key === "appState"
       ? { sidebarWidth: 420, terminals: [{ id: "local-term" }], activeWorktreeId: "local-wt" }
       : undefined
@@ -171,8 +171,11 @@ function setup(forward: Forward, local: (...args: unknown[]) => unknown) {
   return { invoke, router, listener };
 }
 
+const defaultStoreGet = mocks.storeGet.getMockImplementation()!;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.storeGet.mockImplementation(defaultStoreGet);
   mocks.hasClient = true;
   mocks.cached = false;
   mocks.pvm.getActiveProjectId.mockReturnValue(null);
@@ -393,9 +396,60 @@ describe("settings splits", () => {
     }));
     await expect(invoke(CHANNELS.EDITOR_GET_CONFIG, ["p1"])).resolves.toEqual({
       preferredEditor: { id: "cursor" },
+      defaultEditor: null,
+      effectiveEditor: { id: "cursor" },
       discoveredEditors: [{ id: "vscode", available: true }],
     });
     expect(listener).toHaveBeenCalledWith(expect.anything(), undefined);
+  });
+
+  it("takes the default editor from here, never the host's, and resolves the project against it", async () => {
+    const forward = vi.fn(() => ({
+      preferredEditor: null,
+      defaultEditor: { id: "zed" },
+      effectiveEditor: { id: "zed" },
+      discoveredEditors: [],
+    }));
+    const { invoke } = setup(forward, () => ({
+      preferredEditor: null,
+      defaultEditor: { id: "cursor" },
+      effectiveEditor: { id: "cursor" },
+      discoveredEditors: [{ id: "cursor", available: true }],
+    }));
+    await expect(invoke(CHANNELS.EDITOR_GET_CONFIG, ["p1"])).resolves.toEqual({
+      preferredEditor: null,
+      defaultEditor: { id: "cursor" },
+      effectiveEditor: { id: "cursor" },
+      discoveredEditors: [{ id: "cursor", available: true }],
+    });
+  });
+
+  it("reads an older host's answer, which carries only the project's editor", async () => {
+    const { invoke } = setup(
+      () => ({ preferredEditor: { id: "windsurf" }, discoveredEditors: [] }),
+      () => ({
+        preferredEditor: null,
+        defaultEditor: { id: "cursor" },
+        effectiveEditor: { id: "cursor" },
+        discoveredEditors: [],
+      })
+    );
+    await expect(invoke(CHANNELS.EDITOR_GET_CONFIG, ["p1"])).resolves.toMatchObject({
+      preferredEditor: { id: "windsurf" },
+      defaultEditor: { id: "cursor" },
+      effectiveEditor: { id: "windsurf" },
+    });
+  });
+
+  it("clears a project's editor choice on the host, where the project's settings live", async () => {
+    const forward = vi.fn(() => undefined);
+    const { invoke, listener } = setup(forward, () => "local");
+    await invoke(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE, [{ projectId: "p1" }]);
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect(forward).toHaveBeenCalledWith(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE, [
+      { projectId: "p1" },
+    ]);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("keeps notification settings on this machine, alert choices included", async () => {
@@ -719,6 +773,39 @@ describe("opening host files", () => {
     expect(forward).toHaveBeenCalledWith(CHANNELS.EDITOR_GET_CONFIG, ["p1"]);
     expect(mocks.openExternal).toHaveBeenCalledWith(
       "cursor://vscode-remote/ssh-remote+greg@studio-01/home/greg/repo/src/a%20b.ts:3:7",
+      { activate: true }
+    );
+  });
+
+  it("opens through this machine's default editor when the project has no editor of its own", async () => {
+    mocks.storeGet.mockImplementation((key: string) =>
+      key === "defaultEditor" ? { id: "windsurf" } : defaultStoreGet(key)
+    );
+    const forward = vi.fn(() => ({ preferredEditor: null, discoveredEditors: [] }));
+    const { invoke } = setup(forward, () => "local");
+
+    await invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/d.ts", projectId: "p1" }]);
+    await invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/e.ts" }]);
+
+    expect(mocks.openExternal.mock.calls.map((call) => (call as unknown[])[0])).toEqual([
+      "windsurf://vscode-remote/ssh-remote+greg@studio-01/home/greg/d.ts",
+      "windsurf://vscode-remote/ssh-remote+greg@studio-01/home/greg/e.ts",
+    ]);
+  });
+
+  it("keeps the project's own editor ahead of this machine's default", async () => {
+    mocks.storeGet.mockImplementation((key: string) =>
+      key === "defaultEditor" ? { id: "windsurf" } : defaultStoreGet(key)
+    );
+    const { invoke } = setup(
+      () => ({ preferredEditor: { id: "cursor" }, discoveredEditors: [] }),
+      () => "local"
+    );
+
+    await invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [{ path: "/home/greg/f.ts", projectId: "p1" }]);
+
+    expect(mocks.openExternal).toHaveBeenCalledWith(
+      "cursor://vscode-remote/ssh-remote+greg@studio-01/home/greg/f.ts",
       { activate: true }
     );
   });

@@ -114,6 +114,8 @@ export const CHANNELS = {
 
   EDITOR_GET_CONFIG: "editor:get-config",
   EDITOR_SET_CONFIG: "editor:set-config",
+  EDITOR_SET_DEFAULT: "editor:set-default",
+  EDITOR_CLEAR_PROJECT_PREFERENCE: "editor:clear-project-preference",
   EDITOR_DISCOVER: "editor:discover",
 
   PAINT_SURFACE_CREATE: "paint-surface:create",
