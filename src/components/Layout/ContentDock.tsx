@@ -373,6 +373,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           // explicit-default sentinel the launcher relies on, and `undefined`
           // must leave the key off entirely so the saved preset still resolves.
           ...(presetId !== undefined ? { presetId } : {}),
+          // An account row's account, `null` (the default login) included.
+          ...(options?.accountId !== undefined ? { accountId: options.accountId } : {}),
           // A plugin launch entry's first turn, and nothing else of its own.
           ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
         },

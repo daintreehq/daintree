@@ -37,7 +37,7 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
-import { BrandMark, Workflow } from "@/components/icons";
+import { BrandMark, UserRound, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import {
@@ -66,6 +66,8 @@ import {
 } from "@shared/types/toolbar";
 import { resolveLauncherToolbarButtonId } from "./launcherToolbarCatalog";
 import { resolveEffectivePresetId } from "@shared/types";
+import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
+import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import { getMergedPresets } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -91,9 +93,11 @@ import { useLauncherDiscovery } from "./useLauncherDiscovery";
 import {
   activateDockLaunchCue,
   activateDockLaunchItem,
+  buildAccountChoices,
   buildPresetChoices,
   insertExpandedPresetRows,
   insertMoreRows,
+  isDockLaunchChoiceRow,
   rowHasPresets,
   MORE_ROW_KEY,
   useDockLaunchModel,
@@ -106,6 +110,7 @@ import {
   type ActivateDockLaunchItemContext,
   type DockLaunchAgent,
   type DockLaunchAgentOptions,
+  type DockLaunchChoiceRow,
   type DockLaunchCueId,
   type DockLaunchInventoryState,
   type DockLaunchItem,
@@ -252,6 +257,7 @@ export function DockLaunchButton({
   const agentPins = useAgentToolbarPinsStore((s) => s.pins);
   const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const updateWorktreePreset = useAgentSettingsStore((s) => s.updateWorktreePreset);
+  const updateWorktreeAccount = useAgentSettingsStore((s) => s.updateWorktreeAccount);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
   const refreshAvailability = useCliAvailabilityStore((s) => s.refresh);
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
@@ -309,6 +315,19 @@ export function DockLaunchButton({
           projectPresets
         );
         const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
+        // Accounts beside the presets (#16133), the toolbar menu's choice: the
+        // mark sits on what a plain launch signs in as, the saved preset's pin
+        // included.
+        const accounts = getAgentConfigFolderAccount(agent.id)
+          ? sanitizeAgentAccounts(entry?.accounts)
+          : [];
+        const savedPreset = savedPresetId
+          ? presets.find((preset) => preset.id === savedPresetId)
+          : undefined;
+        const accountChoices = buildAccountChoices(
+          accounts,
+          resolveEffectiveAccountId(entry, activeWorktreeId, undefined, savedPreset?.accountId)
+        );
         return {
           ...agent,
           presetChoices:
@@ -319,6 +338,7 @@ export function DockLaunchButton({
                   savedPresetId
                 )
               : undefined,
+          accountChoices: accountChoices.length > 0 ? accountChoices : undefined,
           isNew: newAgentIds.has(agent.id),
         };
       }),
@@ -581,7 +601,7 @@ export function DockLaunchButton({
     const index =
       pending === MORE_ROW_KEY
         ? firstMoreChildIndex(results)
-        : results.findIndex((row) => row.kind === "preset" && row.parentRowKey === pending);
+        : results.findIndex((row) => isDockLaunchChoiceRow(row) && row.parentRowKey === pending);
     if (index < 0) return;
     pendingExpandRef.current = null;
     setSelectedIndex(index);
@@ -709,7 +729,8 @@ export function DockLaunchButton({
       // Launching a preset is one-off and writes no default, as in the toolbar
       // chevron: a preset carries the account and permission mode, and a pick
       // that quietly became the next plain launch changed both unannounced
-      // (#15051). Saving is `setPresetDefault`'s job alone.
+      // (#15051). An account row is one-off the same way. Saving is
+      // `setPresetDefault`'s job alone.
       // Only a plugin entry passes options; every other row keeps the two-argument call.
       if (options) onLaunchAgent(agentId, presetId, options);
       else onLaunchAgent(agentId, presetId);
@@ -719,18 +740,28 @@ export function DockLaunchButton({
 
   // The explicit "Set as default", saved to this worktree alone. Default (`null`)
   // saves the bare agent rather than clearing the slot, which would fall back to
-  // the agent-level preset every other worktree inherits (#15054). Absent with
-  // no active worktree, where there is no slot to write.
+  // the agent-level preset every other worktree inherits (#15054); the default
+  // login is saved the same way for an account. Absent with no active worktree,
+  // where there is no slot to write.
   const setPresetDefault = useMemo(() => {
     if (!activeWorktreeId) return undefined;
     return (row: DockLaunchRow) => {
-      if (row.kind !== "preset" || row.preset.isSelected) return;
       // The store rolls back and records the failure itself.
+      if (row.kind === "account") {
+        if (row.account.isSelected) return;
+        void updateWorktreeAccount(
+          row.item.agent.id,
+          activeWorktreeId,
+          row.account.accountId
+        ).catch(() => {});
+        return;
+      }
+      if (row.kind !== "preset" || row.preset.isSelected) return;
       void updateWorktreePreset(row.item.agent.id, activeWorktreeId, row.preset.presetId).catch(
         () => {}
       );
     };
-  }, [activeWorktreeId, updateWorktreePreset]);
+  }, [activeWorktreeId, updateWorktreeAccount, updateWorktreePreset]);
 
   const activateRow = useCallback(
     (row: DockLaunchRow) => {
@@ -770,8 +801,10 @@ export function DockLaunchButton({
         // own agent button does on a plain click, so the launcher now agrees
         // with it and with the dock instead of launching Default and silently
         // clearing the saved choice from one of the two. Explicit Default is
-        // one keystroke away — the first row of the expansion.
-        row.kind === "preset" ? row.preset.presetId : undefined
+        // one keystroke away — the first row of the expansion. An account child
+        // launches the saved preset on its own account, once.
+        row.kind === "preset" ? row.preset.presetId : undefined,
+        row.kind === "account" ? row.account.accountId : undefined
       );
     },
     [activeWorktreeId, closeLauncher, cwd, launchAgent, recipeContext]
@@ -785,7 +818,7 @@ export function DockLaunchButton({
 
   const collapsePresets = useCallback(
     (row: DockLaunchRow) => {
-      const parentKey = row.kind === "preset" ? row.parentRowKey : row.rowKey;
+      const parentKey = isDockLaunchChoiceRow(row) ? row.parentRowKey : row.rowKey;
       setExpandedPresetParentKey(null);
       const parentIndex = results.findIndex((candidate) => candidate.rowKey === parentKey);
       if (parentIndex >= 0) setSelectedIndex(parentIndex);
@@ -878,7 +911,8 @@ export function DockLaunchButton({
       if (event.key === "ArrowLeft" && selectedRow && expandedPresetParentKey && caretAtStart) {
         const isInExpansion =
           selectedRow.rowKey === expandedPresetParentKey ||
-          (selectedRow.kind === "preset" && selectedRow.parentRowKey === expandedPresetParentKey);
+          (isDockLaunchChoiceRow(selectedRow) &&
+            selectedRow.parentRowKey === expandedPresetParentKey);
         if (isInExpansion) {
           event.preventDefault();
           event.stopPropagation();
@@ -957,7 +991,7 @@ export function DockLaunchButton({
         !event.shiftKey &&
         !event.nativeEvent.getModifierState?.("AltGraph") &&
         normalizeKeyForBinding(event.nativeEvent).toLowerCase() === "d";
-      if (isSetDefaultShortcut && selectedRow?.kind === "preset" && setPresetDefault) {
+      if (isSetDefaultShortcut && isDockLaunchChoiceRow(selectedRow) && setPresetDefault) {
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) setPresetDefault(selectedRow);
@@ -1331,6 +1365,11 @@ interface IndexedRow {
   index: number;
 }
 
+/** Whether an expansion row is the agent's saved choice. */
+function isChoiceSelected(row: DockLaunchChoiceRow): boolean {
+  return row.kind === "preset" ? row.preset.isSelected : row.account.isSelected;
+}
+
 /** Cut the arranged rows into the two columns and the footer. */
 function splitIntoColumns(
   rows: ReadonlyArray<DockLaunchRow>,
@@ -1347,7 +1386,7 @@ function splitIntoColumns(
     const column =
       row.band === "actions"
         ? footer
-        : row.kind === "preset" || !columnOf.has(row.rowKey)
+        : isDockLaunchChoiceRow(row) || !columnOf.has(row.rowKey)
           ? previous
           : columnOf.get(row.rowKey) === 1
             ? end
@@ -1387,12 +1426,12 @@ function shouldShowBandLabel(rows: ReadonlyArray<DockLaunchRow>, index: number):
   const row = rows[index];
   if (!row) return false;
   // The presets block gets exactly one heading, on its first row.
-  if (row.kind === "preset") return rows[index - 1]?.kind !== "preset";
+  if (isDockLaunchChoiceRow(row)) return !isDockLaunchChoiceRow(rows[index - 1]);
   // The footer's two actions are labelled by where they sit, not by a heading,
   // and More names itself.
   if (row.band === "actions" || row.band === "more") return false;
   let previous = index - 1;
-  while (previous >= 0 && rows[previous]?.kind === "preset") previous -= 1;
+  while (previous >= 0 && isDockLaunchChoiceRow(rows[previous])) previous -= 1;
   const prior = rows[previous];
   if (previous < 0 || !prior || headingBand(prior.band) !== headingBand(row.band)) return true;
   // Plugin groups share one browse band and are told apart by plugin, each
@@ -1583,7 +1622,9 @@ function DockLaunchOption({
       ? DOCK_LAUNCH_CUE_LABELS[row.cue]
       : row.kind === "preset"
         ? row.preset.label
-        : item!.name;
+        : row.kind === "account"
+          ? row.account.label
+          : item!.name;
 
   // Whether this row reserves the two trailing control slots. See the comment at
   // the slots themselves for why it is decided by row kind rather than per row.
@@ -1602,7 +1643,13 @@ function DockLaunchOption({
     row.kind === "item" && rowHasPresets(row)
       ? agent?.presetChoices?.find((choice) => choice.isSelected && choice.presetId !== null)
       : undefined;
-  const launchOutcome = savedPreset?.label;
+  // And which named account it signs in as (#16133); the default login says nothing.
+  const savedAccount =
+    row.kind === "item" && rowHasPresets(row)
+      ? agent?.accountChoices?.find((choice) => choice.isSelected && choice.accountId !== null)
+      : undefined;
+  const launchOutcome =
+    [savedPreset?.label, savedAccount?.label].filter(Boolean).join(" · ") || undefined;
 
   // The one flag that separates the two modes. Browse keeps its per-band rows;
   // search collapses everything into a single `results` band.
@@ -1631,31 +1678,38 @@ function DockLaunchOption({
           ]
             .filter(Boolean)
             .join(" · ")
-        : item!.category === "plugin-entry"
-          ? // The heading's attribution, for a listener who never sees it —
-            // kept beside a disabled reason rather than replaced by it.
-            [item!.pluginName, disabledReason].filter(Boolean).join(" · ")
-          : disabledReason !== undefined
-            ? disabledReason
-            : item!.category === "panel"
-              ? item!.location === "dock"
-                ? "Dock"
-                : "Grid"
-              : item!.category === "recipe"
-                ? [
-                    item!.isShadowed
-                      ? `${item!.scopeLabel} · Overridden by Team`
-                      : item!.scopeLabel,
-                    // A recipe opens in the grid from either launcher; in the
-                    // dock's that is the exception, and the heading saying so
-                    // is decorative.
-                    placement === "dock" ? "Grid" : undefined,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-                : item!.agentBand !== "launch"
-                  ? "Setup"
-                  : "Agent";
+        : row.kind === "account"
+          ? [
+              `${row.item.agent.name} account`,
+              row.account.isSelected ? "Current default" : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : item!.category === "plugin-entry"
+            ? // The heading's attribution, for a listener who never sees it —
+              // kept beside a disabled reason rather than replaced by it.
+              [item!.pluginName, disabledReason].filter(Boolean).join(" · ")
+            : disabledReason !== undefined
+              ? disabledReason
+              : item!.category === "panel"
+                ? item!.location === "dock"
+                  ? "Dock"
+                  : "Grid"
+                : item!.category === "recipe"
+                  ? [
+                      item!.isShadowed
+                        ? `${item!.scopeLabel} · Overridden by Team`
+                        : item!.scopeLabel,
+                      // A recipe opens in the grid from either launcher; in the
+                      // dock's that is the exception, and the heading saying so
+                      // is decorative.
+                      placement === "dock" ? "Grid" : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : item!.agentBand !== "launch"
+                    ? "Setup"
+                    : "Agent";
 
   // `visualQualifier` is what the eye sees, and the eye has the band heading
   // that the ear does not. Every browse band is type-homogeneous — "Launch
@@ -1675,10 +1729,10 @@ function DockLaunchOption({
   const visualQualifier =
     row.kind === "cue"
       ? row.contents
-      : row.kind === "preset"
+      : isDockLaunchChoiceRow(row)
         ? // The provenance heading is rendered directly above this row, so the
           // group name here is the same word twice. "Current default" is not.
-          row.preset.isSelected
+          isChoiceSelected(row)
           ? "Current default"
           : undefined
         : // State first, in both modes: these change what Enter does.
@@ -1768,7 +1822,13 @@ function DockLaunchOption({
   // NOT folded in: `title` alongside an `aria-label` computes as the
   // description, so repeating it here would announce it twice.
   // The saved default offers nothing to set; its "Current default" says so.
-  const canSetDefault = row.kind === "preset" && !row.preset.isSelected && onSetDefault;
+  const canSetDefault = isDockLaunchChoiceRow(row) && !isChoiceSelected(row) && onSetDefault;
+  // What the expansion holds, named in the arrow-key hint.
+  const expansionNoun = !agent?.presetChoices?.length
+    ? "accounts"
+    : agent.accountChoices?.length
+      ? "presets and accounts"
+      : "presets";
   const optionLabel = [
     spokenQualifier ? `${displayName}, ${spokenQualifier}` : displayName,
     // Its own clause rather than folded into `spokenQualifier`, which for a
@@ -1787,10 +1847,10 @@ function DockLaunchOption({
     // would do nothing on this row.
     row.kind === "item" && rowHasPresets(row)
       ? isExpanded
-        ? "Press Left Arrow to close presets"
-        : "Press Right Arrow for presets"
-      : row.kind === "preset"
-        ? "Press Left Arrow to close presets"
+        ? `Press Left Arrow to close ${expansionNoun}`
+        : `Press Right Arrow for ${expansionNoun}`
+      : isDockLaunchChoiceRow(row)
+        ? `Press Left Arrow to close ${expansionNoun}`
         : isMore
           ? isExpanded
             ? "Press Left Arrow to close"
@@ -1807,7 +1867,7 @@ function DockLaunchOption({
 
   return (
     <>
-      {row.kind === "preset" && row.groupLabel && (
+      {isDockLaunchChoiceRow(row) && row.groupLabel && (
         <div
           // Same rule as the band heading above: decorative, because the row's
           // own accessible name already states which group it belongs to.
@@ -1858,7 +1918,7 @@ function DockLaunchOption({
           "group relative flex items-center px-2 py-1.5 rounded-[var(--radius-sm)] text-left text-sm cursor-pointer select-none aria-disabled:cursor-default",
           // Preset children are indented so the expansion reads as belonging to
           // the agent above it rather than as another top-level row.
-          row.kind === "preset" && "pl-7",
+          isDockLaunchChoiceRow(row) && "pl-7",
           // Footer actions sit side by side; every other row spans its column.
           row.band === "actions" ? "w-auto" : "w-full",
           // Deliberately NOT a whole-row `opacity-70`. Dimming the row dimmed
@@ -1943,7 +2003,7 @@ function DockLaunchOption({
           {/* Only on the agent's own row. The dot marks the AGENT as newly
               detected, and repeating it on each of its preset children said the
               same thing four times about one thing. */}
-          {agent?.isNew && row.kind !== "preset" && (
+          {agent?.isNew && row.kind === "item" && (
             <span
               data-testid={`launcher-new-pill-${agent.id}`}
               aria-hidden="true"
@@ -2091,7 +2151,7 @@ function DockLaunchOption({
         )}
         {/* Every preset row in an expansion shares one worktree, so either all
             of them reserve this slot or none do, and the column holds still. */}
-        {row.kind === "preset" && onSetDefault && (
+        {isDockLaunchChoiceRow(row) && onSetDefault && (
           <span className="ml-1 w-6 shrink-0" data-launcher-slot="default">
             {canSetDefault && (
               <RowControlTooltip label="Set as default" shortcut="Alt+D">
@@ -2166,6 +2226,10 @@ function DockLaunchOptionIcon({
   }
 
   const { agent } = item;
+  // An account child is who signs in, not a variant of the agent (#16040's glyph).
+  if (row.kind === "account") {
+    return <UserRound className="w-3.5 h-3.5 mr-2 shrink-0 text-text-secondary" aria-hidden />;
+  }
   // A preset child wears its own colour when it has one, so the expansion reads
   // as variants of the agent above rather than a repeat of it.
   const brandColor =

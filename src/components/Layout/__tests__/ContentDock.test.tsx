@@ -193,7 +193,22 @@ vi.mock("../DockedNonPtyPanelItem", () => ({
   ),
 }));
 vi.mock("../DockedTabGroup", () => ({ DockedTabGroup: () => null }));
-vi.mock("../DockLaunchButton", () => ({ DockLaunchButton: () => null }));
+// Holds the launcher's props, so a test can drive the launch it hands the dock.
+const dockLaunchProps = vi.hoisted(() => ({
+  current: null as null | {
+    onLaunchAgent: (
+      agentId: string,
+      presetId?: string | null,
+      options?: { prompt?: string; accountId?: string | null }
+    ) => void;
+  },
+}));
+vi.mock("../DockLaunchButton", () => ({
+  DockLaunchButton: (props: NonNullable<typeof dockLaunchProps.current>) => {
+    dockLaunchProps.current = props;
+    return null;
+  },
+}));
 vi.mock("../DockLaunchMenuItems", () => ({ DockLaunchMenuItems: () => null }));
 vi.mock("../TrashContainer", () => ({ TrashContainer: () => null }));
 vi.mock("../WaitingContainer", () => ({ WaitingContainer: () => null }));
@@ -202,6 +217,7 @@ vi.mock("../ErrorsContainer", () => ({ ErrorsContainer: () => null }));
 vi.mock("../BackgroundContainer", () => ({ BackgroundContainer: () => null }));
 
 import { ContentDock } from "../ContentDock";
+import { actionService } from "@/services/ActionService";
 
 function renderDock() {
   const view = render(<ContentDock />);
@@ -395,6 +411,25 @@ describe("ContentDock regression test", () => {
     expect(content).toContain("activeDockTerminalId");
     expect(content).toContain("closeDockTerminal(activeDockTerminalId)");
     expect(content).toContain("!s.trashedTerminals.has(t.id)");
+  });
+
+  it("launches an account row's account, the default login included (#16133)", () => {
+    renderDock();
+    const dispatch = vi.mocked(actionService.dispatch);
+    dispatch.mockClear();
+
+    dockLaunchProps.current?.onLaunchAgent("claude", undefined, { accountId: null });
+    expect(dispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude", location: "dock", accountId: null }),
+      { source: "menu" }
+    );
+    // The saved preset still resolves: no preset key rides an account row's launch.
+    expect(dispatch.mock.calls[0]?.[1]).not.toHaveProperty("presetId");
+
+    dispatch.mockClear();
+    dockLaunchProps.current?.onLaunchAgent("claude", "fast");
+    expect(dispatch.mock.calls[0]?.[1]).not.toHaveProperty("accountId");
   });
 
   it("renders the visible DockLaunchButton wired to handleAddTerminal", () => {
