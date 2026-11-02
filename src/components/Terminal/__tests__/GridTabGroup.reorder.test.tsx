@@ -67,7 +67,9 @@ vi.mock("@/registry", () => ({
 
 import { GridTabGroup } from "../GridTabGroup";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
+import { GridGroupTabReorderContext } from "@/components/Panel/gridGroupTabReorder";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 
@@ -270,5 +272,59 @@ describe("GridTabGroup tab reorder (#16160)", () => {
     expect(storedOrder()).toEqual(TABS);
     expect(tabOrder()).toEqual(TABS);
     expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+  });
+});
+
+describe("ContentPanel's share of a group's reorder", () => {
+  const stripTabs: TabInfo[] = TABS.map((id) => ({
+    id,
+    title: id,
+    chrome: deriveTerminalChrome(),
+    kind: "terminal",
+    isActive: id === SHOWN,
+  }));
+
+  function renderPanel(location: "grid" | "dock", reorderFor: string) {
+    const onTabReorder = vi.fn();
+    stubLayout();
+    render(
+      <GridGroupTabReorderContext.Provider
+        value={{ panelId: reorderFor, groupId: GROUP, onTabReorder }}
+      >
+        <ContentPanel
+          id={SHOWN}
+          title="Shown"
+          kind="browser"
+          isFocused={false}
+          location={location}
+          onFocus={() => {}}
+          onClose={() => {}}
+          tabs={stripTabs}
+          onTabClick={() => {}}
+        >
+          <div />
+        </ContentPanel>
+      </GridGroupTabReorderContext.Provider>
+    );
+    return onTabReorder;
+  }
+
+  it("takes the reorder for its own tab in the grid", () => {
+    const onTabReorder = renderPanel("grid", SHOWN);
+    dragShownTabPastSecond();
+    expect(onTabReorder).toHaveBeenCalledWith(["second", SHOWN, "third"]);
+  });
+
+  it("takes no reorder meant for another tab", () => {
+    const onTabReorder = renderPanel("grid", "second");
+    dragShownTabPastSecond();
+    expect(onTabReorder).not.toHaveBeenCalled();
+  });
+
+  it("takes no group reorder in the dock", () => {
+    const onTabReorder = renderPanel("dock", SHOWN);
+    expect(tabOrder()).toEqual(TABS);
+    dragShownTabPastSecond();
+    expect(onTabReorder).not.toHaveBeenCalled();
   });
 });
