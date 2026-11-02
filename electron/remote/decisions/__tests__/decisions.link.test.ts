@@ -698,4 +698,64 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
       })
     ).rejects.toMatchObject({ code: "UNSUPPORTED" });
   });
+
+  /** A Host serving `session` whose key file holds an identity, and whose lifetime loads when the test says. */
+  async function heldHost(session: LinkSession, lifetime: ReturnType<typeof hostLifetime>) {
+    const owner = await makeOwner({
+      installationId: OWNER.installationId,
+      deviceId: OWNER.ownerDeviceId,
+    });
+    const keys = memoryKeys();
+    let release!: () => void;
+    const loaded = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const load = lifetime.source.load;
+    lifetime.source.load = vi.fn(async () => {
+      await loaded;
+      return load();
+    });
+    const served = serveLifetime(
+      session,
+      lifetime,
+      async (onHeld) => new HostEnrollments({ openKeys: keys.open, onHeld })
+    );
+    return { owner, keys, release, ...served };
+  }
+
+  it("takes up an identity as its owner last said, after its lifetime loads, and says it again", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    const held = await heldHost(host, lifetime);
+    let state: OwnerStateAnnouncement = OWNER;
+    const { client: shell } = shellOver(client, () => state);
+    await enrollOver(linkOver(client), held.owner);
+
+    // Turned off while the Host's lifetime was still loading, with no record to apply it to.
+    state = { ...OWNER, enabled: false };
+    shell.announceOwnerState();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    held.release();
+
+    await vi.waitFor(() =>
+      expect(lifetime.adopted).toEqual([
+        { deviceId: held.keys.current()!.config.deviceId, ownerEnabled: false },
+      ])
+    );
+    await vi.waitFor(() => expect(lifetime.applied.at(-1)).toEqual(state));
+  });
+
+  it("takes nothing up once its installer has stopped, and its stop waits for one under way", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    const held = await heldHost(host, lifetime);
+    shellOver(client, () => OWNER);
+    await enrollOver(linkOver(client), held.owner);
+
+    const stopping = held.uninstall();
+    held.release();
+    await stopping;
+
+    expect(lifetime.adopted).toEqual([]);
+  });
 });

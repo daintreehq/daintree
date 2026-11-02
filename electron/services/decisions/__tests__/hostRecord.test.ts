@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../../store.js", () => ({ store: { get: () => undefined, set: () => {} } }));
 import {
   hostLifetimeSettings,
   hostRecordServes,
@@ -7,7 +9,7 @@ import {
   sanitizeHostRecord,
   writeHostRecord,
 } from "../hostRecord.js";
-import { ownerStateOf } from "../../../types/decisionsHosts.js";
+import { ownerStateOf } from "../../../remote/decisions/clientInstall.js";
 
 const RECORD = {
   relayOrigin: "https://relay.example.com",
@@ -129,5 +131,16 @@ describe("what a Shell tells its Hosts of its Decisions (#16022)", () => {
         deviceId: "dev_owner_0001",
       })?.enabled
     ).toBe(false);
+    for (const damaged of [{ relayOrigin: "not a relay" }, { hostId: "x" }]) {
+      expect(
+        ownerStateOf({
+          enabled: true,
+          relayOrigin: "https://relay.example.com",
+          installationId: "inst_12345678",
+          deviceId: "dev_owner_0001",
+          ...damaged,
+        })?.enabled
+      ).toBe(false);
+    }
   });
 });

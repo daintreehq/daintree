@@ -968,6 +968,34 @@ describe("Decisions entry", () => {
       kept: false,
     } as const;
 
+    it("tells connected Hosts of the owner identity a claim records, at once (#16022)", async () => {
+      const announceOwnerState = vi.fn(
+        () => (saved.value as { deviceId?: string | null }).deviceId ?? null
+      );
+      const withdraw = setDecisionsHostsPort({
+        hosts: () => [],
+        linkFor: () => null,
+        onLinkOpened: () => () => {},
+        onHostsChanged: () => () => {},
+        runtimeOf: () => null,
+        announceOwnerState,
+      });
+      try {
+        saved.value = { enabled: true, consentedAt: 5 };
+        await startDecisionsIfEnabled();
+        setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
+
+        await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
+
+        // Announced with the identity already saved, so the Hosts hear which owner speaks.
+        expect(announceOwnerState.mock.results.map((result) => result.value)).toEqual([
+          CLAIMED.deviceId,
+        ]);
+      } finally {
+        withdraw();
+      }
+    });
+
     it("records a claimed relay's origin and ids with a host id minted for this computer", async () => {
       saved.value = { enabled: true, consentedAt: 5, proxyAllowlisted: true };
       await startDecisionsIfEnabled();

@@ -162,16 +162,36 @@ export function installDecisionsHostWith(
     return { runtime: HostRuntimeSchema.parse(report) };
   };
 
-  /** The key file holds `held`: its lifetime takes it up, as its owner last said. */
+  /** Adoptions still running: stopping waits for them, so none outlives this installer. */
+  const adoptions = new Set<Promise<void>>();
+
+  /**
+   * The key file holds `held`: its lifetime takes it up, as its owner last
+   * said. What the owner said is read once the lifetime has loaded, and its
+   * latest word is applied again after: an announcement that came while
+   * there was no record yet was only remembered.
+   */
   const onHeld = (held: HeldHost): void => {
     const made = followLifetime();
     if (!made) return;
-    const ownerEnabled = latestByOwner.get(ownerKey(held));
-    made
-      .then((lifetimeOf) => lifetimeOf.adopt(held, ownerEnabled))
+    const key = ownerKey(held);
+    const adoption = made
+      .then(async (lifetimeOf) => {
+        if (disposed) return;
+        await lifetimeOf.adopt(held, latestByOwner.get(key));
+        const enabled = latestByOwner.get(key);
+        if (disposed || enabled === undefined) return;
+        await lifetimeOf.apply({
+          installationId: held.installationId,
+          ownerDeviceId: held.ownerDeviceId,
+          enabled,
+        });
+      })
       .catch((err: unknown) => {
         console.warn("[Decisions] This Host's enrollment couldn't be taken up:", err);
       });
+    adoptions.add(adoption);
+    void adoption.finally(() => adoptions.delete(adoption));
   };
 
   const enrollment = (): Promise<DecisionsHostEnrollment> => {
@@ -248,5 +268,6 @@ export function installDecisionsHostWith(
     for (const unregister of [...unregisters]) unregister();
     const made = loaded ?? (loading ? await loading.catch(() => null) : null);
     await made?.dispose();
+    await Promise.all([...adoptions]);
   };
 }

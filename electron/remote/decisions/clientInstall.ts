@@ -2,7 +2,8 @@ import type { HostRegistry } from "../client/HostRegistry.js";
 import type { RemoteHostManager } from "../client/RemoteHostManager.js";
 import type { LinkSession } from "../link/session.js";
 import { store } from "../../store.js";
-import { ownerStateOf } from "../../types/decisionsHosts.js";
+import { sanitizeDecisionsSettings } from "../../services/decisions/decisionsSettings.js";
+import type { OwnerStateAnnouncement } from "../../types/decisionsHosts.js";
 import { setDecisionsHostsPort } from "../../window/serviceRefs.js";
 import { DecisionsHostsClient } from "./client.js";
 
@@ -12,6 +13,22 @@ export interface DecisionsHostsClientInstallDeps {
   sessionFor(hostId: string): LinkSession | null;
   /** The saved Decisions setting: the app's store unless a test says otherwise. */
   readSetting?: () => unknown;
+}
+
+/**
+ * What this computer tells its Hosts of its Decisions (#16022): only once it
+ * holds an owner identity, whose ids say which owner is speaking, and on or
+ * off as every reader of the saved switch sees it. The setting's sanitiser
+ * is a pure module with nothing of the service or libraries behind it.
+ */
+export function ownerStateOf(setting: unknown): OwnerStateAnnouncement | null {
+  const settings = sanitizeDecisionsSettings(setting);
+  if (settings.installationId === null || settings.deviceId === null) return null;
+  return {
+    installationId: settings.installationId,
+    ownerDeviceId: settings.deviceId,
+    enabled: settings.enabled,
+  };
 }
 
 /**
