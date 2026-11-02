@@ -134,6 +134,7 @@ function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
     claimGlobalAssistantInput: vi.fn(async () =>
       running({ inputOwner: attachmentId, inputEpoch: 5 })
     ),
+    setGlobalAssistantInputEligible: vi.fn(async () => {}),
     restartGlobalAssistant: vi.fn(),
     discardGlobalAssistant: vi.fn(),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {
@@ -311,6 +312,60 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(apis.at(-1)?.stamp).toEqual({ attachmentId: "a1", inputEpoch: 5 });
   });
 
+  it("types under input main hands it when the holder goes, without asking (#16098)", async () => {
+    installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
+    renderPane();
+    await flush();
+    push(running({ inputOwner: "a1", inputEpoch: 5 }));
+    await flush();
+    expect(apis.at(-1)?.stamp).toEqual({ attachmentId: "a1", inputEpoch: 5 });
+    expect(screen.getByTestId("global-composer").getAttribute("data-disabled")).toBe("false");
+    expect(screen.queryByTestId("help-global-input-elsewhere")).toBeNull();
+    expect(help.claimGlobalAssistantInput).not.toHaveBeenCalled();
+  });
+
+  it("attaches behind Canopy as a view that can't type, and says when it can, still attached", async () => {
+    canopy.isOpen = true;
+    installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
+    const { rerenderVisible } = renderPane();
+    await flush();
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
+    expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
+
+    canopy.isOpen = false;
+    rerenderVisible(true);
+    await flush();
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledTimes(1);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
+    expect(help.attachGlobalAssistant).toHaveBeenCalledTimes(1);
+    expect(help.detachGlobalAssistant).not.toHaveBeenCalled();
+
+    canopy.isOpen = true;
+    rerenderVisible(true);
+    await flush();
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", false);
+  });
+
+  it("tells main of a change made while its attach was on its way", async () => {
+    canopy.isOpen = true;
+    installHelp(running());
+    let answer!: (value: { attachmentId: string; state: GlobalAssistantView }) => void;
+    help.attachGlobalAssistant.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    const { rerenderVisible } = renderPane();
+    await flush();
+    canopy.isOpen = false;
+    rerenderVisible(true);
+    await flush();
+    expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
+    await act(async () => answer({ attachmentId: "a1", state: running() }));
+    await flush();
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledTimes(1);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
+  });
+
   it("keeps one stream while input moves between other windows", async () => {
     installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
     renderPane();
@@ -329,11 +384,14 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(screen.queryByTestId("global-terminal")).toBeNull();
     expect(screen.getByTestId("help-global-show-current")).not.toBeNull();
     expect(help.ensureGlobalAssistant).not.toHaveBeenCalled();
+    // It can't type to the successor it hides, so input nobody holds passes it over.
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", false);
 
     fireEvent.click(screen.getByTestId("help-global-show-current"));
     await flush();
     expect(useHelpPanelStore.getState().globalTarget).toBeNull();
     expect(screen.getByTestId("global-terminal")).not.toBeNull();
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", true);
   });
 
   it("offers no restart, stop or input for a successor hidden behind an ended run", async () => {

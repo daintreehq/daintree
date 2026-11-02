@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { GlobalAssistantView } from "@shared/types/ipc/help";
 import { logWarn } from "@/utils/logger";
 
@@ -39,23 +39,40 @@ function messageOf(error: unknown, fallback: string): string {
  * view. Attaching reads; nothing here starts a run except `start`, which only
  * a person's click calls. Dropping the attachment — a project tab, a hidden
  * panel, a cached view, an unmount — leaves the run alive.
+ *
+ * `canType` says whether the pane, showing `view`, could type to the run.
+ * Main is told on attach and at every change, so input nobody holds is only
+ * ever handed to a view that can use it (#16098).
  */
-export function useGlobalAssistant(active: boolean): GlobalAssistantHandle {
+export function useGlobalAssistant(
+  active: boolean,
+  canType: (view: GlobalAssistantView | null) => boolean = () => true
+): GlobalAssistantHandle {
   const [view, setView] = useState<GlobalAssistantView | null>(null);
   const [attachmentId, setAttachmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const eligible = canType(view);
+  // Read by the attach below without re-attaching when it changes; kept
+  // current ahead of it, since effects run in the order they are declared.
+  const eligibleRef = useRef(eligible);
+  useEffect(() => {
+    eligibleRef.current = eligible;
+  }, [eligible]);
+  /** What main was last told of an attachment's eligibility. */
+  const reportedRef = useRef<{ attachmentId: string; eligible: boolean } | null>(null);
 
   useEffect(() => {
     if (!active) return;
     const help = window.electron.help;
     let disposed = false;
     let attached: string | null = null;
+    const asked = eligibleRef.current;
     // Subscribed before attaching: the attach answer is newer than any change
     // sent before it, and every change after it arrives here.
     const off = help.onGlobalAssistantChanged((state) => {
       if (!disposed) setView(state);
     });
-    help.attachGlobalAssistant().then(
+    help.attachGlobalAssistant(asked).then(
       (attachment) => {
         if (disposed) {
           // Torn down while attaching: the reader is let go at once, not leaked.
@@ -63,6 +80,7 @@ export function useGlobalAssistant(active: boolean): GlobalAssistantHandle {
           return;
         }
         attached = attachment.attachmentId;
+        reportedRef.current = { attachmentId: attachment.attachmentId, eligible: asked };
         setAttachmentId(attachment.attachmentId);
         setView(attachment.state);
       },
@@ -81,6 +99,19 @@ export function useGlobalAssistant(active: boolean): GlobalAssistantHandle {
       setAttachmentId(null);
     };
   }, [active]);
+
+  // A change while the attach was on its way is told once it has answered.
+  useEffect(() => {
+    if (attachmentId === null) return;
+    const reported = reportedRef.current;
+    if (reported?.attachmentId === attachmentId && reported.eligible === eligible) return;
+    reportedRef.current = { attachmentId, eligible };
+    window.electron.help
+      .setGlobalAssistantInputEligible(attachmentId, eligible)
+      .catch((err: unknown) => {
+        logWarn("[GlobalAssistant] input eligibility update failed", { error: err });
+      });
+  }, [attachmentId, eligible]);
 
   const run = useCallback(
     async (action: () => Promise<GlobalAssistantView>, fallback: string): Promise<boolean> => {
