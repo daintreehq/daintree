@@ -10,6 +10,7 @@ import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Setti
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SeverityMark } from "@/lib/statusSeverity";
 import type { DecisionsDevice, DecisionsStatus } from "@shared/types/decisions";
+import { DecisionsHostsGroup } from "./DecisionsHostsGroup";
 import { DecisionsPairingDialog } from "./DecisionsPairingDialog";
 import { DecisionsRevokeDeviceDialog } from "./DecisionsRevokeDeviceDialog";
 import { deviceRoleLabel } from "./devicesCopy";
@@ -30,8 +31,24 @@ function currentRotateButton(): HTMLElement | null {
   return document.querySelector<HTMLElement>(`#${SECTION_ID} [${ROTATE_BUTTON_ATTR}]`);
 }
 
-/** Role, when it was last seen, and whether the relay can notify it: what the relay observed. */
+/**
+ * Role, when it was last seen, and whether the relay can notify it: what the
+ * relay observed. A Remote Host is never notified, so it says nothing of it.
+ */
 function DeviceFacts({ device }: { device: DecisionsDevice }) {
+  if (device.role === "desktop-host" || device.role === "owner-desktop") {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-x-1">
+        <span>{deviceRoleLabel(device.role)}</span>
+        <span aria-hidden="true">·</span>
+        {device.lastSeenAt ? (
+          <TimeAgo timestamp={device.lastSeenAt} verbose prefix="Seen " />
+        ) : (
+          <span>Not seen since it was enrolled</span>
+        )}
+      </span>
+    );
+  }
   return (
     <>
       <span className="inline-flex flex-wrap items-center gap-x-1">
@@ -68,8 +85,9 @@ function DeviceFacts({ device }: { device: DecisionsDevice }) {
  * verify, and "Pair a phone". Each can be revoked after a confirmation, and
  * the key rotated without revoking anyone (#16010). The list is read again on
  * Refresh, after a pairing or a key change, when main says the devices
- * changed, and when the window regains focus. Enrolled Hosts (#16021) add to
- * the same list.
+ * changed, when the window regains focus, and when a Remote Host is enrolled.
+ * Enrolled Hosts are listed here like any device (#16021), revoked the same
+ * way, and the Remote Hosts group under the list enrolls them.
  */
 export function DecisionsDevicesSection({
   status,
@@ -254,6 +272,12 @@ export function DecisionsDevicesSection({
       action={headerActions}
     >
       {content}
+      <DecisionsHostsGroup
+        enabled={relaySetUp}
+        revision={status.revision ?? 0}
+        locked={locked}
+        onEnrolledChange={reload}
+      />
       <DecisionsPairingDialog
         isOpen={pairingOpen}
         onClose={() => {

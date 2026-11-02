@@ -62,7 +62,8 @@ export interface DecisionsHostFailure {
  *   doesn't list.
  * - `own-setup`: the Host has its own Decisions setup as an owner, which is
  *   never replaced from here.
- * - `other-setup`: the Host is enrolled with another relay or owner.
+ * - `other-setup`: the Host is enrolled with another relay or owner, which
+ *   is never replaced from here.
  * - `needs-update`: the Host's Daintree doesn't know enrollment.
  * - `failed`: the last attempt didn't finish (`failure`); it is tried again
  *   on the Host's next connection.

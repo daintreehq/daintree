@@ -67,7 +67,8 @@ function reportOf(stored: StoredIdentity | null): HostIdentityReport {
  * the keychain couldn't seal them, so the owner never registers a device this
  * Host can't keep. The keys made for one link are accepted only over that
  * link, and dropped when it closes; an identity already here is never
- * replaced unless the request named it, and never when it is an owner's.
+ * replaced unless the request named it and the same owner signed the new
+ * one, and never when it is an owner's.
  */
 export class HostEnrollments {
   private readonly openKeys: () => HostKeys;
@@ -148,8 +149,16 @@ export class HostEnrollments {
           return stored !== null && replaceable(stored) ? null : stored;
         },
         save: async (identity) => {
-          if (!replaceable(await keys.load())) {
+          const stored = await keys.load();
+          if (!replaceable(stored)) {
             throw new Error("This Host's Decisions identity changed while it was being enrolled");
+          }
+          // Only the owner the old identity was pinned to replaces it.
+          if (
+            stored !== null &&
+            stored.host?.ownerCert.signing_pub !== identity.host?.ownerCert.signing_pub
+          ) {
+            throw new Error("This Host was enrolled by another owner, so it was left as it is");
           }
           await keys.save(identity);
         },

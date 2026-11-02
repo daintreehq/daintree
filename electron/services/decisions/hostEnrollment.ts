@@ -71,7 +71,6 @@ const ENROLLABLE = new Set<DecisionsHostEnrollment["state"]>([
   "not-enrolled",
   "revoked",
   "stale",
-  "other-setup",
   "failed",
 ]);
 
@@ -366,8 +365,8 @@ export class HostEnroller {
         if (mode === "auto") return show({ state: row ? "revoked" : "stale" });
         replace = identity.deviceId;
       } else if (identity.kind === "host") {
-        if (mode === "auto") return show({ state: "other-setup" });
-        replace = identity.deviceId;
+        // Another relay's or owner's: never replaced from here, by Enroll either.
+        return show({ state: "other-setup" });
       } else if (mode === "auto") {
         if (record?.revokedAt != null) return show({ state: "revoked" });
         if (!this.options.autoEnroll()) {
