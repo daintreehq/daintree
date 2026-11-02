@@ -199,8 +199,9 @@ export async function addAgentAccount(
 }
 
 /**
- * Forgets an account. Every choice that named it goes back to inheriting, so
- * no launch is left pointing at an account that isn't there. The folder stays
+ * Forgets an account. Every choice that named it, presets' pins included,
+ * goes back to inheriting, so no launch is left pointing at an account that
+ * isn't there. The folder stays
  * where it is: it holds the user's login and history.
  */
 export function removeAgentAccount(agentId: unknown, accountId: unknown): AgentSettings {
@@ -220,6 +221,14 @@ export function removeAgentAccount(agentId: unknown, accountId: unknown): AgentS
       Object.entries(entry.worktreeAccounts).filter(([, value]) => value !== accountId)
     ) as Record<string, string | null>;
     next.worktreeAccounts = Object.keys(scoped).length > 0 ? scoped : undefined;
+  }
+  // A preset that pinned it goes back to the worktree's or the agent's account (#16133).
+  if (Array.isArray(entry.customPresets)) {
+    next.customPresets = entry.customPresets.map((preset) => {
+      if (!isPlainRecord(preset) || preset.accountId !== accountId) return preset;
+      const { accountId: _removed, ...rest } = preset;
+      return rest as typeof preset;
+    });
   }
   return writeAgentEntry(id, next);
 }

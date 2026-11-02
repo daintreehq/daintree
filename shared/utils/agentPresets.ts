@@ -4,6 +4,7 @@ import {
   getEffectiveAgentConfig,
 } from "../config/agentRegistry.js";
 import { hasShellMetachar } from "./shellEscape.js";
+import { isAccountId } from "./agentAccountId.js";
 import {
   combineDangerousModes,
   combineInlineModes,
@@ -152,7 +153,19 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
     keepConversationOnRateLimit: preset.keepConversationOnRateLimit === true ? true : undefined,
+    // Kept even when no account answers to it any more: a launch refuses a
+    // pin it can't find rather than running on another login.
+    accountId: isAccountId(preset.accountId) ? preset.accountId : undefined,
   };
+}
+
+/**
+ * A preset with no pinned account. Accounts are this machine's folders, so
+ * only the user's own presets can pin one (#16133): a repository's preset
+ * file naming an account id could otherwise refuse every launch of it.
+ */
+function withoutAccountPin(preset: AgentPreset): AgentPreset {
+  return preset.accountId === undefined ? preset : { ...preset, accountId: undefined };
 }
 
 /**
@@ -178,9 +191,13 @@ export function getMergedPresets(
   const custom = presetBucket(customPresets) ?? [];
   const project = presetBucket(projectPresets) ?? [];
 
-  const sanitizedRegistry = registryPresets.map(sanitizePreset).filter(Boolean) as AgentPreset[];
+  const sanitizedRegistry = (registryPresets.map(sanitizePreset).filter(Boolean) as AgentPreset[]).map(
+    withoutAccountPin
+  );
   const sanitizedCustom = custom.map(sanitizePreset).filter(Boolean) as AgentPreset[];
-  const sanitizedProject = project.map(sanitizePreset).filter(Boolean) as AgentPreset[];
+  const sanitizedProject = (project.map(sanitizePreset).filter(Boolean) as AgentPreset[]).map(
+    withoutAccountPin
+  );
 
   // Precedence (first-seen-wins): custom > project > CCR/registry. Custom
   // overrides team-shared project presets, which override CCR-discovered or
