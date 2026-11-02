@@ -7,9 +7,9 @@
  * the store orchestrator does.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { AgentState } from "@shared/types/agent";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { HAND_BACK_SEEN_DWELL_MS } from "@shared/utils/runHandBack";
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
@@ -68,6 +68,7 @@ import {
 interface PaneProps {
   agentState?: AgentState;
   isFocused?: boolean;
+  location?: "grid" | "dock" | "dialog";
   isExited?: boolean;
   exitCode?: number | null;
   submitStatus?: "slow" | "stalled" | "failed";
@@ -94,15 +95,48 @@ function pane(props: PaneProps) {
 
 let prevRecords: Record<string, PanelInstance> | undefined;
 
-/** One write of the pane's record, as the panel store holds it and the orchestrator reads it. */
-function record(fields: Record<string, unknown>) {
+/**
+ * One write of the pane's record, as the panel store holds it and the
+ * orchestrator reads it. `alongside` lands in the same commit, the way the
+ * pane's own props move with the same store write.
+ */
+function record(fields: Partial<PtyPanelData>, alongside?: () => void) {
   mockState.panel = fields;
-  const next = { "t-1": { id: "t-1", kind: "terminal", ...fields } as never };
-  act(() => observePanelFailures(next, prevRecords));
+  const panel: PtyPanelData = {
+    id: "t-1",
+    kind: "terminal",
+    title: "Claude",
+    location: "grid",
+    cwd: "/repo",
+    cols: 80,
+    rows: 24,
+    ...fields,
+  };
+  const next = { "t-1": panel };
+  act(() => {
+    observePanelFailures(next, prevRecords);
+    alongside?.();
+  });
   prevRecords = next;
 }
 
+const seenMarks = () => usePanelFailureStore.getState().seen["t-1"];
+
 let windowFocused = true;
+let documentHidden = false;
+
+function setDocumentHidden(hidden: boolean) {
+  documentHidden = hidden;
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+}
+
+const glyphLabel = () =>
+  screen
+    .queryAllByRole("status")
+    .map((el) => el.getAttribute("aria-label") ?? "")
+    .find((label) => label.startsWith("Agent state:")) ?? null;
 
 function setWindowFocused(focused: boolean) {
   windowFocused = focused;
@@ -219,7 +253,9 @@ const FAILURES: FailureKind[] = [
 beforeEach(() => {
   vi.useFakeTimers();
   windowFocused = true;
+  documentHidden = false;
   vi.spyOn(document, "hasFocus").mockImplementation(() => windowFocused);
+  vi.spyOn(document, "hidden", "get").mockImplementation(() => documentHidden);
   mockState.panel = {};
   prevRecords = undefined;
   _resetPanelFailureStoreForTest();
@@ -232,6 +268,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   _resetPanelFailureStoreForTest();
+  useFleetSnapshotStore.setState({ snapshot: null });
   usePanelStore.setState({ focusedId: null, activeDockTerminalId: null });
   useCanopyStore.setState({ isOpen: false });
   useProjectHomeStore.setState({ presented: false });
@@ -300,49 +337,98 @@ describe("ContentPanel red edge look", () => {
     expect(view.edge()).toBe(false);
   });
 
-  it("starts the dwell over when the window loses focus partway through", () => {
+  /** Each way the look can break, and how it comes back. */
+  const LOOK_BREAKS: [string, () => void, () => void][] = [
+    ["the window loses focus", () => setWindowFocused(false), () => setWindowFocused(true)],
+    ["the view is hidden", () => setDocumentHidden(true), () => setDocumentHidden(false)],
+    [
+      "Canopy opens over it",
+      () => act(() => useCanopyStore.setState({ isOpen: true })),
+      () => act(() => useCanopyStore.setState({ isOpen: false })),
+    ],
+    [
+      "Home covers the grid",
+      () => act(() => useProjectHomeStore.setState({ presented: true })),
+      () => act(() => useProjectHomeStore.setState({ presented: false })),
+    ],
+    ["focus moves to another pane", () => setStoreFocus("t-2"), () => setStoreFocus("t-1")],
+  ];
+
+  it.each(LOOK_BREAKS)(
+    "starts the dwell over when %s partway through",
+    (_label, cover, uncover) => {
+      setStoreFocus("t-1");
+      const view = mount({ ...failedExit.fail(1), isFocused: true });
+      advance(HAND_BACK_SEEN_DWELL_MS - 10);
+      cover();
+      advance(5);
+      uncover();
+
+      // The first dwell's deadline passes without counting.
+      advance(10);
+      expect(view.edge()).toBe(true);
+      advance(HAND_BACK_SEEN_DWELL_MS - 11);
+      expect(view.edge()).toBe(true);
+      advance(1);
+      expect(view.edge()).toBe(false);
+    }
+  );
+
+  it.each(LOOK_BREAKS)("counts no look while %s", (_label, cover, uncover) => {
     setStoreFocus("t-1");
+    cover();
     const view = mount({ ...failedExit.fail(1), isFocused: true });
-    advance(HAND_BACK_SEEN_DWELL_MS - 1);
-    setWindowFocused(false);
     advance(HAND_BACK_SEEN_DWELL_MS * 3);
     expect(view.edge()).toBe(true);
 
-    setWindowFocused(true);
-    advance(HAND_BACK_SEEN_DWELL_MS - 1);
+    uncover();
+    advance(HAND_BACK_SEEN_DWELL_MS);
+    expect(view.edge()).toBe(false);
+  });
+
+  it("gives a failure that replaces another partway through the dwell a dwell of its own", () => {
+    const failedRestart = FAILURES.find(({ name }) => name === "a failed restart")!;
+    setStoreFocus("t-1");
+    const view = mount({ ...failedRestart.fail(1), isFocused: true });
+    advance(HAND_BACK_SEEN_DWELL_MS - 10);
+    view.show(failedRestart.fail(2));
+
+    advance(10);
+    expect(view.edge()).toBe(true);
+    advance(HAND_BACK_SEEN_DWELL_MS - 11);
     expect(view.edge()).toBe(true);
     advance(1);
     expect(view.edge()).toBe(false);
   });
 
-  it.each([
-    [
-      "Canopy is open over it",
-      () => useCanopyStore.setState({ isOpen: true }),
-      () => useCanopyStore.setState({ isOpen: false }),
-    ],
-    [
-      "Home covers the grid",
-      () => useProjectHomeStore.setState({ presented: true }),
-      () => useProjectHomeStore.setState({ presented: false }),
-    ],
-    [
-      "focus is on another pane",
-      () => usePanelStore.setState({ focusedId: "t-2" }),
-      () => usePanelStore.setState({ focusedId: "t-1" }),
-    ],
-  ])("counts no look while %s", (_label, cover, uncover) => {
+  it("counts nothing for a pane unmounted partway through the dwell", () => {
     setStoreFocus("t-1");
-    act(cover);
     const view = mount({ ...failedExit.fail(1), isFocused: true });
-    advance(HAND_BACK_SEEN_DWELL_MS * 3);
-    expect(view.edge()).toBe(true);
-
-    act(uncover);
+    advance(HAND_BACK_SEEN_DWELL_MS - 1);
+    view.unmount();
     advance(HAND_BACK_SEEN_DWELL_MS);
-    expect(view.edge()).toBe(false);
+    expect(seenMarks()).toBeUndefined();
+
+    const again = mount({ agentState: "exited", isExited: true, exitCode: 1, isFocused: true });
+    advance(HAND_BACK_SEEN_DWELL_MS - 1);
+    expect(again.edge()).toBe(true);
+    advance(1);
+    expect(again.edge()).toBe(false);
   });
 
+  it("counts a look in an open dock popover, Home or not, and none while it is shut", () => {
+    setStoreFocus("t-1");
+    act(() => useProjectHomeStore.setState({ presented: true }));
+    mount({ ...failedExit.fail(1), isFocused: true, location: "dock" });
+    advance(HAND_BACK_SEEN_DWELL_MS * 3);
+    expect(seenMarks()).toBeUndefined();
+
+    act(() => usePanelStore.setState({ activeDockTerminalId: "t-1" }));
+    advance(HAND_BACK_SEEN_DWELL_MS);
+    const exit = usePanelFailureStore.getState().occurrences["t-1"]?.exit?.token;
+    expect(exit).toBeDefined();
+    expect(seenMarks()?.exit).toBe(exit);
+  });
   it("lets a seen failed exit recede like a clean one", () => {
     setStoreFocus("t-1");
     const view = mount({ ...failedExit.fail(1), isFocused: true });
@@ -381,14 +467,66 @@ describe("ContentPanel red edge look", () => {
     expect(view.edge()).toBe(true);
   });
 
-  it("keeps the error wait's observed state once the edge has gone", () => {
+  it("keeps the error wait's glyph and observed state once the edge has gone", () => {
+    const errorWait = FAILURES[0]!;
+    act(() =>
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            {
+              runId: "t-1",
+              workspaceId: "p1",
+              spawnedAt: 0,
+              cwd: "/repo",
+              agentState: "waiting",
+              waitingReason: "error",
+            },
+          ],
+          changedAt: 0,
+          degraded: false,
+          lastSuccessfulAt: null,
+        },
+      })
+    );
+    setStoreFocus("t-1");
+    const view = mount({ ...errorWait.fail(1), isFocused: true });
+    advance(ERROR_WAIT_DEBOUNCE_MS);
+    expect(view.edge()).toBe(true);
+    const glyphBefore = glyphLabel();
+    expect(glyphBefore).toMatch(/^Agent state: /);
+
+    advance(HAND_BACK_SEEN_DWELL_MS);
+    expect(view.edge()).toBe(false);
+    expect(glyphLabel()).toBe(glyphBefore);
+    expect(view.frame().getAttribute("data-agent-state")).toBe("waiting");
+  });
+
+  it("never redraws a seen error wait as its agent exits", () => {
     const errorWait = FAILURES[0]!;
     setStoreFocus("t-1");
     const view = mount({ ...errorWait.fail(1), isFocused: true });
     advance(ERROR_WAIT_DEBOUNCE_MS);
     advance(HAND_BACK_SEEN_DWELL_MS);
-
     expect(view.edge()).toBe(false);
-    expect(view.frame().getAttribute("data-agent-state")).toBe("waiting");
+
+    // Every class the frame passes through, so a single-commit flash shows.
+    const drawn: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const { oldValue } of records) drawn.push(oldValue ?? "");
+    });
+    observer.observe(view.frame(), {
+      attributes: true,
+      attributeFilter: ["class"],
+      attributeOldValue: true,
+    });
+    // The agent's exit moves its state on and leaves the wait's reason behind.
+    record({ agentState: "exited", waitingReason: "error" }, () =>
+      view.show({ agentState: "exited" })
+    );
+    for (const { oldValue } of observer.takeRecords()) drawn.push(oldValue ?? "");
+    observer.disconnect();
+
+    drawn.push(view.frame().className);
+    expect(drawn.filter((value) => value.includes("panel-state-failed"))).toEqual([]);
   });
 });

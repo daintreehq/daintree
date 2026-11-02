@@ -98,11 +98,15 @@ export const usePanelFailureStore = create<PanelFailureState>((set) => ({
   markSeen: (panelId, tokens) =>
     set((state) => {
       const current = state.seen[panelId];
-      const changed = (Object.keys(tokens) as PanelFailureSource[]).some(
-        (source) => current?.[source] !== tokens[source]
-      );
-      if (!changed) return state;
-      return { seen: { ...state.seen, [panelId]: { ...current, ...tokens } } };
+      let entry: PanelFailureTokens | null = null;
+      for (const source of PANEL_FAILURE_SOURCES) {
+        const token = tokens[source];
+        if (token === undefined || current?.[source] === token) continue;
+        entry ??= { ...current };
+        entry[source] = token;
+      }
+      if (entry === null) return state;
+      return { seen: { ...state.seen, [panelId]: entry } };
     }),
   removePanel: (panelId) =>
     set((state) => {
@@ -144,10 +148,11 @@ export function isFailedExitCode(exitCode: number | null | undefined): boolean {
 
 /**
  * The failures a panel record shows, by the rules the pane draws them with.
- * Only a restart or reconnect error's time tells one failure from the next
- * while it stays failed; the rest are one failure for as long as they hold,
- * and a new one once they clear and come back. A wait's timestamp is not used:
- * it moves with the error text and trigger while the same wait holds.
+ * Only a restart or reconnect error's time, or a new agent session taking over
+ * the terminal, tells one failure from the next while it stays failed; the rest
+ * are one failure for as long as they hold, and a new one once they clear and
+ * come back. A wait's timestamp is not used: it moves with the error text and
+ * trigger while the same wait holds.
  */
 export function readPanelFailureMarks(
   panel: PanelInstance
@@ -161,7 +166,10 @@ export function readPanelFailureMarks(
     panel.isRestarting !== true &&
     !exited
   ) {
-    marks.wait = "";
+    // A resync can land a new session's error wait on the old one's with no
+    // other state between them. The first session reads as 0, so filling the
+    // count in later doesn't make the same wait new.
+    marks.wait = String(panel.agentIncarnation ?? 0);
   }
   if (exited && isFailedExitCode(panel.exitCode)) marks.exit = "";
   if (panel.spawnError !== undefined) marks.spawn = "";

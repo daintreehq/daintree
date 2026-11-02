@@ -478,8 +478,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   );
   const ownUnseenAsk = useRunUnseenAsk(id);
   const ownBlockedState = useDockBlockedState(ownAgentState);
-  // A restart or an exit is newer than the error wait it ends.
+  // A restart or an exit is newer than the error wait it ends. The raw state
+  // must still be waiting too: an agent exit moves it on without clearing the
+  // reason, while the debounced state still holds the wait for a commit.
   const isBlockedWait =
+    ownAgentState === "waiting" &&
     ownBlockedState === "waiting" &&
     paneSignals.waitingReason === "error" &&
     !paneSignals.isRestarting &&

@@ -126,6 +126,8 @@ const { useResourceMonitoringStore } = await import("../resourceMonitoringStore"
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
 const { usePluginPanelActivityStore } = await import("../pluginPanelActivityStore");
+const { usePanelFailureStore, _resetPanelFailureStoreForTest } =
+  await import("../panelFailureStore");
 const { usePluginPanelAttentionStore } = await import("../pluginPanelAttentionStore");
 const { usePluginPanelToolbarStore } = await import("../pluginPanelToolbarStore");
 const { usePluginPanelOpenRequestStore } = await import("../pluginPanelOpenRequestStore");
@@ -168,6 +170,7 @@ describe("rendererStoreOrchestrator", () => {
     useVoiceRecordingStore.setState({ panelBuffers: {} });
     usePluginPanelBadgeStore.setState({ badgesByPanelId: {} });
     usePluginPanelActivityStore.setState({ activityByPanelId: {}, seenRevisionByPanelId: {} });
+    _resetPanelFailureStoreForTest();
     usePluginPanelAttentionStore.setState({ shelfByPanelId: {} });
     usePluginPanelToolbarStore.setState({ statesByPanelId: {} });
     usePluginPanelOpenRequestStore.setState({ entriesByPanelId: {} });
@@ -572,6 +575,75 @@ describe("rendererStoreOrchestrator", () => {
     expect(useWorktreeSelectionStore.getState().lastFocusedTerminalByWorktree.has("wt-1")).toBe(
       false
     );
+  });
+
+  describe("failure occurrences for the red pane edge (#16140)", () => {
+    function terminal(id: string, fields: Partial<PtyPanelData> = {}): PtyPanelData {
+      return {
+        id,
+        title: id,
+        kind: "terminal",
+        cwd: "/",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+        ...fields,
+      };
+    }
+    const ERROR_WAIT = { agentState: "waiting", waitingReason: "error" } as const;
+    const FAILED_EXIT = { runtimeStatus: "exited", exitCode: 1 } as const;
+    const tokenOf = (id: string, source: "wait" | "exit") =>
+      usePanelFailureStore.getState().occurrences[id]?.[source]?.token;
+    const write = (panel: PtyPanelData) =>
+      usePanelStore.setState((state) => ({
+        panelsById: { ...state.panelsById, [panel.id]: panel },
+        panelIds: state.panelIds.includes(panel.id)
+          ? state.panelIds
+          : [...state.panelIds, panel.id],
+      }));
+
+    it("reads the failures the panel store already holds when it starts", () => {
+      destroyStoreOrchestrator();
+      write(terminal("t1", FAILED_EXIT));
+      expect(tokenOf("t1", "exit")).toBeUndefined();
+
+      initStoreOrchestrator();
+      expect(tokenOf("t1", "exit")).toBeDefined();
+    });
+
+    it("reads a failure that ends and comes back as new with no pane mounted", () => {
+      write(terminal("t1", ERROR_WAIT));
+      const first = tokenOf("t1", "wait");
+      expect(first).toBeDefined();
+
+      write(terminal("t1", { agentState: "working" }));
+      expect(tokenOf("t1", "wait")).toBeUndefined();
+      write(terminal("t1", ERROR_WAIT));
+      expect(tokenOf("t1", "wait")).toBeDefined();
+      expect(tokenOf("t1", "wait")).not.toBe(first);
+    });
+
+    it("forgets a removed panel's failures and seen marks, and keeps the rest", () => {
+      write(terminal("gone", FAILED_EXIT));
+      write(terminal("keep", FAILED_EXIT));
+      const { markSeen } = usePanelFailureStore.getState();
+      markSeen("gone", { exit: tokenOf("gone", "exit") });
+      markSeen("keep", { exit: tokenOf("keep", "exit") });
+
+      usePanelStore.getState().removePanel("gone");
+
+      const { occurrences, seen } = usePanelFailureStore.getState();
+      expect(occurrences.gone).toBeUndefined();
+      expect(seen.gone).toBeUndefined();
+      expect(occurrences.keep?.exit?.token).toBeDefined();
+      expect(seen.keep?.exit).toBe(occurrences.keep?.exit?.token);
+    });
+
+    it("stops reading once torn down", () => {
+      destroyStoreOrchestrator();
+      write(terminal("t1", FAILED_EXIT));
+      expect(tokenOf("t1", "exit")).toBeUndefined();
+    });
   });
 
   describe("layout undo history (#14969)", () => {

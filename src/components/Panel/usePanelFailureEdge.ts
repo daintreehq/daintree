@@ -29,12 +29,16 @@ function isPaneInFront(panelId: string, location: PanelLocation): boolean {
   return true;
 }
 
+function isFailureSource(value: string | undefined): value is PanelFailureSource {
+  return (PANEL_FAILURE_SOURCES as readonly (string | undefined)[]).includes(value);
+}
+
 function parsePending(pending: string): PanelFailureTokens {
   const tokens: PanelFailureTokens = {};
   for (const entry of pending.split(",")) {
     const [source, token] = entry.split(":");
-    if (token === undefined || token === "?") continue;
-    tokens[source as PanelFailureSource] = Number(token);
+    if (!isFailureSource(source) || token === undefined || token === "?") continue;
+    tokens[source] = Number(token);
   }
   return tokens;
 }

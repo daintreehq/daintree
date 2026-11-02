@@ -408,7 +408,7 @@ describe("ContentPanel amber from the fleet band", () => {
     expect(wearsWaitingHue()).toBe(false);
   });
 
-  it("keeps the failed edge for an error wait, with the blocked mark in place of the ring", () => {
+  it("draws the failed edge for an error wait, with the blocked mark in place of the ring", () => {
     observe("waiting", "error");
     fleet({ agentState: "waiting", waitingReason: "error" });
     const { container } = render(pane({ agentState: "waiting" }));
@@ -421,7 +421,7 @@ describe("ContentPanel amber from the fleet band", () => {
     expect(glyphLabel()).toBe("Agent state: blocked (error)");
   });
 
-  it("keeps the failed edge for a failed exit, and none for a clean or interrupted one", () => {
+  it("draws the failed edge for a failed exit, and none for a clean or interrupted one", () => {
     fleet({ agentState: "exited" });
     for (const [exitCode, failed] of [
       [1, true],

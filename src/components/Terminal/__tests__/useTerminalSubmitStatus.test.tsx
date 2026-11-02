@@ -31,11 +31,13 @@ afterEach(() => {
 });
 
 describe("useTerminalSubmitStatus", () => {
-  it("records each failed submit as its own failure, back to back, and only for its terminal", () => {
+  it("records each failed submit as its own failure, back to back", () => {
     const { result } = renderHook(() => useTerminalSubmitStatus("t-1"));
 
-    emit({ id: "t-1", state: "slow" });
-    expect(submitToken("t-1")).toBeUndefined();
+    for (const state of ["slow", "stalled", "settled"] as const) {
+      emit({ id: "t-1", state });
+      expect(submitToken("t-1"), state).toBeUndefined();
+    }
 
     emit({ id: "t-1", state: "failed" });
     expect(result.current).toBe("failed");
@@ -45,8 +47,20 @@ describe("useTerminalSubmitStatus", () => {
     emit({ id: "t-1", state: "failed" });
     expect(submitToken("t-1")).toBeDefined();
     expect(submitToken("t-1")).not.toBe(first);
+  });
+
+  it("leaves another terminal's failed submit to that terminal's pane", () => {
+    const { result, unmount } = renderHook(() => useTerminalSubmitStatus("t-1"));
+    emit({ id: "t-1", state: "failed" });
+    const own = submitToken("t-1");
+    expect(own).toBeDefined();
 
     emit({ id: "t-2", state: "failed" });
+    expect(submitToken("t-1")).toBe(own);
     expect(submitToken("t-2")).toBeUndefined();
+    expect(result.current).toBe("failed");
+
+    unmount();
+    expect(listeners.size).toBe(0);
   });
 });
