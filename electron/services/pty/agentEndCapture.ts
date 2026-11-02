@@ -106,10 +106,19 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
       getEffectiveAgentConfig(agentId)?.capabilities?.selfUpdateSuccessPattern,
       { tailLines: CAPTURE_SCAN_LINES, tailChars: CAPTURE_SCAN_CHARS }
     );
+  const agentResume = getEffectiveAgentConfig(agentId)?.resume;
+  const resumeRefused =
+    launchedRun &&
+    agentResume?.kind === "session-id" &&
+    tailMatchesPattern(recentOutput, agentResume.refusalPattern, {
+      tailLines: CAPTURE_SCAN_LINES,
+      tailChars: CAPTURE_SCAN_CHARS,
+    });
   const observe = (resumeHintSeen: boolean): AgentEndObservation => ({
     launchedRun,
     resumeHintSeen,
     selfUpdateSucceeded,
+    resumeRefused,
   });
 
   const logOutcome = (outcome: AgentEndCaptureOutcome): void => {
@@ -121,6 +130,7 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
       outcome,
       captured: outcome === "captured" || outcome === "preassigned" || outcome === "launch-id",
       selfUpdateSucceeded,
+      resumeRefused,
     });
   };
 
@@ -131,7 +141,7 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
     return observe(false);
   }
 
-  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  const resume = agentResume;
   if (resume?.kind !== "session-id") {
     logOutcome("no-resume-config");
     return observe(false);

@@ -121,6 +121,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // Live offer to reopen an ended launch's conversation (#13226) — a prompt
   // about a process that no longer exists after a restart.
   agentResumeOffer: false,
+  // Live match between a conversation-keeping preset switch and its run's end
+  // (#16045) — about a process that no longer exists after a restart.
+  presetSwitchResume: false,
   restartError: false,
   reconnectError: false,
   scrollbackRestoreError: false,

@@ -165,6 +165,8 @@ export interface AgentSettingsEntry {
     fallbacks?: string[];
     /** Also fall over when the agent hits a plan or rate limit (#14370). */
     fallbackOnRateLimit?: boolean;
+    /** Reopen the same conversation on a usage-limit hop (#16045). */
+    keepConversationOnRateLimit?: boolean;
   }>;
   /**
    * Environment variables applied to every launch of this agent, regardless of preset.
@@ -1365,6 +1367,18 @@ export function supportsCrossDirectoryResume(agentId: string | undefined): boole
   if (!agentId) return false;
   const resume = getEffectiveAgentConfig(agentId)?.resume;
   return resume?.kind === "session-id" && resume.crossDirectoryResume === true;
+}
+
+/**
+ * Whether a preset switch may ask `agentId` to reopen the pane's conversation
+ * by id (#16045): the CLI resumes an exact id and Daintree knows the words it
+ * refuses one with, so a refusal is offered back to the user rather than read
+ * as an ordinary exit.
+ */
+export function supportsConversationKeepingSwitch(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  return resume?.kind === "session-id" && !!resume.refusalPattern;
 }
 
 /**

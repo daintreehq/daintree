@@ -925,7 +925,9 @@ describe("terminal.restartOnPreset (#13746)", () => {
 
     await run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true });
 
-    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work", {
+      keepConversation: false,
+    });
     expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBeUndefined();
   });
 
@@ -971,12 +973,32 @@ describe("terminal.restartOnPreset (#13746)", () => {
       { dispatchSource: "agent", hostConfirmed: true }
     );
 
-    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work", {
+      keepConversation: false,
+    });
     expect(result).toEqual({
       terminalId: "p1",
       agentPresetId: "work-resolved",
       agentSessionIdCleared: true,
     });
+  });
+
+  it("asks for the conversation when told to keep it, and says it wasn't cleared (#16045)", async () => {
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    restartTerminalOnPreset.mockResolvedValue({ success: true, resumedSessionId: "thread-1" });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.restartOnPreset",
+      { terminalId: "p1", presetId: "work", keepConversation: true },
+      { dispatchSource: "agent", hostConfirmed: true }
+    );
+
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work", { keepConversation: true });
+    expect(result).toMatchObject({ terminalId: "p1", agentSessionIdCleared: false });
   });
 
   it("refuses the owned twin outside the MCP main-process path", async () => {

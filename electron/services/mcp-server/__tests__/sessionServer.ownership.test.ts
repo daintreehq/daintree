@@ -1101,6 +1101,21 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(payloadOf<typeof RESTART_RESULT>(result)).toEqual(RESTART_RESULT);
     });
 
+    it("forwards the ask to keep the conversation (#16045)", async () => {
+      const { server, dispatchAction } = restartHarness("s-restart-keep");
+
+      await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-1", presetId: "work", keepConversation: true },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnPreset",
+        { presetId: "work", keepConversation: true, terminalId: "terminal-1" },
+        false
+      );
+    });
+
     // The pane survives a restart, so the session keeps the authority to brief
     // it again and to close it afterwards.
     it("keeps ownership, so the restarted panel can still be closed", async () => {

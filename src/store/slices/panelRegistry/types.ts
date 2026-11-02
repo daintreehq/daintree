@@ -57,6 +57,23 @@ export interface RestartTerminalOptions {
   keepCwd?: boolean;
 }
 
+export interface PresetRespawnOptions {
+  /**
+   * Relaunch the pane's conversation by its id under the new preset, rather
+   * than a new one (#16045). Refused before anything is torn down for an agent
+   * whose CLI refusal Daintree can't recognise, and after the teardown when no
+   * id turned up: never quietly a new conversation.
+   */
+  keepConversation?: boolean;
+}
+
+export interface PresetRespawnResult {
+  success: boolean;
+  error?: string;
+  /** The conversation the relaunch asked the CLI to reopen, when it kept one. */
+  resumedSessionId?: string;
+}
+
 export interface TrashedTerminalGroupMetadata {
   panelIds: string[];
   activeTabId: string;
@@ -290,25 +307,28 @@ export interface PanelRegistrySlice {
   /**
    * Kill the current PTY and respawn it in the same panel slot using a
    * different preset. Fires as part of the fallback chain when a preset's
-   * provider is unavailable. No session resume (fresh spawn), since the
-   * upstream session we were talking to is the very thing that failed.
+   * provider is unavailable. A new conversation unless `keepConversation`
+   * (#16045): only a usage-limit hop on a preset that opted in asks for it.
    */
   activateFallbackPreset: (
     id: string,
     nextPresetId: string,
-    originalPresetId: string
-  ) => Promise<{ success: boolean; error?: string }>;
+    originalPresetId: string,
+    options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
   /**
    * Respawn an agent pane in place on another preset of the same agent
-   * (#13746). Always a new conversation: a session can't follow the pane into
-   * another preset's home. The chosen preset becomes the pane's own — fallback
-   * marking is reset — and its env replaces the saved launch layer so a cold
-   * restore comes back on it.
+   * (#13746). A new conversation by default: a session stored under one
+   * preset's config folder usually can't be found from another's.
+   * `keepConversation` (#16045) asks the CLI to reopen the same one instead.
+   * The chosen preset becomes the pane's own — fallback marking is reset — and
+   * its env replaces the saved launch layer so a cold restore comes back on it.
    */
   restartTerminalOnPreset: (
     id: string,
-    presetId: string
-  ) => Promise<{ success: boolean; error?: string }>;
+    presetId: string,
+    options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
   /** Open a terminal's Scratchpad column (#12835), or expand a collapsed one. */
   showScratchpad: (id: string) => void;
   /** Collapse the Scratchpad; an empty one is removed instead. */

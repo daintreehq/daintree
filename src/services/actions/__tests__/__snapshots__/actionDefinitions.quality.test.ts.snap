@@ -6122,8 +6122,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "terminal",
     "danger": "confirm",
-    "dangerRationale": "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
-    "description": "Respawn an agent terminal in place on another preset of the same agent. Always starts a new conversation and discards the scrollback, so it runs only when confirmed.",
+    "dangerRationale": "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
+    "description": "Respawn an agent terminal in place on another preset of the same agent. Starts a new conversation unless keepConversation, and discards the scrollback, so it runs only when confirmed.",
     "examples": undefined,
     "id": "terminal.restartOnPreset",
     "keywords": [
@@ -6140,8 +6140,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "terminal",
     "danger": "confirm",
-    "dangerRationale": "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
-    "description": "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+    "dangerRationale": "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
+    "description": "Respawn an agent panel this session launched (not one it was handed) on another preset of its agent once the user confirms. Scrollback is lost, and the conversation unless kept.",
     "examples": undefined,
     "id": "terminal.restartOnPresetOwned",
     "keywords": [

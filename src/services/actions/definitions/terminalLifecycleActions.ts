@@ -16,6 +16,7 @@ import {
   AGENT_SESSION_FILE_UNKNOWN_REASONS,
 } from "@shared/types/agentSessionFile";
 import {
+  KeepConversationArgSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
   StartHeldArgsSchema,
@@ -27,8 +28,8 @@ const RestartOnPresetResultSchema = z.object({
   terminalId: z.string().describe("The pane, respawned in place."),
   agentPresetId: z.string().describe("Preset it now runs on."),
   agentSessionIdCleared: z
-    .literal(true)
-    .describe("A new conversation started: re-send anything the agent still needs."),
+    .boolean()
+    .describe("false: asked to reopen it; true: re-send the brief."),
 });
 
 /**
@@ -414,13 +415,13 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartOnPreset",
     title: "Restart agent on preset",
     description:
-      "Respawn an agent terminal in place on another preset of the same agent. Always starts a new conversation and discards the scrollback, so it runs only when confirmed.",
+      "Respawn an agent terminal in place on another preset of the same agent. Starts a new conversation unless keepConversation, and discards the scrollback, so it runs only when confirmed.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+      "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
     keywords: ["preset", "account", "switch", "relaunch", "rate limit"],
     // Needs a preset the palette has no way to ask for; the pane menu and the
     // rate-limit chip carry their own picker and confirm.
@@ -440,14 +441,14 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartOnPresetOwned",
     title: "Move owned agent to another preset",
     description:
-      "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+      "Respawn an agent panel this session launched (not one it was handed) on another preset of its agent once the user confirms. Scrollback is lost, and the conversation unless kept.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
     denyPluginDispatch: true,
     scope: "renderer",
     dangerRationale:
-      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+      "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
     keywords: ["preset", "account", "rate limit", "owned"],
     // Hidden for the same reason as `terminal.closeOwned`: only the MCP
     // main-process path can reach it.
@@ -458,6 +459,7 @@ export function registerTerminalLifecycleActions(
         .min(1)
         .describe("Panel `id` this session got when launching it. Required."),
       presetId: z.string().min(1).describe("A preset `id` of the panel's own agent."),
+      keepConversation: KeepConversationArgSchema,
     }),
     resultSchema: RestartOnPresetResultSchema,
     mcpOutputSchema: true,

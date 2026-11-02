@@ -174,6 +174,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
 
             {scope.scopeKind === "custom" && scope.selectedPreset && (
               <FallbackChainEditor
+                agentId={props.agentId}
                 selectedPreset={scope.selectedPreset}
                 allPresets={scope.allPresets}
                 onUpdatePreset={scope.handleUpdatePreset}
