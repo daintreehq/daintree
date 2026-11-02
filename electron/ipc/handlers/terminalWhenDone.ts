@@ -41,12 +41,10 @@ async function handleSet(
       context: { terminalId },
     });
   }
-  const { getTerminalWhenDone } = await import(
-    "../../services/terminalWhenDone/terminalWhenDoneLive.js"
-  );
-  const { TerminalWhenDoneError } = await import(
-    "../../services/terminalWhenDone/TerminalWhenDone.js"
-  );
+  const { getTerminalWhenDone } =
+    await import("../../services/terminalWhenDone/terminalWhenDoneLive.js");
+  const { TerminalWhenDoneError } =
+    await import("../../services/terminalWhenDone/TerminalWhenDone.js");
   try {
     await getTerminalWhenDone().set(terminalId, choice, projectId);
   } catch (error) {
@@ -64,9 +62,8 @@ async function handleSet(
 
 async function handleList(ctx: IpcContext): Promise<TerminalWhenDoneEntry[]> {
   if (!ctx.projectId) return [];
-  const { peekTerminalWhenDone } = await import(
-    "../../services/terminalWhenDone/terminalWhenDoneLive.js"
-  );
+  const { peekTerminalWhenDone } =
+    await import("../../services/terminalWhenDone/terminalWhenDoneLive.js");
   return peekTerminalWhenDone()?.list(ctx.projectId) ?? [];
 }
 

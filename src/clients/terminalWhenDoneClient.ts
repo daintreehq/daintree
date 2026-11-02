@@ -1,7 +1,4 @@
-import type {
-  TerminalWhenDone,
-  TerminalWhenDoneEntry,
-} from "@shared/types/ipc/terminalWhenDone";
+import type { TerminalWhenDone, TerminalWhenDoneEntry } from "@shared/types/ipc/terminalWhenDone";
 
 /** This view's project's agent terminals' When done choices (#16171). */
 export const terminalWhenDoneClient = {

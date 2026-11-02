@@ -23,7 +23,10 @@ vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => ({ draftInputs: store.drafts }) },
 }));
 
-import { isTerminalPaneInUseHere, useTerminalWhenDoneBridge } from "@/hooks/useTerminalWhenDoneBridge";
+import {
+  isTerminalPaneInUseHere,
+  useTerminalWhenDoneBridge,
+} from "@/hooks/useTerminalWhenDoneBridge";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
 
 let pushChange: ((change: TerminalWhenDoneChange) => void) | null = null;

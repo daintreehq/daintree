@@ -30,10 +30,14 @@ describe("TerminalWhenDoneBadge (#16171)", () => {
     renderBadge();
     expect(screen.getByTestId("terminal-when-done-badge").dataset.whenDone).toBe("background");
 
-    act(() => useTerminalWhenDoneStore.getState().applyChange({ terminalId: "terminal-1", choice: "close" }));
+    act(() =>
+      useTerminalWhenDoneStore.getState().applyChange({ terminalId: "terminal-1", choice: "close" })
+    );
     expect(screen.getByTestId("terminal-when-done-badge").dataset.whenDone).toBe("close");
 
-    act(() => useTerminalWhenDoneStore.getState().applyChange({ terminalId: "terminal-1", choice: "keep" }));
+    act(() =>
+      useTerminalWhenDoneStore.getState().applyChange({ terminalId: "terminal-1", choice: "keep" })
+    );
     expect(screen.queryByTestId("terminal-when-done-badge")).toBeNull();
   });
 });

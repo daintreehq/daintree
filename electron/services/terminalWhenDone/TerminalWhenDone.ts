@@ -177,7 +177,10 @@ export class TerminalWhenDone {
         if (outcome === "applied" && armed.choice === "close") this.disarmIf(armed);
       })
       .catch((error: unknown) => {
-        this.logWarn(`[TerminalWhenDone] Couldn't apply terminal ${armed.terminalId}'s choice:`, error);
+        this.logWarn(
+          `[TerminalWhenDone] Couldn't apply terminal ${armed.terminalId}'s choice:`,
+          error
+        );
       });
   }
 

@@ -59,7 +59,10 @@ function setup(options: { outcome?: WhenDoneOutcome } = {}) {
   };
 }
 
-const done = (code: string, overrides: Partial<{ spawnedAt: number; terminalId: string }> = {}) => ({
+const done = (
+  code: string,
+  overrides: Partial<{ spawnedAt: number; terminalId: string }> = {}
+) => ({
   terminalId: TERMINAL,
   spawnedAt: SPAWNED_AT,
   code,

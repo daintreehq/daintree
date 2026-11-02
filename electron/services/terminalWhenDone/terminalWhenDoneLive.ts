@@ -149,7 +149,9 @@ function startListening(target: TerminalWhenDone): void {
   const offReport = events.on("agent:run-handback-observed", (payload) =>
     target.handleReport(payload)
   );
-  const offAgentExit = events.on("agent:exited", (payload) => target.handleExit(payload.terminalId));
+  const offAgentExit = events.on("agent:exited", (payload) =>
+    target.handleExit(payload.terminalId)
+  );
   const onExit = (fact: PtyIncarnationExit) => target.handleExit(fact.terminalId, fact.spawnedAt);
   const onLost = (fact: PtyIncarnationLost) =>
     target.handleIncarnationLost(fact.terminalId, fact.launchGeneration);
