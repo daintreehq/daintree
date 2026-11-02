@@ -2368,4 +2368,44 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
     expect(helpPanelState.ensureSlot).not.toHaveBeenCalled();
   });
+
+  it("adds a tab for the lane a schedule's Assistant started in, as its run is recorded (#16169)", async () => {
+    helpPanelState.terminalId = "term-live";
+    helpPanelState.agentId = "claude";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
+    const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+    electron.events = {
+      on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+        if (channel === "scheduled-runs:changed") listeners.push(listener);
+        return () => listeners.splice(listeners.indexOf(listener), 1);
+      }),
+    };
+    mockListPendingHibernationSlots.mockResolvedValue([1]);
+
+    try {
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "other", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).toHaveBeenCalledWith("proj-1");
+      expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(1);
+      // Nothing is started for it: opening the tab takes the running Assistant over.
+      expect(mockProvisionSession).not.toHaveBeenCalledWith(expect.objectContaining({ slot: 1 }));
+    } finally {
+      delete electron.events;
+    }
+  });
 });

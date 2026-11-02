@@ -16,6 +16,7 @@ import {
 import { usePanelStore } from "@/store";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { actionService } from "@/services/ActionService";
+import { schedulesClient } from "@/clients/schedulesClient";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
@@ -243,6 +244,32 @@ export function useHelpSessionLanes({
       cancelled = true;
     };
   }, [activeWorkspaceId, openSlots.length, terminalId]);
+
+  // A schedule's Assistant (#16169) is started by main, with no view: as its
+  // run is recorded, its lane gets a tab here too, which takes it over when
+  // opened. Only adds tabs; a lane's own tab is never closed or replaced.
+  useEffect(() => {
+    // Optional-chained like the lane listing: a missing binding adds no tabs.
+    if (!activeWorkspaceId || !window.electron?.events?.on) return;
+    let disposed = false;
+    const unsubscribe = schedulesClient.onRunsChanged(({ projectId }) => {
+      if (projectId !== activeWorkspaceId) return;
+      const listing = window.electron.help.listPendingHibernationSlots?.(activeWorkspaceId);
+      void listing
+        ?.then((slots) => {
+          if (disposed) return;
+          const store = useHelpPanelStore.getState();
+          for (const slot of slots) store.ensureSlot(slot);
+        })
+        .catch((err) => {
+          logWarn("HelpPanel: failed to list lanes after a scheduled run changed", err);
+        });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [activeWorkspaceId]);
 
   const handleOpenParallelSession = useCallback((): number | null => {
     const slot = useHelpPanelStore.getState().openSlot();
