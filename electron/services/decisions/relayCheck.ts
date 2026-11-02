@@ -258,8 +258,17 @@ async function getJson(
 
 /** The body as text, or null once it passes `max` bytes. */
 export async function readCapped(response: Response, max: number): Promise<string | null> {
+  const bytes = await readCappedBytes(response, max);
+  return bytes === null ? null : new TextDecoder().decode(bytes);
+}
+
+/** The body as bytes, or null once it passes `max` bytes. */
+export async function readCappedBytes(
+  response: Response,
+  max: number
+): Promise<Uint8Array<ArrayBuffer> | null> {
   const reader = response.body?.getReader();
-  if (!reader) return "";
+  if (!reader) return new Uint8Array(0);
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -276,7 +285,7 @@ export async function readCapped(response: Response, max: number): Promise<strin
   } finally {
     reader.releaseLock();
   }
-  return new TextDecoder().decode(Buffer.concat(chunks));
+  return new Uint8Array(Buffer.concat(chunks));
 }
 
 function failedRequest(error: unknown, timedOut: boolean): Answer {

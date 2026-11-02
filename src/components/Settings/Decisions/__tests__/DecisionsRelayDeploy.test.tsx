@@ -80,7 +80,13 @@ describe("Decisions relay deploy offer", () => {
     });
     Object.defineProperty(window, "electron", {
       // A saved relay is checked on mount; that check never answers here.
-      value: { decisions: { checkRelay: vi.fn(() => new Promise(() => {})) } },
+      value: {
+        decisions: {
+          checkRelay: vi.fn(() => new Promise(() => {})),
+          getSetupCheck: () => new Promise(() => {}),
+        },
+        events: { on: () => () => {} },
+      },
       configurable: true,
       writable: true,
     });

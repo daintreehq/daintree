@@ -1544,6 +1544,11 @@ export const CHANNELS = {
   DECISIONS_LIST_HOSTS: "decisions:list-hosts",
   DECISIONS_ENROLL_HOST: "decisions:enroll-host",
   DECISIONS_SET_AUTO_ENROLL_HOSTS: "decisions:set-auto-enroll-hosts",
+  // The setup check: the whole loop, run against the relay set up here, and
+  // called off (#16024).
+  DECISIONS_START_SETUP_CHECK: "decisions:start-setup-check",
+  DECISIONS_GET_SETUP_CHECK: "decisions:get-setup-check",
+  DECISIONS_CANCEL_SETUP_CHECK: "decisions:cancel-setup-check",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

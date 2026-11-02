@@ -6,7 +6,7 @@ import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadError
 import { useDecisions } from "./useDecisions";
 import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
-import { DecisionsConnectionSection, setupUnfinished } from "./DecisionsConnectionSection";
+import { DecisionsConnectionSection, kitUnverified } from "./DecisionsConnectionSection";
 import { DecisionsDevicesSection } from "./DecisionsDevicesSection";
 import { DecisionsAgentsSection } from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
@@ -46,7 +46,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
       before.state !== "off" &&
       before.relayOrigin === undefined &&
       status !== null &&
-      setupUnfinished(status)
+      kitUnverified(status)
     ) {
       setKitFocusRequest((count) => count + 1);
     }

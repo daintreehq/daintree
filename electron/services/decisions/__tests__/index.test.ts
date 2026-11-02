@@ -149,6 +149,82 @@ vi.mock("../mcpRoute.js", () => ({
   },
 }));
 
+/**
+ * Each setup check the entry makes: what it was handed, and a way to end it
+ * as the real one would. The checking itself is setupCheck.ts's own suite's.
+ */
+const setupChecks = vi.hoisted(() => ({
+  made: [] as Array<{
+    deps: import("../setupCheck.js").SetupCheckDeps;
+    report: (run: import("../../../../shared/types/decisions.js").DecisionsSetupCheckRun) => void;
+    finish: (state: "passed" | "failed", failedStep?: string) => void;
+    cancelled: number;
+  }>,
+}));
+vi.mock("../setupCheck.js", () => {
+  type Run = import("../../../../shared/types/decisions.js").DecisionsSetupCheckRun;
+  class SetupCheck {
+    readonly runId: string;
+    private run: Run;
+    private failed: string | null = null;
+    private ended: (run: Run) => void = () => {};
+    private readonly ending: Promise<Run>;
+    private started = false;
+    constructor(
+      private readonly deps: import("../setupCheck.js").SetupCheckDeps,
+      private readonly onChange: (run: Run) => void
+    ) {
+      this.runId = `run-${setupChecks.made.length + 1}`;
+      this.run = {
+        runId: this.runId,
+        revision: deps.nextRevision(),
+        state: "running",
+        startedAt: 1,
+        steps: {} as Run["steps"],
+        diagnostic: null,
+      };
+      this.ending = new Promise((resolve) => {
+        this.ended = resolve;
+      });
+      const entry = {
+        deps,
+        cancelled: 0,
+        report: (run: Run) => onChange(run),
+        finish: (state: "passed" | "failed", failedStep?: string) => {
+          this.failed = failedStep ?? null;
+          this.end(state);
+        },
+      };
+      setupChecks.made.push(entry);
+    }
+    snapshot(): Run {
+      return { ...this.run };
+    }
+    failedStep(): string | null {
+      return this.failed;
+    }
+    start(): Promise<Run> {
+      if (!this.started) {
+        this.started = true;
+        this.onChange(this.snapshot());
+      }
+      return this.ending;
+    }
+    cancel(): Promise<Run> {
+      const entry = setupChecks.made.find((made) => made.deps === this.deps);
+      if (entry) entry.cancelled += 1;
+      if (this.run.state === "running") this.end("cancelled");
+      return this.ending;
+    }
+    private end(state: Run["state"]): void {
+      this.run = { ...this.run, state, finishedAt: 2, revision: this.deps.nextRevision() };
+      this.onChange(this.snapshot());
+      this.ended(this.snapshot());
+    }
+  }
+  return { SetupCheck };
+});
+
 // This machine's own windows, which the status push goes to.
 const statusView = vi.hoisted(() => ({ send: vi.fn(), isDestroyed: () => false }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
@@ -302,15 +378,18 @@ import {
   exportRecoveryKit,
   getDecisionsPaneState,
   getDecisionsPolicy,
+  cancelSetupCheck,
   getDecisionsService,
   getDecisionsStatus,
   listHosts,
+  getSetupCheck,
   peekDecisionsService,
   restoreIdentity,
   setAutoEnrollHosts,
   setDecisionsEnabled,
   setDecisionsProxyAllowlisted,
   startDecisionsIfEnabled,
+  startSetupCheck,
   stopDecisions,
   verifyRecoveryKit,
 } from "../index.js";
@@ -360,7 +439,9 @@ describe("Decisions entry", () => {
     paneTokens.clear();
     controlTokens.clear();
     mcpRefs.loaded = true;
+    // The last test's check is cancelled by the reset, before its record goes.
     _resetDecisionsForTesting();
+    setupChecks.made.length = 0;
   });
 
   it("reads no pane state, and makes no service, before Decisions runs", () => {
@@ -2052,6 +2133,167 @@ describe("Decisions entry", () => {
 
       await setDecisionsEnabled(false);
       await expect(setAutoEnrollHosts(true)).rejects.toMatchObject(CANCELLED);
+  describe("setup check (#16024)", () => {
+    /** What the setup check pushes to this machine's windows carried, in order. */
+    function pushedRuns(): Array<{ runId: string; state: string; revision: number }> {
+      return statusView.send.mock.calls
+        .filter(
+          ([channel, event]) =>
+            channel === CHANNELS.EVENTS_PUSH &&
+            (event as { name: string }).name === "decisions:setup-check-changed"
+        )
+        .map(
+          ([, event]) =>
+            (event as { payload: { runId: string; state: string; revision: number } }).payload
+        );
+    }
+
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    it("runs nothing without a relay set up, and refuses while off", async () => {
+      saved.value = { enabled: true };
+      await expect(startSetupCheck()).resolves.toEqual({ result: "not-set-up" });
+      expect(setupChecks.made).toHaveLength(0);
+
+      saved.value = { enabled: false, ...RELAY };
+      _resetDecisionsForTesting();
+      await expect(startSetupCheck()).rejects.toMatchObject(CANCELLED);
+      expect(setupChecks.made).toHaveLength(0);
+    });
+
+    it("refuses a relay that revoked this computer", async () => {
+      saved.value = { enabled: true, ...RELAY, revokedAt: 1_761_955_300_000 };
+      await expect(startSetupCheck()).resolves.toEqual({ result: "revoked" });
+      expect(setupChecks.made).toHaveLength(0);
+    });
+
+    it("runs one at a time against the identity set up here, pushing each change to this machine's windows", async () => {
+      saved.value = { enabled: true, ...RELAY };
+
+      const first = await startSetupCheck();
+      const again = await startSetupCheck();
+
+      expect(first).toMatchObject({ result: "started", run: { runId: "run-1", state: "running" } });
+      expect(again).toMatchObject({ result: "started", run: { runId: "run-1" } });
+      expect(setupChecks.made).toHaveLength(1);
+      expect(setupChecks.made[0]!.deps.relay).toEqual(RELAY);
+      expect(getSetupCheck()).toMatchObject({ runId: "run-1", state: "running" });
+      expect(pushedRuns().map((run) => run.state)).toEqual(["running"]);
+    });
+
+    it("records a check that ran to the end against its identity, which the status then shows", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      writeFileSync(keyFile.path, "sealed");
+      await startSetupCheck();
+
+      setupChecks.made[0]!.finish("failed", "question");
+      await settle();
+
+      expect((saved.value as { setupCheck: unknown }).setupCheck).toEqual({
+        checkedAt: 2,
+        relayOrigin: RELAY.relayOrigin,
+        installationId: RELAY.installationId,
+        deviceId: RELAY.deviceId,
+        failedStep: "question",
+      });
+      await expect(getDecisionsStatus()).resolves.toMatchObject({
+        setupCheck: { checkedAt: 2, failedStep: "question" },
+      });
+      expect(pushedStatuses().at(-1)).toMatchObject({
+        setupCheck: { checkedAt: 2, failedStep: "question" },
+      });
+      expect(getSetupCheck()).toMatchObject({ runId: "run-1", state: "failed" });
+      // A check of keys known to be gone protects nothing, so the status doesn't show it.
+      rmSync(keyFile.path, { force: true });
+      expect((await getDecisionsStatus()).setupCheck).toBeUndefined();
+      writeFileSync(keyFile.path, "sealed");
+
+      // Another run starts, passes, and replaces it.
+      await startSetupCheck();
+      setupChecks.made[1]!.finish("passed");
+      await settle();
+      expect((saved.value as { setupCheck: { failedStep: unknown } }).setupCheck.failedStep).toBe(
+        null
+      );
+    });
+
+    it("records nothing for a cancelled check, and keeps the result before it", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+      setupChecks.made[0]!.finish("passed");
+      await settle();
+      const recorded = (saved.value as { setupCheck: unknown }).setupCheck;
+
+      await startSetupCheck();
+      await expect(cancelSetupCheck()).resolves.toMatchObject({
+        runId: "run-2",
+        state: "cancelled",
+      });
+      await settle();
+
+      expect((saved.value as { setupCheck: unknown }).setupCheck).toEqual(recorded);
+      expect(getSetupCheck()).toMatchObject({ runId: "run-2", state: "cancelled" });
+    });
+
+    it("doesn't record a check whose identity was disconnected while it ran", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+      const check = setupChecks.made[0]!;
+
+      await disconnectRelay();
+      check.finish("passed");
+      await settle();
+
+      expect(check.cancelled).toBe(1);
+      expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
+      // Forgotten with its identity: nothing shows it, nothing more is pushed.
+      expect(getSetupCheck()).toBeNull();
+      expect(pushedRuns().map((run) => run.state)).toEqual(["running"]);
+    });
+
+    it("cancels a running check before turning off stops the service, and at quit", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+      const service = peekDecisionsService()!;
+      const stop = vi.spyOn(service, "stop");
+      const check = setupChecks.made[0]!;
+      let cancelledBeforeStop: boolean | null = null;
+      stop.mockImplementation(async function (this: typeof service) {
+        cancelledBeforeStop = check.cancelled === 1;
+      });
+
+      await setDecisionsEnabled(false);
+
+      expect(cancelledBeforeStop).toBe(true);
+      expect(getSetupCheck()).toBeNull();
+
+      saved.value = { enabled: true, ...RELAY };
+      _resetDecisionsForTesting();
+      await startSetupCheck();
+      await stopDecisions();
+      expect(setupChecks.made[1]!.cancelled).toBe(1);
+    });
+
+    it("forgets the setup check's result with the identity it checked", async () => {
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        setupCheck: {
+          checkedAt: 2,
+          relayOrigin: RELAY.relayOrigin,
+          installationId: RELAY.installationId,
+          deviceId: RELAY.deviceId,
+          failedStep: null,
+        },
+      };
+      writeFileSync(keyFile.path, "sealed");
+      await startDecisionsIfEnabled();
+
+      await disconnectRelay();
+
+      expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
     });
   });
 });

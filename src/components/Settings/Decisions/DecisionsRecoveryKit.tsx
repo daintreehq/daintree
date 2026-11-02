@@ -35,7 +35,7 @@ interface DecisionsRecoveryKitProps {
 /**
  * The recovery kit (#16007): saving one, locked with a passphrase, through
  * main's save dialog, and verifying a saved file against this computer's
- * identity, which is what finishes setup. Each passphrase and kit is handed
+ * identity, which setup needs before its check (#16024). Each passphrase and kit is handed
  * to main as its request starts and cleared here at once, success or not.
  */
 export function DecisionsRecoveryKit({
@@ -169,7 +169,7 @@ export function DecisionsRecoveryKit({
         description={
           verifiedAt !== undefined
             ? `Last verified ${formatVerifiedAt(verifiedAt)}. Save and verify a new kit whenever you want another copy.`
-            : "Setup finishes once a saved kit is verified. Without a kit or this computer's keys, nothing on the relay can be read again."
+            : "Setup needs a saved kit verified, then a setup check that passes. Without a kit or this computer's keys, nothing on the relay can be read again."
         }
       />
       <SettingsRow

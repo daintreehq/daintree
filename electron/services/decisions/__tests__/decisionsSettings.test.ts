@@ -26,6 +26,7 @@ const connected: DecisionsSettings = {
   revokedAt: null,
   recoveryKit: null,
   autoEnrollHosts: true,
+  setupCheck: null,
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -244,6 +245,63 @@ describe("sanitizeDecisionsSettings", () => {
       recoveryKit: { ...recoveryKit, passphrase: "never kept" },
     });
     expect(extra.recoveryKit).toEqual(recoveryKit);
+  });
+
+  it("keeps a setup check result only for the identity the setting records", () => {
+    const passed = {
+      checkedAt: 1_761_955_400_000,
+      relayOrigin: connected.relayOrigin!,
+      installationId: connected.installationId!,
+      deviceId: connected.deviceId!,
+      failedStep: null,
+    };
+    expect(sanitizeDecisionsSettings({ ...connected, setupCheck: passed }).setupCheck).toEqual(
+      passed
+    );
+    const failed = { ...passed, failedStep: "question" };
+    expect(sanitizeDecisionsSettings({ ...connected, setupCheck: failed }).setupCheck).toEqual(
+      failed
+    );
+    for (const other of [
+      { relayOrigin: "https://other.example.workers.dev" },
+      { installationId: "inst_another_one" },
+      { deviceId: "dev-another-one" },
+    ]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        setupCheck: { ...passed, ...other },
+      });
+      expect(settings, JSON.stringify(other)).toEqual(connected);
+    }
+    // A disconnect or a new claim leaves it behind.
+    expect(
+      sanitizeDecisionsSettings({
+        ...connected,
+        deviceId: "dev-from-a-new-claim",
+        setupCheck: passed,
+      }).setupCheck
+    ).toBeNull();
+  });
+
+  it("reads a damaged setup check record as no check, never turning Decisions off", () => {
+    const passed = {
+      checkedAt: 1_761_955_400_000,
+      relayOrigin: connected.relayOrigin!,
+      installationId: connected.installationId!,
+      deviceId: connected.deviceId!,
+      failedStep: null,
+    };
+    for (const damaged of [
+      "passed",
+      [],
+      { ...passed, checkedAt: 0 },
+      { ...passed, failedStep: "phone" },
+      { ...passed, failedStep: undefined },
+      { ...passed, deviceId: undefined },
+    ]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, setupCheck: damaged });
+      expect(settings, JSON.stringify(damaged)).toEqual(connected);
+    }
   });
 
   it("keeps the switch on while no relay is set up yet", () => {

@@ -512,25 +512,35 @@ export class OwnerDevices {
 
   /** What stopped a signed request, as an observation; anything unforeseen is thrown. */
   private failure(error: unknown, session: OwnerSession): DecisionsRelayRequestFailure {
-    const { origin } = session;
-    if (error instanceof RelayError) {
-      if (error.code === "network_error") {
-        const reason = session.requests.lastFailure()?.reason ?? "network";
-        return { result: "unreachable", origin, reason };
-      }
-      if (error.code === "not_authenticated") {
-        return { result: "refused", origin, reason: "not-recognised" };
-      }
-      if (error.code === "rate_limited" || error.status === 429) {
-        return { result: "refused", origin, reason: "rate-limited" };
-      }
-      if (error.retryable || error.status >= 500) {
-        return { result: "unreachable", origin, reason: "server-error" };
-      }
-    }
-    // A success whose body didn't parse: the relay answered, but not as one.
-    if (error instanceof SyntaxError)
-      return { result: "unreachable", origin, reason: "server-error" };
-    throw error;
+    const failure = signedRequestFailure(error, session.origin, session.requests);
+    if (failure === null) throw error;
+    return failure;
   }
+}
+
+/** What stopped a signed request to `origin`, as an observation; null for anything unforeseen. */
+export function signedRequestFailure(
+  error: unknown,
+  origin: string,
+  requests: Pick<RelayRequests, "lastFailure">
+): DecisionsRelayRequestFailure | null {
+  if (error instanceof RelayError) {
+    if (error.code === "network_error") {
+      const reason = requests.lastFailure()?.reason ?? "network";
+      return { result: "unreachable", origin, reason };
+    }
+    if (error.code === "not_authenticated") {
+      return { result: "refused", origin, reason: "not-recognised" };
+    }
+    if (error.code === "rate_limited" || error.status === 429) {
+      return { result: "refused", origin, reason: "rate-limited" };
+    }
+    if (error.retryable || error.status >= 500) {
+      return { result: "unreachable", origin, reason: "server-error" };
+    }
+  }
+  // A success whose body didn't parse: the relay answered, but not as one.
+  if (error instanceof SyntaxError)
+    return { result: "unreachable", origin, reason: "server-error" };
+  return null;
 }

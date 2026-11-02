@@ -1,6 +1,9 @@
-import type {
-  DecisionsRecoveryKitRecord,
-  DecisionsSettings,
+import {
+  DECISIONS_SETUP_CHECK_STEPS,
+  type DecisionsRecoveryKitRecord,
+  type DecisionsSettings,
+  type DecisionsSetupCheckRecord,
+  type DecisionsSetupCheckStep,
 } from "../../../shared/types/decisions.js";
 
 /** The relay protocol's id shape: what a relay mints for installations and devices. */
@@ -26,6 +29,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     revokedAt: null,
     recoveryKit: null,
     autoEnrollHosts: true,
+    setupCheck: null,
   };
 }
 
@@ -94,6 +98,58 @@ function recoveryKitRecord(
   };
 }
 
+type RecordedRelay = Pick<DecisionsSettings, "relayOrigin" | "installationId" | "deviceId">;
+
+/** Whether a record's relay and ids are the identity the setting records, read whole. */
+function namesIdentity(
+  record: { relayOrigin?: unknown; installationId?: unknown; deviceId?: unknown },
+  identity: RecordedRelay
+): record is { relayOrigin: string; installationId: string; deviceId: string } {
+  const relayOrigin = normalizeRelayOrigin(record.relayOrigin);
+  return (
+    relayOrigin !== null &&
+    relayOrigin === identity.relayOrigin &&
+    record.installationId === identity.installationId &&
+    record.deviceId === identity.deviceId &&
+    isRelayId(record.installationId) &&
+    isRelayId(record.deviceId)
+  );
+}
+
+function isSetupCheckStep(value: unknown): value is DecisionsSetupCheckStep {
+  return (DECISIONS_SETUP_CHECK_STEPS as readonly unknown[]).includes(value);
+}
+
+/**
+ * A finished setup check (#16024) that reads whole and names the identity
+ * the setting records; anything else is no check, which leaves setup
+ * unfinished without turning Decisions off.
+ */
+function setupCheckRecord(
+  value: unknown,
+  identity: RecordedRelay
+): DecisionsSetupCheckRecord | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Partial<Record<keyof DecisionsSetupCheckRecord, unknown>>;
+  const checkedAt = consentTime(record.checkedAt);
+  const failedStep =
+    record.failedStep === null
+      ? null
+      : isSetupCheckStep(record.failedStep)
+        ? record.failedStep
+        : undefined;
+  if (checkedAt === null || failedStep === undefined || !namesIdentity(record, identity)) {
+    return null;
+  }
+  return {
+    checkedAt,
+    relayOrigin: normalizeRelayOrigin(record.relayOrigin)!,
+    installationId: record.installationId,
+    deviceId: record.deviceId,
+    failedStep,
+  };
+}
+
 /** Absent is a relay not set up yet; anything else that didn't read is damage. */
 function unreadable(value: unknown, read: string | null): boolean {
   return value !== undefined && value !== null && read === null;
@@ -134,6 +190,7 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     recoveryKit: recoveryKitRecord(value.recoveryKit, { relayOrigin, installationId, deviceId }),
     // On unless turned off: a setting saved before the field existed enrolls.
     autoEnrollHosts: value.autoEnrollHosts !== false,
+    setupCheck: setupCheckRecord(value.setupCheck, { relayOrigin, installationId, deviceId }),
   };
 }
 

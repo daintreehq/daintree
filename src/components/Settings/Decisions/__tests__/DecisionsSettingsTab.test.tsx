@@ -59,10 +59,11 @@ describe("DecisionsSettingsTab recovery kit", () => {
           checkRelay,
           claimRelay,
           verifyRecoveryKit,
-          // The Devices, Remote Hosts and Policy sections' reads, which these tests leave unanswered.
+          // The Devices, Remote Hosts, Policy and setup check reads, which these tests leave unanswered.
           listDevices: () => new Promise(() => {}),
           listHosts: () => new Promise(() => {}),
           getPolicy: () => new Promise(() => {}),
+          getSetupCheck: () => new Promise(() => {}),
         },
         events: {
           on: (name: string, listener: (payload: unknown) => void) => {
@@ -183,7 +184,7 @@ describe("DecisionsSettingsTab recovery kit", () => {
     expect(document.activeElement).not.toBe(kitPassphraseField());
   });
 
-  it("keeps the kit in Data once verified, with setup no longer unfinished", async () => {
+  it("keeps the kit in Data once verified, with the setup check left to finish setup", async () => {
     getStatus.mockResolvedValue({
       state: "not-connected",
       consentedAt: 1,
@@ -217,7 +218,9 @@ describe("DecisionsSettingsTab recovery kit", () => {
       fireEvent.submit(passphrase.form!);
     });
 
-    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    // The kit's warning goes; the setup check's takes its place (#16024).
+    expect(screen.queryByRole("button", { name: "Save recovery kit" })).toBeNull();
+    expect(screen.getByText(/Run the setup check to finish/)).toBeTruthy();
     expect(document.getElementById("decisions-recovery-kit-status")?.textContent ?? "").toContain(
       "Recovery kit verified"
     );

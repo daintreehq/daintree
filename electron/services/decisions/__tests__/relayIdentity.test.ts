@@ -244,6 +244,22 @@ describe("relayRequests", () => {
     expect(await response.text()).toBe("");
     expect(requests.lastFailure()).toBeNull();
   });
+
+  it("hands a binary body over byte for byte, as an attachment's ciphertext comes back", async () => {
+    // Bytes that aren't UTF-8 at all, which a text round trip would replace.
+    const ciphertext = new Uint8Array([0xff, 0xfe, 0x00, 0xc3, 0x28, 0x80, 0x7f, 0xa0]);
+    const requests = await relayRequests(ORIGIN, {
+      fetchImpl: async () =>
+        new Response(ciphertext, {
+          status: 200,
+          headers: { "content-type": "application/octet-stream" },
+        }),
+    });
+
+    const response = await requests.fetch(`${ORIGIN}/api/v1/attachments/att_1/content`);
+
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(ciphertext);
+  });
 });
 
 describe("claimDecisionsRelay", () => {

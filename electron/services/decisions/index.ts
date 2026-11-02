@@ -35,6 +35,8 @@ import {
   type DecisionsRevokeDeviceResult,
   type DecisionsRotateKeysResult,
   type DecisionsSettings,
+  type DecisionsSetupCheckRun,
+  type DecisionsSetupCheckStartResult,
   type DecisionsStatus,
   type DeleteDecisionsRelayDataPayload,
   type ExportDecisionsDataPayload,
@@ -73,6 +75,8 @@ import {
   type RelaySetupOutcome,
   type SetupKeyStore,
 } from "./relayIdentity.js";
+import { SetupCheck } from "./setupCheck.js";
+import { SetupDiagnostics } from "./setupDiagnostic.js";
 import { decisionsPolicyOf } from "./workflowGates.js";
 import {
   checkRecoveryKit,
@@ -216,6 +220,20 @@ let policyRevision = 0;
  * instead, and whatever the dialog answers later is ignored.
  */
 const kitExports = new Set<AbortController>();
+/**
+ * The setup check's diagnostic terminals (#16024): delivery routes their
+ * pane ids to them, and their questions' image comes from them.
+ */
+const setupDiagnostics = new SetupDiagnostics();
+/** The setup check running now, at most one. */
+let setupCheck: SetupCheck | null = null;
+/** The check whose runs `lastSetupRun` keeps; null once forgotten with the identity it ran on. */
+let shownCheck: SetupCheck | null = null;
+/** The latest run, finished or not, for Settings to show. */
+let lastSetupRun: DecisionsSetupCheckRun | null = null;
+let setupCheckRevision = 0;
+/** How long turning off, a disconnect, a deletion or quit waits for a check's cleanup. */
+const SETUP_CHECK_CANCEL_MS = 5_000;
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
@@ -342,6 +360,7 @@ const deliveryDeps: DecisionsDeliveryDeps = {
   // The principal the pane's questions were asked under, which a tier-off pane holds too (#16012).
   principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
   getPtyClient: () => getPtyClient(),
+  diagnostics: setupDiagnostics,
   holdWakes: async () => {
     const { mcpServerService } = await import("../McpServerService.js");
     return mcpServerService.holdWakes();
@@ -385,6 +404,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
           openDecisionsMcpRoute(source, sources, previousClosed),
         delivery: deliveryDeps,
         onDevicesChanged: publishDevicesChanged,
+        diagnostics: setupDiagnostics,
       });
       next.onStatusChanged((event) => {
         hostEnrollerFollows(event.status.state);
@@ -420,12 +440,17 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   // A verification for keys known to be gone protects nothing.
   const kitVerifiedAt =
     settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
+  // Nor does a check of them.
+  const checked = settings.setupCheck !== null && keyFile !== false ? settings.setupCheck : null;
   return {
     ...observed,
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
+    ...(checked !== null
+      ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
+      : {}),
     revision,
   };
 }
@@ -497,8 +522,9 @@ function recordIdentity(
       installationId: config.installationId,
       deviceId: config.deviceId,
       hostId: current.hostId ?? newId(),
-      // A new identity: nothing the relay refused before applies to it.
+      // A new identity: nothing the relay refused, or a check saw, before applies to it.
       revokedAt: null,
+      setupCheck: null,
       recoveryKit:
         kitVerified && relayOrigin !== null
           ? {
@@ -575,6 +601,7 @@ function forgetRecordedIdentity(): DecisionsSettings {
     hostId: null,
     revokedAt: null,
     recoveryKit: null,
+    setupCheck: null,
   });
 }
 
@@ -586,10 +613,13 @@ function forgetRecordedIdentity(): DecisionsSettings {
  */
 export function disconnectRelay(): Promise<DecisionsStatus> {
   cancelKitExports();
+  const checkStopped = endSetupCheck();
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
     hostEnroller.forget();
+    // Its question is cancelled on these keys, before they go.
+    await checkStopped;
     // The socket and delivery run on these keys, so they stop before the keys
     // go, and a rotation still saving a key finishes first, so none is
     // written after.
@@ -722,8 +752,11 @@ export function deleteRelayData(
 export function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
   // Before the queue, as a disconnect does: a kit of keys being erased is never written.
   cancelKitExports();
+  const checkStopped = endSetupCheck();
   return serialize(async () => {
     let outcome: LocalEraseOutcome;
+    // Its terminal closes and its question is cancelled in the store before the rows go.
+    await checkStopped;
     // Its invitations and requests run on the keys this deletes, and the
     // Hosts' record goes with the rest.
     forgetOwnerDevices();
@@ -1101,6 +1134,139 @@ export async function decisionsLaunchPort(): Promise<number | null> {
   return within(running.questionsPort(remaining), remaining);
 }
 
+/** A run forgotten with the identity it ran on is shown nowhere, however it ends. */
+function publishSetupCheck(check: SetupCheck, run: DecisionsSetupCheckRun): void {
+  if (check !== shownCheck) return;
+  lastSetupRun = run;
+  if (!shutDown) sendToLocalViews("decisions:setup-check-changed", run);
+}
+
+/**
+ * Records a check that ran to the end against the identity it checked, if
+ * the setting still records that identity: a disconnect or new setup since
+ * leaves it behind. A cancelled run records nothing.
+ */
+function recordSetupCheck(
+  relay: { relayOrigin: string; installationId: string; deviceId: string },
+  check: SetupCheck,
+  run: DecisionsSetupCheckRun
+): void {
+  if (shutDown || (run.state !== "passed" && run.state !== "failed")) return;
+  const current = readDecisionsSettings(store);
+  if (
+    current.relayOrigin !== relay.relayOrigin ||
+    current.installationId !== relay.installationId ||
+    current.deviceId !== relay.deviceId
+  ) {
+    return;
+  }
+  let saved: DecisionsSettings;
+  try {
+    saved = writeDecisionsSettings(store, {
+      ...current,
+      setupCheck: {
+        checkedAt: run.finishedAt ?? Date.now(),
+        ...relay,
+        failedStep: check.failedStep(),
+      },
+    });
+  } catch {
+    console.warn("[Decisions] The setup check's result couldn't be recorded in settings");
+    return;
+  }
+  service?.updateSettings(saved);
+  publishStatus();
+}
+
+/**
+ * Runs the setup check (#16024) against the identity set up here: the whole
+ * loop, from the relay's health to a test question answered on a phone and
+ * typed into a diagnostic terminal. One at a time; asking while one runs
+ * answers that one. It runs beside the switch's transitions, since it waits
+ * on a person, and turning off, a disconnect, a deletion or quit cancels it.
+ */
+export async function startSetupCheck(): Promise<DecisionsSetupCheckStartResult> {
+  if (setupCheck) return { result: "started", run: setupCheck.snapshot() };
+  const running = await runningService();
+  // Another start may have made one while the service started.
+  const raced = setupCheck as SetupCheck | null;
+  if (raced) return { result: "started", run: raced.snapshot() };
+  const settings = running.getSettings() ?? readDecisionsSettings(store);
+  const { relayOrigin, installationId, deviceId, hostId } = settings;
+  if (relayOrigin === null || installationId === null || deviceId === null || hostId === null) {
+    return { result: "not-set-up" };
+  }
+  if (settings.revokedAt !== null || running.getStatus().state === "revoked") {
+    return { result: "revoked" };
+  }
+  const relay = { relayOrigin, installationId, deviceId };
+  const check = new SetupCheck(
+    {
+      relay: { ...relay, hostId },
+      checkRelay: (origin, signal) => checkDecisionsRelay(origin, { signal }),
+      questionSource: () => running.getQuestionSource(),
+      refreshConnection: () => running.refreshConnection(),
+      status: () => running.getStatus(),
+      onStatus: (listener) => running.onStatusChanged((event) => listener(event.status)),
+      onCommit: (listener) => running.getStore()?.onCommit(listener) ?? (() => {}),
+      diagnostics: setupDiagnostics,
+      nextRevision: () => ++setupCheckRevision,
+    },
+    (run) => publishSetupCheck(check, run)
+  );
+  setupCheck = check;
+  shownCheck = check;
+  void check.start().then(
+    (run) => {
+      if (setupCheck === check) setupCheck = null;
+      recordSetupCheck(relay, check, run);
+    },
+    (error: unknown) => {
+      if (setupCheck === check) setupCheck = null;
+      console.warn(
+        "[Decisions] The setup check stopped:",
+        error instanceof Error ? error.name : typeof error
+      );
+    }
+  );
+  return { result: "started", run: check.snapshot() };
+}
+
+/** The setup check running now, or the latest one this run of Daintree saw; null when there is none. */
+export function getSetupCheck(): DecisionsSetupCheckRun | null {
+  return setupCheck?.snapshot() ?? lastSetupRun;
+}
+
+/** Calls off the setup check running now; resolves once it has cleaned up. */
+export async function cancelSetupCheck(): Promise<DecisionsSetupCheckRun | null> {
+  const check = setupCheck;
+  return check ? check.cancel() : lastSetupRun;
+}
+
+/**
+ * Cancels the running check for a change that ends what it checks, and
+ * forgets the last run. Resolves once it cleaned up, or after
+ * `SETUP_CHECK_CANCEL_MS`, so a stuck store can't hold up the change.
+ */
+function endSetupCheck(): Promise<void> {
+  const check = setupCheck;
+  setupCheck = null;
+  shownCheck = null;
+  lastSetupRun = null;
+  if (!check) return Promise.resolve();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    check.cancel().then(
+      () => {},
+      () => {}
+    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, SETUP_CHECK_CANCEL_MS);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 /** Boot: starts the service only if the saved setting, sanitised, is on. */
 export function startDecisionsIfEnabled(): Promise<void> {
   return serialize(async () => {
@@ -1125,6 +1291,7 @@ export function setDecisionsEnabled(
 ): Promise<DecisionsStatus> {
   // Before the queue, as a disconnect does: an export whose kit is still being
   // made would otherwise reach its dialog before this turn comes round.
+  const checkStopped = enabled ? Promise.resolve() : endSetupCheck();
   if (!enabled) cancelKitExports();
   return serialize(async () => {
     const current = readDecisionsSettings(store);
@@ -1139,6 +1306,8 @@ export function setDecisionsEnabled(
         const next = await getDecisionsService();
         await next.start(saved);
       } else {
+        // Its question is cancelled while the store is still open.
+        await checkStopped;
         await (await settledService())?.stop();
       }
     } finally {
@@ -1157,6 +1326,7 @@ export async function stopDecisions(): Promise<void> {
   cancelKitExports();
   hostEnroller.dispose();
   for (const controller of setups) controller.abort();
+  await endSetupCheck();
   await (await settledService())?.dispose();
 }
 
@@ -1167,6 +1337,11 @@ export function _resetDecisionsForTesting(): void {
   cancelKitExports();
   for (const controller of setups) controller.abort();
   setups.clear();
+  void setupCheck?.cancel().catch(() => {});
+  setupCheck = null;
+  shownCheck = null;
+  lastSetupRun = null;
+  setupCheckRevision = 0;
   service = null;
   creating = null;
   shutDown = false;

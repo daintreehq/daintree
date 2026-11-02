@@ -57,6 +57,12 @@ export interface DecisionsSettings {
    * connected Host instead.
    */
   autoEnrollHosts: boolean;
+   * The latest setup check that ran to the end (#16024), and the identity it
+   * checked. Setup is finished only while it passed and names the relay and
+   * ids recorded above, with a recovery kit verified too; null until a check
+   * finishes.
+   */
+  setupCheck: DecisionsSetupCheckRecord | null;
 }
 
 /** A verified recovery kit, recorded by the identity it held. Never the kit or its passphrase. */
@@ -66,6 +72,17 @@ export interface DecisionsRecoveryKitRecord {
   relayOrigin: string;
   installationId: string;
   deviceId: string;
+}
+
+/** A finished setup check, recorded by the identity it checked: when, and the step that failed if one did. */
+export interface DecisionsSetupCheckRecord {
+  /** Epoch ms. */
+  checkedAt: number;
+  relayOrigin: string;
+  installationId: string;
+  deviceId: string;
+  /** Null when every step passed. */
+  failedStep: DecisionsSetupCheckStep | null;
 }
 
 /**
@@ -129,6 +146,11 @@ export interface DecisionsStatus {
    * identity, or its key file is known to be gone.
    */
   recoveryKitVerifiedAt?: number;
+  /**
+   * The latest setup check that ran to the end for the relay set up here
+   * (#16024). Absent until one has, or while its key file is known to be gone.
+   */
+  setupCheck?: { checkedAt: number; failedStep: DecisionsSetupCheckStep | null };
 }
 
 /** How strictly a question needs a person: only a person, or a proxy answer may do. */
@@ -708,3 +730,157 @@ export type DecisionsRotateKeysResult =
   | { result: "rotated"; keyEpoch: number }
   | DecisionsKeyRotationProblem
   | DecisionsRelayRequestFailure;
+
+/**
+ * The setup check's steps (#16024), in the order it runs them: the relay's
+ * unsigned reads, this computer's ownership of it, a socket on a fresh
+ * ticket, the relay's push configuration, then one test question to the
+ * paired phones, whose image makes the encrypted attachment round trip and
+ * whose answer is typed into a diagnostic terminal that runs no agent.
+ */
+export const DECISIONS_SETUP_CHECK_STEPS = [
+  "relay",
+  "claim",
+  "socket",
+  "push",
+  "attachment",
+  "question",
+] as const;
+
+export type DecisionsSetupCheckStep = (typeof DECISIONS_SETUP_CHECK_STEPS)[number];
+
+/** A step that couldn't be finished for a reason Daintree didn't foresee. Its error is never shown. */
+export interface DecisionsSetupUnexpected {
+  result: "unexpected";
+}
+
+/**
+ * The claim: `recognised` when the relay lists this computer as its owner,
+ * unrevoked, under the keys sealed here; `not-recognised` when it answered
+ * with another owner or other keys.
+ */
+export type DecisionsSetupClaimObservation =
+  | { result: "recognised" }
+  | { result: "not-recognised" }
+  | DecisionsRelayRequestFailure
+  | DecisionsSetupUnexpected;
+
+/**
+ * A fresh attempt's socket: `connected` when the relay's first frame came on
+ * a socket opened with a new ticket. `no-hello`: the attempt closed, or heard
+ * nothing in time. `replaced`: the relay closed it for another connection
+ * with this identity, or one did a moment ago and Daintree is waiting it out.
+ */
+export type DecisionsSetupSocketObservation =
+  | { result: "connected" }
+  | { result: "no-hello" }
+  | { result: "replaced" }
+  | { result: "revoked" }
+  | { result: "not-connected"; problem?: DecisionsConnectionProblem }
+  | DecisionsSetupUnexpected;
+
+/**
+ * The relay's push configuration and the paired phones' subscriptions.
+ * `configured`: it has a push key and holds an enabled subscription for at
+ * least one paired phone (`pushEnabled` of `phones`). `no-push-key`: it gave
+ * none. `no-phone`: no phone is paired. `push-off`: no paired phone has
+ * notifications on.
+ */
+export type DecisionsSetupPushObservation =
+  | { result: "configured"; phones: number; pushEnabled: number }
+  | { result: "no-push-key" }
+  | { result: "no-phone" }
+  | { result: "push-off"; phones: number }
+  | DecisionsRelayRequestFailure
+  | DecisionsSetupUnexpected;
+
+/**
+ * The test question's image, encrypted here, uploaded with the question,
+ * downloaded again and decrypted. `matched`: the bytes came back the same.
+ * `not-asked`: the test question couldn't be asked on this computer.
+ * `not-published`: the relay hadn't taken the question in time;
+ * `publish-failed`: it refused it. `mismatch`: what came back didn't decrypt
+ * to the same image.
+ */
+export type DecisionsSetupAttachmentObservation =
+  | { result: "matched"; bytes: number }
+  | { result: "not-asked" }
+  | { result: "not-published" }
+  | { result: "publish-failed" }
+  | { result: "mismatch" }
+  | DecisionsRelayRequestFailure
+  | DecisionsSetupUnexpected;
+
+/**
+ * The test question's answer. `typed`: a person answered on a phone and the
+ * answer was typed into the diagnostic terminal, `text` being what was typed.
+ * `not-answered`: no answer came in time. `expired` and `cancelled`: the
+ * question ended without one. `not-typed`: it was answered, but delivery
+ * didn't type it.
+ */
+export type DecisionsSetupQuestionObservation =
+  | { result: "typed"; text: string }
+  | { result: "not-answered" }
+  | { result: "expired" }
+  | { result: "cancelled" }
+  | { result: "not-typed" }
+  | DecisionsSetupUnexpected;
+
+export interface DecisionsSetupCheckObservations {
+  relay: DecisionsRelayCheck | DecisionsSetupUnexpected;
+  claim: DecisionsSetupClaimObservation;
+  socket: DecisionsSetupSocketObservation;
+  push: DecisionsSetupPushObservation;
+  attachment: DecisionsSetupAttachmentObservation;
+  question: DecisionsSetupQuestionObservation;
+}
+
+/**
+ * One step as the run last saw it: not reached yet, running, passed or
+ * failed with what it observed, or `skipped` because an earlier step failed
+ * or the run was cancelled.
+ */
+export type DecisionsSetupStepState<O> =
+  | { state: "waiting" }
+  | { state: "running" }
+  | { state: "skipped" }
+  | { state: "passed"; observation: O }
+  | { state: "failed"; observation: O };
+
+export type DecisionsSetupCheckSteps = {
+  [S in DecisionsSetupCheckStep]: DecisionsSetupStepState<DecisionsSetupCheckObservations[S]>;
+};
+
+/**
+ * The terminal a setup check's answer is typed into. It runs no agent and no
+ * process at all, so nothing typed into it can run; `screen` is everything
+ * typed so far.
+ */
+export interface DecisionsSetupDiagnosticTerminal {
+  title: string;
+  screen: string;
+}
+
+/**
+ * One setup check, as main last saw it (#16024). `cancelled`: it was called
+ * off (Cancel, Settings closed, Decisions turned off, a disconnect or quit),
+ * and recorded nothing.
+ */
+export interface DecisionsSetupCheckRun {
+  runId: string;
+  /** Rises with every change, across runs, so a late read never replaces a newer push. */
+  revision: number;
+  state: "running" | "passed" | "failed" | "cancelled";
+  /** Epoch ms. */
+  startedAt: number;
+  finishedAt?: number;
+  steps: DecisionsSetupCheckSteps;
+  /** The diagnostic terminal while the run has it open; null once it has closed. */
+  diagnostic: DecisionsSetupDiagnosticTerminal | null;
+}
+
+/** Starting a setup check: the run (the one already running, if any), or why none can run. */
+export type DecisionsSetupCheckStartResult =
+  | { result: "started"; run: DecisionsSetupCheckRun }
+  | { result: "not-set-up" }
+  | { result: "revoked" };

@@ -31,7 +31,7 @@ import { DecisionsKeyStoreError, isStoredIdentity, type SealedKeyStore } from ".
 import {
   checkDecisionsRelay,
   electronNetFetch,
-  readCapped,
+  readCappedBytes,
   relayOriginFromInput,
   requestFailureReason,
   type RelayFetch,
@@ -144,14 +144,15 @@ export async function relayRequests(
     } catch (error) {
       return fail(requestFailureReason(error, deadline.aborted), false);
     }
-    let text: string | null = null;
+    // Bytes, not text: an attachment's ciphertext comes back through here too.
+    let body: Uint8Array<ArrayBuffer> | null = null;
     let bodyError: unknown = null;
     try {
-      text = await readCapped(response, MAX_ANSWER_BYTES);
+      body = await readCappedBytes(response, MAX_ANSWER_BYTES);
     } catch (error) {
       bodyError = error;
     }
-    if (text === null) {
+    if (body === null) {
       // A refusal stays a refusal whatever became of its body: the status is
       // what the library reads it by.
       if (!response.ok) {
@@ -167,7 +168,7 @@ export async function relayRequests(
         true
       );
     }
-    return new Response(NULL_BODY_STATUSES.has(response.status) ? null : text, {
+    return new Response(NULL_BODY_STATUSES.has(response.status) ? null : body, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -492,7 +493,7 @@ export async function usable(stored: StoredIdentity): Promise<boolean> {
 }
 
 /** The relay lists this identity as its owner, unrevoked, under the same keys. */
-function relayRecognises(answer: unknown, identity: Identity): boolean {
+export function relayRecognises(answer: unknown, identity: Identity): boolean {
   const parsed = DevicesResponse.safeParse(answer);
   if (!parsed.success) return false;
   const { installationId, deviceId } = identity.config;

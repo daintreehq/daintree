@@ -75,6 +75,13 @@ describe("store ownership derived from the settings catalog", () => {
         deviceId: "owner-desktop-01",
       },
       autoEnrollHosts: false,
+      setupCheck: {
+        checkedAt: 1_761_955_400_000,
+        relayOrigin: "https://relay.owner.example",
+        installationId: "owner-installation",
+        deviceId: "owner-desktop-01",
+        failedStep: null,
+      },
     };
     const hostCopy: DecisionsSettings = {
       enabled: false,
@@ -87,6 +94,7 @@ describe("store ownership derived from the settings catalog", () => {
       revokedAt: null,
       recoveryKit: null,
       autoEnrollHosts: true,
+      setupCheck: null,
     };
     expect(mergeByOwnership(owners, hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual(owners);
     expect(splitByOwnership(hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual({

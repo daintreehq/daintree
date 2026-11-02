@@ -110,7 +110,17 @@ describe("DecisionsConnectionSection claim and restore", () => {
     restoreIdentity.mockReset();
     disconnectRelay.mockReset();
     Object.defineProperty(window, "electron", {
-      value: { decisions: { checkRelay, claimRelay, restoreIdentity, disconnectRelay } },
+      value: {
+        decisions: {
+          checkRelay,
+          claimRelay,
+          restoreIdentity,
+          disconnectRelay,
+          // The setup check's read once a relay is set up, left unanswered here.
+          getSetupCheck: () => new Promise(() => {}),
+        },
+        events: { on: () => () => {} },
+      },
       configurable: true,
       writable: true,
     });
@@ -470,7 +480,17 @@ describe("DecisionsConnectionSection disconnect", () => {
     checkRelay.mockReset();
     disconnectRelay.mockReset();
     Object.defineProperty(window, "electron", {
-      value: { decisions: { checkRelay, claimRelay, restoreIdentity, disconnectRelay } },
+      value: {
+        decisions: {
+          checkRelay,
+          claimRelay,
+          restoreIdentity,
+          disconnectRelay,
+          // The setup check's read once a relay is set up, left unanswered here.
+          getSetupCheck: () => new Promise(() => {}),
+        },
+        events: { on: () => () => {} },
+      },
       configurable: true,
       writable: true,
     });
