@@ -29,8 +29,35 @@ describe("submit (#15521)", () => {
       undefined,
       undefined,
       undefined,
-      { text: "Fix the login bug", truncated: true }
+      { text: "Fix the login bug", truncated: true },
+      undefined
     );
+  });
+
+  it("passes the run instruction on only with a code (#16171)", () => {
+    const { ptyManager, handler } = setup();
+
+    handler({
+      type: "submit",
+      id: "t1",
+      text: "go",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    handler({ type: "submit", id: "t1", text: "go", handbackInstruction: "run" });
+    handler({
+      type: "submit",
+      id: "t1",
+      text: "go",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "other" as never,
+    });
+
+    expect(ptyManager.submit.mock.calls.map((call) => call[7])).toEqual([
+      "run",
+      undefined,
+      undefined,
+    ]);
   });
 
   it("drops a candidate that isn't one", () => {

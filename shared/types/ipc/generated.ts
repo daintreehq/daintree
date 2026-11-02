@@ -4305,6 +4305,14 @@ export interface GeneratedIpcInvokeMap {
     args: [__1: { terminalId: string }];
     result: import("../agentSessionFile.js").AgentSessionFileResult;
   };
+  "terminal-when-done:list": {
+    args: [];
+    result: import("./terminalWhenDone.js").TerminalWhenDoneEntry[];
+  };
+  "terminal-when-done:set": {
+    args: [terminalId: string, choice: import("./terminalWhenDone.js").TerminalWhenDone];
+    result: void;
+  };
   "terminal:force-resume": {
     args: [id: string];
     result: void;

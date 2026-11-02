@@ -495,6 +495,35 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("reports an armed terminal's submitted marker once it retires the code, never an earlier one (#16171)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: Array<{ code: string; report: string }> = [];
+    const off = events.on("agent:run-handback-observed", (payload) =>
+      runs.push({ code: payload.code, report: payload.report })
+    );
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    terminal.getInfo().agentState = "waiting";
+
+    terminal.submit("first", "tok-1", "aaaaaa", undefined, undefined, undefined, "run");
+    await vi.advanceTimersByTimeAsync(250);
+    terminal.submit("second", "tok-2", "bbbbbb", undefined, undefined, undefined, "run");
+    await vi.advanceTimersByTimeAsync(250);
+
+    // The first request was retired when the second reached the pty, so its
+    // marker reprinted (a transcript replay) reports nothing.
+    ptyOnDataCallback!("DAINTREE-DONE-aaaaaa: first one END-aaaaaa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([]);
+
+    ptyOnDataCallback!("DAINTREE-NEEDS-YOU-bbbbbb: pick a name END-bbbbbb\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([{ code: "bbbbbb", report: "needs-you" }]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
   it("never reports a launch marker as a run's when the launch was no run's", async () => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;

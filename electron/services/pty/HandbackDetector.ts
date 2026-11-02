@@ -249,7 +249,10 @@ export interface HandbackHit {
   code: string;
   /** Which marker the agent printed; always `done` for a request that offered no other. */
   report: HandbackReport;
-  /** The request was a scheduled run's launch prompt (#15982). */
+  /**
+   * The request carried the instruction that offers `needs-you`: a scheduled
+   * run's launch prompt (#15982) or a prompt to an armed terminal (#16171).
+   */
   run: boolean;
 }
 

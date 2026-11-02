@@ -120,6 +120,7 @@ import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestor
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
+import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhenDone.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
@@ -2029,6 +2030,27 @@ function buildElectronApi(): ElectronAPI {
 
       onFinishRequest: (callback: (request: IpcEventMap["schedules:finish-request"]) => void) =>
         _typedOn(CHANNELS.SCHEDULES_FINISH_REQUEST, callback),
+    },
+
+    // An agent terminal's When done choice (#16171)
+    terminalWhenDone: {
+      ...buildTerminalWhenDonePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: IpcEventMap["terminal-when-done:changed"]) => void) =>
+        _typedOn(CHANNELS.TERMINAL_WHEN_DONE_CHANGED, callback),
+
+      onFinishRequest: (
+        callback: (request: IpcEventMap["terminal-when-done:finish-request"]) => void
+      ) => _typedOn(CHANNELS.TERMINAL_WHEN_DONE_FINISH_REQUEST, callback),
+
+      onInUseQuery: (callback: (query: IpcEventMap["terminal-when-done:in-use-query"]) => void) =>
+        _typedOn(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_QUERY, callback),
+
+      sendInUseReply: (
+        reply: import("../shared/types/ipc/terminalWhenDone.js").TerminalWhenDoneInUseReply
+      ) => {
+        ipcRenderer.send(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, reply);
+      },
     },
 
     // Decisions, as main observes it (#16001)

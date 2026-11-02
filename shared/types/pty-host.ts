@@ -305,6 +305,12 @@ export type PtyHostRequest =
       submissionToken?: string;
       /** Handback code minted for this submission (#12488); its instruction is already in `text`. */
       handbackCode?: string;
+      /**
+       * `run` when `text` carries the instruction that offers `needs-you` too:
+       * a terminal armed with a When done choice (#16171). Absent, the code is
+       * looked for in its `done` form alone.
+       */
+      handbackInstruction?: "run";
       /** Admission check run when the submission reaches the lane (#12491). */
       guard?: TerminalSubmitGuard;
       /** Absolute paths of images attached in the composer, in order (#12792). */

@@ -1753,6 +1753,19 @@ export interface IpcEventMap {
   // Main closed a scheduled run's terminal to replace it (#15980); a view showing the project drops its pane.
   "schedules:run-closed": import("./schedules.js").ScheduledRunClosedPush;
 
+  // An agent terminal's When done choice changed (#16171); main sends it to every view of that project.
+  "terminal-when-done:changed": import("./terminalWhenDone.js").TerminalWhenDoneChange;
+  // Main asks every local view of a project to move or remove an armed terminal's pane (#16171).
+  "terminal-when-done:finish-request": import("./terminalWhenDone.js").TerminalWhenDoneFinishRequest;
+  /**
+   * Main asks a view whether someone is using a pane before moving it (#16171)
+   * and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY`, correlated by `requestId`. The
+   * reply channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "terminal-when-done:in-use-query": import("./terminalWhenDone.js").TerminalWhenDoneInUseQuery;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived

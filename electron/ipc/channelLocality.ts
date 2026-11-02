@@ -1174,6 +1174,14 @@ export const CHANNEL_LOCALITY = {
   "terminal-config:set-scrollback": "shell",
   // Answered where the pane runs; the handler refuses a remote view (#16097).
   "terminal-session-file:get": "host",
+  // Main's own record of this machine's terminals, pushed to its own views:
+  // a project on a Remote Host is out of scope, as for scheduled runs.
+  "terminal-when-done:changed": "shell",
+  "terminal-when-done:finish-request": "shell",
+  "terminal-when-done:in-use-query": "shell",
+  "terminal-when-done:in-use-reply": "shell",
+  "terminal-when-done:list": "shell",
+  "terminal-when-done:set": "shell",
   "terminal:acknowledge-data": "host",
   "terminal:activity": "host",
   "terminal:agent-title-state": "host",

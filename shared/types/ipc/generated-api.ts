@@ -1916,6 +1916,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["terminal-session-file:get"]["args"]
     ): Promise<IpcInvokeMap["terminal-session-file:get"]["result"]>;
   };
+  terminalWhenDone: {
+    list(
+      ...args: IpcInvokeMap["terminal-when-done:list"]["args"]
+    ): Promise<IpcInvokeMap["terminal-when-done:list"]["result"]>;
+    set(
+      ...args: IpcInvokeMap["terminal-when-done:set"]["args"]
+    ): Promise<IpcInvokeMap["terminal-when-done:set"]["result"]>;
+  };
   voiceDictionary: {
     acceptSuggestion(
       ...args: IpcInvokeMap["voice-dictionary:accept-suggestion"]["args"]

@@ -1138,6 +1138,10 @@ export class TerminalProcess {
    * `firstPrompt` is offered as the run's first-prompt record (#15521) once
    * the Enter is written, and only to an agent: a send to the shell an agent
    * left behind was never its prompt.
+   *
+   * `handbackInstruction` is `run` when the instruction in `text` offers
+   * `needs-you` as well (#16171), so its marker is looked for in both forms
+   * and the capture that retires the code is reported to Main.
    */
   submit(
     text: string,
@@ -1145,11 +1149,12 @@ export class TerminalProcess {
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
-    firstPrompt?: FirstPromptCandidate
+    firstPrompt?: FirstPromptCandidate,
+    handbackInstruction?: "run"
   ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
-    const onTrackerWritten = tracker?.noteSubmission(handbackCode, token);
+    const onTrackerWritten = tracker?.noteSubmission(handbackCode, token, handbackInstruction);
     const onPtyWritten = (): void => {
       this.terminalInfo.lastHandback = undefined;
       this.terminalInfo.lastHandbackUnpublished = false;

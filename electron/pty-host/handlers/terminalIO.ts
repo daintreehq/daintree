@@ -70,7 +70,8 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
         msg.handbackCode,
         guard,
         imagePaths,
-        firstPrompt
+        firstPrompt,
+        msg.handbackCode !== undefined && msg.handbackInstruction === "run" ? "run" : undefined
       );
     },
 
