@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="dark light" />
+    <meta name="format" content="webp-lossless" />
+    <link rel="stylesheet" href="base.css" />
+    <style>
+      #art {
+        width: 560px;
+        padding: 10px 0 4px;
+        text-align: center;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .brand .mark {
+        width: 40px;
+        height: 30px;
+        color: var(--accent);
+      }
+      .brand .name {
+        font: 600 30px/1 var(--sans);
+        letter-spacing: -0.015em;
+      }
+      h1 {
+        margin-top: 34px;
+        font: 600 66px/1.04 var(--sans);
+        letter-spacing: -0.032em;
+      }
+      /* The site's headline fills "habitat" with the Daintree rainforest. */
+      .habitat {
+        background-size: 330% auto;
+        background-position: 64% 62%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        padding: 0 0.04em;
+      }
+      body[data-scheme="dark"] {
+        color: var(--text);
+      }
+      body[data-scheme="light"] {
+        color: #1f1d1b;
+      }
+      body[data-scheme="dark"] .habitat {
+        filter: brightness(1.9) saturate(1.1) contrast(0.7);
+      }
+      body[data-scheme="light"] .habitat {
+        filter: brightness(0.8) saturate(1.3) contrast(1.1);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art">
+      <div class="brand">
+        <span class="mark" id="mark"></span><span class="name">Daintree</span>
+      </div>
+      <h1>A desktop <span class="habitat" id="habitat">habitat</span><br />for AI agents.</h1>
+    </div>
+    <script>
+      const art = window.__ART__;
+      document.body.dataset.scheme = art.scheme;
+      document.getElementById("mark").innerHTML = art.data.daintreeMark;
+      // A flat wash under the photo evens out its light and dark patches, so every
+      // letter of "habitat" holds against GitHub's dark and light pages alike.
+      const wash = art.scheme === "dark" ? "rgba(150, 190, 140, 0.32)" : "rgba(20, 34, 18, 0.38)";
+      document.getElementById("habitat").style.backgroundImage =
+        `linear-gradient(${wash}, ${wash}), url("${art.themeArt.daintree}")`;
+      window.__artReady = true;
+    </script>
+  </body>
+</html>

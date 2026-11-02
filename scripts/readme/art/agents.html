@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="wide narrow" />
+    <meta name="format" content="webp-lossless" />
+    <link rel="stylesheet" href="base.css" />
+    <style>
+      #art {
+        width: 896px;
+        padding: 34px 28px 30px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+      }
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        row-gap: 28px;
+      }
+      .agent {
+        width: calc(100% / 6);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+      }
+      .agent .mark {
+        width: 34px;
+        height: 34px;
+      }
+      .agent .name {
+        font: 500 14px/1.2 var(--sans);
+        color: var(--text-sec);
+        text-align: center;
+      }
+      /* Phone: three across, at a size that reads without zooming. */
+      body[data-layout="narrow"] #art {
+        width: 400px;
+        padding: 24px 12px 22px;
+      }
+      body[data-layout="narrow"] .grid {
+        row-gap: 22px;
+      }
+      body[data-layout="narrow"] .agent {
+        width: calc(100% / 3);
+        gap: 9px;
+      }
+      body[data-layout="narrow"] .agent .mark {
+        width: 30px;
+        height: 30px;
+      }
+      body[data-layout="narrow"] .agent .name {
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art"><div class="grid" id="grid"></div></div>
+    <script>
+      document.body.dataset.layout = window.__ART__.scheme;
+      const { agents } = window.__ART__.data;
+      // The products are known by these names; the registry keeps the short form.
+      const DISPLAY = { claude: "Claude Code", gemini: "Gemini CLI" };
+      const ORDER = [
+        "claude",
+        "codex",
+        "antigravity",
+        "opencode",
+        "cursor",
+        "copilot",
+        "gemini",
+        "amp",
+        "aider",
+        "goose",
+        "crush",
+        "grok",
+        "qwen",
+        "kimi",
+        "kiro",
+        "mistral",
+        "interpreter",
+      ];
+      const byId = new Map(agents.map((a) => [a.id, a]));
+      const ordered = [
+        ...ORDER.filter((id) => byId.has(id)),
+        ...agents.map((a) => a.id).filter((id) => !ORDER.includes(id)),
+      ];
+      const grid = document.getElementById("grid");
+      for (const id of ordered) {
+        const a = byId.get(id);
+        const el = document.createElement("div");
+        el.className = "agent";
+        el.innerHTML = `<span class="mark" style="color:${a.ink}">${a.svg}</span><span class="name">${DISPLAY[id] ?? a.name}</span>`;
+        grid.append(el);
+      }
+      window.__artReady = true;
+    </script>
+  </body>
+</html>

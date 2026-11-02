@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="wide narrow" />
+    <meta name="format" content="webp" />
+    <link rel="stylesheet" href="base.css" />
+    <style>
+      #art {
+        width: 896px;
+        padding: 20px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      /* A postcard per theme: the place it is named for, the app wearing it, and
+     its name, all in that theme's own surface, text and border colours. */
+      .card {
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid;
+        display: flex;
+        flex-direction: column;
+      }
+      .place {
+        height: 104px;
+        background-size: cover;
+        background-position: center;
+      }
+      .window {
+        margin: -34px 12px 0;
+        height: 132px;
+        border-radius: 7px;
+        overflow: hidden;
+        border: 1px solid;
+        box-shadow: var(--lift);
+        position: relative;
+      }
+      .window img {
+        position: absolute;
+        left: 0;
+        top: -30px;
+        width: 760px;
+        height: auto;
+      }
+      .label {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        row-gap: 3px;
+        padding: 11px 13px 12px;
+      }
+      .label .name {
+        font: 600 14.5px/1.2 var(--sans);
+        letter-spacing: -0.005em;
+        white-space: nowrap;
+      }
+      .label .where {
+        grid-column: 1;
+        font: 400 12px/1.25 var(--sans);
+        white-space: nowrap;
+      }
+      .label .dot {
+        grid-column: 2;
+        grid-row: 1;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        align-self: center;
+      }
+      /* Phone: two across, and the place may wrap. */
+      body[data-layout="narrow"] #art {
+        width: 400px;
+        padding: 12px;
+      }
+      body[data-layout="narrow"] .grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      body[data-layout="narrow"] .place {
+        height: 72px;
+      }
+      body[data-layout="narrow"] .window {
+        margin: -26px 9px 0;
+        height: 96px;
+      }
+      body[data-layout="narrow"] .window img {
+        width: 520px;
+        top: -20px;
+      }
+      body[data-layout="narrow"] .label {
+        padding: 9px 10px 10px;
+      }
+      body[data-layout="narrow"] .label .name {
+        font-size: 13.5px;
+      }
+      body[data-layout="narrow"] .label .where {
+        font-size: 11.5px;
+        white-space: normal;
+      }
+      /* Fifteen is odd: the last card takes the full row rather than leave a gap. */
+      body[data-layout="narrow"] .card:last-child {
+        grid-column: 1 / -1;
+      }
+      body[data-layout="narrow"] .card:last-child .window {
+        height: 150px;
+      }
+      body[data-layout="narrow"] .card:last-child .window img {
+        width: 760px;
+        top: -30px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art"><div class="grid" id="grid"></div></div>
+    <script>
+      document.body.dataset.layout = window.__ART__.scheme;
+      const { data, shots, themeArt } = window.__ART__;
+      // Daintree first, then the dark cohort, then the light one, as the picker groups them.
+      const themes = [
+        ...data.themes.filter((t) => t.id === "daintree"),
+        ...data.themes.filter((t) => t.id !== "daintree" && t.type === "dark"),
+        ...data.themes.filter((t) => t.type === "light"),
+      ];
+      const grid = document.getElementById("grid");
+      const missing = [];
+      for (const t of themes) {
+        const shot = shots[`hero-${t.id}`];
+        if (!shot) missing.push(t.id);
+        const p = t.palette;
+        // The place keeps its ecosystem ("Movile Cave", "Redwood National Park");
+        // with three parts the country goes, so it fits on one line.
+        const parts = t.location.split(",").map((part) => part.trim());
+        // A middle part that only narrows a region ("South Island", "Constanța
+        // County") goes instead, so the card still names the country.
+        const trimmed =
+          parts.length < 3
+            ? parts
+            : /(Island|County)$/.test(parts[1])
+              ? [parts[0], parts[2]]
+              : parts.slice(0, -1);
+        const where = trimmed.join(", ");
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.background = p.surfaces.panel;
+        card.style.borderColor = p.border;
+        card.style.setProperty(
+          "--lift",
+          t.type === "dark"
+            ? "0 8px 22px rgba(5, 10, 7, 0.38)"
+            : "0 6px 16px rgba(40, 32, 20, 0.14)"
+        );
+        card.innerHTML =
+          `<div class="place" style="background-image:url('${themeArt[t.id]}')"></div>` +
+          `<div class="window" style="border-color:${p.border};background:${p.surfaces.canvas}">${shot ? `<img src="${shot}">` : ""}</div>` +
+          `<div class="label"><span class="name" style="color:${p.text.primary}">${t.name}</span>` +
+          `<span class="dot" style="background:${p.accent}"></span>` +
+          `<span class="where" style="color:${p.text.secondary}">${where}</span></div>`;
+        grid.append(card);
+      }
+      if (missing.length) throw new Error(`no app capture for: ${missing.join(", ")}`);
+      window.__artReady = true;
+    </script>
+  </body>
+</html>

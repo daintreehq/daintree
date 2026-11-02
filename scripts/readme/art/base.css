@@ -1,0 +1,63 @@
+/* daintree.org's tokens and type, so the README art reads as the site's. */
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&display=block");
+
+:root {
+  --bg: #1a1918;
+  --bg-grid: #110d0b;
+  --bg-card: #201f1f;
+  --bg-elevated: #2b2b2a;
+  --border: #292828;
+  --border-strong: #353433;
+  --text: #e4e4e7;
+  --text-sec: #a1a1aa;
+  --text-ter: #8a8a93;
+  --muted: #585853;
+  --accent: #36ce94;
+  --accent-subtle: rgba(54, 206, 148, 0.1);
+  --accent-border: rgba(54, 206, 148, 0.2);
+  --on-accent: #1a1918;
+  --warning: #c59a4e;
+  --success: #6b8d72;
+  --error: #c8746c;
+  --sans: "DM Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius-card: 16px;
+  --radius-control: 6px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body {
+  background: transparent;
+}
+body {
+  font-family: var(--sans);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  font-optical-sizing: auto;
+}
+#art {
+  display: inline-block;
+}
+
+.eyebrow {
+  font: 500 11px/1 var(--sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.mono {
+  font-family: var(--mono);
+}
+.mark {
+  display: inline-flex;
+}
+.mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}

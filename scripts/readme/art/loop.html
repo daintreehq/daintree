@@ -1,0 +1,378 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="wide narrow" />
+    <meta name="format" content="webp-lossless" />
+    <link rel="stylesheet" href="base.css" />
+    <script src="glyphs.js"></script>
+    <style>
+      #art {
+        width: 896px;
+        padding: 30px 24px 26px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+      }
+      /* The stages hang off one stem, in order: the loop is a sequence. */
+      .stages {
+        position: relative;
+        padding-top: 34px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+      svg.stems {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 40px;
+        overflow: visible;
+      }
+      .stage {
+        background: var(--bg-card);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        padding: 16px 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-height: 178px;
+      }
+      .stage h3 {
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+        font: 600 18px/1 var(--sans);
+        letter-spacing: -0.01em;
+      }
+      .stage h3 .n {
+        font: 400 12px/1 var(--mono);
+        color: var(--text-ter);
+      }
+      .stage p {
+        font: 400 13px/1.45 var(--sans);
+        color: var(--text-sec);
+      }
+      .vignette {
+        margin-top: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 26px;
+        padding: 0 9px;
+        background: var(--bg-grid);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font: 400 11.5px/1 var(--mono);
+        color: var(--text);
+      }
+      .row .mark {
+        width: 13px;
+        height: 13px;
+        flex: none;
+      }
+      .row .grow {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .row .st {
+        font: 400 11px/1 var(--sans);
+        color: var(--text-ter);
+      }
+      .ring {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        border: 1.5px solid currentColor;
+        display: inline-block;
+        flex: none;
+      }
+      .ring.working {
+        color: var(--accent);
+        border-right-color: transparent;
+        transform: rotate(-45deg);
+      }
+      .ring.waiting {
+        color: var(--warning);
+      }
+      .done {
+        width: 11px;
+        height: 11px;
+        color: var(--accent);
+        display: inline-flex;
+        flex: none;
+      }
+      .row.attn {
+        border-color: rgba(197, 154, 78, 0.5);
+      }
+      .row.attn .st {
+        color: var(--warning);
+      }
+
+      .diff {
+        overflow: hidden;
+        background: var(--bg-grid);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 0;
+        font: 400 10.5px/1.65 var(--mono);
+      }
+      .diff .file {
+        padding: 0 9px 5px;
+        color: var(--text);
+        display: flex;
+        justify-content: space-between;
+      }
+      .diff .file b {
+        font-weight: 400;
+        color: var(--text-ter);
+      }
+      .diff .l {
+        padding: 0 9px;
+        white-space: pre;
+        overflow: hidden;
+        text-overflow: clip;
+        color: var(--text-sec);
+      }
+      .diff .add {
+        background: rgba(54, 206, 148, 0.08);
+        color: #9fd8bf;
+      }
+      .diff .del {
+        background: rgba(200, 116, 108, 0.1);
+        color: #d99a93;
+      }
+      .plus {
+        color: #6fcf9f;
+      }
+      .minus {
+        color: #d98a82;
+      }
+
+      .commit {
+        display: flex;
+        gap: 6px;
+      }
+      .commit .msg {
+        flex: 1;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        padding: 0 9px;
+        background: var(--bg-grid);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font: 400 11px/1 var(--mono);
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .commit .btn {
+        height: 26px;
+        padding: 0 10px;
+        display: flex;
+        align-items: center;
+        border-radius: 5px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font: 600 11.5px/1 var(--sans);
+        white-space: nowrap;
+      }
+      .commit .ghost {
+        height: 26px;
+        padding: 0 10px;
+        display: flex;
+        align-items: center;
+        border-radius: 5px;
+        border: 1px solid var(--border-strong);
+        color: var(--text-sec);
+        font: 500 11.5px/1 var(--sans);
+      }
+      .commit .btn {
+        flex: 1;
+        justify-content: center;
+      }
+      .pr {
+        background: var(--bg-grid);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 9px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .pr-title {
+        font: 500 12px/1.2 var(--sans);
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .pr-num {
+        font: 400 11px/1 var(--mono);
+        color: var(--text-ter);
+        margin-right: 6px;
+      }
+      .pr-branch {
+        font: 400 10.5px/1 var(--mono);
+        color: var(--text-ter);
+      }
+      .pr-rule {
+        border-top: 1px solid var(--border);
+        margin: 2px 0;
+      }
+      .checks.ready {
+        color: var(--accent);
+      }
+      .ring.merge {
+        color: var(--accent);
+        background: var(--accent);
+      }
+      .checks {
+        font: 400 11px/1.4 var(--sans);
+        color: var(--text-ter);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      /* Phone: two by two, read left to right then down; the stem is dropped. */
+      body[data-layout="narrow"] #art {
+        width: 400px;
+        padding: 14px;
+      }
+      body[data-layout="narrow"] .stages {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        padding-top: 0;
+      }
+      body[data-layout="narrow"] svg.stems {
+        display: none;
+      }
+      body[data-layout="narrow"] .stage {
+        min-height: 168px;
+        padding: 13px 12px 14px;
+        gap: 12px;
+      }
+      body[data-layout="narrow"] .stage h3 {
+        font-size: 17px;
+      }
+      body[data-layout="narrow"] .diff {
+        font-size: 10px;
+      }
+      body[data-layout="narrow"] .diff .long {
+        display: none;
+      }
+      body[data-layout="narrow"] .diff .short {
+        display: block;
+      }
+      .diff .short {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art">
+      <div class="stages" id="stages">
+        <svg class="stems" id="stems"></svg>
+        <section class="stage">
+          <h3><span class="n">01</span>Delegate</h3>
+          <div class="vignette" id="delegate"></div>
+        </section>
+        <section class="stage">
+          <h3><span class="n">02</span>Monitor</h3>
+          <div class="vignette" id="monitor"></div>
+        </section>
+        <section class="stage">
+          <h3><span class="n">03</span>Review</h3>
+          <div class="vignette">
+            <div class="diff">
+              <div class="file">
+                session.ts<b><span class="plus">+62</span> <span class="minus">−14</span></b>
+              </div>
+              <div class="l del">- return fetch(url)</div>
+              <div class="l add long">+ const res = await fetch(url)</div>
+              <div class="l add short">+ const res =</div>
+              <div class="l add short">+&nbsp;&nbsp;await fetch(url)</div>
+              <div class="l add">+ if (res.status === 401)</div>
+              <div class="l add">+&nbsp;&nbsp;await refresh()</div>
+            </div>
+          </div>
+        </section>
+        <section class="stage">
+          <h3><span class="n">04</span>Merge</h3>
+          <div class="vignette">
+            <div class="pr">
+              <div class="pr-title"><span class="pr-num">#482</span>fix: refresh on 401</div>
+              <div class="pr-branch">fix/auth-retry → main</div>
+              <div class="pr-rule"></div>
+              <div class="checks"><span class="done" data-glyph="check"></span>4 checks passed</div>
+              <div class="checks ready"><span class="ring merge"></span>Ready to merge</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+    <script>
+      document.body.dataset.layout = window.__ART__.scheme;
+      const byId = new Map(window.__ART__.data.agents.map((a) => [a.id, a]));
+      const mark = (id) =>
+        `<span class="mark" style="color:${byId.get(id).ink}">${byId.get(id).svg}</span>`;
+      document.getElementById("delegate").innerHTML = [
+        ["claude", "feat/sso"],
+        ["codex", "fix/navbar"],
+        ["opencode", "chore/deps"],
+      ]
+        .map(([id, b]) => `<div class="row">${mark(id)}<span class="grow">${b}</span></div>`)
+        .join("");
+      document.getElementById("monitor").innerHTML = [
+        ["claude", "feat/sso", "waiting", "approval", "attn"],
+        ["codex", "fix/navbar", "working", "working", ""],
+        ["opencode", "chore/deps", "done", "finished", ""],
+      ]
+        .map(
+          ([id, b, s, label, cls]) =>
+            `<div class="row ${cls}">${s === "done" ? `<span class="done">${window.GLYPHS.check}</span>` : `<span class="ring ${s}"></span>`}` +
+            `<span class="grow">${b}</span><span class="st">${label}</span></div>`
+        )
+        .join("");
+      for (const el of document.querySelectorAll("[data-glyph]"))
+        el.innerHTML = window.GLYPHS[el.dataset.glyph];
+
+      // One stem runs over the four stages; a node sits over each card's centre
+      // and drops into it, so the stages read as one sequence fed by one line.
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.getElementById("stems");
+      const box = document.getElementById("stages").getBoundingClientRect();
+      const centres = [...document.querySelectorAll(".stage")].map((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left - box.left + r.width / 2;
+      });
+      const STEM = "#4a4846";
+      const add = (tag, attrs) => {
+        const el = document.createElementNS(ns, tag);
+        for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+        svg.append(el);
+      };
+      const y = 10;
+      add("path", {
+        d: `M ${centres[0]} ${y} H ${centres[3]}`,
+        stroke: STEM,
+        "stroke-width": 1.5,
+        fill: "none",
+      });
+      for (const x of centres) {
+        add("path", { d: `M ${x} ${y} V 34`, stroke: STEM, "stroke-width": 1.5, fill: "none" });
+        add("circle", { cx: x, cy: y, r: 5, fill: "#1a1918", stroke: STEM, "stroke-width": 1.5 });
+      }
+      window.__artReady = true;
+    </script>
+  </body>
+</html>
