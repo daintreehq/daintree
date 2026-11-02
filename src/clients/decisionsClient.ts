@@ -4,6 +4,30 @@ import type { DecisionsStatus, PaneDecisionState } from "@shared/types/decisions
 export const decisionsClient = {
   getStatus: (): Promise<DecisionsStatus> => window.electron.decisions.getStatus(),
 
+  /**
+   * Decisions' status from now on: subscribes before reading, and keeps
+   * whichever carries the higher revision, so a read that lands after a push
+   * can't roll it back. A read that fails calls nothing. The returned
+   * function stops it, read included.
+   */
+  watchStatus: (onStatus: (status: DecisionsStatus) => void): (() => void) => {
+    let latest = -1;
+    let stopped = false;
+    const accept = (status: DecisionsStatus) => {
+      if (stopped) return;
+      const revision = status.revision ?? 0;
+      if (revision < latest) return;
+      latest = revision;
+      onStatus(status);
+    };
+    const off = window.electron.events.on("decisions:status-changed", accept);
+    window.electron.decisions.getStatus().then(accept, () => {});
+    return () => {
+      stopped = true;
+      off();
+    };
+  },
+
   /** A pane's current state; null while Decisions is off or the pane has nothing outstanding. */
   getPaneState: (terminalId: string): Promise<PaneDecisionState | null> =>
     window.electron.decisions.getPaneState(terminalId),

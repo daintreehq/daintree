@@ -1,3 +1,5 @@
+import type { MouseEvent } from "react";
+
 /**
  * The keyboard ring every focusable control in a terminal pane's header wears —
  * the chips beside the title as well as the pane's own buttons (`PanelHeader`
@@ -35,3 +37,18 @@ export const HEADER_CHIP_SURFACE = "border-divider bg-overlay-soft text-text-sec
  */
 export const HEADER_CHIP_TRIGGER_CLASS =
   "transition-colors duration-150 ease-out hover:bg-overlay-medium aria-expanded:bg-overlay-medium";
+
+/**
+ * Wraps a header chip that opens a popover, so pressing it leaves the pane's
+ * selection where it was. A click anywhere in a pane selects it unless the
+ * click was default-prevented (`ContentPanel`), and selecting a pane sends the
+ * keyboard to its home surface, which closes a non-modal popover the moment it
+ * opens: on any pane but the focused one, the chip did nothing. Only clicks on
+ * the chip itself are held back; clicks in the portalled popover are left
+ * alone, so its own links and controls keep their defaults.
+ */
+export function holdPaneSelection(event: MouseEvent<HTMLElement>): void {
+  if (event.target instanceof Node && event.currentTarget.contains(event.target)) {
+    event.preventDefault();
+  }
+}

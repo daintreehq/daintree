@@ -9,8 +9,10 @@ import { AskingCircle, Clock } from "@/components/icons";
 import type { CanopyCategory } from "@shared/types/ipc/canopy";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { pluralize } from "@/lib/pluralize";
 import {
   answerOptions,
+  itemAnswerAttention,
   itemContextWarning,
   itemFacts,
   itemArchived,
@@ -480,7 +482,18 @@ export function CanopyRow({
   // One health note beside the attribution at most, the most pressing first,
   // so the trailing words can never outgrow the ask they follow; the rest are
   // in the row's description and the selected pane.
+  // Decisions saw an answer for this run stop on its way in. Daintree's own
+  // observation, and the reason the run sits with what needs the user, so it
+  // leads the tail.
+  const answers = itemAnswerAttention(item);
+  const answerNote =
+    answers === 0
+      ? null
+      : answers === 1
+        ? "Answer needs attention"
+        : `${pluralize(answers, "answer")} need attention`;
   const statusTail = [
+    answerNote,
     stalled,
     row.band === "quiet" && !quietLead ? "Quiet" : null,
     item.failed && attribution === null ? "Read failed" : null,
@@ -508,6 +521,7 @@ export function CanopyRow({
       ? `screen unchanged for ${formatWaitAge(card.stalledSince, nowMs)}`
       : null,
     overdue ? "waiting a while" : null,
+    answerNote !== null ? answerNote.toLowerCase() : null,
     progress?.spoken ?? null,
     facts.length > 0 ? `reported ${facts.map((fact) => fact.toLowerCase()).join(", ")}` : null,
     compact ? null : itemContextWarning(item),
@@ -655,11 +669,24 @@ export function CanopyRow({
                   {tag}
                 </span>
               )}
-              {statusTail.map((part) => (
-                <span key={part} className="min-w-0 truncate">
-                  {part}
-                </span>
-              ))}
+              {statusTail.map((part) =>
+                // The reason the run sits with what needs the user: full ink and
+                // the warning shape, so it outranks the run's own status words.
+                part === answerNote ? (
+                  <span
+                    key={part}
+                    data-canopy-answer-attention=""
+                    className="flex min-w-0 items-center gap-1 text-text-primary"
+                  >
+                    <WarningGlyph className="size-3.5 shrink-0 text-status-warning" />
+                    <span className="truncate">{part}</span>
+                  </span>
+                ) : (
+                  <span key={part} className="min-w-0 truncate">
+                    {part}
+                  </span>
+                )
+              )}
             </span>
           )}
         </span>

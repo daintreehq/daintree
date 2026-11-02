@@ -168,6 +168,28 @@ export function itemAwaitsPermission(item: CanopyItem): boolean {
 }
 
 /**
+ * Answers Daintree Decisions received for this run whose delivery stopped and
+ * needs a person; 0 when there are none, and always while Decisions is off.
+ */
+export function itemAnswerAttention(item: CanopyItem): number {
+  return item.row.run.answerAttention ?? 0;
+}
+
+/**
+ * An answer waiting on the user's decision puts the run in the needs-you tier
+ * whatever its screen says — it is Daintree's own observation and needs no
+ * reading — unless the user put the run aside, archived it or answered it here.
+ */
+function answerAttentionHolds(item: CanopyItem): boolean {
+  return (
+    itemAnswerAttention(item) > 0 &&
+    !itemPutAside(item) &&
+    !itemHandled(item) &&
+    !itemArchived(item)
+  );
+}
+
+/**
  * Where a run sits before either model has read it, on the same 0–100 scale as
  * a card's priority: what Daintree itself saw, ranked by how blocked it is.
  */
@@ -248,8 +270,9 @@ export function itemPriority(item: CanopyItem, nowMs: number): number {
   const read = readPriority(item);
   if (itemPutAside(item)) return Math.min(read, PUT_ASIDE_PRIORITY);
   if (itemAwaitsPermission(item)) return Math.max(read, PERMISSION_FLOOR);
-  if (!itemIsBusy(item)) return read;
-  return Math.max(read, checkInPriority(item, nowMs));
+  const floor = answerAttentionHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : 0;
+  if (!itemIsBusy(item)) return Math.max(read, floor);
+  return Math.max(read, checkInPriority(item, nowMs), floor);
 }
 
 /**
@@ -268,8 +291,11 @@ export function shownPriority(item: CanopyItem, nowMs: number): number | null {
   if (itemPutAside(item)) return read === null ? null : Math.min(read, PUT_ASIDE_PRIORITY);
   // Daintree's own observation needs no reading behind it.
   if (itemAwaitsPermission(item)) return Math.max(read ?? 0, PERMISSION_FLOOR);
-  if (!itemIsBusy(item) || itemHandled(item)) return read;
-  return Math.max(read ?? 0, checkInPriority(item, nowMs));
+  const floor = answerAttentionHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : null;
+  if (!itemIsBusy(item) || itemHandled(item)) {
+    return floor === null ? read : Math.max(read ?? 0, floor);
+  }
+  return Math.max(read ?? 0, checkInPriority(item, nowMs), floor ?? 0);
 }
 
 /**
@@ -515,6 +541,9 @@ export function itemNeedsAttention(item: CanopyItem): boolean {
   // Daintree's own stall observation: working, and no output for ten minutes.
   // Whether it is stuck or just slow, it is worth a look.
   if (itemStalled(item)) return true;
+  // Decisions saw an answer for it stop on its way in: a person decides what
+  // happens to it, whatever the screen says.
+  if (answerAttentionHolds(item)) return true;
   // Every layer answers on one scale, the score's own bands: 55 and up is
   // something left to check, decide or answer. A finished turn with nothing
   // left (40), an idle session (20) or work going normally (5) stays in the

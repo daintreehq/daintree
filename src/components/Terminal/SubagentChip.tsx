@@ -69,6 +69,7 @@ import {
   HEADER_CHIP_FOCUS_CLASS as CHIP_FOCUS_CLASS,
   HEADER_CHIP_SURFACE,
   HEADER_CHIP_TRIGGER_CLASS,
+  holdPaneSelection,
 } from "./terminalHeaderChip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import {
@@ -749,46 +750,49 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
         }
       }}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                HEADER_CHIP_CLASS,
-                HEADER_CHIP_SURFACE,
-                HEADER_CHIP_TRIGGER_CLASS,
-                // The chip borrows the waiting hue only while a child is
-                // blocked on the user — the one thing worth seeing from the
-                // header without opening anything — and keeps it under the
-                // pointer, where hover lifts the fill instead.
-                // A failure with nothing waiting takes the error hue the same
-                // way; waiting outranks it because it is the one the user can act on.
-                waiting > 0
-                  ? "text-state-waiting"
-                  : failed > 0
-                    ? "text-status-error"
-                    : "text-text-secondary hover:text-text-primary",
-                CHIP_FOCUS_CLASS
-              )}
-              aria-label={attentionNote ? `${summary}, ${attentionNote}` : summary}
-            >
-              <Network className="w-3 h-3" aria-hidden="true" />
-              {count !== null && <span className="tabular-nums">{count}</span>}
-            </button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">{summary}</span>
-            <span>
-              {attentionNote
-                ? `${capitalize(attentionNote)}. Click to review.`
-                : "Click to review."}
-            </span>
-          </div>
-        </TooltipContent>
-      </Tooltip>
+      {/* Selecting the pane would close the popover this opens. */}
+      <span className="contents" onClick={holdPaneSelection}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  HEADER_CHIP_CLASS,
+                  HEADER_CHIP_SURFACE,
+                  HEADER_CHIP_TRIGGER_CLASS,
+                  // The chip borrows the waiting hue only while a child is
+                  // blocked on the user — the one thing worth seeing from the
+                  // header without opening anything — and keeps it under the
+                  // pointer, where hover lifts the fill instead.
+                  // A failure with nothing waiting takes the error hue the same
+                  // way; waiting outranks it because it is the one the user can act on.
+                  waiting > 0
+                    ? "text-state-waiting"
+                    : failed > 0
+                      ? "text-status-error"
+                      : "text-text-secondary hover:text-text-primary",
+                  CHIP_FOCUS_CLASS
+                )}
+                aria-label={attentionNote ? `${summary}, ${attentionNote}` : summary}
+              >
+                <Network className="w-3 h-3" aria-hidden="true" />
+                {count !== null && <span className="tabular-nums">{count}</span>}
+              </button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">{summary}</span>
+              <span>
+                {attentionNote
+                  ? `${capitalize(attentionNote)}. Click to review.`
+                  : "Click to review."}
+              </span>
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      </span>
       <PopoverContent
         align="end"
         className="w-[min(28rem,var(--radix-popover-content-available-width))] p-0 flex flex-col"

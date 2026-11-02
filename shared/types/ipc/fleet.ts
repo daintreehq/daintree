@@ -263,6 +263,13 @@ export interface FleetRunRow {
    */
   quietSince?: number;
   /**
+   * How many answers Daintree Decisions received for this pane whose delivery
+   * stopped and now needs a person (`needs-attention` or
+   * `delivery-uncertain`). Present only while Decisions is on and the count
+   * is above zero. An observation about the answers, never about the agent.
+   */
+  answerAttention?: number;
+  /**
    * Present iff Canopy is on with its model here, and read something this
    * turn that refines where the run lands. Whether it still applies to what
    * Daintree observes now is `canopyPlacement`'s to say, not presence alone:

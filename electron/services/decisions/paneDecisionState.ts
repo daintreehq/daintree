@@ -7,6 +7,9 @@ import type {
 
 export type PaneDecisionStatePublisher = (projectId: string, state: PaneDecisionState) => void;
 
+/** Every pane with answers needing a person, and how many; an empty map when none has any. */
+export type AnswerAttentionPublisher = (counts: ReadonlyMap<string, number>) => void;
+
 type PaneContent = Omit<PaneDecisionState, "revision">;
 
 export interface ProjectedPane {
@@ -139,7 +142,8 @@ export class PaneDecisionStates {
 
   constructor(
     private readonly publish: PaneDecisionStatePublisher,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly publishAttention: AnswerAttentionPublisher = () => {}
   ) {}
 
   get(terminalId: string): PaneDecisionState | null {
@@ -159,14 +163,30 @@ export class PaneDecisionStates {
       if (this.panes.get(terminalId)?.key === key) continue;
       this.panes.set(terminalId, { projectId, key, state: this.send(projectId, content) });
     }
+    this.sendAttention();
   }
 
   /** Lets every pane go; with `notify`, each one's views first get an empty state. */
   clear(notify: boolean): void {
     const held = [...this.panes];
     this.panes.clear();
+    // Whatever happens to the views, no run keeps a count once the panes go.
+    this.sendAttention();
     if (!notify) return;
     for (const [terminalId, { projectId }] of held) this.send(projectId, emptyContent(terminalId));
+  }
+
+  /** Each held pane's count of answers needing a person, for the fleet; best effort like `send`. */
+  private sendAttention(): void {
+    const counts = new Map<string, number>();
+    for (const [terminalId, { state }] of this.panes) {
+      if (state.needsAttention.length > 0) counts.set(terminalId, state.needsAttention.length);
+    }
+    try {
+      this.publishAttention(counts);
+    } catch (err) {
+      console.warn("[Decisions] An answer attention update failed:", err);
+    }
   }
 
   /** Pane chrome is best effort: a failed push must never unwind a store write that caused it. */
