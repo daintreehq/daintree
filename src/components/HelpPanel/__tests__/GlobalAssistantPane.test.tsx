@@ -490,6 +490,38 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
   });
 
+  it("attaches again behind a chosen run as unable to type until main shows it running", async () => {
+    useHelpPanelStore.setState({ globalTarget: subject });
+    installHelp(running());
+    const { rerenderVisible } = renderPane();
+    await flush();
+    expect(help.setGlobalAssistantInputEligible.mock.calls).toEqual([["a1", true]]);
+
+    // The run it last saw is no evidence of the run now: it asks as unable to
+    // type, and says it can once the answer shows the chosen run still going.
+    rerenderVisible(false);
+    await flush();
+    rerenderVisible(true);
+    await flush();
+    expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(false);
+    expect(help.setGlobalAssistantInputEligible.mock.calls).toEqual([
+      ["a1", true],
+      ["a1", true],
+    ]);
+
+    // Replaced while the pane looked away: it never says it can type to the successor.
+    rerenderVisible(false);
+    await flush();
+    help.attachGlobalAssistant.mockImplementationOnce(async () => ({
+      attachmentId: "a2",
+      state: running({ subject: { ...subject, incarnation: 3 } }),
+    }));
+    rerenderVisible(true);
+    await flush();
+    expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(false);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledTimes(2);
+  });
+
   it("attaches nothing from a window bound to another host", async () => {
     host.id = "studio";
     installHelp(running());
