@@ -86,6 +86,7 @@ describe("Decisions lazy boundary", () => {
       "electron/services/decisions/relayTransport.ts",
       "electron/services/decisions/pairing.ts",
       "electron/services/decisions/recoveryKit.ts",
+      "electron/services/decisions/keyRotation.ts",
       "electron/services/decisions/keyStore.ts",
       "electron/services/decisions/localData.ts",
       "electron/services/decisions/dataExport.ts",

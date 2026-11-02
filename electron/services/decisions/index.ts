@@ -27,6 +27,8 @@ import {
   type DecisionsRelayCheck,
   type DecisionsRelayDeleteResult,
   type DecisionsRelayRequestFailure,
+  type DecisionsRevokeDeviceResult,
+  type DecisionsRotateKeysResult,
   type DecisionsSettings,
   type DecisionsStatus,
   type DeleteDecisionsRelayDataPayload,
@@ -120,17 +122,31 @@ function publishPaneState(projectId: string, state: PaneDecisionState): void {
 
 /**
  * Settings belong to this machine's own windows, never to a remote Shell's,
- * so the status goes to the local views only.
+ * so what they show goes to the local views only.
  */
-function sendStatus(status: DecisionsStatus): void {
+function sendToLocalViews(name: string, payload: unknown): void {
   for (const wc of getAllAppWebContents()) {
     if (wc.isDestroyed()) continue;
     try {
-      wc.send(CHANNELS.EVENTS_PUSH, { name: "decisions:status-changed", payload: status });
+      wc.send(CHANNELS.EVENTS_PUSH, { name, payload });
     } catch {
       // A view mid-teardown.
     }
   }
+}
+
+function sendStatus(status: DecisionsStatus): void {
+  sendToLocalViews("decisions:status-changed", status);
+}
+
+/**
+ * The relay's devices changed (#16010): a device was revoked or the key
+ * rotated, here or as the ledger reports it. Settings reads the list again;
+ * nothing about the devices is sent with it.
+ */
+function publishDevicesChanged(): void {
+  if (shutDown) return;
+  sendToLocalViews("decisions:devices-changed", null);
 }
 
 /**
@@ -252,6 +268,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         openQuestions: (source, previousClosed) =>
           openDecisionsMcpRoute(source, sources, previousClosed),
         delivery: deliveryDeps,
+        onDevicesChanged: publishDevicesChanged,
       });
       next.onStatusChanged(() => publishStatus());
       service = next;
@@ -452,10 +469,12 @@ export function disconnectRelay(): Promise<DecisionsStatus> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
-    // The socket and delivery run on these keys, so they stop before the keys go.
+    // The socket and delivery run on these keys, so they stop before the keys
+    // go, and a rotation still saving a key finishes first, so none is
+    // written after.
     await running.suspendConnection();
     try {
-      await keys.clear();
+      await running.getKeyRotations().exclusive(() => keys.clear());
     } catch (error) {
       running.resumeConnection();
       publishStatus();
@@ -615,7 +634,7 @@ async function ownerDevicesFor(): Promise<OwnerDevices | DecisionsRelayRequestFa
   const record = { relayOrigin, installationId, deviceId };
   if (!ownerDevices?.matches(record)) {
     ownerDevices?.dispose();
-    ownerDevices = new OwnerDevices({ ...record, keys });
+    ownerDevices = new OwnerDevices({ ...record, keys, rotations: running.getKeyRotations() });
   }
   return ownerDevices;
 }
@@ -863,6 +882,27 @@ export function verifyRecoveryKit(
     publishStatus();
     return { result: "verified", status: await getDecisionsStatus() };
   });
+}
+
+/**
+ * Revokes a paired device and rotates the key for the rest (#16010). The
+ * person confirmed it in Settings, which says what it can't recall.
+ */
+export async function revokeDevice(deviceId: string): Promise<DecisionsRevokeDeviceResult> {
+  const devices = await ownerDevicesFor();
+  if (!(devices instanceof OwnerDevices)) return devices;
+  const result = await devices.revoke(deviceId);
+  if (result.result === "revoked") publishDevicesChanged();
+  return result;
+}
+
+/** Rotates the key without revoking anyone (#16010). */
+export async function rotateKeys(): Promise<DecisionsRotateKeysResult> {
+  const devices = await ownerDevicesFor();
+  if (!(devices instanceof OwnerDevices)) return devices;
+  const result = await devices.rotate();
+  if (result.result === "rotated") publishDevicesChanged();
+  return result;
 }
 
 /** Boot: starts the service only if the saved setting, sanitised, is on. */

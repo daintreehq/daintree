@@ -1087,6 +1087,29 @@ describe("Decisions entry", () => {
       });
     });
 
+    it("tells this machine's windows when the connection says the devices changed, until quit", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      const [connection] = connections;
+      // The connection shares the lifetime's key rotations with revoke and rotate.
+      expect(connection!.options.rotations).toBe(peekDecisionsService()?.getKeyRotations());
+      const devicesPushes = () =>
+        statusView.send.mock.calls.filter(
+          ([channel, event]) =>
+            channel === CHANNELS.EVENTS_PUSH &&
+            (event as { name: string }).name === "decisions:devices-changed"
+        );
+
+      connection!.options.onDevicesChanged?.();
+      expect(devicesPushes()).toEqual([
+        [CHANNELS.EVENTS_PUSH, { name: "decisions:devices-changed", payload: null }],
+      ]);
+
+      await stopDecisions();
+      connection!.options.onDevicesChanged?.();
+      expect(devicesPushes()).toHaveLength(1);
+    });
+
     it("pushes what the connection observes to this machine's windows, newest revision last", async () => {
       saved.value = { enabled: true, ...RELAY };
       await startDecisionsIfEnabled();

@@ -12,13 +12,22 @@ import type {
   ApproveDecisionsPairingPayload,
   DecisionsDevice,
   DecisionsDevicesResult,
+  DecisionsKeyRotationProblem,
   DecisionsPairingApproveResult,
   DecisionsPairingDeclineResult,
   DecisionsPairingStartResult,
   DecisionsPairingState,
   DecisionsRelayRequestFailure,
+  DecisionsRevokeDeviceResult,
+  DecisionsRotateKeysResult,
 } from "../../../shared/types/decisions.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
+import {
+  KeyRotationsClosedError,
+  MissingKeysError,
+  type KeyRotations,
+  type RotationOutcome,
+} from "./keyRotation.js";
 import type { SealedKeyStore } from "./keyStore.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { keyStorageObservation, relayRequests, type RelayRequests } from "./relayIdentity.js";
@@ -34,6 +43,8 @@ export interface OwnerRecord {
 
 export interface OwnerDevicesOptions extends OwnerRecord {
   keys: Pick<SealedKeyStore, "load">;
+  /** The lifetime's key rotations, which approvals queue behind (#16010). */
+  rotations: KeyRotations;
   fetchImpl?: RelayFetch;
   timeoutMs?: number;
   now?: () => number;
@@ -204,16 +215,45 @@ export class OwnerDevices {
     };
   }
 
-  /** Approves the phone whose code the person compared, and only that one. */
+  /**
+   * Approves the phone whose code the person compared, and only that one. The
+   * approval seals the current key to it, so it waits for any rotation
+   * running, and settles one left pending, before it reads which key that is.
+   */
   async approve(payload: ApproveDecisionsPairingPayload): Promise<DecisionsPairingApproveResult> {
+    const settled = this.approvable(payload);
+    if (settled) return settled;
+    const session = await this.open();
+    if (isFailure(session)) return session;
+    return this.queued(session, () =>
+      this.options.rotations.withCurrentKeys(session.client, () =>
+        this.approveNow(payload, session)
+      )
+    );
+  }
+
+  /** Why an approval can't go ahead from what this computer holds; null when it can. */
+  private approvable(
+    payload: ApproveDecisionsPairingPayload
+  ): { result: "changed" } | { result: "expired" } | null {
     const held = this.invitations.get(payload.pairingId);
     if (!held?.candidate || held.code !== payload.code) return { result: "changed" };
     if (held.expiresAt <= this.now()) {
       this.invitations.delete(payload.pairingId);
       return { result: "expired" };
     }
-    const session = await this.open();
-    if (isFailure(session)) return session;
+    return null;
+  }
+
+  private async approveNow(
+    payload: ApproveDecisionsPairingPayload,
+    session: OwnerSession
+  ): Promise<DecisionsPairingApproveResult> {
+    // Read again: a decline, a newer answer or the deadline may have come while it queued.
+    const settled = this.approvable(payload);
+    if (settled) return settled;
+    const held = this.invitations.get(payload.pairingId);
+    if (!held?.candidate) return { result: "changed" };
     const candidate = held.candidate;
     // The relay's own code for these keys disagrees with the one computed
     // here: something between the phone and this computer changed them.
@@ -279,6 +319,78 @@ export class OwnerDevices {
       return this.failure(error, session);
     }
     return { result: "declined" };
+  }
+
+  /**
+   * Revokes a paired device and rotates the key for the devices that remain
+   * (#16010). This computer is never revoked from here.
+   */
+  async revoke(deviceId: string): Promise<DecisionsRevokeDeviceResult> {
+    if (deviceId === this.options.deviceId) return { result: "not-found" };
+    const session = await this.open();
+    if (isFailure(session)) return session;
+    return this.queued(session, async () => {
+      const outcome = await this.options.rotations.rotate(session.client, deviceId);
+      // Done is revoked either way: a device revoked by another route since
+      // the list was read leaves only the rotation, and it's gone all the same.
+      if (outcome.outcome === "done") return { result: "revoked", keyEpoch: outcome.epoch };
+      if (outcome.outcome === "not-found") return { result: "not-found" };
+      return this.unfinished(outcome, session);
+    });
+  }
+
+  /** Rotates the key without revoking anyone. */
+  async rotate(): Promise<DecisionsRotateKeysResult> {
+    const session = await this.open();
+    if (isFailure(session)) return session;
+    return this.queued(session, async () => {
+      const outcome = await this.options.rotations.rotate(session.client, null);
+      if (outcome.outcome === "done") return { result: "rotated", keyEpoch: outcome.epoch };
+      return this.unfinished(outcome, session);
+    });
+  }
+
+  /**
+   * Runs a call that takes its turn among the lifetime's rotations. What
+   * stopped it is an observation, as for any signed request.
+   */
+  private async queued<T>(
+    session: OwnerSession,
+    call: () => Promise<T>
+  ): Promise<T | DecisionsRelayRequestFailure> {
+    try {
+      return await call();
+    } catch (error) {
+      const observation = keyStorageObservation(error);
+      if (observation) return observation;
+      if (error instanceof KeyRotationsClosedError || error instanceof MissingKeysError) {
+        return { result: "not-set-up" };
+      }
+      return this.failure(error, session);
+    }
+  }
+
+  private unfinished(
+    outcome: Exclude<RotationOutcome, { outcome: "done" }>,
+    session: OwnerSession
+  ): DecisionsKeyRotationProblem {
+    switch (outcome.outcome) {
+      case "unconfirmed":
+        return { result: "unconfirmed", origin: session.origin };
+      case "unsaved":
+        return {
+          result: "unsaved",
+          reason:
+            keyStorageObservation(outcome.error)?.reason ?? "The key file couldn't be written",
+        };
+      case "unverified":
+        return { result: "unverified" };
+      case "conflict":
+      case "superseded":
+      case "not-found":
+      case "none":
+        return { result: "conflict" };
+    }
   }
 
   /**

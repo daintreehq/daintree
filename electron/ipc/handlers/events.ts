@@ -84,6 +84,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:decision-state": "external",
   // Sent to this machine's own windows by the Decisions service, only while it is loaded.
   "decisions:status-changed": "external",
+  // The same, when the relay's paired devices or its key changed (#16010).
+  "decisions:devices-changed": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)

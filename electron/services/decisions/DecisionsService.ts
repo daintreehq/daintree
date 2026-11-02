@@ -10,6 +10,7 @@ import type { AnswerDeliveryDeps } from "./answerDelivery.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
+import { KeyRotations } from "./keyRotation.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
 import {
   eraseLocalDecisionsData,
@@ -82,6 +83,11 @@ export interface DecisionsServiceOptions {
    * records it in the setting, so no later lifetime connects with it either.
    */
   onRelayRevoked?: (relay: RelayBinding) => void;
+  /**
+   * The relay's devices changed, as the running connection observed it: a
+   * device event in the ledger, or a pending key rotation finished (#16010).
+   */
+  onDevicesChanged?: () => void;
   /** Makes the relay connection for a lifetime with a relay set up. */
   connect?: DecisionsConnectionFactory;
   /** The stored rows, for deleting them: the app database's unless a test says otherwise. */
@@ -123,9 +129,13 @@ export class DecisionsService {
   private readonly listeners = new Set<DecisionsStatusListener>();
   private readonly keyFilePath: () => string;
   private keyStore: SealedKeyStore | null = null;
+  private rotations: KeyRotations | null = null;
+  /** Local data is being deleted (#16025): no key store or rotation is made until it finishes. */
+  private erasing = false;
   private readonly panes: PaneDecisionStates;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding) => void;
+  private readonly onDevicesChanged: () => void;
   private readonly delivery: DecisionsDeliveryDeps | null;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
@@ -168,6 +178,7 @@ export class DecisionsService {
     this.panes = new PaneDecisionStates(options.publishPaneState ?? (() => {}));
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
+    this.onDevicesChanged = options.onDevicesChanged ?? (() => {});
     this.openRows = options.openRows ?? openDecisionsRows;
     this.forgetIdentity =
       options.forgetIdentity ??
@@ -210,8 +221,21 @@ export class DecisionsService {
     if (this.disposed || this.settings === null) {
       throw new Error("Decisions is off, so its keys can't be used");
     }
+    // A key store made now could write the key file back after it is deleted.
+    if (this.erasing) throw new Error("Decisions is deleting its data, so its keys can't be used");
     this.keyStore ??= new SealedKeyStore(this.keyFilePath());
     return this.keyStore;
+  }
+
+  /**
+   * The enabled lifetime's key rotations over its key store (#16010): every
+   * revoke, rotation, approval and pending-rotation settle takes its turn
+   * here. Stopping waits for the one running before the keys close.
+   */
+  getKeyRotations(): KeyRotations {
+    const keys = this.getKeyStore();
+    this.rotations ??= new KeyRotations(keys);
+    return this.rotations;
   }
 
   /**
@@ -348,13 +372,22 @@ export class DecisionsService {
         await this.settledConnections();
         const store = this.detachStore();
         const keyStore = this.keyStore;
+        const rotations = this.rotations;
         this.keyStore = null;
+        this.rotations = null;
+        this.erasing = true;
         try {
-          await store?.close();
+          try {
+            await store?.close();
+          } finally {
+            // A rotation saving its key finishes before the key file goes.
+            await rotations?.close();
+            await keyStore?.close();
+          }
+          outcome = await eraseLocalDecisionsData(this.eraseDeps());
         } finally {
-          await keyStore?.close();
+          this.erasing = false;
         }
-        outcome = await eraseLocalDecisionsData(this.eraseDeps());
         // Every row is gone, so no pane has anything outstanding.
         if (outcome.result !== "failed") this.panes.clear(true);
         if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
@@ -409,7 +442,9 @@ export class DecisionsService {
     await this.questionsClosing;
     const store = this.detachStore();
     const keyStore = this.keyStore;
+    const rotations = this.rotations;
     this.keyStore = null;
+    this.rotations = null;
     this.settings = null;
     this.policy = null;
     this.storeFailed = false;
@@ -418,6 +453,8 @@ export class DecisionsService {
       await store?.close();
     } finally {
       this.panes.clear(clearViews && !this.disposed && this.state !== "off");
+      // A rotation that is saving its key finishes before the keys close.
+      await rotations?.close();
       await keyStore?.close();
       this.setStatus({ state: "off" });
     }
@@ -466,6 +503,10 @@ export class DecisionsService {
       relay: wanted,
       store: observeQuestionWrites(store, () => void feed?.refresh()),
       keys: this.getKeyStore(),
+      rotations: this.getKeyRotations(),
+      onDevicesChanged: () => {
+        if (this.connection === connection) this.onDevicesChanged();
+      },
       policy,
       ...(delivery
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }

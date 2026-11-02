@@ -1,4 +1,10 @@
-import type { DecisionsDeviceRole, DecisionsRelayRequestFailure } from "@shared/types/decisions";
+import type {
+  DecisionsDeviceRole,
+  DecisionsKeyRotationProblem,
+  DecisionsRelayRequestFailure,
+  DecisionsRevokeDeviceResult,
+  DecisionsRotateKeysResult,
+} from "@shared/types/decisions";
 import { hostOf } from "./relayCheckCopy";
 
 /** What was observed when a request got no usable answer, naming the relay by its host. */
@@ -71,4 +77,62 @@ export function formatCountdown(msLeft: number): string {
   const minutes = Math.floor(total / 60);
   const seconds = total % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+/** A reason as a sentence: some arrive without their closing period. */
+function asSentence(text: string): string {
+  return /[.!?…]$/.test(text) ? text : `${text}.`;
+}
+
+/** A revocation or rotation that didn't finish, in words: what was observed, and what follows. */
+function describeRotationProblem(
+  problem: DecisionsKeyRotationProblem | DecisionsRelayRequestFailure
+): string {
+  switch (problem.result) {
+    case "unconfirmed":
+      return `No answer came back from the relay at ${hostOf(problem.origin)}, so whether it took the change isn't known yet. Daintree kept the new key, and sends it again when it next connects.`;
+    case "unsaved":
+      return `The relay took the change, but the new key couldn't be saved on this computer. ${asSentence(problem.reason)} Daintree saves it when it next connects.`;
+    case "conflict":
+      return "The relay's devices or key changed while this ran, so nothing was changed. Try again.";
+    case "unverified":
+      return "A device the relay lists has a certificate that doesn't verify against this computer's key, so no new key was sealed to it and nothing was changed.";
+    default:
+      return describeRelayRequestFailure(problem);
+  }
+}
+
+/**
+ * What a revocation came to (#16010). `finished` is true when there's nothing
+ * left to do for this device: it is revoked, or the relay no longer lists it.
+ */
+export function describeRevokeResult(
+  result: DecisionsRevokeDeviceResult,
+  label: string
+): { finished: boolean; message: string } {
+  switch (result.result) {
+    case "revoked":
+      return {
+        finished: true,
+        message: `'${label}' is revoked. The relay holds a new key, sealed to each device that remains.`,
+      };
+    case "not-found":
+      return { finished: true, message: `The relay no longer lists '${label}' as paired.` };
+    default:
+      return { finished: false, message: describeRotationProblem(result) };
+  }
+}
+
+/** What rotating the key came to (#16010). */
+export function describeRotateResult(result: DecisionsRotateKeysResult): {
+  finished: boolean;
+  message: string;
+} {
+  if (result.result === "rotated") {
+    return {
+      finished: true,
+      message: "The relay holds a new key, sealed to each paired device.",
+    };
+  }
+  return { finished: false, message: describeRotationProblem(result) };
 }

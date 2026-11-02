@@ -32,6 +32,8 @@ import type {
   DecisionsPolicy,
   DecisionsRelayCheck,
   DecisionsRelayDeleteResult,
+  DecisionsRevokeDeviceResult,
+  DecisionsRotateKeysResult,
   DecisionsStatus,
   DeleteDecisionsRelayDataPayload,
   ExportDecisionsDataPayload,
@@ -164,6 +166,8 @@ const pairingIdSchema = z.string().min(1).max(128);
 const approvePairingSchema = z
   .object({ pairingId: pairingIdSchema, code: z.string().regex(/^\d{6}$/) })
   .strict();
+// A device id as the relay listed it.
+const deviceIdSchema = z.string().min(1).max(128);
 
 // The passphrase's shortest length is the library's, checked by Decisions
 // itself, since importing its shared constant here would make it eager.
@@ -448,6 +452,24 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.verifyRecoveryKit(payload);
       }
     ),
+    // Revoking a paired device, which rotates the key, and rotating it alone
+    // (#16010). Settings confirms a revocation before it sends this.
+    revokeDevice: opValidated(
+      CHANNELS.DECISIONS_REVOKE_DEVICE,
+      deviceIdSchema,
+      async (deviceId: string): Promise<DecisionsRevokeDeviceResult> => {
+        refuseWhileOff("revoke a device");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.revokeDevice(deviceId);
+      }
+    ),
+    rotateKeys: op(CHANNELS.DECISIONS_ROTATE_KEYS, async (): Promise<DecisionsRotateKeysResult> => {
+      refuseWhileOff("rotate the keys");
+      const decisions = await loadDecisions();
+      if (!decisions) throw setupCancelled();
+      return decisions.rotateKeys();
+    }),
   },
 });
 

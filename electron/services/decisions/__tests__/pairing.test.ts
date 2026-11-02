@@ -12,6 +12,10 @@ const relay = vi.hoisted(() => ({
   verifiedDevices: vi.fn(),
   localShortCode: vi.fn(),
   lastFailure: null as null | { reason: string; answered: boolean },
+  // The lifetime's key rotations, as OwnerDevices uses them.
+  rotate: vi.fn(),
+  queue: [] as Array<() => void>,
+  holdQueue: false,
 }));
 
 vi.mock("@daintreehq/decisions-client", async (importOriginal) => {
@@ -40,6 +44,7 @@ vi.mock("../relayIdentity.js", async (importOriginal) => {
 });
 
 import { RelayError, type StoredIdentity } from "@daintreehq/decisions-client";
+import type { KeyRotations } from "../keyRotation.js";
 import { OwnerDevices } from "../pairing.js";
 
 const ORIGIN = "https://decisions.example.workers.dev";
@@ -67,12 +72,27 @@ function candidate(overrides: Partial<PendingPairing> = {}): PendingPairing {
   };
 }
 
+/** Steps that take their turn run at once, or wait for `releaseQueue` while it is held. */
+const rotations = {
+  rotate: (...args: unknown[]) => relay.rotate(...args),
+  withCurrentKeys: async <T>(_client: unknown, step: () => Promise<T>): Promise<T> => {
+    if (relay.holdQueue) await new Promise<void>((resolve) => relay.queue.push(resolve));
+    return step();
+  },
+} as unknown as KeyRotations;
+
+function releaseQueue(): void {
+  relay.holdQueue = false;
+  for (const resume of relay.queue.splice(0)) resume();
+}
+
 function owner(identity: StoredIdentity | null = stored(), now = () => Date.now()) {
   return new OwnerDevices({
     relayOrigin: ORIGIN,
     installationId: INSTALLATION,
     deviceId: DEVICE,
     keys: { load: vi.fn(async () => identity) },
+    rotations,
     now,
   });
 }
@@ -98,6 +118,9 @@ describe("OwnerDevices", () => {
     relay.createPairingInvite.mockReset();
     relay.verifiedDevices.mockReset();
     relay.localShortCode.mockReset().mockResolvedValue("482913");
+    relay.rotate.mockReset();
+    relay.queue = [];
+    relay.holdQueue = false;
   });
 
   it("shows the code computed from the phone's keys, not the relay's", async () => {
@@ -363,5 +386,102 @@ describe("OwnerDevices", () => {
     devices.dispose();
 
     await expect(devices.read("pair_1")).resolves.toEqual({ state: "unknown" });
+  });
+
+  it("approves only once its turn among the key rotations comes, and re-reads what it holds then", async () => {
+    const devices = owner();
+    await invited(devices);
+    relay.pending = [candidate()];
+    await devices.read("pair_1");
+    relay.holdQueue = true;
+
+    const approving = devices.approve({ pairingId: "pair_1", code: "482913" });
+    await vi.waitFor(() => expect(relay.queue).toHaveLength(1));
+    // Declined while the approval waited behind a rotation.
+    await devices.decline("pair_1");
+    releaseQueue();
+
+    await expect(approving).resolves.toEqual({ result: "changed" });
+    expect(relay.approveCandidate).not.toHaveBeenCalled();
+  });
+
+  it("expires an approval whose invitation lapsed while it waited its turn", async () => {
+    let clock = Date.now();
+    const devices = owner(stored(), () => clock);
+    await invited(devices);
+    relay.pending = [candidate()];
+    await devices.read("pair_1");
+    relay.holdQueue = true;
+
+    const approving = devices.approve({ pairingId: "pair_1", code: "482913" });
+    await vi.waitFor(() => expect(relay.queue).toHaveLength(1));
+    clock += 300_000;
+    releaseQueue();
+
+    await expect(approving).resolves.toEqual({ result: "expired" });
+    expect(relay.approveCandidate).not.toHaveBeenCalled();
+  });
+
+  it("revokes a device and reports the epoch the relay now holds", async () => {
+    relay.rotate.mockResolvedValueOnce({ outcome: "done", epoch: 4, revoked: "dev_phone_1" });
+
+    await expect(owner().revoke("dev_phone_1")).resolves.toEqual({
+      result: "revoked",
+      keyEpoch: 4,
+    });
+    expect(relay.rotate).toHaveBeenCalledWith(expect.anything(), "dev_phone_1");
+  });
+
+  it("never revokes this computer", async () => {
+    await expect(owner().revoke(DEVICE)).resolves.toEqual({ result: "not-found" });
+    expect(relay.rotate).not.toHaveBeenCalled();
+  });
+
+  it("rotates without naming a device", async () => {
+    relay.rotate.mockResolvedValueOnce({ outcome: "done", epoch: 2, revoked: null });
+
+    await expect(owner().rotate()).resolves.toEqual({ result: "rotated", keyEpoch: 2 });
+    expect(relay.rotate).toHaveBeenCalledWith(expect.anything(), null);
+  });
+
+  it("says when the relay's answer was lost, naming the relay, and when the key wasn't saved", async () => {
+    relay.rotate.mockResolvedValueOnce({
+      outcome: "unconfirmed",
+      error: new RelayError("network_error", "socket hang up", 0),
+    });
+    await expect(owner().revoke("dev_phone_1")).resolves.toEqual({
+      result: "unconfirmed",
+      origin: ORIGIN,
+    });
+
+    relay.rotate.mockResolvedValueOnce({ outcome: "unsaved", error: new Error("disk full") });
+    await expect(owner().rotate()).resolves.toEqual({
+      result: "unsaved",
+      reason: "The key file couldn't be written",
+    });
+  });
+
+  it("reads refusals that changed nothing as such", async () => {
+    relay.rotate
+      .mockResolvedValueOnce({ outcome: "not-found" })
+      .mockResolvedValueOnce({ outcome: "unverified" })
+      .mockResolvedValueOnce({ outcome: "conflict" })
+      .mockResolvedValueOnce({ outcome: "superseded" });
+
+    await expect(owner().revoke("dev_phone_1")).resolves.toEqual({ result: "not-found" });
+    await expect(owner().rotate()).resolves.toEqual({ result: "unverified" });
+    await expect(owner().rotate()).resolves.toEqual({ result: "conflict" });
+    await expect(owner().rotate()).resolves.toEqual({ result: "conflict" });
+  });
+
+  it("reads an unreachable relay during a rotation as an observation", async () => {
+    relay.lastFailure = { reason: "timeout", answered: false };
+    relay.rotate.mockRejectedValueOnce(new RelayError("network_error", "timed out", 0));
+
+    await expect(owner().rotate()).resolves.toEqual({
+      result: "unreachable",
+      origin: ORIGIN,
+      reason: "timeout",
+    });
   });
 });

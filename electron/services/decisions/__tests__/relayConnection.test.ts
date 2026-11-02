@@ -16,6 +16,7 @@ import {
   generateEpochKeyBytes,
   serializeDeviceKeys,
 } from "@daintreehq/decisions-crypto";
+import { pendingRotationOf } from "../keyRotation.js";
 import { bytesToBase64Url } from "@daintreehq/decisions-protocol";
 
 vi.mock("electron", () => ({
@@ -1209,5 +1210,147 @@ describe("RelayConnection", () => {
     h.connection.start();
     await h.status("not-connected");
     expect(ready).not.toHaveBeenCalled();
+  });
+
+  describe("key rotations (#16010)", () => {
+    /** The owner identity with epoch 2 staged for a rotation the relay may not have taken. */
+    function withPendingRotation(): StoredIdentity {
+      return {
+        ...identity,
+        epochs: [...identity.epochs, { epoch: 2, raw: bytesToBase64Url(generateEpochKeyBytes()) }],
+        daintreePendingRotation: { epoch: 2, revoke: null },
+      } as StoredIdentity;
+    }
+
+    function deviceEvent(socket: FakeSocket, seq: number, type: string, data: object): void {
+      socket.onmessage?.({
+        data: JSON.stringify({
+          t: "event",
+          event: {
+            protocol_version: 1,
+            seq,
+            event_id: `evt_${String(seq).padStart(8, "0")}`,
+            event_type: type,
+            occurred_at: new Date().toISOString(),
+            question_id: null,
+            question_revision: null,
+            origin_device_id: null,
+            data,
+          },
+        }),
+      });
+    }
+
+    it("finishes a rotation a crash left pending before it opens a socket", async () => {
+      const keys = new MemoryKeyStore();
+      await keys.save(withPendingRotation());
+      const onDevicesChanged = vi.fn();
+      const devicesRead = vi.fn();
+      let answerDevices!: () => void;
+      const devicesAnswered = new Promise<void>((resolve) => (answerDevices = resolve));
+      const h = await harness({
+        keys,
+        overrides: { onDevicesChanged },
+        wrapFetch: (inner) => async (url, init) => {
+          if (new URL(url).pathname === "/api/v1/devices") {
+            devicesRead();
+            await devicesAnswered;
+            // The relay took the rotation before the crash.
+            return new Response(JSON.stringify({ key_epoch: 2, devices: [] }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          return inner(url, init);
+        },
+      });
+
+      h.connection.start();
+      await vi.waitFor(() => expect(devicesRead).toHaveBeenCalledOnce());
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+      // No ticket, so no socket, until the pending key is settled.
+      expect(h.relay.tickets).toHaveLength(0);
+      answerDevices();
+      await connectLive(h);
+
+      expect(devicesRead).toHaveBeenCalledOnce();
+      const stored = await keys.load();
+      expect(stored?.currentEpoch).toBe(2);
+      expect(pendingRotationOf(stored!)).toBeNull();
+      expect(onDevicesChanged).toHaveBeenCalledOnce();
+      h.connection.stop();
+    });
+
+    it("makes a pending key current when the ledger confirms its epoch, before the bridge reloads it", async () => {
+      const real = new MemoryKeyStore();
+      await real.save(withPendingRotation());
+      let holdSaves = false;
+      let releaseSave: (() => void) | null = null;
+      const keys: KeyStore = {
+        load: () => real.load(),
+        save: async (stored) => {
+          if (holdSaves) await new Promise<void>((resolve) => (releaseSave = resolve));
+          await real.save(stored);
+        },
+        clear: () => real.clear(),
+      };
+      const onDevicesChanged = vi.fn();
+      // The relay refuses the device list read (404), so the key is still pending once live.
+      const h = await harness({ keys, overrides: { onDevicesChanged } });
+      h.connection.start();
+      const socket = await connectLive(h);
+      expect((await real.load())?.currentEpoch).toBe(1);
+      const bridgeEpoch = () =>
+        (
+          h.connection as unknown as {
+            current: { bridge: { ctx: { identity: { currentEpoch: number } } } | null } | null;
+          }
+        ).current?.bridge?.ctx.identity.currentEpoch;
+
+      holdSaves = true;
+      deviceEvent(socket, 1, "device.key_rotated", { key_epoch: 2 });
+      // The bridge applies the event only once the key it will reload is current.
+      await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+      expect(bridgeEpoch()).toBe(1);
+      releaseSave!();
+
+      await vi.waitFor(() => expect(bridgeEpoch()).toBe(2));
+      expect((await real.load())?.currentEpoch).toBe(2);
+      expect(pendingRotationOf((await real.load())!)).toBeNull();
+      await vi.waitFor(() => expect(onDevicesChanged).toHaveBeenCalledOnce());
+      h.connection.stop();
+    });
+
+    it("says the devices changed on a new device event, reading no keys when nothing is pending", async () => {
+      let loads = 0;
+      const real = new MemoryKeyStore();
+      await real.save(identity);
+      const keys: KeyStore = {
+        load: () => {
+          loads += 1;
+          return real.load();
+        },
+        save: (stored) => real.save(stored),
+        clear: () => real.clear(),
+      };
+      const onDevicesChanged = vi.fn();
+      const h = await harness({ keys, overrides: { onDevicesChanged } });
+      h.connection.start();
+      const socket = await connectLive(h);
+      const loadsLive = loads;
+
+      // A revocation at the epoch already held: nothing to reload or make current.
+      deviceEvent(socket, 1, "device.revoked", { device_id: "dev_phone_1", key_epoch: 1 });
+      await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 1);
+      // The same event again is a duplicate: not news.
+      deviceEvent(socket, 1, "device.revoked", { device_id: "dev_phone_1", key_epoch: 1 });
+      deviceEvent(socket, 2, "delivery.received", {});
+      await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 2);
+
+      expect(onDevicesChanged).toHaveBeenCalledOnce();
+      expect(loads).toBe(loadsLive);
+      h.connection.stop();
+    });
   });
 });

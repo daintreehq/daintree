@@ -1365,6 +1365,29 @@ describe("DecisionsService deleting local data", () => {
     }
   });
 
+  it("makes no key store or rotation while a deletion runs, so nothing can write the key file back (#16010)", async () => {
+    let rowsReady!: () => void;
+    const t = setup({ rowsReady: new Promise<void>((resolve) => (rowsReady = resolve)) });
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+      const before = t.service.getKeyRotations();
+
+      const erasing = t.service.eraseLocalData();
+      await vi.waitFor(() => expect(t.log).toContain("open rows"));
+      expect(() => t.service.getKeyStore()).toThrow(/deleting/);
+      expect(() => t.service.getKeyRotations()).toThrow(/deleting/);
+      rowsReady();
+      await expect(erasing).resolves.toEqual({ result: "deleted" });
+
+      // The lifetime's old queue is closed; a new one comes once the deletion is done.
+      await expect(before.exclusive(async () => "ran")).rejects.toThrow(/stopped/);
+      expect(t.service.getKeyRotations()).not.toBe(before);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it("finishes a deletion under way before quit ends the lifetime, and opens no store after", async () => {
     let rowsReady!: () => void;
     const t = setup({ rowsReady: new Promise<void>((resolve) => (rowsReady = resolve)) });
