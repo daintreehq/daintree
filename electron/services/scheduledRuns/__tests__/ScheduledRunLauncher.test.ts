@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionDispatchResult } from "../../../../shared/types/actions.js";
 import type { Project } from "../../../../shared/types/project.js";
 import type {
+  ProjectScheduleSwitches,
   Schedule,
   ScheduledRun,
   ScheduledRunOrigin,
@@ -42,6 +43,7 @@ let recorder: {
 /** The schedule's recorded runs, newest first, as the history lists them. */
 let history: ScheduledRun[];
 let schedule: Schedule;
+let switches: ProjectScheduleSwitches;
 let project: Project;
 let deps: ScheduledRunLauncherDeps<FakeView>;
 
@@ -91,10 +93,12 @@ beforeEach(() => {
     },
     Date.UTC(2026, 10, 1)
   );
+  switches = { schedulesOn: true, startWhenClosed: false, schedulesOnSince: null };
   project = { id: "project-1", path: "/repo", name: "Repo", status: "active" } as Project;
   deps = {
     getRecorder: async () => recorder as unknown as ScheduledRunRecorder,
-    getSchedule: async (_projectId, scheduleId) => (scheduleId === schedule.id ? schedule : null),
+    getSchedule: async (_projectId, scheduleId) =>
+      scheduleId === schedule.id ? { schedule, switches } : null,
     getProject: (projectId) => (projectId === project.id ? project : null),
     folderExists: async () => true,
     isProjectSleeping: () => false,
@@ -558,7 +562,7 @@ describe("launchScheduledRun", () => {
     deps.getSchedule = async () => null;
     await expect(run()).resolves.toEqual({ status: "not-found" });
 
-    deps.getSchedule = async () => schedule;
+    deps.getSchedule = async () => ({ schedule, switches });
     deps.getProject = () => null;
     await expect(run()).resolves.toEqual({ status: "not-found" });
     expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
@@ -585,6 +589,66 @@ describe("launchScheduledRun", () => {
     expect(hasPendingScheduledLaunch("project-1")).toBe(false);
 
     await expect(run()).resolves.toMatchObject({ status: "started" });
+  });
+
+  it.each([
+    ["scheduled", null],
+    ["catch-up", { after: Date.UTC(2026, 10, 2, 8), through: Date.UTC(2026, 10, 2, 9, 30) }],
+    ["os-launch", null],
+  ] as const)(
+    "fires no %s occurrence while the project's schedules are off, but Run now runs it (#16166)",
+    async (trigger, coalesced) => {
+      switches = { ...switches, schedulesOn: false };
+      const dueAt = Date.UTC(2026, 10, 2, 9);
+      const origin = {
+        trigger,
+        dueAt,
+        occurrenceKey: new Date(dueAt).toISOString(),
+        coalesced,
+      } as ScheduledRunOrigin;
+
+      await expect(
+        launchScheduledRun({ projectId: "project-1", scheduleId: "schedule-1", origin }, deps)
+      ).resolves.toEqual({ status: "not-found" });
+      expect(deps.launchInView).not.toHaveBeenCalled();
+      expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+      expect(recorder.registerSkip).not.toHaveBeenCalled();
+      expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+
+      await expect(run()).resolves.toMatchObject({ status: "started" });
+    }
+  );
+
+  it("fires nothing for a launch whose decision no longer stands, though its schedule reads on again (#16166)", async () => {
+    const dueAt = Date.UTC(2026, 10, 2, 9);
+    const origin: ScheduledRunOrigin = {
+      trigger: "scheduled",
+      dueAt,
+      occurrenceKey: new Date(dueAt).toISOString(),
+      coalesced: null,
+    };
+    // Switched off and back on while this launch waited for its turn.
+    const stillCurrent = vi.fn(() => false);
+
+    await expect(
+      launchScheduledRun(
+        { projectId: "project-1", scheduleId: "schedule-1", origin, stillCurrent },
+        deps
+      )
+    ).resolves.toEqual({ status: "not-found" });
+    expect(stillCurrent).toHaveBeenCalled();
+    expect(deps.launchInView).not.toHaveBeenCalled();
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+    expect(recorder.registerSkip).not.toHaveBeenCalled();
+    expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+
+    stillCurrent.mockReturnValue(true);
+    await expect(
+      launchScheduledRun(
+        { projectId: "project-1", scheduleId: "schedule-1", origin, stillCurrent },
+        deps
+      )
+    ).resolves.toMatchObject({ status: "started" });
   });
 
   it("refuses to run when the history can't record it", async () => {
@@ -1131,8 +1195,10 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
       id: "schedule-2",
       policies: { ...schedule.policies, precondition: null },
     };
-    deps.getSchedule = async (_projectId, scheduleId) =>
-      scheduleId === "schedule-2" ? other : schedule;
+    deps.getSchedule = async (_projectId, scheduleId) => ({
+      schedule: scheduleId === "schedule-2" ? other : schedule,
+      switches,
+    });
     await expect(
       launchScheduledRun(
         { projectId: "project-1", scheduleId: "schedule-2", origin: RUN_NOW },

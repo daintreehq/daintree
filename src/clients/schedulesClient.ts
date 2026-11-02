@@ -6,6 +6,8 @@ import type {
   ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
+  ScheduleSetSwitchesOutcome,
+  ScheduleSwitchesPatch,
   SchedulesSnapshot,
   ScheduleUpdateOutcome,
   ScheduleUpdatePatch,
@@ -26,6 +28,12 @@ export const schedulesClient = {
     window.electron.schedules.update(id, expectedUpdatedAt, patch),
   setEnabled: (id: string, enabled: boolean): Promise<ScheduleSetEnabledOutcome> =>
     window.electron.schedules.setEnabled(id, enabled),
+  /**
+   * Turns the project's schedules on or off, or Daintree starting for them
+   * when it isn't running (#16166). The new state also arrives on `onChanged`.
+   */
+  setSwitches: (patch: ScheduleSwitchesPatch): Promise<ScheduleSetSwitchesOutcome> =>
+    window.electron.schedules.setSwitches(patch),
   remove: (id: string): Promise<ScheduleRemoveOutcome> => window.electron.schedules.remove(id),
   /**
    * Launches the schedule's agent now as a tracked run (#15978), under its

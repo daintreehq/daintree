@@ -1,13 +1,14 @@
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   fitRunWhenClosed,
-  isRunWhenClosedOptedIn,
   runWhenClosedIssue,
+  runWhenClosedSchedules,
   scheduleOsJobMachine,
+  type ProjectSchedules,
   type ScheduleOsJobContext,
   type ScheduleOsJobKind,
 } from "../../../shared/utils/scheduleOsJob.js";
-import type { Schedule, ScheduleCadence } from "../../../shared/types/scheduledRuns.js";
+import type { ScheduleCadence } from "../../../shared/types/scheduledRuns.js";
 import type {
   ScheduleOsJobExclusion,
   ScheduleOsJobStatus,
@@ -64,21 +65,24 @@ function noZoneError(kind: ScheduleOsJobKind): string {
   return `Couldn't read this ${scheduleOsJobMachine(kind)}'s time zone, so the job that starts Daintree was left as it was`;
 }
 
-/** The sender's switched-on, opted-in schedules whose cadences the job can't start. */
+/**
+ * The sender's switched-on, opted-in schedules whose cadences the job can't
+ * start; none while the project's own switches leave the job out of it.
+ */
 export function excludedSchedules(
-  schedules: readonly Schedule[],
+  project: ProjectSchedules,
   context: ScheduleOsJobContext
 ): ScheduleOsJobExclusion[] {
-  return schedules.filter(isRunWhenClosedOptedIn).flatMap((schedule) => {
+  return runWhenClosedSchedules(project).flatMap((schedule) => {
     const reason = runWhenClosedIssue(schedule.cadence, context);
     return reason === null ? [] : [{ scheduleId: schedule.id, reason }];
   });
 }
 
 /**
- * Keeps the machine's one OS job matching every switched-on schedule, in every
- * local project, set to run when Daintree isn't running (#15990, #15991,
- * #15993). It reads each project's schedules once, follows every committed
+ * Keeps the machine's one OS job matching every switched-on schedule set to run
+ * when Daintree isn't running (#15990, #15991, #15993), in every local project
+ * whose own switches let Daintree start for its schedules (#16166). It reads each project's schedules once, follows every committed
  * change, and rewrites the job after each, one pass at a time: changes that
  * arrive during a pass are taken by the next, from the newest snapshots.
  *
@@ -114,7 +118,7 @@ export class ScheduleOsJobService {
     // job can't have heard of its schedules.
     if (!this.snapshots.has(projectId) && !this.unread.has(projectId)) {
       await this.read([projectId]);
-      if (this.snapshots.get(projectId)?.schedules.some(isRunWhenClosedOptedIn)) {
+      if (runWhenClosedSchedules(this.snapshots.get(projectId)).length > 0) {
         await this.request(false);
       }
     }
@@ -239,9 +243,22 @@ export class ScheduleOsJobService {
     }
   }
 
-  /** Every project's opted-in schedules, fitted to the one job together. */
+  /** Every project's opted-in schedules, where the project allows it, fitted to the one job together. */
   private fit(context: ScheduleOsJobContext) {
     return fitRunWhenClosed(this.snapshots.values(), context);
+  }
+
+  /**
+   * The zone to write or read the job in. One that couldn't be read leaves the
+   * job alone while any schedule asks for it; with none asking, the job is
+   * only removed, and no cadence is read in the zone.
+   */
+  private jobZone(context: ScheduleOsJobContext): string | null {
+    if (context.systemTimeZone !== null) return context.systemTimeZone;
+    for (const project of this.snapshots.values()) {
+      if (runWhenClosedSchedules(project).length > 0) return null;
+    }
+    return "UTC";
   }
 
   private async pass(reload: boolean): Promise<void> {
@@ -253,12 +270,13 @@ export class ScheduleOsJobService {
       return;
     }
     const context = this.deps.context();
-    if (context.systemTimeZone === null) {
+    const zone = this.jobZone(context);
+    if (zone === null) {
       this.lastError = noZoneError(adapter.kind);
       return;
     }
     try {
-      await adapter.sync(this.fit(context).included, context.systemTimeZone, { reload });
+      await adapter.sync(this.fit(context).included, zone, { reload });
       this.lastError = null;
     } catch (error) {
       this.lastError = formatErrorMessage(error, "Couldn't update the job that starts Daintree");
@@ -283,12 +301,13 @@ export class ScheduleOsJobService {
     });
     const base = { context, unavailable: adapter.unavailable, error: this.lastError, excluded };
     if (adapter.unavailable !== null) return { ...base, state: "none", error: null };
-    if (context.systemTimeZone === null || this.unread.size > 0) return { ...base, state: "stale" };
+    const zone = this.jobZone(context);
+    if (zone === null || this.unread.size > 0) return { ...base, state: "stale" };
 
     const cadences = fit.included;
     let seen: ScheduleOsJobObservation;
     try {
-      seen = await adapter.observe(cadences, context.systemTimeZone);
+      seen = await adapter.observe(cadences, zone);
     } catch (error) {
       return {
         ...base,

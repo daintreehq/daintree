@@ -17,6 +17,7 @@ import {
   type TaskSchedulerTargetResult,
   type TaskXmlFs,
 } from "../taskSchedulerScheduleJob.js";
+import { itFollowsProjectSwitches } from "./helpers/projectSwitchTransitions.js";
 
 const USER_DATA = "C:\\Users\\Some One\\AppData\\Roaming\\Daintree";
 const EXE = "C:\\Users\\Some One\\AppData\\Local\\Programs\\Daintree\\Daintree.exe";
@@ -662,5 +663,26 @@ describe("createTaskSchedulerScheduleJob", () => {
       MICROSOFT_STORE_UNAVAILABLE
     );
     expect(schtasks.commands).toEqual([]);
+  });
+});
+
+describe("the Task Scheduler task behind ScheduleOsJobService", () => {
+  itFollowsProjectSwitches(() => {
+    const schtasks = fakeSchtasks();
+    return {
+      adapter: job(schtasks),
+      context: { kind: "task-scheduler", systemTimeZone: ZONE, unavailable: null },
+      live: () => /<Settings>[\s\S]*?<Enabled>true<\/Enabled>/.test(schtasks.task() ?? ""),
+      hours: () =>
+        [
+          ...new Set(
+            [
+              ...(schtasks.task() ?? "").matchAll(
+                /<StartBoundary>[^<]*T(\d\d):00:00<\/StartBoundary>/g
+              ),
+            ].map((match) => Number(match[1]))
+          ),
+        ].sort((a, b) => a - b),
+    };
   });
 });

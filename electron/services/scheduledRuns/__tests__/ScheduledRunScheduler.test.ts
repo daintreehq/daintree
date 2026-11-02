@@ -28,7 +28,12 @@ import type {
   ScheduleRunNowOutcome,
   SchedulesSnapshot,
 } from "../../../../shared/types/ipc/schedules.js";
-import type { Schedule, ScheduledRunOrigin } from "../../../../shared/types/scheduledRuns.js";
+import {
+  SCHEDULE_SWITCHES_OFF,
+  type ProjectScheduleSwitches,
+  type Schedule,
+  type ScheduledRunOrigin,
+} from "../../../../shared/types/scheduledRuns.js";
 import { createSchedule, occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -108,9 +113,20 @@ function schedule(overrides: Partial<Schedule> & { cron?: string; timeZone?: str
   return { ...created, ...rest };
 }
 
+/** A project whose schedules were on before the switches existed (#16166). */
+const ON: ProjectScheduleSwitches = {
+  schedulesOn: true,
+  startWhenClosed: false,
+  schedulesOnSince: null,
+};
+
 /** Commits a project's schedules as the store does, announcing them. */
-function commit(projectId: string, schedules: Schedule[]): void {
-  const snapshot = { projectId, schedules, revision: ++revision };
+function commit(
+  projectId: string,
+  schedules: Schedule[],
+  switches: ProjectScheduleSwitches = ON
+): void {
+  const snapshot = { projectId, switches, schedules, revision: ++revision };
   snapshots.set(projectId, snapshot);
   for (const listener of listeners) listener(snapshot);
 }
@@ -120,7 +136,12 @@ function deps(): ScheduledRunSchedulerDeps {
     listProjectIds: () => [...projects],
     projectExists: (projectId) => projects.has(projectId),
     listSchedules: async (projectId) =>
-      snapshots.get(projectId) ?? { projectId, schedules: [], revision },
+      snapshots.get(projectId) ?? {
+        projectId,
+        switches: SCHEDULE_SWITCHES_OFF,
+        schedules: [],
+        revision,
+      },
     subscribeSchedules: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1268,5 +1289,186 @@ describe("ScheduledRunScheduler", () => {
     await elapse(HOUR);
     expect(launches).toEqual([]);
     expect(recorder.listBySchedule("schedule-1")).toEqual([]);
+  });
+  describe("the project's switch for its schedules (#16166)", () => {
+    const off = (since: number | null = null): ProjectScheduleSwitches => ({
+      schedulesOn: false,
+      startWhenClosed: true,
+      schedulesOnSince: since,
+    });
+    const onSince = (since: number): ProjectScheduleSwitches => ({
+      schedulesOn: true,
+      startWhenClosed: false,
+      schedulesOnSince: since,
+    });
+
+    it("fires nothing on time, opens no history and keeps no timer while it's off", async () => {
+      commit("project-1", [schedule({ updatedAt: at(8) })], off());
+      await start();
+
+      expect(getRecorder).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      await elapse(3 * HOUR);
+      expect(launches).toEqual([]);
+    });
+
+    it("fires nothing missed across a sleep or a restart, and records no skip, while it's off", async () => {
+      const skipping = schedule({ updatedAt: at(8) });
+      commit(
+        "project-1",
+        [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }],
+        off()
+      );
+      projects.add("project-2");
+      commit("project-2", [
+        schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) }),
+      ]);
+      await start();
+      scheduler!.suspend();
+      sleepFor(4 * HOUR);
+      scheduler!.resume();
+      await scheduler!.idle();
+      setClock(at(16, 30));
+      await restart();
+
+      // The project still on catches up after each, in the same passes.
+      expect(launches.map((launch) => [launch.scheduleId, launch.origin.trigger])).toEqual([
+        ["schedule-2", "catch-up"],
+        ["schedule-2", "catch-up"],
+      ]);
+      expect(recorder.listBySchedule("schedule-1")).toEqual([]);
+    });
+
+    it("fires nothing for an OS job's launch while it's off", async () => {
+      setClock(at(9, 0, 20));
+      commit("project-1", [schedule({ cron: "0 9 * * *", updatedAt: at(8) })], off());
+      projects.add("project-2");
+      commit("project-2", [
+        schedule({ id: "schedule-2", projectId: "project-2", cron: "0 9 * * *", updatedAt: at(8) }),
+      ]);
+      await start(at(9));
+
+      expect(launches.map((launch) => [launch.scheduleId, launch.origin.trigger])).toEqual([
+        ["schedule-2", "os-launch"],
+      ]);
+      expect(recorder.listBySchedule("schedule-1")).toEqual([]);
+    });
+
+    it("leaves another project's schedules firing", async () => {
+      projects.add("project-2");
+      commit("project-1", [schedule({ updatedAt: at(8) })], off());
+      commit("project-2", [
+        schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) }),
+      ]);
+      await start();
+
+      await elapse(30 * MINUTE);
+      expect(launches.map((launch) => launch.scheduleId)).toEqual(["schedule-2"]);
+    });
+
+    it("cancels a launch not yet spawned when it goes off, and fires nothing after", async () => {
+      const original = schedule({ updatedAt: at(8) });
+      commit("project-1", [original]);
+      let finish: (outcome: ScheduleRunNowOutcome) => void = () => {};
+      launchImpl = () => new Promise((resolve) => (finish = resolve));
+      await start();
+      await elapse(30 * MINUTE);
+      expect(launches).toHaveLength(1);
+
+      commit("project-1", [original], off());
+      expect(cancelled).toEqual(["schedule-1"]);
+      expect(launches[0]!.stillCurrent()).toBe(false);
+      // The cancelled launch ends as the launcher answers it.
+      finish({ status: "not-found" });
+      await settle();
+      await elapse(2 * HOUR);
+      expect(launches).toHaveLength(1);
+    });
+
+    it("tells a launch still waiting for its turn that it no longer stands once off and back on", async () => {
+      const original = schedule({ updatedAt: at(8) });
+      commit("project-1", [original]);
+      launchImpl = () => new Promise(() => {});
+      await start();
+      await elapse(30 * MINUTE);
+      expect(launches[0]!.stillCurrent()).toBe(true);
+
+      commit("project-1", [original], off());
+      commit("project-1", [original], onSince(Date.now()));
+
+      expect(launches[0]!.stillCurrent()).toBe(false);
+    });
+
+    it("resumes from the next occurrence when it goes back on, never catching up what came due while off", async () => {
+      const original = schedule({ updatedAt: at(8) });
+      commit("project-1", [original]);
+      await start();
+      await elapse(30 * MINUTE);
+      expect(origins().map((origin) => origin.dueAt)).toEqual([at(9)]);
+
+      commit("project-1", [original], off());
+      await elapse(3 * HOUR + 30 * MINUTE);
+      expect(launches).toHaveLength(1);
+
+      // 12:30: back on, with 10:00, 11:00 and 12:00 missed while off.
+      commit("project-1", [original], onSince(at(12, 30)));
+      await settle();
+      expect(launches).toHaveLength(1);
+
+      await elapse(30 * MINUTE);
+      expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+        ["scheduled", at(9)],
+        ["scheduled", at(13)],
+      ]);
+    });
+
+    it("never catches up what came due while it was off, after a restart once it's back on", async () => {
+      const original = schedule({ updatedAt: at(8) });
+      commit("project-1", [original]);
+      await start();
+      await elapse(30 * MINUTE);
+      commit("project-1", [original], off());
+      setClock(at(12, 30));
+      commit("project-1", [original], onSince(at(12, 30)));
+      await settle();
+      // Quit at 12:30 with the switch just back on, started again at 12:40.
+      setClock(at(12, 40));
+      await restart();
+      expect(launches).toHaveLength(1);
+
+      // Quit again and started at 15:30: what came due once it was back on is caught up.
+      setClock(at(15, 30));
+      await restart();
+      expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+        ["scheduled", at(9)],
+        ["catch-up", at(15)],
+      ]);
+      expect(origins()[1]!.coalesced).toEqual({ after: at(12, 30), through: at(15, 30) });
+    });
+
+    it("leaves the timing alone when only starting Daintree for them changes", async () => {
+      const original = schedule({ updatedAt: at(8) });
+      commit("project-1", [original]);
+      await start();
+      // A rename keeps the window the schedule had, from 08:00.
+      const renamed = { ...original, name: "Renamed", updatedAt: at(8, 15) };
+      commit("project-1", [renamed]);
+      scheduler!.suspend();
+      sleepFor(2 * HOUR);
+      // Turned on while the sleep's catch-up is still owed.
+      commit("project-1", [renamed], { ...ON, startWhenClosed: true });
+      scheduler!.resume();
+      await scheduler!.idle();
+
+      expect(cancelled).toEqual([]);
+      expect(origins()).toEqual([
+        {
+          trigger: "catch-up",
+          dueAt: at(10),
+          occurrenceKey: occurrenceKeyFor(at(10)),
+          coalesced: { after: at(8), through: at(10, 30) },
+        },
+      ]);
+    });
   });
 });

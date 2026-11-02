@@ -56,6 +56,8 @@ import type {
   ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
+  ScheduleSetSwitchesOutcome,
+  ScheduleSwitchesPatch,
   ScheduleUpdateOutcome,
   ScheduleUpdatePatch,
   SchedulesSnapshot,
@@ -81,6 +83,10 @@ type SetEnabledHandler = (
   scheduleId: string,
   enabled: boolean
 ) => Promise<ScheduleSetEnabledOutcome>;
+type SetSwitchesHandler = (
+  ctx: IpcContext,
+  patch: ScheduleSwitchesPatch
+) => Promise<ScheduleSetSwitchesOutcome>;
 type RemoveHandler = (ctx: IpcContext, scheduleId: string) => Promise<ScheduleRemoveOutcome>;
 type RunNowHandler = (
   ctx: IpcContext,
@@ -92,6 +98,7 @@ const list = schedulesNamespace.ops.list.handler as unknown as ListHandler;
 const create = schedulesNamespace.ops.create.handler as unknown as CreateHandler;
 const update = schedulesNamespace.ops.update.handler as unknown as UpdateHandler;
 const setEnabled = schedulesNamespace.ops.setEnabled.handler as unknown as SetEnabledHandler;
+const setSwitches = schedulesNamespace.ops.setSwitches.handler as unknown as SetSwitchesHandler;
 const remove = schedulesNamespace.ops.remove.handler as unknown as RemoveHandler;
 const runNow = schedulesNamespace.ops.runNow.handler as unknown as RunNowHandler;
 type OsJobHandler = (ctx: IpcContext) => Promise<ScheduleOsJobStatus>;
@@ -188,6 +195,48 @@ describe("schedules handlers", () => {
 
       await expect(list(ctx(PROJECT))).rejects.toMatchObject({ code: "NOT_FOUND" });
       await expect(create(ctx(PROJECT), input)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
+
+  describe("the project's switches (#16166)", () => {
+    it("reads and changes only the sender project's switches", async () => {
+      await created();
+
+      expect((await list(ctx(PROJECT)))!.switches).toEqual({
+        schedulesOn: false,
+        startWhenClosed: false,
+        schedulesOnSince: null,
+      });
+      const outcome = await setSwitches(ctx(PROJECT), { schedulesOn: true, startWhenClosed: true });
+
+      expect(outcome).toMatchObject({
+        status: "saved",
+        snapshot: { projectId: PROJECT, switches: { schedulesOn: true, startWhenClosed: true } },
+      });
+      expect((await list(ctx(PROJECT)))!.switches.schedulesOn).toBe(true);
+      expect((await list(ctx(OTHER)))!.switches.schedulesOn).toBe(false);
+    });
+
+    it("refuses a view that can't have schedules, and a change of the wrong shape", async () => {
+      await expect(setSwitches(ctx(null), { schedulesOn: true })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      await expect(
+        setSwitches(ctx(PROJECT, "remote-view"), { schedulesOn: true })
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      for (const bad of [
+        { schedulesOn: "yes" },
+        { schedulesOnSince: 1 },
+        { projectId: OTHER, schedulesOn: true },
+        { wakeMachine: true },
+        null,
+      ]) {
+        await expect(
+          setSwitches(ctx(PROJECT), bad as unknown as ScheduleSwitchesPatch)
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+      }
+      expect((await list(ctx(PROJECT)))!.switches.schedulesOn).toBe(false);
+      expect((await list(ctx(OTHER)))!.switches.schedulesOn).toBe(false);
     });
   });
 
@@ -418,7 +467,13 @@ describe("schedules handlers", () => {
     );
     fs.mkdirSync(path.join(repo, ".daintree"), { recursive: true });
     for (const name of ["schedules.json", "schedules"]) {
-      fs.writeFileSync(path.join(repo, ".daintree", name), encodeSchedulesFile([planted]));
+      fs.writeFileSync(
+        path.join(repo, ".daintree", name),
+        encodeSchedulesFile({
+          switches: { schedulesOn: true, startWhenClosed: true, schedulesOnSince: 1 },
+          schedules: [planted],
+        })
+      );
     }
     const readFile = vi.spyOn(fs.promises, "readFile");
 
@@ -462,8 +517,9 @@ describe("schedules handlers", () => {
       const edited = await update(ctx(PROJECT), schedule.id, schedule.updatedAt, { name: "B" });
       const off = await setEnabled(ctx(PROJECT), schedule.id, false);
       const on = await setEnabled(ctx(PROJECT), schedule.id, true);
+      const switched = await setSwitches(ctx(PROJECT), { schedulesOn: true });
       const removed = await remove(ctx(PROJECT), schedule.id);
-      const sent = [edited, off, on, removed].map((outcome) =>
+      const sent = [edited, off, on, switched, removed].map((outcome) =>
         "snapshot" in outcome ? outcome.snapshot : null
       );
 

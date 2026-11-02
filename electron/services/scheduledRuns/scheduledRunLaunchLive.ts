@@ -143,7 +143,11 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
   ]);
   return {
     getRecorder: getScheduledRunRecorder,
-    getSchedule: (projectId, scheduleId) => projectStore.schedules.get(projectId, scheduleId),
+    getSchedule: async (projectId, scheduleId) => {
+      const { switches, schedules } = await projectStore.schedules.list(projectId);
+      const schedule = schedules.find((entry) => entry.id === scheduleId);
+      return schedule ? { schedule, switches } : null;
+    },
     getProject: (projectId) => projectStore.getProjectById(projectId),
     folderExists: (path) =>
       fs.access(path).then(
@@ -185,6 +189,7 @@ export async function launchScheduledRunLive(input: {
   scheduleId: string;
   origin: ScheduledRunOrigin;
   preferredWebContentsId?: number;
+  stillCurrent?: () => boolean;
 }): Promise<ScheduledRunLaunchOutcome> {
   return launchScheduledRun(input, await liveDeps());
 }

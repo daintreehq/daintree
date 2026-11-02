@@ -15,6 +15,7 @@ import {
   nodeScheduleJobFs,
   type ScheduleJobFs,
 } from "../launchAgentScheduleJob.js";
+import { itFollowsProjectSwitches } from "./helpers/projectSwitchTransitions.js";
 
 const HOME = "/Users/someone";
 const USER_DATA = "/Users/someone/Library/Application Support/Daintree";
@@ -596,5 +597,27 @@ describe("nodeScheduleJobFs", () => {
     } finally {
       nodeFs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the LaunchAgent behind ScheduleOsJobService", () => {
+  itFollowsProjectSwitches(() => {
+    const files = memoryFs();
+    const launchctl = fakeLaunchctl({ files: files.files });
+    return {
+      adapter: job(launchctl, files),
+      context: { kind: "launch-agent", systemTimeZone: "Europe/London", unavailable: null },
+      live: () => files.files.has(FILE) && launchctl.isLoaded(),
+      hours: () =>
+        [
+          ...new Set(
+            [
+              ...(files.files.get(FILE) ?? "").matchAll(
+                /<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/g
+              ),
+            ].map((match) => Number(match[1]))
+          ),
+        ].sort((a, b) => a - b),
+    };
   });
 });

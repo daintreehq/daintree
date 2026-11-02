@@ -432,6 +432,7 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
           <ScheduleOsJobStatus
             status={osJob.status}
             schedules={state.snapshot?.schedules ?? []}
+            switches={state.snapshot?.switches ?? null}
             repairing={osJob.repairing}
             error={osJob.error}
             onRepair={osJob.repair}

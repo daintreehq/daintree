@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
-import type { Schedule } from "@shared/types/scheduledRuns";
+import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
 import type { ScheduleOsJobStatus as Status } from "@shared/types/ipc/schedules";
 import { ScheduleOsJobStatus } from "../ScheduleOsJobStatus";
 
@@ -31,16 +31,28 @@ const CURRENT: Status = {
   excluded: [],
 };
 
+/** A project that lets the job start Daintree for its schedules (#16166). */
+const STARTS: ProjectScheduleSwitches = {
+  schedulesOn: true,
+  startWhenClosed: true,
+  schedulesOnSince: 1,
+};
+
 function show(
   status: Status | null,
   schedules: Schedule[],
-  options: { error?: string | null; repairing?: boolean } = {}
+  options: {
+    error?: string | null;
+    repairing?: boolean;
+    switches?: ProjectScheduleSwitches | null;
+  } = {}
 ) {
   const onRepair = vi.fn();
   render(
     <ScheduleOsJobStatus
       status={status}
       schedules={schedules}
+      switches={options.switches === undefined ? STARTS : options.switches}
       repairing={options.repairing ?? false}
       error={options.error ?? null}
       onRepair={onRepair}
@@ -59,6 +71,19 @@ describe("ScheduleOsJobStatus (#15990)", () => {
     ]);
     expect(screen.queryByTestId("schedule-os-job-status")).toBeNull();
   });
+
+  it.each([
+    ["schedules are off", { ...STARTS, schedulesOn: false }],
+    ["starting Daintree is off", { ...STARTS, startWhenClosed: false }],
+    ["they haven't been read", null],
+  ])(
+    "claims no schedule here while the project's switches leave the job out: %s (#16166)",
+    (_label, switches) => {
+      // The job is current for another project's schedules.
+      show(CURRENT, [schedule("a")], { switches });
+      expect(screen.queryByTestId("schedule-os-job-status")).toBeNull();
+    }
+  );
 
   it("counts the schedules a current job starts", () => {
     const { text } = show(CURRENT, [

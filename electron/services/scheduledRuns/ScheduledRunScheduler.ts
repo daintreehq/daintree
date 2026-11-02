@@ -40,6 +40,8 @@ export interface ScheduledRunSchedulerLaunch {
   readonly projectId: string;
   readonly scheduleId: string;
   readonly origin: ScheduledRunOrigin;
+  /** False once the schedule's timing changed after this launch was decided. */
+  readonly stillCurrent: () => boolean;
 }
 
 export interface ScheduledRunSchedulerDeps {
@@ -78,7 +80,8 @@ type Decision =
  * Fires due schedules (#15979). It holds every local project's schedules,
  * follows their changes, and looks at the wall clock at each schedule's next
  * due time, or every {@link SCHEDULER_TICK_MS} at the longest, and at once
- * after a wake, an unlock, or any edit.
+ * after a wake, an unlock, or any edit. A schedule fires only while it and its
+ * project's schedules (#16166) are both switched on.
  *
  * Each schedule is evaluated from its evaluation point, the latest occurrence
  * a run was registered for, which the history moves in the same transaction
@@ -229,14 +232,16 @@ export class ScheduledRunScheduler {
     for (const schedule of snapshot.schedules) {
       const before = previous.get(schedule.id);
       previous.delete(schedule.id);
+      const was = held && before ? { project: held, schedule: before } : null;
+      const current = { project: snapshot, schedule };
       // Synchronously with the commit, so a launch past its read doesn't spawn.
-      if (before?.enabled && !schedule.enabled) this.deps.cancelLaunches(schedule.id);
-      if (before && keepsTiming(before, schedule)) {
-        if (!this.floors.has(schedule.id)) this.floors.set(schedule.id, before.updatedAt);
+      if (was && isActive(was) && !isActive(current)) this.deps.cancelLaunches(schedule.id);
+      if (was && keepsTiming(was, current)) {
+        if (!this.floors.has(schedule.id)) this.floors.set(schedule.id, timingStart(was));
         continue;
       }
       // A stamp kept ahead of a clock set back would hold off what's due.
-      this.floors.set(schedule.id, Math.min(schedule.updatedAt, this.now()));
+      this.floors.set(schedule.id, Math.min(timingStart(current), this.now()));
       this.epochs.set(schedule.id, ++this.nextEpoch);
       this.unwatched.delete(schedule.id);
       this.retryAfter.delete(schedule.id);
@@ -351,6 +356,7 @@ export class ScheduledRunScheduler {
     this.osLaunchAt = null;
     let nextDueAt: number | null = null;
     for (const [projectId, snapshot] of this.projects) {
+      if (!snapshot.switches.schedulesOn) continue;
       for (const schedule of snapshot.schedules) {
         if (!schedule.enabled || this.launching.has(schedule.id)) continue;
         const retryAt = this.retryAfter.get(schedule.id);
@@ -364,7 +370,7 @@ export class ScheduledRunScheduler {
         let decision: Decision;
         try {
           decision = this.decide(
-            schedule,
+            { project: snapshot, schedule },
             recorder.evaluationPoint(schedule.id),
             now,
             missedThrough,
@@ -402,18 +408,19 @@ export class ScheduledRunScheduler {
    * time when found within a minute, as when Daintree watches.
    */
   private decide(
-    schedule: Schedule,
+    held: HeldSchedule,
     evaluationPoint: number | null,
     now: number,
     missedThrough: number | null,
     osLaunch: { readonly at: number; readonly unwatchedThrough: number | null } | null
   ): Decision {
+    const { schedule } = held;
     const cron = this.parse(schedule.cadence.cron);
     if (!cron) return { kind: "wait", nextDueAt: null };
     const { timeZone } = schedule.cadence;
     // Nothing before its timing floor counts as missed. A clock set back past
     // the point waits for it: an occurrence never runs twice.
-    const floor = this.floors.get(schedule.id) ?? schedule.updatedAt;
+    const floor = this.floors.get(schedule.id) ?? timingStart(held);
     const after = Math.max(evaluationPoint ?? floor, floor);
     if (after >= now) return { kind: "wait", nextDueAt: nextCronOccurrence(cron, timeZone, after) };
     const latest = previousCronOccurrence(cron, timeZone, now);
@@ -459,7 +466,7 @@ export class ScheduledRunScheduler {
       `[ScheduledRuns] Schedule ${scheduleId} is due: ${origin.trigger} for ${origin.occurrenceKey}`
     );
     new Promise<ScheduledRunLaunchOutcome>((resolve) =>
-      resolve(this.deps.launch({ projectId, scheduleId, origin }))
+      resolve(this.deps.launch({ projectId, scheduleId, origin, stillCurrent: current }))
     )
       .then(
         (outcome) => {
@@ -550,6 +557,7 @@ export class ScheduledRunScheduler {
 
   private hasEnabledSchedule(): boolean {
     for (const snapshot of this.projects.values()) {
+      if (!snapshot.switches.schedulesOn) continue;
       if (snapshot.schedules.some((schedule) => schedule.enabled)) return true;
     }
     return false;
@@ -582,12 +590,33 @@ export class ScheduledRunScheduler {
   }
 }
 
+/** A schedule as held, with the project snapshot it came in. */
+interface HeldSchedule {
+  readonly project: SchedulesSnapshot;
+  readonly schedule: Schedule;
+}
+
+/** Switched on, in a project whose schedules are on (#16166). */
+function isActive({ project, schedule }: HeldSchedule): boolean {
+  return project.switches.schedulesOn && schedule.enabled;
+}
+
+/**
+ * Where a schedule's timing starts: its last switch-on or cadence change, or
+ * its project's schedules going on, whichever is later. Both are stored, so
+ * what came due while either was off is never caught up, even after a restart.
+ */
+function timingStart({ project, schedule }: HeldSchedule): number {
+  return Math.max(schedule.updatedAt, project.switches.schedulesOnSince ?? 0);
+}
+
 /** An edit that leaves a running schedule's cadence alone keeps the window it found. */
-function keepsTiming(before: Schedule, after: Schedule): boolean {
+function keepsTiming(before: HeldSchedule, after: HeldSchedule): boolean {
   return (
-    before.enabled &&
-    after.enabled &&
-    before.cadence.cron === after.cadence.cron &&
-    before.cadence.timeZone === after.cadence.timeZone
+    isActive(before) &&
+    isActive(after) &&
+    before.project.switches.schedulesOnSince === after.project.switches.schedulesOnSince &&
+    before.schedule.cadence.cron === after.schedule.cadence.cron &&
+    before.schedule.cadence.timeZone === after.schedule.cadence.timeZone
   );
 }

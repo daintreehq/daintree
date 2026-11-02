@@ -23,7 +23,11 @@ import type {
   ScheduleCreateInput,
   SchedulesSnapshot,
 } from "../../../shared/types/ipc/schedules.js";
-import type { Schedule } from "../../../shared/types/scheduledRuns.js";
+import {
+  SCHEDULE_SWITCHES_OFF,
+  type ProjectScheduleSwitches,
+  type Schedule,
+} from "../../../shared/types/scheduledRuns.js";
 
 const PROJECT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -364,7 +368,10 @@ describe("ScheduleStore", () => {
 
     // A stored opt-in the machine would now refuse still loads and still switches.
     const stored = { ...created, policies: { ...created.policies, runWhenClosed: true } };
-    fs.writeFileSync(schedulesFile(), encodeSchedulesFile([stored]));
+    fs.writeFileSync(
+      schedulesFile(),
+      encodeSchedulesFile({ switches: SCHEDULE_SWITCHES_OFF, schedules: [stored] })
+    );
     writeIssues.mockClear();
     expect((await store.list(PROJECT)).schedules).toEqual([stored]);
     expect((await store.setEnabled(PROJECT, created.id, false)).status).toBe("saved");
@@ -410,6 +417,166 @@ describe("ScheduleStore", () => {
     expect(fs.readdirSync(root)).toEqual([]);
   });
 
+  describe("the project's switches (#16166)", () => {
+    it("start off for a project with no schedules, and creating one doesn't turn them on", async () => {
+      const store = newStore();
+
+      expect((await store.list(PROJECT)).switches).toEqual(SCHEDULE_SWITCHES_OFF);
+      const { snapshot } = saved(
+        await store.create(PROJECT, { ...input, policies: { runWhenClosed: true } })
+      );
+
+      expect(snapshot.switches).toEqual(SCHEDULE_SWITCHES_OFF);
+      expect((await newStore().list(PROJECT)).switches).toEqual(SCHEDULE_SWITCHES_OFF);
+    });
+
+    it("are changed one at a time, stamp when schedules went on, and survive a restart", async () => {
+      const store = newStore();
+      saved(await store.create(PROJECT, input));
+      const heard: SchedulesSnapshot[] = [];
+      store.subscribe((snapshot) => heard.push(snapshot));
+
+      clock += 1_000;
+      const on = saved(await store.setSwitches(PROJECT, { schedulesOn: true }));
+      clock += 1_000;
+      const start = saved(await store.setSwitches(PROJECT, { startWhenClosed: true }));
+
+      const expected: ProjectScheduleSwitches = {
+        schedulesOn: true,
+        startWhenClosed: true,
+        schedulesOnSince: clock - 1_000,
+      };
+      expect(on.snapshot.switches).toEqual({ ...expected, startWhenClosed: false });
+      expect(start.snapshot.switches).toEqual(expected);
+      expect(heard.map((snapshot) => snapshot.switches)).toEqual([on.snapshot.switches, expected]);
+      expect(start.snapshot.revision).toBeGreaterThan(on.snapshot.revision);
+      expect((await newStore().list(PROJECT)).switches).toEqual(expected);
+      expect(JSON.parse(fs.readFileSync(schedulesFile(), "utf-8"))._schemaVersion).toBe(
+        SCHEDULES_SCHEMA_VERSION
+      );
+    });
+
+    it("keep start-when-closed as set while schedules go off, and restamp them going back on", async () => {
+      const store = newStore();
+      saved(await store.setSwitches(PROJECT, { schedulesOn: true, startWhenClosed: true }));
+      const firstOn = clock;
+
+      clock += 5_000;
+      const off = saved(await store.setSwitches(PROJECT, { schedulesOn: false }));
+      expect(off.snapshot.switches).toEqual({
+        schedulesOn: false,
+        startWhenClosed: true,
+        schedulesOnSince: firstOn,
+      });
+
+      clock += 5_000;
+      const again = saved(await store.setSwitches(PROJECT, { schedulesOn: true }));
+      expect(again.snapshot.switches.schedulesOnSince).toBe(clock);
+    });
+
+    it("leave the schedules, their history, and a switch already as asked, untouched", async () => {
+      const forget = vi.fn();
+      const store = new ScheduleStore(
+        root,
+        (id) => registered.has(id),
+        () => clock,
+        forget
+      );
+      const created = saved(await store.create(PROJECT, input));
+      const heard: SchedulesSnapshot[] = [];
+      store.subscribe((snapshot) => heard.push(snapshot));
+
+      const same = saved(await store.setSwitches(PROJECT, { schedulesOn: false }));
+      const on = saved(await store.setSwitches(PROJECT, { schedulesOn: true }));
+      const off = saved(await store.setSwitches(PROJECT, { schedulesOn: false }));
+
+      expect(same.snapshot.revision).toBe(created.snapshot.revision);
+      expect(heard).toHaveLength(2);
+      expect(on.snapshot.schedules).toEqual([created.schedule]);
+      expect(off.snapshot.schedules).toEqual([created.schedule]);
+      expect((await newStore().list(PROJECT)).schedules).toEqual([created.schedule]);
+      expect(forget).not.toHaveBeenCalled();
+    });
+
+    it("refuse starting Daintree where the machine can't, but never refuse turning it off", async () => {
+      const unavailable = vi.fn<() => string | null>(() => "Not on this platform");
+      const store = new ScheduleStore(
+        root,
+        (id) => registered.has(id),
+        () => clock,
+        () => {},
+        () => [],
+        unavailable
+      );
+
+      expect(await store.setSwitches(PROJECT, { schedulesOn: true })).toMatchObject({
+        status: "saved",
+      });
+      expect(unavailable).not.toHaveBeenCalled();
+      expect(
+        await store.setSwitches(PROJECT, { schedulesOn: false, startWhenClosed: true })
+      ).toEqual({
+        status: "invalid",
+        issues: [
+          { path: "switches.startWhenClosed", cronField: null, message: "Not on this platform" },
+        ],
+      });
+      expect((await store.list(PROJECT)).switches.schedulesOn).toBe(true);
+
+      // One stored on before the machine changed still turns off.
+      fs.writeFileSync(
+        schedulesFile(),
+        encodeSchedulesFile({
+          switches: { schedulesOn: true, startWhenClosed: true, schedulesOnSince: clock },
+          schedules: [],
+        })
+      );
+      expect(
+        saved(await store.setSwitches(PROJECT, { startWhenClosed: false })).snapshot.switches
+          .startWhenClosed
+      ).toBe(false);
+    });
+
+    it("carry a project from before them over as it behaved, and keep that once written", async () => {
+      const opted = createSchedule(
+        {
+          id: "opted",
+          projectId: PROJECT,
+          name: "Opted",
+          launch: { agentId: "claude", prompt: "x" },
+          policies: { runWhenClosed: true },
+        },
+        clock
+      );
+      fs.mkdirSync(path.join(root, PROJECT), { recursive: true });
+      fs.writeFileSync(
+        schedulesFile(),
+        JSON.stringify({ _schemaVersion: 1, schedules: [opted] }, null, 2)
+      );
+      const store = newStore();
+      const migrated = { schedulesOn: true, startWhenClosed: true, schedulesOnSince: null };
+
+      expect((await store.list(PROJECT)).switches).toEqual(migrated);
+      // Removing the schedule that asked keeps what the project was carried over as.
+      saved(await store.create(PROJECT, input));
+      await store.remove(PROJECT, opted.id);
+
+      expect((await newStore().list(PROJECT)).switches).toEqual(migrated);
+      expect(JSON.parse(fs.readFileSync(schedulesFile(), "utf-8"))._schemaVersion).toBe(
+        SCHEDULES_SCHEMA_VERSION
+      );
+    });
+
+    it("refuse a project that isn't registered", async () => {
+      registered.delete(PROJECT);
+
+      await expect(newStore().setSwitches(PROJECT, { schedulesOn: true })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+      expect(fs.existsSync(schedulesFile())).toBe(false);
+    });
+  });
+
   describe("an unreadable file", () => {
     function writeRaw(raw: string): void {
       fs.mkdirSync(path.join(root, PROJECT), { recursive: true });
@@ -432,7 +599,7 @@ describe("ScheduleStore", () => {
         id: "bad",
         cadence: { cron: "61 * * * *", timeZone: "UTC" },
       };
-      const raw = encodeSchedulesFile([good, bad]);
+      const raw = encodeSchedulesFile({ switches: SCHEDULE_SWITCHES_OFF, schedules: [good, bad] });
       writeRaw(raw);
       const store = newStore();
 
@@ -520,7 +687,12 @@ describe("ScheduleStore", () => {
 
       await expect(removal).rejects.toThrow("EBUSY");
       expect((await next).status).toBe("saved");
-      expect(heard[0]).toEqual({ projectId: PROJECT, schedules: [], revision: before + 1 });
+      expect(heard[0]).toEqual({
+        projectId: PROJECT,
+        switches: SCHEDULE_SWITCHES_OFF,
+        schedules: [],
+        revision: before + 1,
+      });
       expect(heard).toHaveLength(2);
     });
 
@@ -534,7 +706,13 @@ describe("ScheduleStore", () => {
       await store.removeProject(PROJECT);
 
       expect(fs.existsSync(schedulesFile())).toBe(false);
-      expect(heard).toEqual([expect.objectContaining({ projectId: PROJECT, schedules: [] })]);
+      expect(heard).toEqual([
+        expect.objectContaining({
+          projectId: PROJECT,
+          switches: SCHEDULE_SWITCHES_OFF,
+          schedules: [],
+        }),
+      ]);
     });
 
     it("refuses every edit whose turn comes after the row is gone", async () => {

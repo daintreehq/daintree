@@ -1810,6 +1810,9 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["schedules:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["schedules:set-enabled"]["result"]>;
+    setSwitches(
+      ...args: IpcInvokeMap["schedules:set-switches"]["args"]
+    ): Promise<IpcInvokeMap["schedules:set-switches"]["result"]>;
     update(
       ...args: IpcInvokeMap["schedules:update"]["args"]
     ): Promise<IpcInvokeMap["schedules:update"]["result"]>;
