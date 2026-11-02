@@ -100,17 +100,17 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
     const before = container.firstChild as HTMLElement | null;
     expect(before).not.toBeNull();
     const beforeClasses = before!.className;
-    const beforeChildCount = before!.childElementCount;
+    const beforeTag = before!.tagName;
 
     setHydrated();
     rerender(<RotatingTip />);
     const after = container.firstChild as HTMLElement | null;
     expect(after).not.toBeNull();
 
-    // Same flex column shape (items-center gap-2) and same row count.
-    expect(after!.className).toContain("flex flex-col items-center gap-2");
-    expect(beforeClasses).toContain("flex flex-col items-center gap-2");
-    expect(after!.childElementCount).toBe(beforeChildCount);
+    // Same one-line shape: a paragraph on the rail at the tip's text size.
+    expect(after!.tagName).toBe(beforeTag);
+    expect(after!.className).toContain("px-3 text-xs");
+    expect(beforeClasses).toContain("px-3 text-xs");
   });
 
   it("biases toward an unused (zero-count) actionId over high-count ones", () => {

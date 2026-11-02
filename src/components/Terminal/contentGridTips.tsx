@@ -271,7 +271,7 @@ export function RotatingTip() {
       // it entirely. Exactly the trap `.lessons/11180.md` documents for the
       // sections above. The marker class snaps it to rest with the sections
       // around it under reduced motion, so the stagger stays one piece.
-      <p className="launcher-section-enter px-3 text-xs text-pretty text-text-secondary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
+      <p className="launcher-section-enter px-3 text-xs text-text-secondary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
         Tip: <LiveTipMessage tip={tip} />
         {tip.actionId && tip.actionLabel && (
           <>
@@ -311,7 +311,7 @@ export function RotatingTip() {
   // first paint (#7671). `invisible` keeps the box in layout flow without
   // showing skeleton noise — the tip is sub-Doherty so a flash isn't needed.
   return (
-    <p className="invisible text-xs" aria-hidden="true">
+    <p className="invisible px-3 text-xs" aria-hidden="true">
       &nbsp;
     </p>
   );
