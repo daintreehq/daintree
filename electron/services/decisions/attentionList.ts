@@ -150,6 +150,7 @@ export function copiedAnswerText(
       choices: entry.choices,
       comment: entry.text,
       correction: entry.correction,
+      ...(entry.reason ? { reason: entry.reason } : {}),
       ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
       ...(entry.model_id ? { modelId: entry.model_id } : {}),
       // Never shown: the copy is rendered without it.
