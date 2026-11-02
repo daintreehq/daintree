@@ -26,7 +26,7 @@ type AttentionStatus = PaneDecisionAttention["deliveryStatus"];
  */
 const REASON_CODE = /^[a-z0-9_.-]{1,48}$/;
 
-function reasonOf(code: string | null): string {
+export function reasonOf(code: string | null): string {
   return typeof code === "string" && REASON_CODE.test(code) ? code : "unspecified";
 }
 

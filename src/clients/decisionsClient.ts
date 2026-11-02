@@ -1,4 +1,9 @@
 import type { DecisionsStatus, PaneDecisionState } from "@shared/types/decisions";
+import type {
+  DecisionsAnswerDestinations,
+  DecisionsAnswerOutcome,
+  DecisionsAttentionList,
+} from "@shared/types/decisionsAttention";
 
 /** Daintree Decisions, as main observes it. Pane state comes from the machine that owns the pane. */
 export const decisionsClient = {
@@ -27,6 +32,29 @@ export const decisionsClient = {
       off();
     };
   },
+
+  /** Every answer a person has to decide about, opened, oldest question first (#16020). */
+  listAttention: (): Promise<DecisionsAttentionList> => window.electron.decisions.listAttention(),
+
+  /** The delimited block of an answer needing attention, to paste in by hand. Rejects when there is none. */
+  copyAnswer: (questionId: string): Promise<string> =>
+    window.electron.decisions.copyAnswer(questionId),
+
+  /** Reopens the agent that asked and types the answer in; resolves with what became of it. */
+  resumeAnswer: (questionId: string): Promise<DecisionsAnswerOutcome> =>
+    window.electron.decisions.resumeAnswer(questionId),
+
+  /** The agents running here now that the answer could be typed into instead. */
+  listAnswerDestinations: (questionId: string): Promise<DecisionsAnswerDestinations> =>
+    window.electron.decisions.listAnswerDestinations(questionId),
+
+  /** Sends the answer to the pane the person confirmed; recorded in the audit trail. */
+  reassignAnswer: (questionId: string, terminalId: string): Promise<DecisionsAnswerOutcome> =>
+    window.electron.decisions.reassignAnswer({ questionId, terminalId }),
+
+  /** The person dealt with it: it leaves the list and is never typed in. */
+  markAnswerHandled: (questionId: string): Promise<DecisionsAnswerOutcome> =>
+    window.electron.decisions.markAnswerHandled({ questionId }),
 
   /** A pane's current state; null while Decisions is off or the pane has nothing outstanding. */
   getPaneState: (terminalId: string): Promise<PaneDecisionState | null> =>

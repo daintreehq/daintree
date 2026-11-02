@@ -28,6 +28,12 @@ export const DECISIONS_METHOD_CHANNELS = {
   startSetupCheck: "decisions:start-setup-check",
   getSetupCheck: "decisions:get-setup-check",
   cancelSetupCheck: "decisions:cancel-setup-check",
+  listAttention: "decisions:list-attention",
+  copyAnswer: "decisions:copy-answer",
+  resumeAnswer: "decisions:resume-answer",
+  listAnswerDestinations: "decisions:list-answer-destinations",
+  reassignAnswer: "decisions:reassign-answer",
+  markAnswerHandled: "decisions:mark-answer-handled",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

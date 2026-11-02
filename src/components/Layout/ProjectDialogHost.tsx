@@ -16,6 +16,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useRecipeDialogState } from "./useRecipeDialogState";
 
@@ -37,6 +38,11 @@ const LazyRecipeManager = lazy(() =>
 );
 const LazySchedulesDialog = lazy(() =>
   import("@/components/Schedules/SchedulesDialog").then((m) => ({ default: m.SchedulesDialog }))
+);
+const LazyDecisionsAttentionDialog = lazy(() =>
+  import("@/components/Decisions/DecisionsAttentionDialog").then((m) => ({
+    default: m.DecisionsAttentionDialog,
+  }))
 );
 
 /**
@@ -150,6 +156,9 @@ function ProjectDialogHost() {
   const isSchedulesOpen = useSchedulesViewStore((state) => state.isOpen);
   const closeSchedules = useSchedulesViewStore((state) => state.close);
   const shouldMountSchedules = useKeepMounted(isSchedulesOpen);
+  const isDecisionsAttentionOpen = useDecisionsAttentionStore((state) => state.isOpen);
+  const closeDecisionsAttention = useDecisionsAttentionStore((state) => state.close);
+  const shouldMountDecisionsAttention = useKeepMounted(isDecisionsAttentionOpen);
   useEffect(() => () => useSchedulesViewStore.getState().close(), []);
 
   return (
@@ -263,6 +272,21 @@ function ProjectDialogHost() {
         {shouldMountSchedules && (
           <Suspense fallback={null}>
             <LazySchedulesDialog isOpen={isSchedulesOpen} onClose={closeSchedules} />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+
+      <ErrorBoundary
+        variant="component"
+        componentName="DecisionsAttentionDialog"
+        resetKeys={[Number(isDecisionsAttentionOpen)]}
+      >
+        {shouldMountDecisionsAttention && (
+          <Suspense fallback={null}>
+            <LazyDecisionsAttentionDialog
+              isOpen={isDecisionsAttentionOpen}
+              onClose={closeDecisionsAttention}
+            />
           </Suspense>
         )}
       </ErrorBoundary>

@@ -242,14 +242,13 @@ export function decisionWakeId(blocks: readonly AnswerBlock[]): string {
   return `dec-${createHash("sha256").update(subject).digest("hex").slice(0, 60)}`;
 }
 
-function renderBlock(block: AnswerBlock): string {
+function renderBlock(block: AnswerBlock, marked = true): string {
   const lines = [
     DECISION_BLOCK_START,
     `question_id: ${block.questionId}${block.alias !== null ? ` (q-${block.alias})` : ""}`,
     `revision: ${block.revision}`,
-    `injection_id: ${block.injectionId}`,
-    markerFor(block.injectionId),
   ];
+  if (marked) lines.push(`injection_id: ${block.injectionId}`, markerFor(block.injectionId));
   if (block.expired) {
     lines.push("source: system", "status: expired", "authorised: no", EXPIRED_NOTE);
   } else {
@@ -279,9 +278,9 @@ const CUTTABLE = ["comment", "choiceLabel", "choice"] as const;
  * the comment first; the delimiters, ids, marker and notes always survive, and
  * fit with room to spare once the cuttable fields are gone.
  */
-function boundedBlock(original: AnswerBlock): string {
+function boundedBlock(original: AnswerBlock, marked = true): string {
   const block = { ...original };
-  let out = renderBlock(block);
+  let out = renderBlock(block, marked);
   for (const field of CUTTABLE) {
     for (let i = 0; i < 12 && byteLength(out) > MAX_DECISION_BLOCK_BYTES; i++) {
       const value = block[field];
@@ -289,7 +288,7 @@ function boundedBlock(original: AnswerBlock): string {
       const over = byteLength(out) - MAX_DECISION_BLOCK_BYTES;
       const keep = byteLength(value) - over - byteLength(TRUNCATED) - 8;
       block[field] = keep > 0 ? truncateBytes(value, keep).trimEnd() + TRUNCATED : null;
-      out = renderBlock(block);
+      out = renderBlock(block, marked);
     }
   }
   return out;
@@ -297,5 +296,14 @@ function boundedBlock(original: AnswerBlock): string {
 
 /** What the wake types: Daintree's preface, then each answer's block. */
 export function renderDecisionSection(blocks: readonly AnswerBlock[]): string {
-  return [DECISION_PREFACE, ...blocks.map(boundedBlock)].join("\n");
+  return [DECISION_PREFACE, ...blocks.map((block) => boundedBlock(block))].join("\n");
+}
+
+/**
+ * The same section for a person to paste in themselves (#16020): no injection
+ * id or marker, since nothing records that paste, and crash recovery must
+ * never take a pasted copy for Daintree's own typing.
+ */
+export function renderCopiedAnswer(blocks: readonly AnswerBlock[]): string {
+  return [DECISION_PREFACE, ...blocks.map((block) => boundedBlock(block, false))].join("\n");
 }

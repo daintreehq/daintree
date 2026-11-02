@@ -59,11 +59,12 @@ describe("DecisionsSettingsTab recovery kit", () => {
           checkRelay,
           claimRelay,
           verifyRecoveryKit,
-          // The Devices, Remote Hosts, Policy and setup check reads, which these tests leave unanswered.
+          // The Devices, Remote Hosts, Policy, setup check and Questions reads, which these tests leave unanswered.
           listDevices: () => new Promise(() => {}),
           listHosts: () => new Promise(() => {}),
           getPolicy: () => new Promise(() => {}),
           getSetupCheck: () => new Promise(() => {}),
+          listAttention: () => new Promise(() => {}),
         },
         events: {
           on: (name: string, listener: (payload: unknown) => void) => {

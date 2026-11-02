@@ -7,9 +7,10 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
-import type { AnswerDeliveryDeps } from "./answerDelivery.js";
+import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
+import { readHandledAnswers, withoutHandled } from "./attentionList.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
@@ -55,6 +56,8 @@ export interface DecisionsRelayConnection {
   stop(): void | Promise<void>;
   /** Starts a fresh attempt now; false when none can start. */
   refresh?(): boolean;
+  /** The connection's answer delivery, while it runs; what the needs-attention list acts through. */
+  getDelivery?(): AnswerDelivery | null;
 }
 
 /** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
@@ -391,6 +394,16 @@ export class DecisionsService {
   }
 
   /** A pane's state as last pushed; null while stopped, and for a pane with nothing outstanding. */
+  /**
+   * The running connection's answer delivery, which the needs-attention list
+   * (#16020) reads and acts through; null while none runs (off, no relay set
+   * up, revoked, or stopped for a problem).
+   */
+  getAnswerDelivery(): AnswerDelivery | null {
+    if (this.disposed || this.state === "off") return null;
+    return this.connection?.getDelivery?.() ?? null;
+  }
+
   getPaneState(terminalId: string): PaneDecisionState | null {
     return this.state === "off" ? null : this.panes.get(terminalId);
   }
@@ -771,8 +784,9 @@ export class DecisionsService {
     this.offCommit?.();
     this.offCommit = null;
     if (store === null) return Promise.resolve();
+    // What a person marked handled (#16020) shows nowhere: not on its pane, in Canopy or the list.
     const feed = new QuestionRowsFeed(
-      () => store.listQuestions(),
+      async () => withoutHandled(await store.listQuestions(), await readHandledAnswers(store)),
       (rows) => this.observeQuestions(rows)
     );
     this.feed = feed;

@@ -618,6 +618,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").ClaimDecisionsRelayPayload];
     result: import("../decisions.js").DecisionsConnectResult;
   };
+  "decisions:copy-answer": {
+    args: [questionId: string];
+    result: string;
+  };
   "decisions:decline-pairing": {
     args: [pairingId: string];
     result: import("../decisions.js").DecisionsPairingDeclineResult;
@@ -666,6 +670,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:list-answer-destinations": {
+    args: [questionId: string];
+    result: import("../decisionsAttention.js").DecisionsAnswerDestinations;
+  };
+  "decisions:list-attention": {
+    args: [];
+    result: import("../decisionsAttention.js").DecisionsAttentionList;
+  };
   "decisions:list-devices": {
     args: [];
     result: import("../decisions.js").DecisionsDevicesResult;
@@ -674,9 +686,21 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisionsHosts.js").DecisionsHostsResult;
   };
+  "decisions:mark-answer-handled": {
+    args: [payload: import("../decisionsAttention.js").MarkDecisionsAnswerHandledPayload];
+    result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:reassign-answer": {
+    args: [payload: import("../decisionsAttention.js").ReassignDecisionsAnswerPayload];
+    result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
   "decisions:restore-identity": {
     args: [payload: import("../decisions.js").RestoreDecisionsIdentityPayload];
     result: import("../decisions.js").DecisionsConnectResult;
+  };
+  "decisions:resume-answer": {
+    args: [questionId: string];
+    result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
   };
   "decisions:revoke-device": {
     args: [deviceId: string];
