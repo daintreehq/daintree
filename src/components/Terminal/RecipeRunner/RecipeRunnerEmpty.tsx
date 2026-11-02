@@ -50,7 +50,7 @@ export function RecipeRunnerEmpty({
                 />
                 <span
                   id={`recipe-suggestion-${suggestion.id}-name`}
-                  className="flex-1 text-sm font-medium text-text-primary truncate"
+                  className="flex-1 text-sm text-text-primary truncate"
                 >
                   {suggestion.name}
                 </span>
@@ -63,7 +63,7 @@ export function RecipeRunnerEmpty({
               </ChoiceCard>
             ))}
           </div>
-          <div className="flex justify-center">{createButton}</div>
+          <div className="flex justify-start">{createButton}</div>
         </>
       ) : (
         // Two lines, not an `EmptyState`. Even at sidebar scale that shell

@@ -23,7 +23,9 @@ import { TourInviteCard } from "@/components/Tour/TourInviteCard";
 import { useProjectWelcomeStore } from "@/store/projectWelcomeStore";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
-const PATH_TRUNCATE_LENGTH = 52;
+// Sized to the narrow canvas's measure: past it the line's own CSS truncation
+// adds a second ellipsis and eats the tail, the part of the path that orients.
+const PATH_TRUNCATE_LENGTH = 56;
 
 // The column's single measure. Every band fills it rather than choosing its
 // own, so the stack has ONE pair of edges instead of the four it used to
@@ -339,21 +341,19 @@ export function ContentGridEmptyState({
               // empty air and buys the same launch position in every kind of
               // workspace, which is the whole point of anchoring it.
               //
-              // 9.25rem, not the 8.5rem this first shipped with: the tallest
-              // form actually measures ~145px (mark 56 + mb-3 12 + name line 32
-              // + gap 6 + branch line 20 + gap 2 + path line 16), so 136px was
-              // eight short. A project OVERFLOWED the reserve while a scratch
-              // sat inside it, and the palette rendered 9px lower in a project
-              // than in a scratch — the exact drift the reserve exists to
-              // prevent, just moved from "which bands resolved" to "which kind
-              // of workspace". Every line here is `truncate`, so the tallest
-              // form is a fixed height and this can be an exact number.
+              // The tallest form measures 140px (mark 56 + mb-3 12 + name line
+              // 28 + gap 6 + branch line 20 + gap 2 + path line 16). An earlier
+              // reserve sat eight short of its form, so a project OVERFLOWED it
+              // while a scratch sat inside, and the palette rendered lower in a
+              // project than in a scratch — the drift the reserve exists to
+              // prevent. Every line here is `truncate`, so the tallest form is
+              // a fixed height and this must stay the exact sum.
               <div
                 className={cn(
                   // `w-full`: as a centred flex child it sized to its content,
                   // so a long name pushed past the column and none of the
                   // `truncate`s below ever ran.
-                  "flex w-full min-h-[9.25rem] flex-col items-center justify-end text-center",
+                  "flex w-full min-h-[8.75rem] flex-col items-center justify-end text-center",
                   SECTION_ENTRY
                 )}
               >
@@ -374,11 +374,15 @@ export function ContentGridEmptyState({
                       {/* A long name truncates inside the measure; the full name is
                           disclosed on hover the way the path below is. */}
                       <TruncatedTooltip content={workspaceName}>
-                        <h3 className="text-2xl font-semibold text-text-primary tracking-tight truncate max-w-full">
+                        {/* `text-xl font-medium`: the name confirms where you
+                            are; at 2xl semibold it was the heaviest text on a
+                            screen whose job is launching, and outweighed the
+                            palette it sits above. */}
+                        <h3 className="text-xl font-medium text-text-primary tracking-tight truncate max-w-full">
                           {projectEmoji ? (
                             // The name outweighs the emoji — the text is the
                             // identity, the emoji is seasoning.
-                            <span className="mr-2 text-lg align-middle" aria-hidden="true">
+                            <span className="mr-2 text-base align-middle" aria-hidden="true">
                               {projectEmoji}
                             </span>
                           ) : null}
@@ -423,7 +427,7 @@ export function ContentGridEmptyState({
                     )}
                   </div>
                 ) : (
-                  <h3 className="text-xl font-semibold text-text-primary tracking-tight truncate max-w-full">
+                  <h3 className="text-xl font-medium text-text-primary tracking-tight truncate max-w-full">
                     {activeWorktreeName || "Daintree"}
                   </h3>
                 )}
@@ -537,11 +541,8 @@ export function ContentGridEmptyState({
 
             {hasLaunchTarget && hasProjectContext && hasEverLaunchedAgent && (
               <div
-                className={cn(
-                  "flex flex-col items-center gap-4 empty:hidden",
-                  SECTION_ENTRY,
-                  SECTION_ENTRY_DELAY_5
-                )}
+                // On the left rail with every other band below identity.
+                className={cn("flex w-full empty:hidden", SECTION_ENTRY, SECTION_ENTRY_DELAY_5)}
               >
                 <RotatingTip />
               </div>

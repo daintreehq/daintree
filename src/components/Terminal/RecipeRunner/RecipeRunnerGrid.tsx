@@ -5,6 +5,7 @@ import type { TerminalRecipe } from "@/types";
 interface RecipeRunnerGridProps {
   recipes: TerminalRecipe[];
   focusedIndex: number;
+  showScope?: boolean;
   disabled?: boolean;
   onRun: (id: string) => void;
   onEdit: (id: string) => void;
@@ -15,20 +16,17 @@ interface RecipeRunnerGridProps {
   setFocusedIndex: (i: number) => void;
 }
 
-// Arrow keys follow the grid as it is drawn. Left/Right walk reading order;
-// Up/Down move a whole row, by however many columns the container query has
-// left — Down from the first card in a two-column grid lands on the card
-// under it, not the one beside it. A move off the top or bottom stays put.
-function moveFocus(current: number, total: number, key: string, columns: number): number {
+// Arrow keys follow the grid as it is drawn. Left/Right walk reading order.
+// Up/Down are spatial: they land on the card in the next rendered row that sits
+// under a remembered column line, so a card spanning the row (the odd last card
+// at two columns) is reachable by Down from either card above it, and Up from it
+// returns to the column the user came down. A move off the top or bottom stays.
+function moveHorizontal(current: number, total: number, key: string): number {
   switch (key) {
     case "ArrowRight":
       return (current + 1) % total;
     case "ArrowLeft":
       return (current - 1 + total) % total;
-    case "ArrowDown":
-      return current + columns < total ? current + columns : current;
-    case "ArrowUp":
-      return current - columns >= 0 ? current - columns : current;
     case "Home":
       return 0;
     case "End":
@@ -38,23 +36,40 @@ function moveFocus(current: number, total: number, key: string, columns: number)
   }
 }
 
-const NAVIGATION_KEYS = new Set(["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]);
-
-/** Cards sharing the first card's row: the column count the layout resolved to. */
-function renderedColumns(buttons: Array<HTMLButtonElement | null>): number {
-  const first = buttons[0];
-  if (!first) return 1;
-  let columns = 0;
-  for (const button of buttons) {
-    if (!button || button.offsetTop !== first.offsetTop) break;
-    columns++;
-  }
-  return Math.max(1, columns);
+function moveVertical(
+  buttons: Array<HTMLButtonElement | null>,
+  current: number,
+  direction: 1 | -1,
+  columnX: number
+): number {
+  const origin = buttons[current];
+  if (!origin) return current;
+  const rows = [...new Set(buttons.map((b) => b?.offsetTop).filter((t) => t !== undefined))].sort(
+    (a, b) => a - b
+  );
+  const targetRow = rows[rows.indexOf(origin.offsetTop) + direction];
+  if (targetRow === undefined) return current;
+  let best = current;
+  let bestDistance = Infinity;
+  buttons.forEach((button, index) => {
+    if (!button || button.offsetTop !== targetRow) return;
+    const left = button.offsetLeft;
+    const right = left + button.offsetWidth;
+    const distance = columnX < left ? left - columnX : columnX > right ? columnX - right : 0;
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  });
+  return best;
 }
+
+const NAVIGATION_KEYS = new Set(["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]);
 
 export function RecipeRunnerGrid({
   recipes,
   focusedIndex,
+  showScope,
   disabled,
   onRun,
   onEdit,
@@ -64,8 +79,8 @@ export function RecipeRunnerGrid({
   onDelete,
   setFocusedIndex,
 }: RecipeRunnerGridProps) {
-  // A lone recipe renders as one full-width hero card — a half-empty two-column
-  // grid reads as a mistake when there's a single pinned recipe (the common
+  // A lone recipe spans the measure as one row — a half-empty two-column grid
+  // reads as a mistake when there's a single pinned recipe (the common
   // fresh-worktree case).
   //
   // The container-query overrides drop columns as the CANVAS narrows, not the
@@ -88,6 +103,10 @@ export function RecipeRunnerGrid({
   // stop and the grid would be unreachable by Tab.
   const activeIndex = Math.min(focusedIndex, Math.max(0, focusableCount - 1));
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // The column line a run of Up/Down presses keeps to, and the card that run
+  // last landed on. Pressed from anywhere else (a horizontal move, a click, a
+  // fresh Tab in), the run starts over from the focused card's centre.
+  const columnRunRef = useRef<{ x: number; at: number } | null>(null);
 
   const setButtonRef = useCallback(
     (index: number) => (el: HTMLButtonElement | null) => {
@@ -103,12 +122,21 @@ export function RecipeRunnerGrid({
     // arrow with one recipe): otherwise the key falls through and scrolls the
     // canvas while focus stays put.
     e.preventDefault();
-    const next = moveFocus(
-      index,
-      focusableCount,
-      e.key,
-      renderedColumns(buttonRefs.current.slice(0, focusableCount))
-    );
+    const buttons = buttonRefs.current.slice(0, focusableCount);
+    let next: number;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const origin = buttons[index];
+      const x =
+        columnRunRef.current?.at === index
+          ? columnRunRef.current.x
+          : origin
+            ? origin.offsetLeft + origin.offsetWidth / 2
+            : 0;
+      next = moveVertical(buttons, index, e.key === "ArrowDown" ? 1 : -1, x);
+      columnRunRef.current = { x, at: next };
+    } else {
+      next = moveHorizontal(index, focusableCount, e.key);
+    }
     if (next === index) return;
     setFocusedIndex(next);
     buttonRefs.current[next]?.focus();
@@ -126,7 +154,11 @@ export function RecipeRunnerGrid({
           key={recipe.id}
           recipe={recipe}
           isFocused={activeIndex === i}
-          mode="grid"
+          // A lone recipe is one full-width row in the list's single-line form:
+          // as a two-line card stretched across the measure it was a frame
+          // around mostly air, and outweighed the resume row above it.
+          mode={recipes.length === 1 ? "list" : "grid"}
+          showScope={showScope}
           disabled={disabled}
           id={`recipe-option-${recipe.id}`}
           tabIndex={activeIndex === i ? 0 : -1}

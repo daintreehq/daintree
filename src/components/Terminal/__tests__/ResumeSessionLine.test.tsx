@@ -100,7 +100,7 @@ describe("ResumeSessionLine", () => {
   it("offers a '+N more' browse entry into the resume launcher", () => {
     h.items.list = [makeItem("s1", "Resume Claude"), makeItem("s2", "Resume Codex")];
     render(<ResumeSessionLine />);
-    const more = screen.getByRole("button", { name: /^\+1 more — browse resumable session/i });
+    const more = screen.getByRole("button", { name: /^\+1 more… — browse resumable session/i });
     fireEvent.click(more);
     // Shortcut-hint teardown around the launcher open is now global — the
     // launcher's own open transition clears it (AppPaletteDialog overlay
@@ -113,6 +113,6 @@ describe("ResumeSessionLine", () => {
   it("does not show '+N more' when there is only one session", () => {
     h.items.list = [makeItem("s1", "Resume Claude")];
     render(<ResumeSessionLine />);
-    expect(screen.queryByRole("button", { name: /more — browse resumable/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /more… — browse resumable/i })).toBeNull();
   });
 });

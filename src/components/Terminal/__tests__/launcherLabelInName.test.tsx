@@ -73,7 +73,7 @@ describe("Label in Name on the canvas-home context rows", () => {
     render(<ResumeSessionLine />);
     const more = screen.getAllByRole("button").find((b) => (b.textContent ?? "").includes("more"))!;
     const visible = (more.textContent ?? "").trim();
-    expect(visible).toMatch(/^\+\d+ more$/);
+    expect(visible).toMatch(/^\+\d+ more…$/);
     // The leading "+" is the part that used to be dropped, and it is the part
     // a voice user would say.
     expect(more.getAttribute("aria-label") ?? "").toContain(visible);
@@ -97,7 +97,8 @@ describe("truncating launcher controls disclose their full label on focus", () =
   it("the resume line opens a tooltip with the full name and description", async () => {
     vi.resetModules();
     const name = "Wire the OAuth device-flow refresh path end to end";
-    const description = "feature/oauth-device-flow · Opus";
+    // The row and its tooltip build the line from these parts, recency first.
+    const description = "2h ago · feature/oauth-device-flow · Opus";
     vi.doMock("@/hooks/useWorktreeStore", () => ({ useWorktreeStore: () => new Map() }));
     vi.doMock("@/store/projectStore", () => ({ useProjectStore: () => "p1" }));
     vi.doMock("@/hooks/useResumeAgentSession", () => ({ useResumeAgentSession: () => vi.fn() }));
@@ -106,7 +107,15 @@ describe("truncating launcher controls disclose their full label on focus", () =
     }));
     vi.doMock("@/services/resumeSessionItems", () => ({
       buildResumeSessionItems: () => [
-        { session: { sessionId: "a" }, name, description, agentName: "Claude", isStale: false },
+        {
+          session: { sessionId: "a" },
+          name,
+          timeAgo: "2h ago",
+          location: "feature/oauth-device-flow",
+          modelName: "Opus",
+          agentName: "Claude",
+          isStale: false,
+        },
       ],
     }));
     vi.doMock("@/components/PanelPalette/PanelKindIcon", () => ({ PanelKindIcon: () => <span /> }));

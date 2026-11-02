@@ -6,6 +6,7 @@ import { RecipeRunnerEmpty } from "./RecipeRunnerEmpty";
 import { InlineStatusBanner } from "../InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
+import { getRecipeScope } from "@/utils/recipeScope";
 
 interface RecipeRunnerProps {
   activeWorktreeId: string | null | undefined;
@@ -68,6 +69,10 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
   }
 
   const flatRecipes = runner.getFlatRecipes();
+  // A scope label earns its place only when it tells recipes apart: printed
+  // under every card when they all share it, it was the whole second line
+  // saying "Team" three times.
+  const showScope = new Set(runner.recipes.map((recipe) => getRecipeScope(recipe).label)).size > 1;
 
   return (
     <div className="w-full">
@@ -112,6 +117,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           focusedIndex={runner.focusedIndex}
           focusedItemId={runner.focusedItemId}
           showSearch={runner.showSearch}
+          showScope={showScope}
           disabled={!defaultCwd}
           onSearchChange={runner.setSearchQuery}
           onKeyDown={runner.handleKeyDown}
@@ -128,6 +134,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
         <RecipeRunnerGrid
           recipes={flatRecipes}
           focusedIndex={runner.focusedIndex}
+          showScope={showScope}
           disabled={!defaultCwd}
           onRun={runner.handleRun}
           onEdit={runner.handleEdit}
@@ -154,7 +161,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
             Create new recipe…
           </Button>
           <Button variant="ghost" size="sm" onClick={runner.handleManage}>
-            Manage recipes
+            Manage recipes…
           </Button>
         </div>
       )}

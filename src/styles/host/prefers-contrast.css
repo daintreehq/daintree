@@ -339,6 +339,14 @@
     border-color: var(--color-text-primary);
   }
 
+  /* The canvas home's ribbon draws a quiet day as an outline and an active day
+     as a fill. On its 6px cells the rim above covered more than half of every
+     active cell, so both read as the same white-rimmed box; an active day stays
+     a solid fill here and the outline stays the quiet day's. */
+  .pulse-mini-ribbon .pulse-heat-cell[data-heat-level] {
+    border-width: 0;
+  }
+
   /* File-browser type icons (issue #11596). Entry icons paint in the secondary
    * text token so they sit under the filename they label, but that token is
    * tuned for restraint rather than contrast. Under Increase Contrast the
