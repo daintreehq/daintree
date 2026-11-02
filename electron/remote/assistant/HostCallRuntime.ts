@@ -309,6 +309,8 @@ const NOTICE_PIN_TTL_MS = RELAY_NOTICE_WINDOW_MS;
 const MAX_SEEN_NOTICES = 1024;
 /** Host terminals whose recent prompts from here are remembered, for superseding. */
 const MAX_PROMPTED_TERMINALS = 512;
+/** First sends whose time a resend reports under (#16169); the oldest go first. */
+const MAX_CALL_TIMES = 512;
 /**
  * Prompts remembered per host terminal, newest kept: ones that ran apart from
  * ones still unanswered, so a burst of calls refused later never pushes out
@@ -912,6 +914,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly seenNotices = new Map<string, true>();
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
   private readonly prompted = new Map<string, PromptMark[]>();
+  /** When each call was first sent, so its answer, got by a resend, still dates from then. */
+  private readonly callTimes = new Map<string, number>();
   /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
   private readonly throwawaySessions = new Map<string, ThrowawaySession>();
   private disposed = false;
@@ -1467,6 +1471,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.settledPins.clear();
     this.seenNotices.clear();
     this.prompted.clear();
+    this.callTimes.clear();
     this.lastAgents.clear();
     this.agentsEpochs.clear();
     this.settingsRequests.dispose();
@@ -1547,7 +1552,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         };
       }
       const runMs = relayRunMs(args.tool, toolArgs);
-      const askedAt = this.now();
+      const askedAt = (resend ? this.callTimes.get(callId) : undefined) ?? this.now();
+      if (!resend) remember(this.callTimes, callId, askedAt, MAX_CALL_TIMES);
       const payload: RelayCallRequest = {
         helpSessionId,
         projectId,

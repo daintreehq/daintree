@@ -60,7 +60,7 @@ declare module "../runtime.js" {
  * of this machine's views takes it over. One a remote Shell's view holds
  * never counts.
  */
-function isOwnScheduledWithoutView(helpSessionId: string, handle: number | null): boolean {
+function isOwnScheduledWithoutView(helpSessionId: string, handle: number): boolean {
   return handle === NO_VIEW_HANDLE && helpSessionService.getScheduledRunOf(helpSessionId) !== null;
 }
 
@@ -264,8 +264,11 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       const lane = helpSessionService.getSessionLane(helpSessionId);
       if (lane !== null && isGlobalAssistantId(lane.projectId)) return true;
       const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
-      if (isOwnScheduledWithoutView(helpSessionId, handle)) return true;
-      return handle !== null && !isRemoteEndpointHandle(handle);
+      // A live session with no view answers null here; a schedule's is this machine's own.
+      if (handle === null) {
+        return lane !== null && helpSessionService.getScheduledRunOf(helpSessionId) !== null;
+      }
+      return !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled(hostId),
     // Workers a schedule's assistant launched elsewhere, for its run (#16169).

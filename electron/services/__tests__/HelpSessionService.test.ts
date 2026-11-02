@@ -1010,6 +1010,44 @@ describe("HelpSessionService", () => {
       expect(service.detachedSlots("proj-1")).toEqual([0]);
     });
 
+    it("remembers the run a schedule started it for, past its end (#16169)", async () => {
+      const scheduled = await service.provisionSession({
+        ...provisionInput(),
+        slot: 1,
+        windowId: NO_VIEW_HANDLE,
+        projectViewWebContentsId: NO_VIEW_HANDLE,
+        vacantOnly: true,
+        startedBy: { kind: "schedule", scheduleId: "schedule-1", runId: "run-1" },
+      });
+      if (!scheduled) throw new Error("expected result");
+      const asked = await startWithoutView();
+
+      expect(service.getScheduledRunOf(scheduled.sessionId)).toEqual({
+        scheduleId: "schedule-1",
+        runId: "run-1",
+      });
+      expect(service.getScheduledRunOf(asked.sessionId)).toBeNull();
+
+      await service.revokeSession(scheduled.sessionId);
+      expect(service.getSessionLane(scheduled.sessionId)).toBeNull();
+      // A launch it asked for before it ended still belongs to the run.
+      expect(service.getScheduledRunOf(scheduled.sessionId)).toEqual({
+        scheduleId: "schedule-1",
+        runId: "run-1",
+      });
+    });
+
+    it("refuses a schedule's start that names no run", async () => {
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: NO_VIEW_HANDLE,
+          projectViewWebContentsId: NO_VIEW_HANDLE,
+          startedBy: { kind: "schedule", scheduleId: "schedule-1", runId: "" },
+        })
+      ).rejects.toThrow(/startedBy/);
+    });
+
     it("answers no project for a bearer that runs through a view", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");

@@ -48,6 +48,16 @@ describe("an Assistant's run in the history (#16169)", () => {
     });
   });
 
+  it("only opens a run whose Assistant still runs, taken over by this view or not", () => {
+    const running = assistantRun({
+      settlement: { state: "open" },
+      process: { agent: { state: "not-started" }, pty: { state: "running", startedAt: 2 } },
+    });
+    // Reopening its conversation beside the running one would start a second, or end it.
+    expect(runAction(running, context)).toEqual({ kind: "open" });
+    expect(runAction(running, { ...context, terminalExists: true })).toEqual({ kind: "open" });
+  });
+
   it("says why when the Assistant's CLI can't be reopened in an Assistant tab", () => {
     const run = assistantRun({
       resume: { ...assistantRun().resume!, agentId: "copilot", agentSessionId: "s-1" },

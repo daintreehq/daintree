@@ -98,6 +98,8 @@ const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_RUNBOOK_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
+/** Schedule-started sessions whose run is remembered past their end; the oldest go first. */
+const SCHEDULED_RUN_SESSIONS_KEPT = 64;
 
 function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
   const parts =
@@ -395,6 +397,13 @@ function agentSessionDirName(pathHash: string, agentId: string): string {
 export class HelpSessionService {
   private readonly sessionsByToken = new Map<string, HelpSessionRecord>();
   private readonly sessionsById = new Map<string, HelpSessionRecord>();
+  /**
+   * The run each schedule-started session was provisioned for (#16169), kept
+   * past its revocation: a worker launch it asked for while the run was open
+   * can be answered after the session ends, and still belongs to that run.
+   * Session ids are minted per provision, so an entry never names a successor.
+   */
+  private readonly scheduledRunBySession = new Map<string, { scheduleId: string; runId: string }>();
   private readonly sessionFiles = new AssistantSessionFiles({
     byToken: (token) => this.sessionsByToken.get(token),
     bySessionId: (sessionId) => this.sessionsById.get(sessionId),
@@ -1259,6 +1268,13 @@ export class HelpSessionService {
 
     this.sessionsByToken.set(token, record);
     this.sessionsById.set(sessionId, record);
+    if (input.startedBy?.kind === "schedule") {
+      const { scheduleId, runId } = input.startedBy;
+      this.scheduledRunBySession.set(sessionId, { scheduleId, runId });
+      if (this.scheduledRunBySession.size > SCHEDULED_RUN_SESSIONS_KEPT) {
+        this.scheduledRunBySession.delete(this.scheduledRunBySession.keys().next().value as string);
+      }
+    }
 
     if (settings.daintreeControl && port) {
       try {
@@ -1419,13 +1435,14 @@ export class HelpSessionService {
     return { projectId: record.projectId, slot: record.slot };
   }
 
-  /** The run a live session was started for by a schedule on this machine (#16169), or null. */
+  /**
+   * The run a session was started for by a schedule on this machine (#16169),
+   * or null; answered after the session ends too, for what it did meanwhile.
+   * Says nothing about whether the session may still act: ask its lane.
+   */
   getScheduledRunOf(sessionId: string): { scheduleId: string; runId: string } | null {
-    const record = this.sessionsById.get(sessionId);
-    const startedBy = record && !record.revoked ? record.startedBy : undefined;
-    return startedBy?.kind === "schedule"
-      ? { scheduleId: startedBy.scheduleId, runId: startedBy.runId }
-      : null;
+    const run = this.scheduledRunBySession.get(sessionId);
+    return run ? { ...run } : null;
   }
 
   /**

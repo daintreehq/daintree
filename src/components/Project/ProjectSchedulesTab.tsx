@@ -14,7 +14,7 @@ import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { usePanelStore } from "@/store/panelStore";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { actionService } from "@/services/ActionService";
-import { revealRunTerminal } from "@/services/scheduledRunLanding";
+import { revealAssistantRun, revealRunTerminal } from "@/services/scheduledRunLanding";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
@@ -325,25 +325,25 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
       if (closed) then();
     });
   };
-  // An Assistant's run lives in an Assistant tab (#16169): the tab holding its
-  // conversation is brought forward, or the conversation reopens in one.
-  const showAssistantRun = (run: ScheduledRun): boolean => {
-    const resume = run.resume;
-    if (run.assistant !== true || !resume?.agentSessionId) return false;
-    if (!ASSISTANT_RESUMABLE_AGENTS.has(resume.agentId)) return false;
-    const args = { agentId: resume.agentId, sessionId: resume.agentSessionId };
-    closeThen(
-      () => void actionService.dispatch("help.resumePastSession", args, { source: "user" })
-    );
-    return true;
-  };
+  // An Assistant's run lives in an Assistant tab (#16169). Open brings its tab
+  // forward and never starts anything; Resume, offered once its terminal has
+  // ended, reopens its conversation in a tab by its exact id.
   const openRun = (run: ScheduledRun) => {
     const terminalId = run.terminalId;
-    if (!terminalId || showAssistantRun(run)) return;
+    if (run.assistant === true) return closeThen(() => revealAssistantRun(terminalId));
+    if (!terminalId) return;
     closeThen(() => revealRunTerminal(terminalId));
   };
   const resumeRun = (run: ScheduledRun, schedule: Schedule) => {
-    if (showAssistantRun(run)) return;
+    const resume = run.resume;
+    if (run.assistant === true) {
+      if (!resume?.agentSessionId || !ASSISTANT_RESUMABLE_AGENTS.has(resume.agentId)) return;
+      const args = { agentId: resume.agentId, sessionId: resume.agentSessionId };
+      closeThen(
+        () => void actionService.dispatch("help.resumePastSession", args, { source: "user" })
+      );
+      return;
+    }
     const record = sessionRecordFor(run, schedule);
     if (!record) return;
     closeThen(() => void resumeSession(record));

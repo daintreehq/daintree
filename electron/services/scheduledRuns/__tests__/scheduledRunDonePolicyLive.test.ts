@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   },
   background: vi.fn(async () => {}),
   forget: vi.fn(async () => {}),
+  sessionCaptured: vi.fn(),
   generation: undefined as number | undefined,
 }));
 
@@ -36,7 +37,10 @@ vi.mock("../../viewless/projectStateAuthoring.js", () => ({
   forgetViewlessTerminal: state.forget,
 }));
 vi.mock("../index.js", () => ({
-  peekScheduledRunRecorder: () => ({ get: (runId: string) => state.runs.get(runId) ?? null }),
+  peekScheduledRunRecorder: () => ({
+    get: (runId: string) => state.runs.get(runId) ?? null,
+    handleSessionCaptured: state.sessionCaptured,
+  }),
 }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
@@ -110,6 +114,7 @@ beforeEach(() => {
   state.ptyClient.kill.mockReset();
   state.background.mockClear();
   state.forget.mockClear();
+  state.sessionCaptured.mockClear();
   state.generation = 4;
 });
 
@@ -293,9 +298,24 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
 });
 
 describe("an Assistant run's done policy (#16169)", () => {
-  const assistantRun = (): ScheduledRun => ({ ...settledRun(), assistant: true, workers: [] });
+  const worker = (terminalId: string, hostId: string | null) => ({
+    terminalId,
+    hostId,
+    hostName: hostId,
+    projectId: "project-1",
+    projectName: null,
+    agentId: "claude",
+    observedAt: SPAWNED_AT + 1_000,
+  });
+  const assistantRun = (): ScheduledRun => ({
+    ...settledRun(),
+    assistant: true,
+    workers: [worker("worker-here", null), worker("worker-there", "studio")],
+  });
 
-  it("closes the Assistant's own terminal and nothing else: no pane request, no layout write", async () => {
+  it("closes the Assistant's own terminal and nothing else, keeping the conversation on its run", async () => {
+    const captured: unknown[] = [];
+    events.on("agent-session:captured", (payload) => captured.push(payload));
     const views = [view(1)];
     state.views = views;
     state.ptyClient.getTerminalAsync.mockResolvedValue(terminalInfo({ isAssistantTerminal: true }));
@@ -303,12 +323,25 @@ describe("an Assistant run's done policy (#16169)", () => {
 
     arm("close");
 
-    await vi.waitFor(() => expect(state.ptyClient.gracefulKill).toHaveBeenCalledWith("terminal-1"));
-    // Its views and its session follow its terminal ending; workers aren't the run's to close.
+    await vi.waitFor(() =>
+      expect(state.sessionCaptured).toHaveBeenCalledWith({
+        record: {
+          sessionId: "codex-session",
+          agentId: "codex",
+          projectId: "project-1",
+          terminal: { id: "terminal-1", spawnedAt: SPAWNED_AT },
+        },
+      })
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(state.ptyClient.gracefulKill).toHaveBeenCalledTimes(1);
+    // Only its own terminal: the workers it launched keep running.
+    expect(state.ptyClient.gracefulKill.mock.calls).toEqual([["terminal-1"]]);
+    expect(state.ptyClient.kill).not.toHaveBeenCalled();
+    // Its tab and session follow the terminal ending; it was never in a grid or the layout,
+    // and its capture stays out of the session journal.
     expect(views[0]!.send).not.toHaveBeenCalled();
     expect(state.forget).not.toHaveBeenCalled();
+    expect(captured).toEqual([]);
   });
 
   it("leaves it where it is for a background policy stored before it was refused", async () => {

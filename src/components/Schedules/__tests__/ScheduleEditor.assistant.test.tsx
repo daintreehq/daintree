@@ -64,6 +64,7 @@ function renderEditor(schedule: Schedule) {
       onSaved={vi.fn()}
       onDeleted={vi.fn()}
       onCancel={vi.fn()}
+      onOpenAgentSettings={vi.fn()}
     />
   );
 }
@@ -131,6 +132,48 @@ describe("ScheduleEditor: the Daintree Assistant (#16169)", () => {
           prompt: "Go.",
           worktreeId: null,
         },
+      })
+    );
+  });
+
+  it("switching an agent's schedule to the Assistant drops its preset, worktree and background", async () => {
+    const schedule = {
+      ...existing("claude", "background"),
+      launch: { agentId: "claude", presetId: "fast", prompt: "Go.", worktreeId: "/wt" },
+    };
+    clientMock.update.mockResolvedValue({
+      status: "saved",
+      schedule,
+      snapshot: { projectId: "p1", schedules: [], revision: 1 },
+    });
+    renderEditor(schedule);
+    const save = () => screen.getByRole("button", { name: "Save changes" });
+    expect(screen.queryByText("No changes to save")).not.toBeNull();
+
+    Element.prototype.scrollIntoView ??= () => {};
+    HTMLElement.prototype.hasPointerCapture ??= () => false;
+    HTMLElement.prototype.releasePointerCapture ??= () => {};
+    const trigger = screen.getByRole("combobox", { name: "Agent" });
+    await act(async () => fireEvent.keyDown(trigger, { key: "Enter" }));
+    const assistant = await screen.findByRole("option", { name: "Daintree Assistant" });
+    await act(async () => fireEvent.keyDown(assistant, { key: "Enter" }));
+
+    expect(screen.queryByLabelText("Preset")).toBeNull();
+    expect(doneChoices()).toEqual(["Keep", "Close"]);
+    expect(screen.queryByText("No changes to save")).toBeNull();
+    await act(async () => fireEvent.click(save()));
+
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({
+        launch: {
+          agentId: SCHEDULE_ASSISTANT_AGENT_ID,
+          presetId: null,
+          prompt: "Go.",
+          worktreeId: null,
+        },
+        policies: expect.objectContaining({ onDone: "keep" }),
       })
     );
   });

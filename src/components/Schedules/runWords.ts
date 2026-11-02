@@ -129,6 +129,10 @@ export function runAction(
   // which the row already says; Open would show nothing more.
   const seenStarting = runStartedAt(run) !== null || run.settlement.state === "open";
   if (context.terminalExists && seenStarting) return { kind: "open" };
+  // An Assistant's terminal still running is in an Assistant tab, taken over
+  // by this view or not yet (#16169): reopening its conversation beside it
+  // would start a second one, or end the first.
+  if (run.assistant === true && run.process.pty.state === "running") return { kind: "open" };
   const neverStarted =
     run.process.pty.state === "not-started" &&
     run.settlement.state === "settled" &&

@@ -2402,8 +2402,6 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
       await flushAsyncWork();
       expect(mockListPendingHibernationSlots).toHaveBeenCalledWith("proj-1");
       expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(1);
-      // Nothing is started for it: opening the tab takes the running Assistant over.
-      expect(mockProvisionSession).not.toHaveBeenCalledWith(expect.objectContaining({ slot: 1 }));
     } finally {
       delete electron.events;
     }

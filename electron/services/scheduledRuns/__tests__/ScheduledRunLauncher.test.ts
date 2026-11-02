@@ -1347,4 +1347,18 @@ describe("launchScheduledRun with the Daintree Assistant", () => {
       expect.objectContaining({ command: "test -f ready", cwd: "/repo" })
     );
   });
+
+  it("starts no Assistant when the precondition fails", async () => {
+    withPolicies({ precondition: { command: "test -f ready" } });
+    const reason = { kind: "precondition" as const, exitCode: 1, signal: null, error: null };
+    deps.runPrecondition = vi.fn(async () => reason);
+
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "skipped",
+      runId: "id-1",
+      reason,
+    });
+    expect(deps.launchAssistant).not.toHaveBeenCalled();
+    expect(recorder.registerSkip).toHaveBeenCalledWith(expect.objectContaining({ reason }));
+  });
 });

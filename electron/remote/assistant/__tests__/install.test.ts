@@ -6,6 +6,8 @@ const running = vi.hoisted(
 );
 /** Running lanes whose session no view has attached, by lane key. */
 const detached = vi.hoisted(() => new Set<string>());
+/** Help sessions a schedule started (#16169), with their run. */
+const scheduled = vi.hoisted(() => new Map<string, { scheduleId: string; runId: string }>());
 /** Which project each of this machine's views shows, by WebContents id. */
 const views = vi.hoisted(() => new Map<number, string>());
 /** The host-control runtime install hands the MCP server. */
@@ -58,6 +60,7 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     getRunningLaneSession: (projectId: string, slot: number) =>
       running.get(`${projectId}:${slot}`) ?? null,
+    getScheduledRunOf: (helpSessionId: string) => scheduled.get(helpSessionId) ?? null,
     listRunningLanes: () =>
       [...running.keys()].map((key) => {
         const [projectId, slot] = laneOf(key);
@@ -205,6 +208,7 @@ function runLocally(projectId: string, slot: number, sessionId: string, view = 4
 afterEach(() => {
   running.clear();
   detached.clear();
+  scheduled.clear();
   views.clear();
   generations.clear();
   queued.length = 0;
@@ -404,6 +408,36 @@ describe("installHostControl (#13493)", () => {
       expect(listed.ok).toBe(false);
       off();
     });
+  });
+
+  it("treats a schedule's assistant no view has taken over as this machine's own (#16169)", async () => {
+    const off = installHostControl({
+      observeHosts: () => [],
+      isHostControlEnabled: () => false,
+    });
+    running.set("proj-1:0", {
+      sessionId: "scheduled",
+      terminalId: "t-s",
+      projectViewWebContentsId: 0,
+    });
+    generations.set("t-s", 1);
+    scheduled.set("scheduled", { scheduleId: "schedule-1", runId: "run-1" });
+    const runtime = hostControl.runtime as HostCallRuntime;
+
+    // Offered the host tools from the start, and answered as a run of this machine.
+    expect(runtime.isCallReachable("scheduled")).toBe(true);
+    await expect(runtime.list("scheduled")).resolves.toMatchObject({ ok: true });
+
+    // Once a remote Shell's view holds it, it's that Shell's.
+    running.set("proj-1:0", {
+      sessionId: "scheduled",
+      terminalId: "t-s",
+      // A remote endpoint handle is negative.
+      projectViewWebContentsId: -7,
+    });
+    expect(runtime.isCallReachable("scheduled")).toBe(false);
+    await expect(runtime.list("scheduled")).resolves.toMatchObject({ ok: false });
+    off();
   });
 });
 

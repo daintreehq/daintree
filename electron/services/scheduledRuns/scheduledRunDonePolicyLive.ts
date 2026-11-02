@@ -39,9 +39,18 @@ function askViews(target: ArmedScheduledRun, action: ScheduledRunFinishRequest["
  * one running under its id.
  */
 function closeRunTerminal(target: ArmedScheduledRun, run: ScheduledRun): Promise<boolean> {
+  const { terminalSpawnedAt } = run;
   return closeTerminalKeepingSession(
-    { terminalId: target.terminalId, spawnedAt: run.terminalSpawnedAt },
-    "scheduled-run-done"
+    { terminalId: target.terminalId, spawnedAt: terminalSpawnedAt },
+    "scheduled-run-done",
+    undefined,
+    // An Assistant's run keeps its conversation (#16169): a Codex Assistant's id is only known now.
+    (capture) => {
+      if (terminalSpawnedAt === null) return;
+      peekScheduledRunRecorder()?.handleSessionCaptured({
+        record: { ...capture, terminal: { id: target.terminalId, spawnedAt: terminalSpawnedAt } },
+      });
+    }
   );
 }
 
