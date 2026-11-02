@@ -534,6 +534,19 @@ describe("getThemeContrastWarnings", () => {
     const messages = outlineMessages(scheme);
     expect(messages.some((m) => m.includes("the highlighted row fill"))).toBe(true);
     expect(messages.some((m) => m.includes("surface-panel-elevated"))).toBe(false);
+
+    // The same pixel spelled another way is still the palette's surface.
+    const respelled: AppColorScheme = {
+      ...scheme,
+      tokens: {
+        ...scheme.tokens,
+        "surface-panel-elevated": "#FFFFFF" as AppColorSchemeTokens["surface-panel-elevated"],
+        "surface-panel": "#fff" as AppColorSchemeTokens["surface-panel"],
+      },
+    };
+    const respelledMessages = outlineMessages(respelled);
+    expect(respelledMessages.some((m) => m.includes("the highlighted row fill"))).toBe(true);
+    expect(respelledMessages.some((m) => m.includes("surface-panel"))).toBe(false);
   });
 
   it("reports a panel surface it cannot composite as unevaluable", () => {

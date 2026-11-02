@@ -283,8 +283,54 @@ describe("highlighted-row language", () => {
         .endsWith('[data-overview-cursor="true"][aria-selected="true"]::after')
     );
     expect(ring, "a ring for the selected cursor cell").toBeDefined();
-    expect(ring![2]).toMatch(/border\s*:\s*2px solid var\(--color-accent-primary\)/);
+    expect(ring![2]).toMatch(/content\s*:\s*""/);
     expect(ring![2]).toMatch(/position\s*:\s*absolute/);
+    expect(ring![2]).toMatch(/inset\s*:\s*[1-9]\d*px/);
+    expect(ring![2]).toMatch(/border\s*:\s*2px solid var\(--color-accent-primary\)/);
+
+    // The ring and the membership outline find the cell by these attributes.
+    const row = files.find((f) => f.rel === "src/components/Worktree/WorktreeOverviewRow.tsx");
+    const cells = elementsCarrying(row!.source, "data-worktree-overview-cell");
+    expect(cells).toHaveLength(1);
+    for (const attribute of ["role", "aria-selected", "data-overview-cursor"]) {
+      expect(cells[0], `the overview cell carries ${attribute}`).toContain(attribute);
+    }
+  });
+
+  it("accepts the recipe cursor only with its whole forced-colours outline", () => {
+    const state = ["group-focus-within/recipes", "aria-selected"];
+    const full = [
+      "group-focus-within/recipes:aria-selected:bg-overlay-highlight",
+      "group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]",
+      "forced-colors:group-focus-within/recipes:aria-selected:outline-solid",
+      "forced-colors:group-focus-within/recipes:aria-selected:outline-2",
+      "forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight]",
+      "forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2",
+    ];
+    expect(recipeCursorTreatment(full, [state])).toBe(true);
+    for (const missing of full.slice(1)) {
+      expect(
+        recipeCursorTreatment(
+          full.filter((token) => token !== missing),
+          [state]
+        ),
+        `without ${missing}`
+      ).toBe(false);
+      const offChain = missing.replace("group-focus-within/recipes:", "");
+      expect(
+        recipeCursorTreatment(
+          full.map((token) => (token === missing ? offChain : token)),
+          [state]
+        ),
+        `with ${offChain}`
+      ).toBe(false);
+    }
+    expect(
+      recipeCursorTreatment(
+        full.map((token) => token.replace("outline-[color:Highlight]", "outline-[color:#fff]")),
+        [state]
+      )
+    ).toBe(false);
   });
 
   it("puts an outline hook on every element that paints the highlight", () => {
@@ -394,6 +440,19 @@ describe("highlighted-row language", () => {
     expect(reasons(`<div className="data-[state=open]:bg-overlay-highlight" />`)).toEqual([
       "no outline hook",
     ]);
+    // An explicit role outranks the tag, whichever way it is written.
+    expect(
+      reasons(`<SubTrigger role="button" className="data-[state=open]:bg-overlay-highlight" />`)
+    ).toEqual(["no outline hook"]);
+    expect(
+      reasons(`<SubTrigger role={role} className="data-[state=open]:bg-overlay-highlight" />`)
+    ).toEqual(["no outline hook"]);
+    expect(
+      reasons(`<Item role={"button"} className="data-[highlighted]:bg-overlay-highlight" />`)
+    ).toEqual(["no outline hook"]);
+    expect(
+      reasons(`<div role={"menuitem"} className="data-[state=open]:bg-overlay-highlight" />`)
+    ).toEqual(["hooked"]);
     expect(
       reasons(
         `<SubTrigger className="data-[state=open]:bg-overlay-highlight aria-selected:bg-overlay-highlight" />`
@@ -463,26 +522,23 @@ const OWN_TREATMENT: Record<
  * there the cursor needs a `Highlight` outline under the same state too.
  */
 function recipeCursorTreatment(classes: string[], states: string[][]): boolean {
-  return states.every(
-    (state) =>
-      hasClass(
-        classes,
-        (variants, utility) =>
-          utility === "border-[var(--color-selection-outline)]" && sameChain(variants, state)
-      ) &&
-      hasClass(
-        classes,
-        (variants, utility) =>
-          VISIBLE_OUTLINE.test(utility) && sameChain(variants, ["forced-colors", ...state])
-      ) &&
-      hasClass(
-        classes,
-        (variants, utility) =>
-          utility === "outline-[color:Highlight]" &&
-          sameChain(variants, ["forced-colors", ...state])
-      )
-  );
+  return states.every((state) => {
+    const under = (chain: string[], test: (utility: string) => boolean) =>
+      hasClass(classes, (variants, utility) => test(utility) && sameChain(variants, chain));
+    const forced = ["forced-colors", ...state];
+    return (
+      under(state, (utility) => utility === "border-[var(--color-selection-outline)]") &&
+      under(forced, (utility) => utility === "outline-solid") &&
+      under(forced, (utility) => OUTLINE_WIDTH.test(utility)) &&
+      under(forced, (utility) => utility === "outline-[color:Highlight]") &&
+      under(forced, (utility) => INSET_OUTLINE_OFFSET.test(utility))
+    );
+  });
 }
+
+const OUTLINE_WIDTH = /^outline-([1-9]\d*|\[(length:)?(\d*\.)?\d*[1-9]\d*[a-z]*\])$/;
+const INSET_OUTLINE_OFFSET =
+  /^(-outline-offset-[1-9]\d*|outline-offset-\[-(\d*\.)?\d*[1-9]\d*[a-z]*\])$/;
 
 /** An outline utility that draws one: a width or a style, not an offset or a colour. */
 const VISIBLE_OUTLINE =
@@ -595,10 +651,13 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
         }
         const element = node.parent.parent;
         const tag = element.tagName.getText(file);
-        const role = attributes.get("role")?.initializer;
-        const radixItem =
-          RADIX_ITEM_TAGS.has(tag) ||
-          (role !== undefined && ts.isStringLiteral(role) && RADIX_ITEM_ROLES.has(role.text));
+        // An explicit role wins over the tag: Radix forwards it, and the outline
+        // rules select by role. One this scan can't read hooks nothing.
+        const roleAttribute = attributes.get("role");
+        const role = roleAttribute && literalText(roleAttribute.initializer);
+        const radixItem = roleAttribute
+          ? role !== null && role !== undefined && RADIX_ITEM_ROLES.has(role)
+          : RADIX_ITEM_TAGS.has(tag);
         // The paint's own state, outlined in each mode: a visible outline, not
         // just an offset, under the same variants the fill is painted under.
         const outlinedIn = (mode: string) =>
@@ -612,20 +671,14 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
         const shared = names.has("PALETTE_ROW_CLASS") || names.has("LIST_DETAIL_ROW_CLASS");
         let hooked = false;
         let reason = "no outline hook";
-        const menuItem =
-          tag === "SubTrigger" ||
-          (role !== undefined && ts.isStringLiteral(role) && role.text === "menuitem");
+        const menuItem = roleAttribute ? role === "menuitem" : tag === "SubTrigger";
         // An open submenu's parent row is outlined by its role and `data-state`.
         const radixOnly = states.every(
           (state) =>
             state.includes("data-[highlighted]") ||
             (menuItem && state.includes("data-[state=open]"))
         );
-        const overviewCell =
-          role !== undefined &&
-          ts.isStringLiteral(role) &&
-          role.text === "gridcell" &&
-          attributes.has("data-worktree-overview-cell");
+        const overviewCell = role === "gridcell" && attributes.has("data-worktree-overview-cell");
         if (radixOnly && radixItem) hooked = true;
         else if (radixOnly) hooked = outlinedIn("contrast-more") && outlinedIn("forced-colors");
         else if (overviewCell) {
@@ -654,6 +707,40 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
         hooked: false,
         reason: "painted outside a className attribute",
       });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return out;
+}
+
+/** A JSX attribute's value when it is a string literal, bare or in braces. */
+function literalText(initializer: ts.JsxAttributeValue | undefined): string | null {
+  if (initializer === undefined) return null;
+  const value = ts.isJsxExpression(initializer) ? initializer.expression : initializer;
+  return value && (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value))
+    ? value.text
+    : null;
+}
+
+/** The attribute names of every JSX element in `source` that carries `marker`. */
+function elementsCarrying(source: string, marker: string): Set<string>[] {
+  const file = ts.createSourceFile(
+    "row.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+  const out: Set<string>[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const names = new Set(
+        node.attributes.properties
+          .filter(ts.isJsxAttribute)
+          .map((attribute) => attribute.name.getText(file))
+      );
+      if (names.has(marker)) out.push(names);
     }
     ts.forEachChild(node, visit);
   };

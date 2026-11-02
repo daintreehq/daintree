@@ -1140,7 +1140,9 @@ function getPanelRowSelectionWarnings(scheme: AppColorScheme): AppThemeValidatio
   const warnings: AppThemeValidationWarning[] = [];
   const outlineToken = scheme.tokens["selection-outline"];
   const fillToken = scheme.tokens["overlay-highlight"];
-  const scored = resolvePaletteSurfaces(scheme) ?? [];
+  // Compared as pixels, so `#FFFFFF` and `#fff` are the one surface they paint.
+  const pixel = (hex: string) => `${hexToRgb(hex).join(",")}/${splitHexAlpha(hex)?.opacity ?? 1}`;
+  const scored = new Set((resolvePaletteSurfaces(scheme) ?? []).map(pixel));
 
   for (const key of PANEL_ROW_SURFACES) {
     const surface = scheme.tokens[key];
@@ -1151,7 +1153,7 @@ function getPanelRowSelectionWarnings(scheme: AppColorScheme): AppThemeValidatio
       });
       continue;
     }
-    if (scored.includes(surface)) continue;
+    if (scored.has(pixel(surface))) continue;
     const fill = resolveOverBackdrop(fillToken, surface);
     const outline = fill === null ? null : resolveOverBackdrop(outlineToken, fill);
     if (fill === null || outline === null) {
