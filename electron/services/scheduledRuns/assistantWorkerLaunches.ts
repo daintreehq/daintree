@@ -50,6 +50,24 @@ export function workerLaunchesIn(
   return { terminalIds, agentId: typeof asked === "string" && asked !== "" ? asked : null };
 }
 
+type ScheduledRunOfSession = (helpSessionId: string) => { readonly runId: string } | null;
+let runOfSession: ScheduledRunOfSession = () => null;
+
+/**
+ * Set by the help sessions' service, so the run history can read which run
+ * started a session without importing that service: an import from the run
+ * history would pull the service's whole graph into the lazily initialised
+ * part of the main bundle.
+ */
+export function setScheduledRunOfSession(lookup: ScheduledRunOfSession): void {
+  runOfSession = lookup;
+}
+
+/** The schedule's run that started a help session, or null; null before any session exists. */
+export function scheduledRunOfSession(helpSessionId: string): { readonly runId: string } | null {
+  return runOfSession(helpSessionId);
+}
+
 type AssistantWorkerSink = (answer: AssistantToolAnswer) => void;
 let sink: AssistantWorkerSink | null = null;
 

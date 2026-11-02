@@ -95,15 +95,14 @@ async function followAssistantWorkers(history: ScheduledRunRecorder): Promise<vo
   try {
     // Loaded here, never at boot: a new static import from this module would
     // change how the main bundle's eagerly loaded chunks are grouped.
-    const [{ setAssistantWorkerSink, workerLaunchesIn }, { helpSessionService }, { projectStore }] =
-      await Promise.all([
-        import("./assistantWorkerLaunches.js"),
-        import("../HelpSessionService.js"),
-        import("../ProjectStore.js"),
-      ]);
+    // HelpSessionService is never imported here, not even lazily: this module
+    // is initialised lazily, and an import() from it makes the service's whole
+    // graph lazy too, which skips zod/mini's initialisation and crashes main
+    // at load.
+    const [{ scheduledRunOfSession, setAssistantWorkerSink, workerLaunchesIn }, { projectStore }] =
+      await Promise.all([import("./assistantWorkerLaunches.js"), import("../ProjectStore.js")]);
     setAssistantWorkerSink((answer) => {
-      const runId =
-        answer.runId ?? helpSessionService.getScheduledRunOf(answer.helpSessionId)?.runId;
+      const runId = answer.runId ?? scheduledRunOfSession(answer.helpSessionId)?.runId;
       if (runId === undefined || answer.projectId === undefined) return;
       const { terminalIds, agentId } = workerLaunchesIn(answer.tool, answer.args, answer.result);
       const projectName =

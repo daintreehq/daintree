@@ -43,6 +43,7 @@ import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
 import { agentSupportsAssistantContent } from "./AssistantContentMirror.js";
 import { resolveAssistantPluginKnowledge } from "./AssistantPluginKnowledge.js";
+import { setScheduledRunOfSession } from "./scheduledRuns/assistantWorkerLaunches.js";
 import type { HelpSessionProjectFacts } from "./helpSessionProjectMetadata.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
@@ -2894,3 +2895,4 @@ export class HelpSessionService {
 }
 
 export const helpSessionService = new HelpSessionService();
+setScheduledRunOfSession((sessionId) => helpSessionService.getScheduledRunOf(sessionId));
