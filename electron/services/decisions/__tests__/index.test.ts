@@ -269,6 +269,8 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import { outstandingRows, row } from "./questionRows.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
+import { setDecisionsHostsPort } from "../../../window/serviceRefs.js";
+import type { DecisionsHostLink, DecisionsHostsPort } from "../../../types/decisionsHosts.js";
 
 /** An entry status: what it observed, and the revision it was read at. */
 function withRevision<T extends object>(status: T): T & { revision: number } {
@@ -302,8 +304,10 @@ import {
   getDecisionsPolicy,
   getDecisionsService,
   getDecisionsStatus,
+  listHosts,
   peekDecisionsService,
   restoreIdentity,
+  setAutoEnrollHosts,
   setDecisionsEnabled,
   setDecisionsProxyAllowlisted,
   startDecisionsIfEnabled,
@@ -1958,6 +1962,96 @@ describe("Decisions entry", () => {
         vi.useRealTimers();
       }
       await stopDecisions();
+    });
+  });
+
+  describe("Remote Hosts (#16021)", () => {
+    /** A Host from before enrollment, so a run ends at its first step. */
+    function olderHostLink() {
+      const status = vi.fn(async () => ({ ok: false as const, failure: "needs-update" as const }));
+      const link: DecisionsHostLink = {
+        isOpen: true,
+        onClose: () => () => {},
+        hold: () => () => {},
+        status,
+        request: vi.fn(),
+        accept: vi.fn(),
+      };
+      return { link, status };
+    }
+
+    function publishPort(links: Map<string, DecisionsHostLink>) {
+      const opened = new Set<(hostId: string, link: DecisionsHostLink) => void>();
+      const port: DecisionsHostsPort = {
+        hosts: () => [...links.keys()].map((hostId) => ({ hostId, name: hostId })),
+        linkFor: (hostId) => links.get(hostId) ?? null,
+        onLinkOpened: (listener) => {
+          opened.add(listener);
+          return () => opened.delete(listener);
+        },
+        onHostsChanged: () => () => {},
+      };
+      const withdraw = setDecisionsHostsPort(port);
+      return {
+        withdraw,
+        open(hostId: string, link: DecisionsHostLink) {
+          links.set(hostId, link);
+          for (const listener of opened) listener(hostId, link);
+        },
+      };
+    }
+
+    it("asks a connected Host only once Decisions connects, and nothing once it is off", async () => {
+      const links = new Map<string, DecisionsHostLink>();
+      const studio = olderHostLink();
+      links.set("studio", studio.link);
+      const port = publishPort(links);
+      try {
+        saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+        await startDecisionsIfEnabled();
+        const [connection] = connections;
+        connection!.options.onStatus({ state: "connecting" });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(studio.status).not.toHaveBeenCalled();
+
+        connection!.options.onStatus({ state: "connected" });
+        await vi.waitFor(() => expect(studio.status).toHaveBeenCalledTimes(1));
+        await vi.waitFor(async () =>
+          expect(await listHosts()).toMatchObject({
+            result: "listed",
+            autoEnroll: true,
+            hosts: [{ hostId: "studio", enrollment: { state: "needs-update" }, canEnroll: false }],
+          })
+        );
+
+        await setDecisionsEnabled(false);
+        const lab = olderHostLink();
+        port.open("lab", lab.link);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(lab.status).not.toHaveBeenCalled();
+      } finally {
+        port.withdraw();
+      }
+    });
+
+    it("saves automatic enrollment's switch with everything else as it was", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+
+      await expect(setAutoEnrollHosts(false)).resolves.toMatchObject({
+        result: "listed",
+        autoEnroll: false,
+      });
+      expect(saved.value).toMatchObject({
+        enabled: true,
+        consentedAt: 5,
+        ...RELAY,
+        autoEnrollHosts: false,
+      });
+      await expect(listHosts()).resolves.toMatchObject({ autoEnroll: false });
+
+      await setDecisionsEnabled(false);
+      await expect(setAutoEnrollHosts(true)).rejects.toMatchObject(CANCELLED);
     });
   });
 });

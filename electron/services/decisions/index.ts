@@ -120,12 +120,15 @@ function forgetOwnerDevices(): void {
  * off, stopped when it returns there. What it shows rides on the status
  * push, as the policy does, so Settings reads the Hosts again with it.
  */
-const hostEnroller = new HostEnroller({
-  watchPort: watchDecisionsHostsPort,
-  owner: () => hostEnrollmentOwner(),
-  autoEnroll: () => (service?.getSettings() ?? readDecisionsSettings(store)).autoEnrollHosts,
-  onChanged: () => publishStatus(),
-});
+function makeHostEnroller(): HostEnroller {
+  return new HostEnroller({
+    watchPort: watchDecisionsHostsPort,
+    owner: () => hostEnrollmentOwner(),
+    autoEnroll: () => (service?.getSettings() ?? readDecisionsSettings(store)).autoEnrollHosts,
+    onChanged: () => publishStatus(),
+  });
+}
+let hostEnroller = makeHostEnroller();
 /** One record keeper per store and installation, so its writes run one at a time. */
 let hostRecords: { store: DaintreeLocalStore; installationId: string; records: HostRecords } | null =
   null;
@@ -1165,6 +1168,7 @@ export function _resetDecisionsForTesting(): void {
   statusRevision = 0;
   statusPushes = Promise.resolve();
   policyRevision = 0;
-  hostEnroller.stop();
+  hostEnroller.dispose();
+  hostEnroller = makeHostEnroller();
   hostRecords = null;
 }
