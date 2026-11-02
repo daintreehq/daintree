@@ -457,4 +457,29 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     await flushAll!();
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  // The page mounts on empty rows before the project form seeds them, and a close
+  // that caught a registration made then wrote the untouched values (#16150).
+  it("asks for no close-time save when the form seeds its rows, only for an edit", () => {
+    const register = vi.fn(() => () => {});
+    const registry = { register, flushAll: async () => [] };
+    const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const page = (environmentVariables: EnvVar[]) => (
+      <SettingsValidationProvider>
+        <SettingsFlushContext.Provider value={registry}>
+          <EnvironmentVariablesEditor
+            {...defaultProps}
+            environmentVariables={environmentVariables}
+            onFlush={onFlush}
+          />
+        </SettingsFlushContext.Provider>
+      </SettingsValidationProvider>
+    );
+    const { rerender } = rtlRender(page([]));
+    rerender(page([makeEnvVar("MY_VAR", "a")]));
+    expect(register).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/^Value of /), { target: { value: "b" } });
+    expect(register).toHaveBeenCalledWith("project:variables", expect.any(Function));
+  });
 });

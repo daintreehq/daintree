@@ -71,12 +71,17 @@ export function EnvironmentVariablesEditor({
     focusAfterDelete,
   } = useRowFocus();
 
-  useEffect(() => {
+  // Reseeded during render, not in an effect: an effect left the draft a commit
+  // behind its rows, so a close landing in that commit saved unchanged values as
+  // an edit, and the effect's run on mount overwrote an edit made before it.
+  const [seededFrom, setSeededFrom] = useState({ environmentVariables, isOpen });
+  if (seededFrom.environmentVariables !== environmentVariables || seededFrom.isOpen !== isOpen) {
+    setSeededFrom({ environmentVariables, isOpen });
     setRows(cloneRows(environmentVariables));
     setVisibleEnvVars(new Set());
     setSaveAttempted(false);
     setSaveError(null);
-  }, [environmentVariables, isOpen]);
+  }
 
   // After a failed Save the rows are the form's, so the save that finally lands
   // (the banner's Retry, a close) never passes through this page.
