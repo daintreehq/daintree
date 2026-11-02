@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   _resetDecisionsModuleForTesting,
+  decisionsHostServes,
+  decisionsServesPanes,
+  decisionsWantedAtStartup,
   loadDecisionsModule,
   sealDecisionsModule,
 } from "../serviceRefs.js";
@@ -57,5 +60,28 @@ describe("Decisions module loader", () => {
     const late = vi.fn(async () => fakeModule);
     expect(loadDecisionsModule(late)).toBeNull();
     expect(late).not.toHaveBeenCalled();
+  });
+});
+
+describe("what Decisions runs, read before it loads (#16022)", () => {
+  const RECORD = { deviceId: "dev_host_0001", ownerOffAt: null, revokedAt: null };
+
+  it("serves panes with the owner's switch on, or as an enrolled Host its owner hasn't turned off", () => {
+    expect(decisionsServesPanes(undefined, undefined)).toBe(false);
+    expect(decisionsServesPanes({ enabled: true }, undefined)).toBe(true);
+    expect(decisionsServesPanes({ enabled: false }, RECORD)).toBe(true);
+    expect(decisionsServesPanes(undefined, { ...RECORD, ownerOffAt: 5 })).toBe(false);
+    expect(decisionsServesPanes(undefined, { ...RECORD, revokedAt: 5 })).toBe(false);
+    expect(decisionsHostServes({ ownerOffAt: null })).toBe(false);
+    expect(decisionsHostServes("dev_host_0001")).toBe(false);
+  });
+
+  it("starts at boot to finish removing a revoked Host's keys, and never once they are gone", () => {
+    expect(decisionsWantedAtStartup(undefined, { ...RECORD, revokedAt: 5 })).toBe(true);
+    expect(
+      decisionsWantedAtStartup(undefined, { ...RECORD, revokedAt: 5, credentialsRemovedAt: 6 })
+    ).toBe(false);
+    expect(decisionsWantedAtStartup(undefined, { ...RECORD, ownerOffAt: 5 })).toBe(false);
+    expect(decisionsWantedAtStartup({ enabled: true }, undefined)).toBe(true);
   });
 });
