@@ -1,4 +1,5 @@
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "@shared/types";
+import type { AddAgentAccountRequest, AddAgentAccountResult } from "@shared/types/ipc/agentAccounts";
 
 // Value cache + singleflight on get(): burst paths (bulk restart, duplicate,
 // recipe spawns) coalesce concurrent reads into one IPC round-trip, and later
@@ -68,6 +69,18 @@ export const agentSettingsClient = {
   reset: (agentType?: string): Promise<AgentSettings> => {
     invalidate();
     return window.electron.agentSettings.reset(agentType).finally(invalidate);
+  },
+
+  /** Make or check the account's folder and save it (#16040). */
+  addAccount: (request: AddAgentAccountRequest): Promise<AddAgentAccountResult> => {
+    invalidate();
+    return window.electron.agentAccounts.add(request).finally(invalidate);
+  },
+
+  /** Forget an account; its folder stays where it is. */
+  removeAccount: (agentId: string, accountId: string): Promise<AgentSettings> => {
+    invalidate();
+    return window.electron.agentAccounts.remove(agentId, accountId).finally(invalidate);
   },
 
   stampVersion: (version: number): Promise<Record<string, unknown>> => {

@@ -17,6 +17,7 @@ import {
 } from "@shared/types/agentSessionFile";
 import {
   KeepConversationArgSchema,
+  RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
   StartHeldArgsSchema,
@@ -430,6 +431,36 @@ export function registerTerminalLifecycleActions(
     resultSchema: RestartOnPresetResultSchema,
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.restartOnPreset", args, ctx),
+  }));
+
+  actions.set("terminal.restartOnAccount", () => ({
+    id: "terminal.restartOnAccount",
+    title: "Restart agent on account",
+    description:
+      "Respawn an agent terminal in place on another of its agent's accounts, keeping its preset. Always starts a new conversation and discards the scrollback, so it runs only when confirmed.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Ends the agent's conversation and respawns it on another account. Scrollback is lost.",
+    keywords: ["account", "login", "switch", "relaunch", "rate limit"],
+    // Needs an account the palette has no way to ask for; the pane menu and
+    // the rate-limit chip carry their own picker and confirm.
+    palette: { mode: "hidden" },
+    argsSchema: RestartOnAccountArgsSchema,
+    resultSchema: z.object({
+      terminalId: z.string().describe("The pane, respawned in place."),
+      agentAccountId: z
+        .string()
+        .nullable()
+        .describe("Account it now runs on; null is the CLI's default login."),
+      agentSessionIdCleared: z
+        .literal(true)
+        .describe("A new conversation started: re-send anything the agent still needs."),
+    }),
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.restartOnAccount", args, ctx),
   }));
 
   // Manifest-only, executed in the MCP main process like `terminal.closeOwned`

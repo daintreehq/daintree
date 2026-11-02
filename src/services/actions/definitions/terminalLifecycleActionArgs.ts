@@ -19,6 +19,19 @@ export const RestartOnPresetArgsSchema = z.object({
     .describe("Confirms interrupting the agent. Without it the terminal is left alone."),
 });
 
+export const RestartOnAccountArgsSchema = z.object({
+  terminalId: z.string().optional(),
+  accountId: z
+    .string()
+    .min(1)
+    .nullable()
+    .describe("An account of the terminal's own agent; null is the CLI's default login."),
+  confirmed: z
+    .boolean()
+    .optional()
+    .describe("Confirms ending the conversation. Without it the terminal is left alone."),
+});
+
 export const TerminalKillBatchArgsSchema = z.object({
   terminalIds: TerminalKillBatchIdsSchema.describe(
     `Identifies the panels to destroy (1-${MAX_KILL_BATCH_TERMINALS}), using \`id\` values from the terminal listing. Each id must appear once. An id that is unchecked, already gone, or newly busy is reported back rather than failing the batch.`
