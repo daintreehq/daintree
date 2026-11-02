@@ -516,6 +516,17 @@ describe("RecipeEditor", () => {
       expect((await save())[0]).toMatchObject({ type: "codex", whenDone: "close" });
     });
 
+    it("says a prompt led by a variable is armed only if it fills in as a task", () => {
+      renderEditor({
+        ...AGENT,
+        terminals: [{ type: "claude", title: "Path", initialPrompt: "{{worktree_path}}", env: {} }],
+      });
+      expect(document.getElementById("terminal-when-done-0")!.hasAttribute("disabled")).toBe(false);
+      expect(document.getElementById("terminal-when-done-help-0")?.textContent).toContain(
+        "filled-in prompt"
+      );
+    });
+
     it("names why a slash-command prompt can't set it", () => {
       renderEditor({
         ...AGENT,

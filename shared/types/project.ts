@@ -547,6 +547,15 @@ export function promptCarriesWhenDone(prompt: string | undefined): boolean {
   return trimmed !== "" && !trimmed.startsWith("/");
 }
 
+/**
+ * Whether a recipe prompt opens with a variable, so only the filled-in prompt
+ * says whether {@link promptCarriesWhenDone} holds: it may fill in empty, or
+ * as a path that reads as a slash command.
+ */
+export function promptStartsWithVariable(prompt: string | undefined): boolean {
+  return prompt?.trimStart().startsWith("{{") ?? false;
+}
+
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
   /** Type of terminal to spawn */

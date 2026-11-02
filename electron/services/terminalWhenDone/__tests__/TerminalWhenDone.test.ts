@@ -591,6 +591,24 @@ describe("TerminalWhenDone launch arming (#16172)", () => {
       expect(service.list(PROJECT)).toEqual([]);
     });
 
+    it("lets go of its bound on every way it ends", async () => {
+      const ended: Array<(target: ReturnType<typeof setup>) => void | Promise<void>> = [
+        (t) => t.service.handleSpawnResult(TERMINAL, confirmed),
+        (t) => t.service.handleSpawnResult(TERMINAL, { ...confirmed, success: false }),
+        (t) => t.service.handleExit(TERMINAL),
+        (t) => t.service.handleIncarnationLost(TERMINAL, 4),
+        (t) => t.service.set(TERMINAL, "keep", PROJECT),
+        (t) => t.service.set(TERMINAL, "background", PROJECT),
+      ];
+      for (const end of ended) {
+        const target = setup({ launchTimeoutMs: 1_000 });
+        target.service.armLaunch(launch());
+        expect(vi.getTimerCount()).toBe(1);
+        await end(target);
+        expect(vi.getTimerCount()).toBe(0);
+      }
+    });
+
     it("never drops a confirmed launch or a choice picked from the menu meanwhile", async () => {
       const confirmedLaunch = setup({ launchTimeoutMs: 1_000 });
       confirmedLaunch.service.armLaunch(launch());

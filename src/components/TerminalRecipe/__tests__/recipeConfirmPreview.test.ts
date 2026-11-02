@@ -197,6 +197,12 @@ describe("When done in the preview (#16172)", () => {
     expect(
       describeTerminal({ type: "claude", initialPrompt: "Review", whenDone: "background" })
     ).toContain("when done: move to background");
+    // A prompt led by a variable is armed only if it fills in as a task.
+    expect(
+      describeTerminal({ type: "claude", initialPrompt: "{{worktree_path}}", whenDone: "close" })
+    ).toContain(
+      "when done: close, keeping the session (if the filled-in prompt isn't empty or a slash command)"
+    );
     // No prompt, a blank one or a slash command arms nothing; a shell step never is.
     for (const initialPrompt of [undefined, "   ", "/prompts:merge-prs"]) {
       expect(

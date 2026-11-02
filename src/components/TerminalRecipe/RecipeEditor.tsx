@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { FolderGit2, FolderOpen, GitBranch, Globe, Plus, Trash2 } from "lucide-react";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { isAgentRecipeType, promptCarriesWhenDone } from "@shared/types/project";
+import {
+  isAgentRecipeType,
+  promptCarriesWhenDone,
+  promptStartsWithVariable,
+} from "@shared/types/project";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -585,7 +589,9 @@ export function RecipeEditor({
         hint={hint(
           helpId,
           armable
-            ? "What the terminal does once its agent reports the prompt done"
+            ? promptStartsWithVariable(terminal.initialPrompt)
+              ? "Applies once the agent reports the prompt done, if the filled-in prompt isn't empty or a slash command"
+              : "What the terminal does once its agent reports the prompt done"
             : isSlashCommand
               ? "Not available for a slash command; choose When done from the terminal menu once it runs"
               : "Add an initial prompt to set this, or choose When done from the terminal menu once it runs"
