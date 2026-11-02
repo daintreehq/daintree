@@ -44,6 +44,7 @@ import {
   setPendingComposerSelection,
 } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
+import { isDragCancelEscape } from "@/lib/dragCancelEscape";
 import { correctionRequest } from "@/services/voiceCorrectionRequest";
 import {
   planVoiceBreak,
@@ -1705,7 +1706,8 @@ class VoiceRecordingService {
     // counts as the release. Modifier-only releases (Shift, Alt, Ctrl) do not —
     // only the physical trigger key or Meta release.
     const handlePttKeyUp = (e: KeyboardEvent) => {
-      if (this.heldPress === null) return;
+      // A drag recovery's Escape keyup is no release, even of a key bound to Escape.
+      if (this.heldPress === null || isDragCancelEscape(e)) return;
       const isTriggerRelease = e.code === this.heldPress.code;
       const isMetaRelease = e.code === "MetaLeft" || e.code === "MetaRight";
       if (!isTriggerRelease && !isMetaRelease) return;

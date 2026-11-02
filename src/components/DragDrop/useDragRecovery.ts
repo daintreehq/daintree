@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { dispatchDragCancelEscape } from "@/lib/dragCancelEscape";
 
 /**
  * Grace period after the pointer leaves the host document before a live mouse
@@ -10,22 +11,6 @@ import { useCallback, useEffect, useRef } from "react";
 export const DRAG_RECOVERY_GRACE_MS = 500;
 
 type LiveDragKind = "mouse" | "other";
-
-/**
- * Cancels a live pointer drag the way dnd-kit's pointer sensors expect: a
- * document keydown with code "Escape" and no `key`, so ordinary Escape actions
- * ignore it. Dispatched on body, not document: capture-phase key handlers cast
- * event.target to HTMLElement (`.closest`), which a Document target would
- * break. The matching keyup releases it for anything tracking held keys
- * (`useDoubleShift`), which would otherwise read Escape as still down.
- */
-export function dispatchDragCancelEscape(): void {
-  for (const type of ["keydown", "keyup"] as const) {
-    document.body.dispatchEvent(
-      new KeyboardEvent(type, { code: "Escape", bubbles: true, cancelable: true })
-    );
-  }
-}
 
 /**
  * Watchdog for drags whose native end event never reaches the host document

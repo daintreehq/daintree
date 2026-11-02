@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
-import { DRAG_RECOVERY_GRACE_MS, dispatchDragCancelEscape } from "./useDragRecovery";
+import { dispatchDragCancelEscape } from "@/lib/dragCancelEscape";
+import { DRAG_RECOVERY_GRACE_MS } from "./useDragRecovery";
 
 // Strip drags in separate panes can overlap (one picked up by keyboard while
 // another is dragged by mouse), so the shield they raise is held by count and

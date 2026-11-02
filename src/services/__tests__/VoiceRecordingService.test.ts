@@ -4017,6 +4017,42 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     );
   });
 
+  it("takes no drag recovery's Escape keyup as the release of a key bound to Escape", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
+      keybindingService: { matchesEvent: ReturnType<typeof vi.fn> };
+    };
+    keybindingService.matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Escape"
+    );
+    const { markDragCancelEscape } = await import("@/lib/dragCancelEscape");
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const down = { code: "Escape", key: "Escape", repeat: false, metaKey: true };
+    for (const listener of windowListeners["keydown"] ?? []) listener(down);
+    await startFromPress(voiceRecordingService);
+
+    for (const listener of windowListeners["keyup"] ?? []) {
+      listener(markDragCancelEscape({ code: "Escape" }));
+    }
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Escape" });
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+  });
+
   it("a second override combo for the voice shortcut arms the release like the first", async () => {
     const electron = buildPttElectronStub();
     const { windowListeners } = setupGlobals(electron);
