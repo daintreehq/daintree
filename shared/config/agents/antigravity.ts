@@ -195,6 +195,7 @@ export const config: AgentConfig = {
     configPathsAll: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"],
     envVar: "GOOGLE_API_KEY",
   },
+  account: { kind: "api-key", keyVars: ["GOOGLE_API_KEY"] },
   prerequisites: [
     {
       tool: "agy",

@@ -268,6 +268,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "One of the user's saved launch presets. Explicit null ignores the default preset.",
           type: ["string", "null"],
         },
+        accountId: {
+          description:
+            "One of the agent's saved accounts. Explicit null uses the CLI's default login.",
+          type: ["string", "null"],
+        },
         activateDockOnCreate: {
           description: "Open the sidebar dock when placing the agent there.",
           type: "boolean",

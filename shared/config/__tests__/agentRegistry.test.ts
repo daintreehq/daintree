@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   getAgentIds,
+  getAgentConfigFolderAccount,
   getAgentConfig,
   setUserRegistry,
   getEffectiveAgentConfig,
@@ -491,6 +492,36 @@ describe("agentRegistry", () => {
       expect(hasAssistantMcpImplementation("aider")).toBe(false);
       expect(hasAssistantMcpImplementation("not-an-agent")).toBe(false);
     });
+  });
+});
+
+describe("account declarations (#16040)", () => {
+  it("gives every probe of a config folder the folder's own declaration", () => {
+    for (const id of getAgentIds()) {
+      const config = getAgentConfig(id);
+      if (!config?.authCheck?.configHomePaths) continue;
+      expect(config.account?.kind, id).toBe("config-folder");
+    }
+  });
+
+  it("names a home-relative default folder and a variable for every config-folder account", () => {
+    for (const id of getAgentIds()) {
+      const account = getAgentConfig(id)?.account;
+      if (account?.kind !== "config-folder") continue;
+      expect(account.envVar, id).toMatch(/^[A-Z][A-Z0-9_]*$/);
+      expect(account.defaultDir.startsWith("/") || account.defaultDir.includes(".."), id).toBe(
+        false
+      );
+    }
+  });
+
+  it("offers folder accounts only for agents whose CLI keeps its whole login in one folder", () => {
+    expect(getAgentConfigFolderAccount("codex")?.envVar).toBe("CODEX_HOME");
+    expect(getAgentConfigFolderAccount("claude")?.envVar).toBe("CLAUDE_CONFIG_DIR");
+    // A keychain login isn't selectable per launch, and an install directory isn't a login.
+    expect(getAgentConfigFolderAccount("copilot")).toBeUndefined();
+    expect(getAgentConfigFolderAccount("amp")).toBeUndefined();
+    expect(getAgentConfigFolderAccount("not-an-agent")).toBeUndefined();
   });
 });
 

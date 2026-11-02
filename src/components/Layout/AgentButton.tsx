@@ -14,6 +14,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -21,6 +23,8 @@ import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
+import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
+import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
@@ -97,6 +101,9 @@ interface AgentButtonProps {
   availability?: AgentAvailabilityState;
   "data-toolbar-item"?: string;
 }
+
+const DEFAULT_LOGIN_VALUE = "default-login";
+const MISSING_ACCOUNT_VALUE = "missing-account";
 
 const stopPointer = (e: ReactPointerEvent) => {
   e.stopPropagation();
@@ -327,6 +334,13 @@ export function AgentButton({
   // dropdown always renders the implicit "Default" entry alongside it, so one
   // named preset already gives the user two real launch choices.
   const hasPresets = presets.length >= 1;
+  // Accounts are a choice of their own beside the preset (#16040).
+  const accounts = getAgentConfigFolderAccount(type) ? sanitizeAgentAccounts(entry.accounts) : [];
+  const hasAccounts = accounts.length > 0;
+  const savedAccountId = resolveEffectiveAccountId(entry, activeWorktreeId);
+  const activeAccount = savedAccountId
+    ? accounts.find((account) => account.id === savedAccountId)
+    : undefined;
   // Worktree-scoped pick wins over the agent-level default so switching
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
@@ -380,7 +394,9 @@ export function AgentButton({
   // second half would advertise a control that isn't there.
   const isSplitLive = !isLoading && isLaunchable;
 
-  const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
+  const presetSegment =
+    (activePresetName ? ` · ${activePresetName}` : "") +
+    (activeAccount ? ` · ${activeAccount.name}` : "");
   // The click still launches when the CLI is unavailable — it lands on the
   // recovery panel, not Settings — so both surfaces borrow the dock's hint
   // rather than naming an action this button no longer performs (#11760).
@@ -400,7 +416,9 @@ export function AgentButton({
     : isLaunchable
       ? // Its rows launch; only their trailing control sets a default, so
         // naming it "set" promised the one thing a click on a row doesn't do.
-        `Start ${config.name} with a preset`
+        hasAccounts
+        ? `Start ${config.name} with a preset, or choose its account`
+        : `Start ${config.name} with a preset`
       : needsSetup
         ? // The chevron blocks clicks when not launchable, so its copy names
           // the precondition alone — unlike the primary button, it opens
@@ -479,6 +497,18 @@ export function AgentButton({
         if (presetNoticeGenerationRef.current === generation) setPresetNotice(notice);
       })
       .catch(() => {});
+  };
+
+  // The account rides with every launch from here, so picking one changes the
+  // worktree's account (or the agent's, outside a worktree) rather than
+  // launching once, and the radio mark is where it now stands.
+  const pickAccount = (value: string) => {
+    const accountId = value === DEFAULT_LOGIN_VALUE ? null : value;
+    const store = useAgentSettingsStore.getState();
+    const write = activeWorktreeId
+      ? store.updateWorktreeAccount(type, activeWorktreeId, accountId)
+      : store.updateAgent(type, { accountId: accountId ?? undefined });
+    void write.catch(() => {});
   };
 
   // The agent-default row saves the bare agent to this worktree's slot rather
@@ -631,7 +661,7 @@ export function AgentButton({
     </div>
   );
 
-  if (!hasPresets) {
+  if (!hasPresets && !hasAccounts) {
     return (
       <ContextMenu
         onOpenChange={(open) => {
@@ -935,6 +965,31 @@ export function AgentButton({
                     {customPresetGroup.map((preset) => renderPresetRow(preset))}
                   </>
                 )}
+                {hasAccounts && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>Account</DropdownMenuLabel>
+                    {/* A saved account that's gone checks nothing, so picking the
+                        default login still registers as a change. */}
+                    <DropdownMenuRadioGroup
+                      value={
+                        savedAccountId === null
+                          ? DEFAULT_LOGIN_VALUE
+                          : (activeAccount?.id ?? MISSING_ACCOUNT_VALUE)
+                      }
+                      onValueChange={pickAccount}
+                    >
+                      <DropdownMenuRadioItem value={DEFAULT_LOGIN_VALUE}>
+                        Default login
+                      </DropdownMenuRadioItem>
+                      {accounts.map((account) => (
+                        <DropdownMenuRadioItem key={account.id} value={account.id}>
+                          {account.name}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </>
+                )}
                 {presetNotice && (
                   <PresetSwitchNoticeItems
                     agentName={config.name}
@@ -965,6 +1020,21 @@ export function AgentButton({
                   <Settings2 className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Manage presets…
                 </DropdownMenuItem>
+                {hasAccounts && (
+                  <DropdownMenuItem
+                    inset
+                    onSelect={() =>
+                      void actionService.dispatch(
+                        "app.settings.openTab",
+                        { tab: "agents", subtab: type, sectionId: "agents-accounts" },
+                        { source: "user" }
+                      )
+                    }
+                  >
+                    <Settings2 className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                    Manage accounts…
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </span>

@@ -304,6 +304,14 @@ function mergePresets(into: PresetLabels, from: PresetLabels): void {
   into.presetOrder = merged.map((entry) => entry.order);
 }
 
+function mergeAccountNames(
+  into: string[] | undefined,
+  from: string[] | undefined
+): string[] | undefined {
+  if (!from?.length) return into;
+  return [...(into ?? []), ...from.filter((name) => !into?.includes(name))];
+}
+
 /**
  * Folds the spellings of one directory — a symlink, `.Codex-2` beside
  * `.codex-2` on APFS — into the first target that names it. Folding into the
@@ -321,6 +329,7 @@ async function foldBySameDirectory(targets: CodexQuotaProfileTarget[]): Promise<
     const existing = byKey.get(homeKey);
     if (existing) {
       mergePresets(existing, target);
+      existing.accountNames = mergeAccountNames(existing.accountNames, target.accountNames);
       existing.isDefault ||= target.isDefault;
       continue;
     }
@@ -359,6 +368,7 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
       key: profileKey(target.homeKey, target.invalid !== undefined),
       isDefault: target.isDefault,
       presetNames: target.presetNames,
+      ...(target.accountNames?.length && { accountNames: target.accountNames }),
       result,
     };
     // Two homes signed into one login are one row (#13702). It saves a row,
@@ -370,6 +380,8 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
     if (sameAccount) {
       mergePresets(sameAccount.labels, target);
       sameAccount.profile.presetNames = sameAccount.labels.presetNames;
+      const accountNames = mergeAccountNames(sameAccount.profile.accountNames, target.accountNames);
+      if (accountNames?.length) sameAccount.profile.accountNames = accountNames;
       sameAccount.profile.isDefault ||= profile.isDefault;
       if (result.fetchedAt > sameAccount.profile.result.fetchedAt) {
         sameAccount.profile.result = result;

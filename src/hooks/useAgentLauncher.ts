@@ -177,6 +177,11 @@ export interface LaunchAgentOptions {
   interactive?: boolean;
   modelId?: string;
   presetId?: string | null;
+  /**
+   * The account to launch on (#16040). `null` is the CLI's default login;
+   * omitted, the worktree's account applies, else the agent's default.
+   */
+  accountId?: string | null;
   /** Bypass the availability gate and always attempt to spawn. */
   force?: boolean;
   /**
@@ -298,6 +303,36 @@ function notifyPresetsLoading(
     context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
     urgent: true,
     replaceKey: `launch-presets-loading:${agentId}`,
+    action: {
+      label: "Open settings",
+      actionId: "app.settings.openTab",
+      actionArgs: target,
+      onClick: () => {
+        void import("@/services/ActionService").then(({ actionService }) =>
+          actionService.dispatch("app.settings.openTab", target, { source: "user" })
+        );
+      },
+    },
+  });
+}
+
+/**
+ * Why a launch on a removed account didn't start: running on another account
+ * than the one chosen bills someone else, so it isn't swapped silently.
+ */
+function notifyAccountMissing(
+  agentId: string,
+  agentName: string,
+  worktreeId: string | null | undefined
+): void {
+  const target = { tab: "agents", subtab: agentId, sectionId: "agents-accounts" } as const;
+  notify({
+    type: "error",
+    title: `Couldn't start ${agentName}`,
+    message: "The account it's set to launch on was removed. Choose another account and try again.",
+    context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
+    urgent: true,
+    replaceKey: `launch-account-missing:${agentId}`,
     action: {
       label: "Open settings",
       actionId: "app.settings.openTab",
@@ -579,6 +614,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           },
         });
         if (plan.unloadedPresetId !== undefined) return declinePresetsLoading();
+        if (plan.missingAccountId !== undefined) {
+          logWarn(`Declined a launch of ${agentId}: its account no longer exists`);
+          notifyAccountMissing(agentId, agentConfig?.name ?? agentId, effectiveWorktreeId);
+          return decline("spawn-failed");
+        }
         const { command, assignedSessionId, preset } = plan;
         const cachedLaunchCliDetail = plan.cliDetail;
 
@@ -621,6 +661,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               ...(firstPrompt && { launchPrompt: firstPrompt }),
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
+              agentAccountId: plan.account?.id,
               env: plan.env,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
@@ -681,6 +722,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentModelId: plan.modelId,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
+              agentAccountId: plan.account?.id,
+              // The folder the account is, kept with it so a reload restores
+              // the gate's launch on that account, not the default login.
+              ...(plan.account && plan.env && { env: plan.env }),
               spawnStatus: "missing-cli",
               // "Run anyway" replays the gate's command, prompt included, so
               // the gate holds the launch's record for it. Review Hub shows

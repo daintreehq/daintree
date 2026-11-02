@@ -367,6 +367,7 @@ export type { BuiltInKeyAction, KeyAction, KeymapPreset, KeyMapConfig } from "./
 
 // Agent settings types - AI agent CLI configuration
 export type {
+  AgentAccount,
   AgentSettingsEntry,
   AgentSettings,
   DangerousMode,

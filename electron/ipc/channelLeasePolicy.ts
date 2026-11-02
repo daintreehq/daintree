@@ -33,6 +33,9 @@ type HostSideChannel = {
 }[keyof typeof CHANNEL_LOCALITY];
 
 export const CHANNEL_LEASE_POLICY = {
+  // Host-wide agent settings, like `agent-settings:set` (#16040).
+  "agent-accounts:add": "free",
+  "agent-accounts:remove": "free",
   "agent-capabilities:get-agent-ids": "free",
   "agent-capabilities:get-agent-metadata": "free",
   "agent-capabilities:get-ccr-presets": "free",

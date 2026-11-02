@@ -1367,6 +1367,8 @@ export const SETTINGS_REGISTRY = [
     LazyComponent: LazyAgentSettings,
     needsSubtabs: true,
     needsOnSettingsChange: true,
+    // A sign-in terminal opened from an agent's Accounts closes Settings first.
+    needsOnClose: true,
     searchNavDescription: "Configure CLI agent settings",
     searchNavKeywords: [
       "integrations",

@@ -208,6 +208,8 @@ export interface AddPanelOptionsBase {
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time, for the panel's own mark */
   agentPresetColor?: string;
+  /** The account the launch runs on (#16040); its folder is in `env`. */
+  agentAccountId?: string;
   /** Original user-selected preset ID; immutable across fallback hops. */
   originalPresetId?: string;
   /** Whether this panel is currently running on a fallback preset. */

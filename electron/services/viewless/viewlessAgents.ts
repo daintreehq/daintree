@@ -359,6 +359,7 @@ export async function runAgentLaunch(
     presetInventory,
     options: {
       presetId: args.presetId,
+      accountId: args.accountId,
       env: args.env,
       prompt:
         handbackCode !== undefined && args.prompt !== undefined
@@ -394,6 +395,8 @@ export async function runAgentLaunch(
   // The disk reads already finished, so an unread source here failed: nothing
   // will arrive to wait for.
   if (plan.unloadedPresetId !== undefined) return declined("presets-loading", null, identity);
+  // Never on another account than the one chosen (#16040): that bills someone else.
+  if (plan.missingAccountId !== undefined) return declined("spawn-failed", null, identity);
   if (isAgent && !plan.command) return declined("spawn-failed", null, identity);
   // A CLI that cannot launch would only start and fail. A view opens its setup
   // diagnostic panel instead; with no view, the result says why nothing ran.
@@ -482,6 +485,7 @@ export async function runAgentLaunch(
     agentPresetColor: plan.preset?.color,
     originalPresetId: plan.preset?.id,
     env: plan.env,
+    agentAccountId: plan.account?.id,
     ...provenance,
     ...(firstPrompt && { firstPrompt }),
   };

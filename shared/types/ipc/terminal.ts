@@ -194,6 +194,8 @@ export interface TerminalState {
   originalPresetId?: string;
   /** Captured launch env replayed on restore so a session keeps its provider environment (#10922) */
   env?: Record<string, string>;
+  /** The account the pane launched on (#16040); its folder is in `env` */
+  agentAccountId?: string;
   /** Whether this panel is currently running on a fallback preset */
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed */

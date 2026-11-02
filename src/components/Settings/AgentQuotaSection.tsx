@@ -87,7 +87,9 @@ function useUnreadProjectCodexPresets(): string[] {
 
 /** The group name once a section holds several profiles; a lone one goes unnamed. */
 export function profileLabel(profile: CodexQuotaProfile): string {
-  const names = profile.presetNames.join(", ");
+  // Accounts first: they're what a home is for now (#16040); presets that
+  // still name one follow.
+  const names = [...(profile.accountNames ?? []), ...profile.presetNames].join(", ");
   if (!profile.isDefault) return names;
   return names ? `Default profile · ${names}` : "Default profile";
 }

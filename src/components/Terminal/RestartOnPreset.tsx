@@ -75,14 +75,17 @@ function PresetRowContent({ agentId, choice }: { agentId: string; choice: Restar
 export function RestartOnPresetSubmenu({
   agentId,
   currentPresetId,
+  accountBound = false,
   onPick,
 }: {
   agentId: string;
   currentPresetId: string | undefined;
+  /** The pane keeps its account across the switch, so a preset's home quota doesn't apply. */
+  accountBound?: boolean;
   onPick: (choice: RestartPresetChoice) => void;
 }) {
   // Menu content mounts only while open, so the quota is read only then.
-  const choices = useRestartPresetChoices(agentId, currentPresetId, true);
+  const choices = useRestartPresetChoices(agentId, currentPresetId, !accountBound);
   if (choices.length === 0) return null;
   return (
     <ContextMenuSub>

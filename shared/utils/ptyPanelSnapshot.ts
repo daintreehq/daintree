@@ -33,6 +33,7 @@ export type PtySnapshotSource = Pick<
   | "scheduledRun"
   | "agentPresetId"
   | "agentPresetColor"
+  | "agentAccountId"
   | "originalPresetId"
   | "isUsingFallback"
   | "fallbackChainIndex"
@@ -88,6 +89,9 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     ...readSpawnProvenance(t.spawnedBy, t.scheduledRun),
     ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
     ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
+    // Only beside the env that holds its folder: without it a relaunch has
+    // nothing to put the pane back on (#16040).
+    ...(t.agentAccountId && env && { agentAccountId: t.agentAccountId }),
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),

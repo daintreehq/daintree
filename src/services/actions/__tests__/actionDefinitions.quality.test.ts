@@ -1116,6 +1116,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
   "terminal.restartAll",
   "terminal.startHeld",
@@ -1192,6 +1193,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartAll",
   "worktree.delete",
   "worktree.sessions.endAll",
@@ -1428,6 +1430,8 @@ describe("destructive-action danger metadata", () => {
       terminalIds: ["term-placeholder"],
       // terminal.restartOnPreset names the preset to respawn on.
       presetId: "preset-placeholder",
+      // terminal.restartOnAccount names the account to respawn on.
+      accountId: "account-placeholder",
       // terminal.startHeld names how the held pane starts.
       start: "fresh",
       // session.bookmarkAndClose/delete need label + sessionId to clear arg

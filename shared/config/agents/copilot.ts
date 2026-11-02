@@ -159,6 +159,7 @@ export const config: AgentConfig = {
     // users get `authConfirmed: false` but remain launchable.
     configPathsAll: [".copilot/config.json"],
   },
+  account: { kind: "fixed" },
   prerequisites: [
     {
       tool: "copilot",

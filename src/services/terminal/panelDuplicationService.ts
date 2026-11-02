@@ -19,6 +19,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
+import { keepPaneAccount, paneAccountEnv } from "@shared/utils/agentAccounts";
 import {
   appendCallerLaunchFlagsToCommand,
   splitCallerLaunchFlags,
@@ -47,6 +48,7 @@ function duplicateTitleMode(
 export interface ResolvedCommand {
   command: string | undefined;
   env: Record<string, string> | undefined;
+  agentAccountId?: string;
   agentLaunchFlags: string[] | undefined;
   /** The caller's verbatim tail of `agentLaunchFlags` (#13046), when known. */
   callerLaunchFlags: string[] | undefined;
@@ -151,9 +153,13 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             globalUseAltScreen,
           }
         );
+        // The copy runs on the source pane's account, not whichever is the
+        // default now (#16040).
+        const accountEnv = paneAccountEnv(panel.launchAgentId, panel);
         return {
           command,
-          env: runtimeSettings.env,
+          env: keepPaneAccount(runtimeSettings.env, panel.launchAgentId, panel),
+          agentAccountId: accountEnv ? panel.agentAccountId : undefined,
           agentLaunchFlags: [...baseLaunchFlags, ...caller],
           callerLaunchFlags: caller.length > 0 ? caller : undefined,
           preset,
@@ -166,7 +172,11 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           `Failed to get agent settings for ${panel.launchAgentId}, using existing command:`,
           error
         );
+        // Settings couldn't be read, but the source's account is on the pane
+        // itself: the copy doesn't fall back to the default login (#16040).
+        const accountEnv = paneAccountEnv(panel.launchAgentId, panel);
         return {
+          agentAccountId: accountEnv ? panel.agentAccountId : undefined,
           // Reusing the source's command verbatim would clone its assigned
           // session id along with it, so strip that back off (#11782) and let
           // this copy launch as the fresh conversation it is.
@@ -174,7 +184,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             panel.command ?? agentConfig.command,
             panel.launchAgentId
           ),
-          env: undefined,
+          env: accountEnv,
           agentLaunchFlags: panel.agentLaunchFlags,
           callerLaunchFlags: panel.callerLaunchFlags,
           preset: undefined,
@@ -407,6 +417,7 @@ export async function buildPanelDuplicateOptions(
   const {
     command,
     env,
+    agentAccountId,
     agentLaunchFlags,
     callerLaunchFlags,
     preset,
@@ -451,6 +462,7 @@ export async function buildPanelDuplicateOptions(
       callerLaunchFlags,
       agentSessionId,
       env,
+      agentAccountId,
       requiredPluginTools: sourcePanel.requiredPluginTools
         ? [...sourcePanel.requiredPluginTools]
         : undefined,

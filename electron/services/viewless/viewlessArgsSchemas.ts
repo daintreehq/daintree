@@ -129,6 +129,7 @@ export const AgentLaunchArgsSchema = z.object({
   interactive: z.boolean().optional(),
   model: z.string().optional(),
   presetId: z.string().nullable().optional(),
+  accountId: z.string().nullable().optional(),
   activateDockOnCreate: z.boolean().optional(),
   env: z.record(z.string(), z.string()).optional(),
   excludeFromPersistence: z.boolean().optional(),

@@ -443,6 +443,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- terminalLifecycleActions --
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
   "terminal.startHeld",
   "terminal.redraw",

@@ -406,6 +406,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       // prefetch below, overlapping prewarm and any queue wait) and layered
       // UNDER this, so only the launch-resolved layer is frozen here.
       ...(options.env && { env: options.env }),
+      ...(options.agentAccountId && { agentAccountId: options.agentAccountId }),
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
       sessionLostOnRestore: options.sessionLostOnRestore,

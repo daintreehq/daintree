@@ -160,17 +160,38 @@ export interface AgentAuthCheck {
   /** Platform-independent config file paths (relative to os.homedir()) */
   configPathsAll?: string[];
   /**
-   * Files under a config root that an environment variable can relocate.
-   * `paths` are checked under `process.env[envVar]` when it is set in
-   * Daintree's environment, otherwise under `defaultDir` (relative to
-   * os.homedir()). Never both: a relocated root means the default one is not
-   * where the CLI looks. A relative value is not probed at all, since it
-   * depends on the directory the agent is launched in.
+   * Files under the agent's config folder, the one its `account` declaration
+   * names (`kind: "config-folder"`). Checked under `process.env[envVar]` when
+   * it is set in Daintree's environment, otherwise under `defaultDir`. Never
+   * both: a relocated folder means the default one is not where the CLI looks.
+   * A relative value is not probed at all, since it depends on the directory
+   * the agent is launched in.
    */
-  configHome?: { envVar: string; defaultDir: string; paths: string[] };
+  configHomePaths?: string[];
   /** Environment variable(s) that indicate auth when present */
   envVar?: string | string[];
 }
+
+/**
+ * How a CLI holds a second account (#16040), declared so Settings, the
+ * launcher and the quota reader all read one answer.
+ *
+ * - `config-folder`: everything the CLI keeps, login included, lives in one
+ *   folder that `envVar` relocates. An account is that folder; Daintree only
+ *   hands the variable to a launch and never writes inside the folder.
+ *   `defaultDir` is the folder the CLI uses without it, relative to the home
+ *   directory.
+ * - `api-key`: the CLI is reached with a key in `keyVars`. Such keys stay in
+ *   presets for now, beside the endpoint they belong to.
+ * - `fixed`: the CLI keeps a single login in one place (the keychain, its own
+ *   app data). Not selectable per launch.
+ *
+ * Absent means nobody has confirmed how the CLI holds one, never that it can't.
+ */
+export type AgentAccountDeclaration =
+  | { kind: "config-folder"; envVar: string; defaultDir: string }
+  | { kind: "api-key"; keyVars: readonly string[] }
+  | { kind: "fixed" };
 
 export interface AgentPreset {
   id: string;
@@ -977,6 +998,8 @@ export interface AgentConfig {
    * Used by CliAvailabilityService to distinguish "installed" from "ready".
    */
   authCheck?: AgentAuthCheck;
+  /** How the CLI holds a second account (#16040). */
+  account?: AgentAccountDeclaration;
   /**
    * Absolute filesystem paths to probe when PATH-based lookup (`which`/`where`)
    * fails. Used to detect agents installed by native installers into locations
@@ -1224,6 +1247,17 @@ export function isEffectivelyRegisteredAgent(agentId: string): boolean {
  */
 export function resolveAgentContinuity(agentId: string): AgentContinuity {
   return getEffectiveAgentConfig(agentId)?.continuity ?? { tier: "unverified" };
+}
+
+/**
+ * The config folder an agent's accounts are made of (#16040), or `undefined`
+ * when its CLI holds no account Daintree can choose per launch.
+ */
+export function getAgentConfigFolderAccount(
+  agentId: string
+): Extract<AgentAccountDeclaration, { kind: "config-folder" }> | undefined {
+  const account = getEffectiveAgentConfig(agentId)?.account;
+  return account?.kind === "config-folder" ? account : undefined;
 }
 
 export function isBuiltInAgent(agentId: string): boolean {

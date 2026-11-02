@@ -13,6 +13,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["accessibility:get-enabled"]["args"]
     ): Promise<IpcInvokeMap["accessibility:get-enabled"]["result"]>;
   };
+  agentAccounts: {
+    add(
+      ...args: IpcInvokeMap["agent-accounts:add"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:add"]["result"]>;
+    remove(
+      ...args: IpcInvokeMap["agent-accounts:remove"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:remove"]["result"]>;
+  };
   agentCapabilities: {
     getAgentIds(
       ...args: IpcInvokeMap["agent-capabilities:get-agent-ids"]["args"]

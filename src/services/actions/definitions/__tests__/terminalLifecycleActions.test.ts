@@ -55,7 +55,13 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => {
     createTerminalPaintPlane: () => terminalInstanceService,
   };
 });
-vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
+const agentSettingsClientMock = vi.hoisted(() => ({
+  get: vi.fn().mockResolvedValue({ agents: {} }),
+}));
+vi.mock("@/clients", () => ({
+  terminalClient: terminalClientMock,
+  agentSettingsClient: agentSettingsClientMock,
+}));
 vi.mock("@/store/viewWorkspaceId", () => viewWorkspaceIdMock);
 vi.mock("@/lib/watchNotification", () => ({
   fireWatchNotification: fireWatchNotificationMock,
@@ -470,6 +476,7 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
   const removePanel = vi.fn();
   const restartTerminal = vi.fn();
   const restartTerminalOnPreset = vi.fn().mockResolvedValue({ success: true });
+  const restartTerminalOnAccount = vi.fn().mockResolvedValue({ success: true });
   const bulkRestartAll = vi.fn().mockResolvedValue(undefined);
   const bulkRestartByWorktree = vi.fn().mockResolvedValue(undefined);
   panelStoreMock.getState.mockImplementation(() => ({
@@ -479,10 +486,17 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
     removePanel,
     restartTerminal,
     restartTerminalOnPreset,
+    restartTerminalOnAccount,
     bulkRestartAll,
     bulkRestartByWorktree,
   }));
-  return { removePanel, restartTerminal, restartTerminalOnPreset, bulkRestartAll };
+  return {
+    removePanel,
+    restartTerminal,
+    restartTerminalOnPreset,
+    restartTerminalOnAccount,
+    bulkRestartAll,
+  };
 }
 
 describe("terminal.kill confirm gate", () => {
@@ -894,6 +908,77 @@ describe("terminal.killBatch", () => {
       failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal.restartOnAccount (#16040)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+
+  it("refuses without confirmation, like a preset switch", async () => {
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p1", accountId: "company" })
+    ).rejects.toThrow(/confirmed/);
+    expect(restartTerminalOnAccount).not.toHaveBeenCalled();
+  });
+
+  it("restarts on the saved account's folder, named by the agent's own variable", async () => {
+    agentSettingsClientMock.get.mockResolvedValueOnce({
+      agents: { codex: { accounts: [COMPANY] } },
+    });
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnAccount", {
+      terminalId: "p1",
+      accountId: "company",
+      confirmed: true,
+    });
+
+    expect(restartTerminalOnAccount).toHaveBeenCalledWith("p1", {
+      id: "company",
+      envVar: "CODEX_HOME",
+      configDir: COMPANY.configDir,
+    });
+  });
+
+  it("moves to the default login for a null account", async () => {
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnAccount", { terminalId: "p1", accountId: null, confirmed: true });
+
+    expect(restartTerminalOnAccount).toHaveBeenCalledWith("p1", null);
+  });
+
+  it("refuses an account the agent doesn't have, and an agent with no accounts", async () => {
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [
+        { id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" },
+        { id: "p2", kind: "terminal", location: "grid", launchAgentId: "cursor" },
+      ],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p1", accountId: "gone", confirmed: true })
+    ).rejects.toThrow(/no account 'gone'/);
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p2", accountId: null, confirmed: true })
+    ).rejects.toThrow(/no accounts/);
+    expect(restartTerminalOnAccount).not.toHaveBeenCalled();
   });
 });
 

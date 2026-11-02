@@ -116,11 +116,7 @@ export const config: AgentConfig = {
     // logout rewrites them as an empty encrypted map rather than removing them
     // (secrets/src/local.rs), so their presence proves nothing. A keyring-only
     // login therefore leaves nothing to observe.
-    configHome: {
-      envVar: "INTERPRETER_HOME",
-      defaultDir: ".openinterpreter",
-      paths: ["auth.json"],
-    },
+    configHomePaths: ["auth.json"],
     // OpenAI is the built-in default provider. The bundled provider catalog
     // reads around a hundred other keys; these are the common ones.
     envVar: [
@@ -134,6 +130,7 @@ export const config: AgentConfig = {
       "GROQ_API_KEY",
     ],
   },
+  account: { kind: "config-folder", envVar: "INTERPRETER_HOME", defaultDir: ".openinterpreter" },
   prerequisites: [
     {
       tool: "interpreter",

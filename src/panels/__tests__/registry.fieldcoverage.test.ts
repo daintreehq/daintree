@@ -70,6 +70,9 @@ const PTY_FIELD_CLASSIFICATION = {
   agentModelId: true,
   agentPresetId: true,
   agentPresetColor: true,
+  // The account the pane launched on (#16040), written beside the env that
+  // holds its folder.
+  agentAccountId: true,
   originalPresetId: true,
   // Captured launch env replayed on restore so a session keeps its provider
   // environment (#10922); sanitized on the serialize/restore boundary.
@@ -461,6 +464,7 @@ const terminalFixture: PtySerializeInput = {
   scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
   agentPresetId: "blue-provider",
   agentPresetColor: "#3366ff",
+  agentAccountId: "company",
   originalPresetId: "primary-provider",
   env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
   isUsingFallback: true,

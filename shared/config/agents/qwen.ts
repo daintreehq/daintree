@@ -124,6 +124,10 @@ export const config: AgentConfig = {
     configPathsAll: [".qwen/oauth_creds.json", ".qwen/settings.json"],
     envVar: ["DASHSCOPE_API_KEY", "BAILIAN_CODING_PLAN_API_KEY", "OPENAI_API_KEY"],
   },
+  account: {
+    kind: "api-key",
+    keyVars: ["DASHSCOPE_API_KEY", "BAILIAN_CODING_PLAN_API_KEY", "OPENAI_API_KEY"],
+  },
   prerequisites: [
     {
       tool: "qwen",

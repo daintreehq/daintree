@@ -15,6 +15,10 @@ import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 import { useRateLimitObservationStore } from "@/store/rateLimitObservationStore";
 import { isPtyPanel } from "@shared/types/panel";
+import { agentSettingsClient } from "@/clients";
+import { getAgentConfigFolderAccount, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import type { AccountSwitchTarget } from "@/store/slices/panelRegistry/types";
 import {
   useTerminalPendingDestructiveActionStore,
   type TerminalPendingDestructiveActionKind,
@@ -42,6 +46,7 @@ import {
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { logWarn } from "@/utils/logger";
 import {
+  RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
   StartHeldArgsSchema,
@@ -393,6 +398,53 @@ export const terminalLifecycleActionRuns = {
       // What was launched, not whether the CLI took it: a refusal is a later
       // observation the pane reports.
       agentSessionIdCleared: result.resumedSessionId === undefined,
+    };
+  },
+  "terminal.restartOnAccount": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
+    const { terminalId, accountId } = RestartOnAccountArgsSchema.parse(args);
+    requireExplicitTerminalIdForAgentDispatch("terminal.restartOnAccount", terminalId, ctx);
+    // Asked whatever the agent is doing, as a preset switch is: the
+    // conversation doesn't follow the pane to another account yet (#16045).
+    if (!isConfirmed(args, ctx)) {
+      throw new Error("Restarting on another account ends the conversation; pass confirmed: true");
+    }
+    const targetId = terminalId ?? focusedAtDispatch;
+    if (!targetId) throw new Error("No terminal to restart on that account");
+    const panel = usePanelStore.getState().panelsById[targetId];
+    const agentId = panel && isPtyPanel(panel) ? panel.launchAgentId : undefined;
+    if (!agentId) throw new Error(`Terminal '${targetId}' isn't an agent`);
+    const declaration = getAgentConfigFolderAccount(agentId);
+    const agentName = getEffectiveAgentConfig(agentId)?.name ?? agentId;
+    if (!declaration) throw new Error(`${agentName} has no accounts to choose between`);
+    let target: AccountSwitchTarget = null;
+    if (accountId !== null) {
+      const settings = await agentSettingsClient.get();
+      const account = sanitizeAgentAccounts(settings?.agents?.[agentId]?.accounts).find(
+        (candidate) => candidate.id === accountId
+      );
+      if (!account) throw new Error(`${agentName} has no account '${accountId}'`);
+      target = { id: account.id, envVar: declaration.envVar, configDir: account.configDir };
+    }
+    const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
+    const result = await usePanelStore.getState().restartTerminalOnAccount(targetId, target);
+    if (!result.success) {
+      throw new Error(result.error ?? "Couldn't restart the terminal on that account");
+    }
+    // The chip reported the account the pane left. Only that observation goes:
+    // the new process may already have reported one of its own.
+    if (observedBefore !== undefined) {
+      useRateLimitObservationStore.getState().clearObservation(targetId, observedBefore);
+    }
+    const restarted = usePanelStore.getState().panelsById[targetId];
+    return {
+      terminalId: targetId,
+      agentAccountId:
+        (restarted && isPtyPanel(restarted) ? restarted.agentAccountId : null) ?? null,
+      agentSessionIdCleared: true as const,
     };
   },
   "terminal.redraw": async (

@@ -1457,6 +1457,10 @@ export const CHANNELS = {
   AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
   AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
 
+  // An agent's accounts (#16040)
+  AGENT_ACCOUNTS_ADD: "agent-accounts:add",
+  AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",
+
   // Per-project presentation profile (#13771)
   PROJECT_PRESENTATION_GET: "project-presentation:get",
   PROJECT_PRESENTATION_SET_LEVEL: "project-presentation:set-level",

@@ -93,6 +93,11 @@ const AgentLaunchArgsSchema = z.object({
     .nullable()
     .optional()
     .describe("One of the user's saved launch presets. Explicit null ignores the default preset."),
+  accountId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("One of the agent's saved accounts. Explicit null uses the CLI's default login."),
   activateDockOnCreate: z
     .boolean()
     .optional()

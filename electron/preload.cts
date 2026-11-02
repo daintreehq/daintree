@@ -137,6 +137,7 @@ import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMc
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
 import { buildAgentToolbarPinsPreloadBindings } from "./ipc/handlers/agentToolbarPins.preload.js";
+import { buildAgentAccountsPreloadBindings } from "./ipc/handlers/agentAccounts.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
@@ -1956,6 +1957,9 @@ function buildElectronApi(): ElectronAPI {
       onChanged: (callback: (snapshot: AgentToolbarPinsSnapshot) => void) =>
         _typedOn(CHANNELS.AGENT_TOOLBAR_PINS_CHANGED, callback),
     },
+
+    // An agent's accounts (#16040)
+    agentAccounts: buildAgentAccountsPreloadBindings(_unwrappingInvoke),
 
     // Per-service connectivity API
     connectivity: {

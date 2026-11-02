@@ -400,9 +400,11 @@ function candidateAuthPaths(config: AgentConfig): string[] {
   const platform = process.platform as "darwin" | "linux" | "win32";
   // The default root only: clearAuthEnvironment removes the variable that
   // would relocate it.
-  const homePaths = check.configHome
-    ? check.configHome.paths.map((relative) => `${check.configHome!.defaultDir}/${relative}`)
-    : [];
+  const folder = config.account?.kind === "config-folder" ? config.account : undefined;
+  const homePaths =
+    folder && check.configHomePaths
+      ? check.configHomePaths.map((relative) => `${folder.defaultDir}/${relative}`)
+      : [];
   return [...(check.configPaths?.[platform] ?? []), ...(check.configPathsAll ?? []), ...homePaths];
 }
 
@@ -418,15 +420,14 @@ export function authEnvVars(registry: Record<string, AgentConfig>): string[] {
 }
 
 /**
- * Env vars that move an agent's config root (`KIMI_CODE_HOME`). Not proof of
- * auth, but a developer's own value would send the probe to their real
- * credentials instead of the synthetic HOME.
+ * Env vars that move an agent's config root (`KIMI_CODE_HOME`, `CODEX_HOME`).
+ * Not proof of auth, but a developer's own value would send the probe to their
+ * real credentials instead of the synthetic HOME.
  */
 export function configHomeEnvVars(registry: Record<string, AgentConfig>): string[] {
   const names = new Set<string>();
   for (const config of Object.values(registry)) {
-    const envVar = config.authCheck?.configHome?.envVar;
-    if (envVar !== undefined) names.add(envVar);
+    if (config.account?.kind === "config-folder") names.add(config.account.envVar);
   }
   return [...names];
 }

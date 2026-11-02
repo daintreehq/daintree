@@ -383,6 +383,8 @@ export interface PanelSnapshot {
   agentPresetId?: string;
   /** Preset hex color captured at launch time; fallback when preset is later deleted */
   agentPresetColor?: string;
+  /** The account the pane launched on (#16040); its folder is in `env`. */
+  agentAccountId?: string;
   /** Original user-selected preset ID; immutable across fallback hops. */
   originalPresetId?: string;
   /** Whether this panel is currently running on a fallback preset. */

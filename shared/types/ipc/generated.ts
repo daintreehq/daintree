@@ -8,6 +8,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-accounts:add": {
+    args: [request: import("./agentAccounts.js").AddAgentAccountRequest];
+    result: import("./agentAccounts.js").AddAgentAccountResult;
+  };
+  "agent-accounts:remove": {
+    args: [agentId: string, accountId: string];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "agent-capabilities:get-agent-ids": {
     args: [];
     result: string[];

@@ -79,6 +79,20 @@ export type DangerousMode = "inherit" | "on" | "off";
  */
 export type InlineMode = "inherit" | "on" | "off";
 
+/**
+ * One of an agent's accounts (#16040): a config folder its CLI keeps
+ * everything in, login included, handed to a launch through the variable the
+ * agent's registry `account` declaration names. Daintree never writes inside
+ * the folder, and removing the account forgets this entry only.
+ */
+export interface AgentAccount {
+  /** Stable and agent-local; a pane records it. */
+  id: string;
+  name: string;
+  /** Absolute folder on the host. Fixed once added: another folder is another account. */
+  configDir: string;
+}
+
 export interface AgentSettingsEntry {
   customFlags?: string;
   /** Additional args appended when dangerous mode is enabled */
@@ -173,6 +187,20 @@ export interface AgentSettingsEntry {
    * Preset-level env overrides these when keys overlap.
    */
   globalEnv?: Record<string, string>;
+  /**
+   * This agent's accounts (#16040), chosen separately from the preset. The
+   * CLI's own default login is the implicit entry and is never listed.
+   * Host-local: the folders are this machine's.
+   */
+  accounts?: AgentAccount[];
+  /** Agent-level default account; absent launches on the CLI's default login. */
+  accountId?: string;
+  /**
+   * Per-worktree account overrides, keyed by worktreeId, as `worktreePresets`
+   * is for presets. An absent key inherits `accountId`; `null` is the default
+   * login in that worktree alone.
+   */
+  worktreeAccounts?: Record<string, string | null>;
   [key: string]: unknown;
 }
 

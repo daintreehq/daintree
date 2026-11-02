@@ -240,11 +240,15 @@ export const config: AgentConfig = {
     args: [],
   },
   authCheck: {
-    // Codex CLI persists auth to ~/.codex/auth.json on all platforms.
-    // OPENAI_API_KEY is also a first-class auth signal for the CLI.
-    configPathsAll: [".codex/auth.json"],
+    // Codex CLI persists auth to auth.json in its home (~/.codex unless
+    // CODEX_HOME moves it) on all platforms. OPENAI_API_KEY is also a
+    // first-class auth signal for the CLI.
+    configHomePaths: ["auth.json"],
     envVar: "OPENAI_API_KEY",
   },
+  // CODEX_HOME moves auth.json, config.toml and sessions together; a home it is
+  // handed has to exist already (CodexQuotaProfiles).
+  account: { kind: "config-folder", envVar: "CODEX_HOME", defaultDir: ".codex" },
   prerequisites: [
     {
       tool: "codex",

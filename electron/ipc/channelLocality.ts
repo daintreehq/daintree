@@ -34,6 +34,8 @@ export type ChannelLocality = "host" | "shell" | "hybrid";
 export const CHANNEL_LOCALITY = {
   "accessibility:get-enabled": "shell",
   "accessibility:support-changed": "shell",
+  "agent-accounts:add": "host",
+  "agent-accounts:remove": "host",
   "agent-capabilities:get-agent-ids": "host",
   "agent-capabilities:get-agent-metadata": "host",
   "agent-capabilities:get-ccr-presets": "host",

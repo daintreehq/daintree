@@ -146,6 +146,7 @@ export interface HydrationOptions {
     agentModelId?: string;
     agentPresetId?: string;
     agentPresetColor?: string;
+    agentAccountId?: string;
     originalPresetId?: string;
     isUsingFallback?: boolean;
     fallbackChainIndex?: number;

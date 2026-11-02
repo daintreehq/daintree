@@ -267,13 +267,8 @@ describe("perf cli-availability auth expectations", () => {
 
   it("plants and grades a relocatable config root under its default directory", () => {
     const config = agent({
-      authCheck: {
-        configHome: {
-          envVar: "ALPHA_HOME",
-          defaultDir: ".alpha",
-          paths: ["creds/a.json", "c.toml"],
-        },
-      },
+      authCheck: { configHomePaths: ["creds/a.json", "c.toml"] },
+      account: { kind: "config-folder", envVar: "ALPHA_HOME", defaultDir: ".alpha" },
     });
     expect(expectedAuthState(config, new Set())).toBe("unauthenticated");
     expect(expectedAuthState(config, new Set(["creds/a.json"]))).toBe("unauthenticated");
@@ -282,10 +277,10 @@ describe("perf cli-availability auth expectations", () => {
   });
 
   it("collects config-root variables apart from credential env vars", () => {
-    const home = (envVar: string) => ({ envVar, defaultDir: ".x", paths: ["a"] });
+    const home = (envVar: string) => ({ kind: "config-folder" as const, envVar, defaultDir: ".x" });
     const registry: Record<string, AgentConfig> = {
-      one: agent({ authCheck: { envVar: "ONE_KEY", configHome: home("ONE_HOME") } }),
-      two: agent({ authCheck: { configHome: home("ONE_HOME") } }),
+      one: agent({ authCheck: { envVar: "ONE_KEY" }, account: home("ONE_HOME") }),
+      two: agent({ authCheck: { configHomePaths: ["a"] }, account: home("ONE_HOME") }),
       three: agent({ authCheck: { configPathsAll: [".three"] } }),
     };
     expect(configHomeEnvVars(registry)).toEqual(["ONE_HOME"]);

@@ -48,6 +48,10 @@ import {
   RestartOnPresetConfirmDialog,
   type RestartOnPresetRequest,
 } from "@/components/Terminal/RestartOnPreset";
+import {
+  RestartOnAccountConfirmDialog,
+  type RestartOnAccountRequest,
+} from "@/components/Terminal/RestartOnAccount";
 import { DestructiveConsequence } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { TerminalHandOverDialog, useOrchestratorCandidates } from "./TerminalHandOver";
 import {
@@ -439,6 +443,9 @@ function TerminalContextMenuBody({
   const [restartOnPresetRequest, setRestartOnPresetRequest] =
     useState<RestartOnPresetRequest | null>(null);
   const closeRestartOnPreset = useCallback(() => setRestartOnPresetRequest(null), []);
+  const [restartOnAccountRequest, setRestartOnAccountRequest] =
+    useState<RestartOnAccountRequest | null>(null);
+  const closeRestartOnAccount = useCallback(() => setRestartOnAccountRequest(null), []);
 
   // Recent dictation targets surfaced in the context menu must resolve to a
   // live, non-trashed PTY panel that isn't the current one. Persisted entries
@@ -831,6 +838,11 @@ function TerminalContextMenuBody({
         onClose={closeRestartOnPreset}
         sourceRef={sourceRef}
       />
+      <RestartOnAccountConfirmDialog
+        request={restartOnAccountRequest}
+        onClose={closeRestartOnAccount}
+        sourceRef={sourceRef}
+      />
       {handOverRequest !== null && (
         <TerminalHandOverDialog
           key={handOverRequest.id}
@@ -893,6 +905,7 @@ function TerminalContextMenuBody({
             orchestratorCandidateIds={orchestratorCandidateIds}
             onRequestHandOver={handleRequestHandOver}
             onRequestRestartOnPreset={setRestartOnPresetRequest}
+            onRequestRestartOnAccount={setRestartOnAccountRequest}
             onAction={handleAction}
           />
           {/* Other plugins' rows sit above the identity group, never after
