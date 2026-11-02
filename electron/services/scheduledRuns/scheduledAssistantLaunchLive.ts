@@ -12,11 +12,11 @@ const REFUSALS: Record<"no-project" | "launch-failed", string> = {
 
 /**
  * Starts the project's Daintree Assistant for a schedule's run (#16169), the
- * way an Assistant is started with no view: in the lowest vacant session
- * only, never displacing one or a stopped session's kept conversation, past
- * its folder-trust question, with the run's prompt and handback instruction
- * in place of a greeting. The session records the run as who started it,
- * which is how the workers it launches are attributed to the run.
+ * way an Assistant is started with no view: in a vacant session only, never
+ * displacing one, and where it can, not where a stopped session keeps a
+ * conversation; past its folder-trust question, with the run's prompt and
+ * handback instruction in place of a greeting. The session records the run as
+ * who started it, which is how the workers it launches are attributed to it.
  */
 export async function launchScheduledAssistantLive(
   project: Project,
@@ -43,12 +43,9 @@ export async function launchScheduledAssistantLive(
     },
     {
       ...deps,
-      // A session that's stopped but keeps its conversation for the person
-      // to resume is theirs too: a run never starts in its place.
-      occupiedSlots: (projectId) => [
-        ...deps.occupiedSlots(projectId),
-        ...helpSessionService.listPendingHibernationSlots(projectId),
-      ],
+      // A stopped session's conversation stays the person's to resume while
+      // another session is free.
+      keptSlots: (projectId) => helpSessionService.listPendingHibernationSlots(projectId),
     }
   );
   if (result.status === "started") return { status: "started" };

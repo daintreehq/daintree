@@ -1175,9 +1175,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         resourceId
       );
 
+    const askedAt = Date.now();
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
       recordOwnershipFromDispatch(
-        { sessionId, actionId, sessionStore, ownershipOwner },
+        { sessionId, actionId, sessionStore, ownershipOwner, args, askedAt },
         { ownedResource, ownedResourceId, ownedResourceRecord },
         envelope
       );

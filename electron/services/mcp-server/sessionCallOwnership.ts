@@ -3,11 +3,13 @@ import type { DispatchEnvelope } from "./shared.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS, RESOURCE_NOT_OWNED_CODE } from "./shared.js";
 import { parseLastMessageReadArgs, type LastMessageReadArgs } from "./lastMessageArgs.js";
 import {
+  assistantPrincipalOf,
   extractOwnedResourcesFromDispatch,
   type OwnedResourceKind,
   type OwnedResourceRecord,
 } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
+import { noteAssistantToolAnswer } from "../scheduledRuns/assistantWorkerLaunches.js";
 import type { OwnedMainExecutors, SessionServerDeps } from "./sessionServerDepsContract.js";
 import { isHandedBackUntouched } from "./sessionServerDepsContract.js";
 import { TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL } from "./sessionToolIds.js";
@@ -654,9 +656,17 @@ export function recordOwnershipFromDispatch(
     readonly actionId: string;
     readonly sessionStore: Pick<
       SessionStore,
-      "resourceOwnership" | "terminalAdoption" | "workerCreations" | "hasLiveTransport"
+      | "resourceOwnership"
+      | "terminalAdoption"
+      | "workerCreations"
+      | "hasLiveTransport"
+      | "sessionWorkspaceMap"
     >;
     readonly ownershipOwner: string;
+    /** What the caller asked, for a scheduled run's record of the agent it named (#16169). */
+    readonly args?: unknown;
+    /** When the call was made; absent, now. */
+    readonly askedAt?: number;
   },
   owned: {
     readonly ownedResource: OwnedResourceTool | undefined;
@@ -686,6 +696,23 @@ export function recordOwnershipFromDispatch(
   }
   const drafts = extractOwnedResourcesFromDispatch(actionId, envelope.result);
   if (drafts.length === 0) return;
+  // A launch that happened is a fact about a schedule's run whatever the
+  // session's authority is now (#16169); the run history decides whether the
+  // session is one a schedule started.
+  const principal = assistantPrincipalOf(ownershipOwner);
+  if (principal?.kind === "help" && envelope.result.ok) {
+    noteAssistantToolAnswer({
+      helpSessionId: principal.helpSessionId,
+      tool: actionId,
+      args: call.args,
+      result: envelope.result.result,
+      hostId: null,
+      hostName: null,
+      projectId:
+        envelope.dispatchedWorkspace?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId),
+      askedAt: call.askedAt ?? Date.now(),
+    });
+  }
   // Liveness guard, mirroring the dedup completion hook below: a creation
   // admitted before the session was revoked can land after
   // `clearSessionBinding` already dropped the ledger. Writing then would

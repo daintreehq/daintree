@@ -63,6 +63,11 @@ export interface AssistantLaunchDeps {
   /** Slots of the project an assistant runs in now, which a start without a slot skips. */
   occupiedSlots(projectId: string): readonly number[];
   /**
+   * Slots holding a stopped session's conversation for the person to resume,
+   * which a start without a slot tries last, so it keeps them when it can.
+   */
+  keptSlots?(projectId: string): readonly number[];
+  /**
    * The agents this host can start as its assistant right now, its default
    * first. `byDefault`: one a start that names no agent may pick, as the
    * assistant's own picker offers it; any other runs only when named.
@@ -146,12 +151,14 @@ export async function startAssistantWithoutView(
   }
 
   const occupied = new Set(deps.occupiedSlots(project.id));
+  const kept = new Set(deps.keptSlots?.(project.id) ?? []);
+  const vacant = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
+    (slot) => !occupied.has(slot)
+  );
   const slots =
     request.slot !== undefined
       ? [request.slot]
-      : Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
-          (slot) => !occupied.has(slot)
-        );
+      : [...vacant.filter((slot) => !kept.has(slot)), ...vacant.filter((slot) => kept.has(slot))];
   let session: Awaited<ReturnType<AssistantLaunchDeps["provision"]>> = null;
   let slot: number | undefined;
   for (const candidate of slots) {

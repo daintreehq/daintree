@@ -324,14 +324,16 @@ export class ScheduledRunRecorder {
   }
 
   /**
-   * A worker an open Assistant run launched (#16169), as the launch was
-   * answered. Recorded once per machine and terminal, and only while the run
-   * is open: what its Assistant launches after handing it back is the
-   * person's conversation, not the run's.
+   * A worker an Assistant run launched (#16169), as the launch was answered.
+   * Recorded once per machine and terminal, and only for a call made while
+   * the run was open (`askedAt`): what its Assistant launches after handing
+   * the run back is the person's conversation, not the run's.
    */
-  noteWorkerLaunch(runId: string, worker: ScheduledRunWorker): boolean {
+  noteWorkerLaunch(runId: string, worker: ScheduledRunWorker, askedAt: number): boolean {
     const run = this.store.get(runId);
-    if (!run || run.assistant !== true || run.settlement.state !== "open") return false;
+    if (!run || run.assistant !== true) return false;
+    const { settlement } = run;
+    if (settlement.state === "settled" && settlement.settledAt < askedAt) return false;
     const workers = run.workers ?? [];
     const seen = workers.some(
       (known) => known.terminalId === worker.terminalId && known.hostId === worker.hostId

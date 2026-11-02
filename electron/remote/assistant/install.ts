@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
-import { isRemoteEndpointHandle } from "../../ipc/endpoint.js";
+import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { getLocalAgentDirectory } from "../../services/assistants/localAgentDirectory.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
@@ -23,6 +23,10 @@ import {
   type OpenRun,
 } from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
+import {
+  noteAssistantToolAnswer,
+  workerLaunchesIn,
+} from "../../services/scheduledRuns/assistantWorkerLaunches.js";
 import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "./localMcpRelay.js";
 import { relayCallerOf } from "./mcpRelayExecutor.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
@@ -51,9 +55,69 @@ declare module "../runtime.js" {
 }
 
 /**
+ * Whether a help session belongs to no view yet because this machine's own
+ * schedule started it (#16169): main's, like the global assistant, until one
+ * of this machine's views takes it over. One a remote Shell's view holds
+ * never counts.
+ */
+function isOwnScheduledWithoutView(helpSessionId: string, handle: number | null): boolean {
+  return handle === NO_VIEW_HANDLE && helpSessionService.getScheduledRunOf(helpSessionId) !== null;
+}
+
+/** How long a host's project listing may take to name a worker's project before it goes unnamed. */
+const HOST_PROJECT_NAME_WAIT_MS = 2_000;
+
+/**
+ * A call an assistant made through `host.call` was answered (#16169). A
+ * launch it names is recorded on the schedule's run that started that
+ * assistant, if one did; a host's project is named from the host's own
+ * listing when it answers in time, this machine's from its own projects.
+ */
+function noteHostCallAnswer(
+  answer: Parameters<NonNullable<HostCallRuntimeDeps["noteAnswered"]>>[0],
+  listHostProjects: ((hostId: HostId) => Promise<readonly HostProjectSummary[]>) | undefined
+): void {
+  if (helpSessionService.getScheduledRunOf(answer.helpSessionId) === null) return;
+  if (workerLaunchesIn(answer.tool, answer.args, answer.structured).terminalIds.length === 0) {
+    return;
+  }
+  const local = answer.hostId === LOCAL_HOST_ID;
+  const note = (projectName: string | null) =>
+    noteAssistantToolAnswer({
+      helpSessionId: answer.helpSessionId,
+      tool: answer.tool,
+      args: answer.args,
+      result: answer.structured,
+      hostId: local ? null : answer.hostId,
+      hostName: answer.hostName,
+      projectId: answer.projectId,
+      projectName,
+      askedAt: answer.askedAt,
+    });
+  if (local || listHostProjects === undefined) {
+    note(null);
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  void Promise.race([
+    listHostProjects(answer.hostId).then(
+      (projects) => projects.find((project) => project.id === answer.projectId)?.name ?? null,
+      () => null
+    ),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), HOST_PROJECT_NAME_WAIT_MS);
+    }),
+  ]).then((name) => {
+    clearTimeout(timer);
+    note(name);
+  });
+}
+
+/**
  * The run a help session answers in, when one of this machine's own views
  * shows it, or when it is this machine's global assistant (#14161), which
- * main owns and no view holds.
+ * main owns and no view holds, or one of its schedules' assistants no view
+ * has taken over yet (#16169).
  */
 function localRunOf(helpSessionId: string): OpenRun | null {
   const lane = helpSessionService.getSessionLane(helpSessionId);
@@ -64,6 +128,7 @@ function localRunOf(helpSessionId: string): OpenRun | null {
   const handle = running.projectViewWebContentsId;
   if (
     !isGlobalAssistantId(lane.projectId) &&
+    !isOwnScheduledWithoutView(helpSessionId, handle) &&
     (isRemoteEndpointHandle(handle) || getProjectForWebContents(handle) !== lane.projectId)
   ) {
     return null;
@@ -197,9 +262,12 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       const lane = helpSessionService.getSessionLane(helpSessionId);
       if (lane !== null && isGlobalAssistantId(lane.projectId)) return true;
       const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
+      if (isOwnScheduledWithoutView(helpSessionId, handle)) return true;
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled(hostId),
+    // Workers a schedule's assistant launched elsewhere, for its run (#16169).
+    noteAnswered: (answer) => noteHostCallAnswer(answer, deps.listHostProjects),
     ...(deps.watchHosts ? { watchHosts: deps.watchHosts } : {}),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the

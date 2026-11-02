@@ -204,6 +204,21 @@ export interface HostCallRuntimeDeps {
   /** The person's per-host "assistant control" switch, read at each call (#13493). */
   controlEnabled?(hostId: HostId): boolean;
   /**
+   * A call ran and was answered, on a host or this machine's other project,
+   * for a schedule's run to record the workers it launched (#16169).
+   */
+  noteAnswered?(answer: {
+    helpSessionId: string;
+    hostId: HostId;
+    /** The host's name as observed; null for this machine. */
+    hostName: string | null;
+    projectId: string;
+    tool: string;
+    args: Record<string, unknown>;
+    structured: Record<string, unknown> | null;
+    askedAt: number;
+  }): void;
+  /**
    * Queues a wake on a run's own notice line, the one writer that types into
    * its prompt, under its gate (#13500). Absent, hosts' notices are dropped.
    */
@@ -1532,6 +1547,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         };
       }
       const runMs = relayRunMs(args.tool, toolArgs);
+      const askedAt = this.now();
       const payload: RelayCallRequest = {
         helpSessionId,
         projectId,
@@ -1578,6 +1594,20 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         // A tool error may still have run some of a batch before it failed.
         case "done": {
           noted.ran(answer.result);
+          try {
+            this.deps.noteAnswered?.({
+              helpSessionId,
+              hostId: args.hostId,
+              hostName: local ? null : (host?.name ?? null),
+              projectId,
+              tool: args.tool,
+              args: toolArgs,
+              structured: answer.result.structured,
+              askedAt,
+            });
+          } catch (error) {
+            logger.debug("Couldn't note an answered call", { callId, error });
+          }
           // A resend that got the answer its first send lost: the host has the call.
           const pin = resend ? this.pinOf(callId) : undefined;
           if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {

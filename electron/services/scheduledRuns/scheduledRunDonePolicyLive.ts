@@ -50,6 +50,13 @@ async function applyDonePolicy(
   action: ScheduledRunDoneAction,
   run: ScheduledRun
 ): Promise<void> {
+  // An Assistant (#16169) runs in its own tab, never the grid or the saved
+  // layout: closing it is its own terminal ending, which its views and its
+  // session follow, and the workers it launched are left running.
+  if (run.assistant === true) {
+    if (action === "close") await closeRunTerminal(target, run);
+    return;
+  }
   // The saved layout is written whether or not a view holds the pane: a view
   // that does saves the same placement from its own store.
   if (action === "background") {

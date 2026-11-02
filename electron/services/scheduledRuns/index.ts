@@ -9,6 +9,7 @@ import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import type { ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 import type { ScheduledRunRecorder, ScheduledRunsChange } from "./ScheduledRunRecorder.js";
 import { scheduledRunAttention } from "./scheduledRunAttention.js";
+import { setAssistantWorkerSink, workerLaunchesIn } from "./assistantWorkerLaunches.js";
 
 /** The parts of `PtyClient` the run history follows. */
 export interface ScheduledRunFactSource {
@@ -76,6 +77,7 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
     });
     created.reconcileInterrupted();
     recorder = created;
+    await followAssistantWorkers(created);
     return created;
   })().catch((error: unknown) => {
     console.warn("[ScheduledRuns] Couldn't open the run history:", error);
@@ -83,6 +85,47 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
     return null;
   });
   return creating;
+}
+
+/**
+ * Records the workers a schedule's Assistant launches on its run (#16169),
+ * from the calls its session makes. Followed once the history is open: before
+ * that no run exists to record them on.
+ */
+async function followAssistantWorkers(history: ScheduledRunRecorder): Promise<void> {
+  try {
+    const [{ helpSessionService }, { projectStore }] = await Promise.all([
+      import("../HelpSessionService.js"),
+      import("../ProjectStore.js"),
+    ]);
+    setAssistantWorkerSink((answer) => {
+      const run = helpSessionService.getScheduledRunOf(answer.helpSessionId);
+      if (run === null || answer.projectId === undefined) return;
+      const { terminalIds, agentId } = workerLaunchesIn(answer.tool, answer.args, answer.result);
+      const projectName =
+        answer.hostId === null
+          ? (projectStore.getProjectById(answer.projectId)?.name ?? null)
+          : (answer.projectName ?? null);
+      const observedAt = Date.now();
+      for (const terminalId of terminalIds) {
+        history.noteWorkerLaunch(
+          run.runId,
+          {
+            terminalId,
+            hostId: answer.hostId,
+            hostName: answer.hostName || null,
+            projectId: answer.projectId,
+            projectName: projectName || null,
+            agentId,
+            observedAt,
+          },
+          answer.askedAt
+        );
+      }
+    });
+  } catch (error) {
+    console.warn("[ScheduledRuns] Couldn't follow assistants' workers:", error);
+  }
 }
 
 type ScheduledRunNotifierModule = typeof import("./scheduledRunNotifierLive.js");
@@ -263,4 +306,5 @@ function pushScheduledRunsChanged(change: ScheduledRunsChange): void {
 export function _resetScheduledRunRecorderForTest(): void {
   recorder = null;
   creating = null;
+  setAssistantWorkerSink(null);
 }

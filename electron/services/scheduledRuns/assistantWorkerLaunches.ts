@@ -1,0 +1,66 @@
+import { extractOwnedResources } from "../mcp-server/resourceOwnership.js";
+
+/**
+ * The tools whose answer names an agent it launched. A shell, a recipe's
+ * terminals or a worktree are no worker.
+ */
+const WORKER_LAUNCH_TOOLS = new Set(["agent.launch", "workflow.startWorkOnIssue"]);
+
+/** What an assistant's call was answered with, on this machine or a host. */
+export interface AssistantToolAnswer {
+  readonly helpSessionId: string;
+  readonly tool: string;
+  readonly args: unknown;
+  /** The tool's result as answered; nothing is read from anything but it and the call. */
+  readonly result: unknown;
+  /** The host it ran on; null for this machine. */
+  readonly hostId: string | null;
+  readonly hostName: string | null;
+  /** The project it ran in, as the call was routed. */
+  readonly projectId: string | undefined;
+  /** A host project's name, when its listing gave one; this machine's are read here. */
+  readonly projectName?: string | null;
+  /** When the call was made: a run settled before then isn't the call's. */
+  readonly askedAt: number;
+}
+
+/** The agent terminals an answered call says it launched, with the agent it asked for. */
+export function workerLaunchesIn(
+  tool: string,
+  args: unknown,
+  result: unknown
+): { terminalIds: string[]; agentId: string | null } {
+  if (!WORKER_LAUNCH_TOOLS.has(tool)) return { terminalIds: [], agentId: null };
+  const terminalIds = extractOwnedResources(tool, result)
+    .filter((draft) => draft.kind === "terminal")
+    .map((draft) => draft.id);
+  const asked =
+    typeof args === "object" && args !== null ? Reflect.get(args, "agentId") : undefined;
+  return { terminalIds, agentId: typeof asked === "string" && asked !== "" ? asked : null };
+}
+
+type AssistantWorkerSink = (answer: AssistantToolAnswer) => void;
+let sink: AssistantWorkerSink | null = null;
+
+/**
+ * Set by the run history once it's open (#16169). Until then no run can be
+ * open, so there's nothing to record a worker on, and an assistant's calls
+ * cost nothing more than this check.
+ */
+export function setAssistantWorkerSink(next: AssistantWorkerSink | null): void {
+  sink = next;
+}
+
+/**
+ * An assistant's call was answered. A worker it names is recorded on the
+ * schedule's run that started that assistant, while the run is open; any
+ * other call, or any other assistant's, records nothing.
+ */
+export function noteAssistantToolAnswer(answer: AssistantToolAnswer): void {
+  if (sink === null || !WORKER_LAUNCH_TOOLS.has(answer.tool)) return;
+  try {
+    sink(answer);
+  } catch (error) {
+    console.warn("[ScheduledRuns] Couldn't record an assistant's worker:", error);
+  }
+}
