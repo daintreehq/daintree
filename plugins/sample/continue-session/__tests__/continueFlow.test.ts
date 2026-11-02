@@ -252,6 +252,31 @@ describe("Continue in another agent", () => {
   });
 });
 
+describe("Continuing a session again", () => {
+  it("keeps the first agent's search when another launch fails, and adds the new one's when it works", async () => {
+    const scenario = await setUp();
+    const { host } = scenario;
+    host.simulateConfirmResponse(true);
+    await clickContinue(host);
+    const launch = host.registeredActions.find((entry) => entry.descriptor.id === "launch")!;
+    const signal = new AbortController().signal;
+    const search = (terminalId: string) =>
+      searchTool(host).execute({ query: "keymap" }, caller("p1", terminalId), signal);
+
+    scenario.launchResult = () =>
+      ok({ launched: false, terminalId: null, spawnStatus: "panel-limit" });
+    await launch.handler({ conversionId: "id-1" });
+    await expect(search("continue-id-2")).resolves.toBeDefined();
+    await expect(search("continue-id-3")).rejects.toThrow(/No converted session is searchable/);
+
+    scenario.launchResult = (args) =>
+      ok({ launched: true, terminalId: args.requestedId, spawnStatus: null });
+    await launch.handler({ conversionId: "id-1" });
+    await expect(search("continue-id-2")).resolves.toBeDefined();
+    await expect(search("continue-id-4")).resolves.toBeDefined();
+  });
+});
+
 describe("Converted sessions", () => {
   async function converted(): Promise<Scenario> {
     const scenario = await setUp();
@@ -306,14 +331,28 @@ describe("Converted sessions", () => {
   it("deletes a removed project's sessions, but never on a listing it can't trust", async () => {
     const scenario = await converted();
     const { host } = scenario;
+    // A second session, converted in p3.
+    scenario.front.projectId = "p3";
+    scenario.projects = ["p1", "p3"];
+    await clickContinue(host, "pane-in-p3");
+    const indexes = () => readdirSync(join(scenario.dataDir, "sessions")).sort();
+    expect(indexes()).toEqual(["id-1.db", "id-3.db"]);
 
+    // An empty listing, or one from another host that doesn't name p3, deletes nothing.
     scenario.projects = [];
-    await manage(host, "p2");
-    expect(readdirSync(join(scenario.dataDir, "sessions"))).toEqual(["id-1.db"]);
+    await manage(host, "p3");
+    scenario.projects = ["remote-1", "remote-2"];
+    await manage(host, "p3");
+    // Nor does a listing anchored on a project with no converted sessions,
+    // as a remote project's pill would be.
+    scenario.front.projectId = "remote-1";
+    await manage(host, "remote-1");
+    expect(indexes()).toEqual(["id-1.db", "id-3.db"]);
 
-    scenario.projects = ["p2"];
-    scenario.front.projectId = "p2";
-    await manage(host, "p2");
-    expect(readdirSync(join(scenario.dataDir, "sessions"))).toEqual([]);
+    // p1 is gone from a listing that names p3, in front: its session goes.
+    scenario.front.projectId = "p3";
+    scenario.projects = ["p3"];
+    await manage(host, "p3");
+    expect(indexes()).toEqual(["id-3.db"]);
   });
 });

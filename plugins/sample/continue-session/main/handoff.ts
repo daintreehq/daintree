@@ -1,4 +1,4 @@
-import { slashCommandOf, type RecordFragment, type SessionAgentId } from "./sessionRecords.js";
+import type { RecordFragment, SessionAgentId } from "./sessionRecords.js";
 
 export const AGENT_LABELS: Readonly<Record<SessionAgentId, string>> = {
   codex: "Codex",
@@ -39,11 +39,6 @@ export class HandoffCollector {
       if (this.prompts.length > RECENT_PROMPTS) this.prompts.shift();
       // A new request starts a new turn: an earlier reply is no longer the last word.
       this.reply = null;
-      return;
-    }
-    if (fragment.kind === "context") {
-      const command = slashCommandOf(fragment.text);
-      if (command) this.add({ kind: "prompt", text: command }, line, timestamp);
       return;
     }
     if (fragment.kind !== "assistant") return;

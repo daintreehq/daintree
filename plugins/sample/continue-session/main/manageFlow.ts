@@ -1,6 +1,6 @@
 import type { PluginQuickPickItem } from "../../../../shared/types/plugin.js";
 import type { ConversionRecord } from "./catalog.js";
-import { currentProjectId, type PluginContext } from "./context.js";
+import { currentProjectId, MANIFEST_NAME, type PluginContext } from "./context.js";
 import { launchById } from "./continueFlow.js";
 import { AGENT_LABELS } from "./handoff.js";
 import { deleteConversions, pruneRemovedProjects } from "./retention.js";
@@ -24,7 +24,7 @@ export async function manageConversions(ctx: PluginContext, args: unknown): Prom
     });
     return;
   }
-  await pruneRemovedProjects(ctx);
+  await pruneRemovedProjects(ctx, projectId).catch(() => undefined);
 
   const records = (await catalog.list())
     .filter((record) => record.projectId === projectId)
@@ -36,7 +36,10 @@ export async function manageConversions(ctx: PluginContext, args: unknown): Prom
     id: record.id,
     label: `${AGENT_LABELS[record.sourceAgent]} → ${AGENT_LABELS[record.targetAgent]}`,
     description: `${new Date(record.createdAt).toLocaleString()} · ${formatBytes(sizes[index] ?? null)}`,
-    detail: record.terminalId ? "Searchable by the agent that continued it" : "Not continued yet",
+    detail:
+      record.terminalIds.length > 0
+        ? "Searchable by the agent that continued it"
+        : "Not continued yet",
   }));
   items.push(
     shared
@@ -84,7 +87,7 @@ export async function manageConversions(ctx: PluginContext, args: unknown): Prom
       confirmLabel: "Delete sessions",
       destructive: true,
     });
-    if (ok) await deleteConversions(ctx, records);
+    if (ok) await reportDeletion(ctx, await deleteConversions(ctx, records));
     return;
   }
 
@@ -116,8 +119,20 @@ async function manageOne(ctx: PluginContext, record: ConversionRecord): Promise<
       confirmLabel: "Delete session",
       destructive: true,
     });
-    if (ok) await deleteConversions(ctx, [record]);
+    if (ok) await reportDeletion(ctx, await deleteConversions(ctx, [record]));
   }
+}
+
+async function reportDeletion(ctx: PluginContext, result: { failed: number }): Promise<void> {
+  if (result.failed === 0) return;
+  await ctx.host.notify({
+    title: "Couldn't delete converted sessions",
+    body: "Their index files couldn't be removed, so they're still listed. Delete them again from Converted sessions.",
+    severity: "error",
+    actions: [
+      { id: "open", label: "Converted sessions", actionId: `${MANIFEST_NAME}.manage`, args: {} },
+    ],
+  });
 }
 
 function readProjectId(args: unknown): string | null {

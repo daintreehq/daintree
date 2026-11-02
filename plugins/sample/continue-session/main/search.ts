@@ -9,6 +9,12 @@ const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 25;
 /** Sessions searched in one call when the caller can see several. */
 const MAX_SESSIONS = 10;
+/**
+ * What one answer may serialize to, in UTF-8 bytes. The host refuses a result
+ * past 256 KiB as a whole, so hits stop being added well before that and the
+ * answer says it was cut.
+ */
+export const RESULT_BUDGET_BYTES = 200 * 1024;
 
 /**
  * Who may search a converted session. By default only the agent launched to
@@ -26,7 +32,7 @@ export function canSearch(
   caller: Pick<PluginMcpCaller, "projectId" | "terminalId">,
   sharedProjects: ReadonlySet<string>
 ): boolean {
-  if (record.projectId === caller.projectId && record.terminalId === caller.terminalId) {
+  if (record.projectId === caller.projectId && record.terminalIds.includes(caller.terminalId)) {
     return true;
   }
   return sharedProjects.has(caller.projectId) && sharedProjects.has(record.projectId);
@@ -68,6 +74,8 @@ export interface SearchedSession {
   readonly convertedAt: string;
   readonly matched: "all words" | "any word";
   readonly hits: readonly SearchHit[];
+  /** Set when the session's index couldn't be read; its hits are empty. */
+  readonly error?: string;
 }
 
 export function createSearchTool(deps: {
@@ -114,42 +122,69 @@ export function createSearchTool(deps: {
       if (!all) throw new Error("The query has no words to search for.");
       const any = buildMatch(query, "any");
       const sessions: SearchedSession[] = [];
+      let bytes = 64;
+      let truncated = false;
       for (const record of visible) {
+        // Each search is synchronous: yield between them so a cancel the
+        // host sends meanwhile is seen before the next one runs.
+        await new Promise<void>((resolve) => setImmediate(resolve));
         signal.throwIfAborted();
-        let hits = runSearch(deps, record, all, limit);
-        let matched: SearchedSession["matched"] = "all words";
-        if (hits.length === 0 && any && any !== all) {
-          hits = runSearch(deps, record, any, limit);
-          matched = "any word";
-        }
-        sessions.push({
+        const found = searchRecord(deps, record, all, any, limit);
+        const session: SearchedSession = {
           convertedSessionId: record.id,
           sourceAgent: AGENT_LABELS[record.sourceAgent],
           sourceSessionId: record.sourceSessionId,
           sessionFile: record.sourcePath,
           convertedAt: new Date(record.createdAt).toISOString(),
-          matched,
-          hits,
-        });
+          matched: found.matched,
+          hits: [],
+          ...(found.error ? { error: found.error } : {}),
+        };
+        bytes += jsonBytes(session);
+        if (bytes > RESULT_BUDGET_BYTES) {
+          truncated = true;
+          break;
+        }
+        const hits: SearchHit[] = [];
+        for (const hit of found.hits) {
+          const cost = jsonBytes(hit) + 1;
+          if (bytes + cost > RESULT_BUDGET_BYTES) {
+            truncated = true;
+            break;
+          }
+          bytes += cost;
+          hits.push(hit);
+        }
+        sessions.push({ ...session, hits });
+        if (truncated) break;
       }
-      return { sessions };
+      return truncated ? { sessions, truncated: true } : { sessions };
     },
   };
 }
 
-function runSearch(
+function searchRecord(
   deps: { store: IndexStore; log: (message: string) => void },
   record: ConversionRecord,
-  match: string,
+  all: string,
+  any: string | null,
   limit: number
-): SearchHit[] {
+): { hits: SearchHit[]; matched: SearchedSession["matched"]; error?: string } {
   try {
-    return deps.store.search(record.id, match, limit);
+    const hits = deps.store.search(record.id, all, limit);
+    if (hits.length > 0 || !any || any === all) return { hits, matched: "all words" };
+    return { hits: deps.store.search(record.id, any, limit), matched: "any word" };
   } catch (error) {
     // Never the query: it can quote the session.
     deps.log(`search failed for ${record.id}: ${error instanceof Error ? error.name : "error"}`);
-    throw new Error(
-      `Converted session ${record.id} couldn't be searched: its index is missing or damaged. Convert the session again from its pane's menu.`
-    );
+    return {
+      hits: [],
+      matched: "all words",
+      error: "Its index is missing or damaged. Convert the session again from its pane's menu.",
+    };
   }
+}
+
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
 }

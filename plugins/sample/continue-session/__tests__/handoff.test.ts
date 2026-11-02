@@ -35,22 +35,14 @@ describe("HandoffCollector", () => {
     expect(collector.lastReply()).toBeNull();
   });
 
-  it("counts a slash command as the user's request, and other injected text not at all", () => {
+  it("quotes neither injected context nor tool text, and keeps the reply across them", () => {
     const collector = new HandoffCollector();
-    collector.add(
-      { kind: "context", text: "<environment_context>x</environment_context>" },
-      1,
-      null
-    );
-    collector.add(
-      {
-        kind: "context",
-        text: "<command-name>/work</command-name><command-args>12</command-args>",
-      },
-      2,
-      null
-    );
-    expect(collector.recentPrompts().map((turn) => turn.text)).toEqual(["/work 12"]);
+    collector.add({ kind: "prompt", text: "do it" }, 1, null);
+    collector.add({ kind: "assistant", text: "done", messageKey: "m" }, 2, null);
+    collector.add({ kind: "context", text: "Daintree: terminal t1 is waiting." }, 3, null);
+    collector.add({ kind: "tool_result", text: "ok" }, 4, null);
+    expect(collector.recentPrompts().map((turn) => turn.text)).toEqual(["do it"]);
+    expect(collector.lastReply()?.text).toBe("done");
   });
 });
 
@@ -66,8 +58,24 @@ describe("buildHandoffPrompt", () => {
     lastReply: { text: "Done.", line: 9, timestamp: null },
   });
 
-  it("opens with fixed prose, so quoted text can never make it a launch flag", () => {
-    expect(prompt.startsWith("You are continuing a Codex session")).toBe(true);
+  it("never starts like a launch flag, even when the first quoted request does", () => {
+    expect(prompt.trimStart().startsWith("-")).toBe(false);
+    expect(prompt).toContain("--dangerously-skip-permissions please");
+  });
+
+  it("clips a long request and a long reply, keeping their heads", () => {
+    const long = buildHandoffPrompt({
+      sourceAgent: "codex",
+      sourceSessionId: "s",
+      sourcePath: "/p",
+      conversionId: "c",
+      prompts: [{ text: `HEAD-REQUEST ${"r".repeat(20_000)}`, line: 1, timestamp: null }],
+      lastReply: { text: `HEAD-REPLY ${"a".repeat(50_000)}`, line: 2, timestamp: null },
+    });
+    expect(long).toContain("HEAD-REQUEST");
+    expect(long).toContain("HEAD-REPLY");
+    expect(long.length).toBeLessThan(10_000);
+    expect(long.match(/more characters, searchable/g)).toHaveLength(2);
   });
 
   it("names the search tool, the session and its file, and fences the quotations", () => {

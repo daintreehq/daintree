@@ -56,12 +56,16 @@ export async function continueFromPane(
   const terminalId = readString(args, "panelId") ?? readString(args, "terminalId");
   if (!terminalId) return unavailable(host, "No pane was named.");
 
-  const projectId = await currentProjectId(host);
-  if (!projectId) return unavailable(host, "No project is open.");
+  const front = await currentProjectId(host);
+  if (!front) return unavailable(host, "No project is open.");
 
   const info = await host.dispatch("terminal.info.get", { terminalId });
   if (!info.ok) return unavailable(host, "This pane's details couldn't be read.");
-  const terminal = info.result as { cwd?: unknown; worktreeId?: unknown };
+  const terminal = info.result as { cwd?: unknown; worktreeId?: unknown; projectId?: unknown };
+  // The pane's own record names its project when it can; the session is filed
+  // under that, and a pane outside the project in front isn't one dispatch reaches.
+  const projectId = typeof terminal.projectId === "string" ? terminal.projectId : front;
+  if (projectId !== front) return unavailable(host, "This pane isn't in the project in front.");
 
   const located = await host.dispatch("terminal.sessionFile.get", { terminalId });
   if (!located.ok) return unavailable(host, "This pane's session file couldn't be located.");
@@ -86,7 +90,6 @@ export async function continueFromPane(
     confirmLabel: `Continue in ${target}`,
   });
   if (!confirmed) return { status: "declined" };
-  await pruneRemovedProjects(ctx).catch(() => undefined);
 
   const conversionId = ctx.newId();
   const controller = new AbortController();
@@ -124,7 +127,7 @@ export async function continueFromPane(
       fragments: converted.fragments,
       skippedLines: converted.skippedLines,
       createdAt: Date.now(),
-      terminalId: null,
+      terminalIds: [],
     };
     prompt = buildHandoffPrompt({
       sourceAgent,
@@ -135,8 +138,12 @@ export async function continueFromPane(
       lastReply: converted.lastReply,
     });
     await ctx.store.writeHandoff(conversionId, prompt);
+    // A cancel that lands while the index is published still wins: nothing
+    // is kept and nothing launches.
+    signal.throwIfAborted();
     await ctx.catalog.put(record);
   } catch (error) {
+    await ctx.catalog.remove([conversionId]).catch(() => undefined);
     await ctx.store.delete(conversionId).catch(() => undefined);
     if (signal.aborted) {
       await task.finish({ outcome: "cancelled" });
@@ -153,13 +160,21 @@ export async function continueFromPane(
   }
 
   await task.finish({ outcome: "succeeded" });
+  await pruneRemovedProjects(ctx, projectId).catch(() => undefined);
   return launchConversion(ctx, record, prompt);
 }
 
 /**
  * Starts the continuing agent for a converted session. The terminal id is
- * chosen up front and recorded before the launch, so the agent can search
- * from its very first turn; a launch that doesn't happen takes it back.
+ * chosen up front and granted before the launch, so the agent can search
+ * from its very first turn; a launch that doesn't happen takes back its own
+ * grant and no other.
+ *
+ * The project check sits right before the launch, with nothing awaited
+ * between them but the check itself, because an installed plugin's dispatch
+ * runs in whichever project is in front. A pane in a worktree is also safe
+ * from a switch in that gap: the launcher refuses a worktree id the project
+ * in front doesn't have.
  */
 export async function launchConversion(
   ctx: PluginContext,
@@ -168,8 +183,9 @@ export async function launchConversion(
 ): Promise<ContinueOutcome> {
   const { host } = ctx;
   const target = AGENT_LABELS[record.targetAgent];
+  const requestedId = `continue-${ctx.newId()}`;
   const notLaunched = async (reason: string): Promise<ContinueOutcome> => {
-    await ctx.catalog.update(record.id, { terminalId: null });
+    await ctx.catalog.revoke(record.id, requestedId);
     await host.notify({
       title: `Couldn't start ${target}`,
       body: `${reason} The converted session is kept.`,
@@ -186,14 +202,10 @@ export async function launchConversion(
     return { status: "not-launched", conversionId: record.id, reason };
   };
 
-  // An installed plugin's dispatch runs in the project in front. Launching
-  // from another one would put the agent in the wrong worktree.
+  await ctx.catalog.grant(record.id, requestedId);
   if ((await currentProjectId(host)) !== record.projectId) {
     return notLaunched("The project this session belongs to isn't the one in front.");
   }
-
-  const requestedId = `continue-${ctx.newId()}`;
-  await ctx.catalog.update(record.id, { terminalId: requestedId });
   const launch = await host.dispatch("agent.launch", {
     agentId: record.targetAgent,
     ...(record.worktreeId ? { worktreeId: record.worktreeId } : {}),
@@ -213,7 +225,7 @@ export async function launchConversion(
     return notLaunched(launchRefusal(result.spawnStatus, target));
   }
   if (result.terminalId !== requestedId) {
-    await ctx.catalog.update(record.id, { terminalId: result.terminalId });
+    await ctx.catalog.revoke(record.id, requestedId, result.terminalId);
   }
   return { status: "launched", conversionId: record.id, terminalId: result.terminalId };
 }
@@ -223,12 +235,7 @@ export async function launchById(ctx: PluginContext, args: unknown): Promise<Con
   const id = readString(args, "conversionId");
   const record = id ? await ctx.catalog.get(id) : null;
   if (!record) return unavailable(ctx.host, "That converted session was deleted.");
-  let prompt: string | null = null;
-  try {
-    prompt = await ctx.store.readHandoff(record.id);
-  } catch {
-    prompt = null;
-  }
+  const prompt = await ctx.store.readHandoff(record.id).catch(() => null);
   if (!prompt) {
     return unavailable(
       ctx.host,

@@ -94,7 +94,6 @@ export async function* readJsonlLines(
       const newline = buffer.indexOf(NEWLINE, cursor);
       if (newline === -1 || newline >= bytesRead) {
         keep(buffer.subarray(cursor, bytesRead));
-        cursor = bytesRead;
         break;
       }
       keep(buffer.subarray(cursor, newline));

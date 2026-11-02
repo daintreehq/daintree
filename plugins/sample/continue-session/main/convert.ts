@@ -87,6 +87,8 @@ export async function convertSession(
         "The session file no longer belongs to this pane's session, so nothing was converted."
       );
     }
+    // The last read can finish after a cancel; the index is not published then.
+    input.signal.throwIfAborted();
     await builder.finish();
   } catch (error) {
     await builder.abandon();

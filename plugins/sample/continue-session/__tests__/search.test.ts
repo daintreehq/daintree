@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConversionRecord } from "../main/catalog.js";
 import { convertSession, SessionMismatchError } from "../main/convert.js";
-import { IndexStore } from "../main/indexStore.js";
-import { buildMatch, canSearch } from "../main/search.js";
+import type { Catalog } from "../main/catalog.js";
+import { chunks, IndexStore, type SearchHit } from "../main/indexStore.js";
+import { buildMatch, canSearch, createSearchTool, RESULT_BUDGET_BYTES } from "../main/search.js";
 import {
   claudeTranscript,
   CLAUDE_SESSION_ID,
@@ -50,7 +51,7 @@ describe("buildMatch", () => {
 });
 
 describe("canSearch", () => {
-  const record = { projectId: "p1", terminalId: "t-continue" } as ConversionRecord;
+  const record = { projectId: "p1", terminalIds: ["t-continue"] } as unknown as ConversionRecord;
 
   it("lets the continuing agent search its session", () => {
     expect(canSearch(record, { projectId: "p1", terminalId: "t-continue" }, new Set())).toBe(true);
@@ -62,7 +63,7 @@ describe("canSearch", () => {
   });
 
   it("refuses everyone while the continuing agent hasn't been launched", () => {
-    const pending = { ...record, terminalId: null };
+    const pending = { ...record, terminalIds: [] };
     expect(canSearch(pending, { projectId: "p1", terminalId: "t-continue" }, new Set())).toBe(
       false
     );
@@ -113,20 +114,48 @@ describe("convertSession and IndexStore", () => {
     expect(hits[0]!.excerpt).toContain("[VOICE_KEY]");
   });
 
-  it("ranks the record that matches every word above one that matches some", async () => {
+  /** A rollout of assistant messages, one per text, after the session's meta. */
+  async function indexTexts(id: string, texts: readonly string[]): Promise<IndexStore> {
     const { dir, store } = workspace();
     const source = join(dir, "rollout.jsonl");
-    writeJsonl(source, codexRollout());
+    writeJsonl(source, [
+      { type: "session_meta", payload: { id: CODEX_SESSION_ID } },
+      ...texts.map((text) => ({
+        type: "response_item",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] },
+      })),
+    ]);
     await convertSession(store, {
-      id: "c2",
+      id,
       agentId: "codex",
       sessionId: CODEX_SESSION_ID,
       path: source,
       signal: neverAborted,
       onProgress: () => {},
     });
+    return store;
+  }
+
+  it("ranks the record that matches every word above ones that match some", async () => {
+    // The weaker records come first in the file, so file order alone would rank them first.
+    const store = await indexTexts("c2", [
+      "the linux build is green",
+      "a keymap change landed",
+      "the linux keymap test fails on the shared replacement",
+    ]);
     const hits = store.search("c2", buildMatch("linux keymap test", "any")!, 5);
-    expect(hits[0]!.excerpt).toMatch(/\[keymap\]\.\[linux\]\.\[test\]|\[Linux\] \[keymap\]/);
+    expect(hits.map((hit) => hit.line)).toHaveLength(3);
+    expect(hits[0]!.line).toBe(4);
+  });
+
+  it("finds a phrase that crosses a chunk cut, and answers one hit per record", async () => {
+    const text = `${"p ".repeat(1994)}alpha beta gamma ${"q ".repeat(3000)}`;
+    const store = await indexTexts("c8", [text]);
+    const hits = store.search("c8", buildMatch('"beta gamma"', "all")!, 5);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.excerpt).toContain("[beta gamma]");
+    // Every chunk holds "p" or "q": one record, however many chunks match.
+    expect(store.search("c8", buildMatch("p q", "any")!, 5)).toHaveLength(1);
   });
 
   it("indexes a Claude Code transcript and leaves sidechains and thinking out", async () => {
@@ -220,9 +249,45 @@ describe("convertSession and IndexStore", () => {
     await store.writeHandoff("c7", "the hand-off");
     expect(await store.readHandoff("c7")).toBe("the hand-off");
     expect(await store.sizeOf("c7")).toBeGreaterThan(0);
+    for (const suffix of ["-journal", "-wal", "-shm", ".partial"]) {
+      writeFileSync(`${store.pathOf("c7")}${suffix}`, "");
+    }
     await store.delete("c7");
     expect(existsSync(store.pathOf("c7"))).toBe(false);
+    expect(readdirSync(join(dir, "sessions"))).toEqual([]);
     expect(await store.sizeOf("c7")).toBeNull();
+  });
+
+  it("publishes nothing when cancelled after the last read", async () => {
+    const { dir, store } = workspace();
+    const source = join(dir, "rollout.jsonl");
+    // 70 records of 64 KiB: progress first reports past 4 MiB, inside the
+    // last 1 MiB read, so only the check after reading can see the cancel.
+    const text = "w ".repeat(32 * 1024);
+    writeJsonl(source, [
+      { type: "session_meta", payload: { id: CODEX_SESSION_ID } },
+      ...Array.from({ length: 70 }, () => ({
+        type: "response_item",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] },
+      })),
+    ]);
+    const controller = new AbortController();
+    let reports = 0;
+    await expect(
+      convertSession(store, {
+        id: "c9",
+        agentId: "codex",
+        sessionId: CODEX_SESSION_ID,
+        path: source,
+        signal: controller.signal,
+        onProgress: () => {
+          reports += 1;
+          controller.abort();
+        },
+      })
+    ).rejects.toThrow();
+    expect(reports).toBe(1);
+    expect(readdirSync(join(dir, "sessions"))).toEqual([]);
   });
 
   it("sweeps only partial builds", async () => {
@@ -237,5 +302,109 @@ describe("convertSession and IndexStore", () => {
   it("refuses an id that could leave the index directory", () => {
     const { store } = workspace();
     expect(() => store.pathOf("../escape")).toThrow();
+  });
+});
+
+describe("chunks", () => {
+  it("cuts a long text without spaces into bounded, overlapping chunks that cover it all", () => {
+    const text = "x".repeat(1024 * 1024);
+    const started = performance.now();
+    const parts = [...chunks(text)];
+    expect(performance.now() - started).toBeLessThan(1_000);
+    let covered = 0;
+    for (const [offset, chunk] of parts) {
+      expect(chunk.length).toBeLessThanOrEqual(4_000);
+      expect(offset).toBeLessThanOrEqual(covered);
+      expect(text.slice(offset, offset + chunk.length)).toBe(chunk);
+      covered = offset + chunk.length;
+    }
+    expect(covered).toBe(text.length);
+  });
+
+  it("never splits a surrogate pair", () => {
+    // The leading "a" puts every pair at an odd offset, so plain cuts would split them.
+    const text = `a${"😀".repeat(5_000)}`;
+    const isLow = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+    const isHigh = (code: number) => code >= 0xd800 && code <= 0xdbff;
+    for (const [, chunk] of chunks(text)) {
+      expect(isLow(chunk.charCodeAt(0))).toBe(false);
+      expect(isHigh(chunk.charCodeAt(chunk.length - 1))).toBe(false);
+    }
+  });
+});
+
+describe("search_converted results", () => {
+  it("stay under the host's result limit, and say when they were cut", async () => {
+    const records = Array.from({ length: 10 }, (_, index) => ({
+      id: `c${index}`,
+      projectId: "p1",
+      terminalIds: ["t1"],
+      sourceAgent: "codex",
+      targetAgent: "claude",
+      sourceSessionId: "s",
+      sourcePath: "/sessions/rollout.jsonl",
+      createdAt: index,
+    }));
+    const hit: SearchHit = {
+      kind: "tool_result",
+      line: 1,
+      byteOffset: 0,
+      charOffset: 0,
+      timestamp: "2026-10-26T13:00:00.000Z",
+      excerpt: "é".repeat(1_000),
+    };
+    const tool = createSearchTool({
+      catalog: {
+        list: async () => records,
+        sharedProjects: async () => new Set<string>(),
+      } as unknown as Catalog,
+      store: { search: () => Array.from({ length: 25 }, () => hit) } as unknown as IndexStore,
+      log: () => {},
+    });
+    const result = (await tool.execute(
+      { query: "anything", limit: 25 },
+      { credentialId: "c", projectId: "p1", terminalId: "t1" },
+      new AbortController().signal
+    )) as { truncated?: boolean; sessions: unknown[] };
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(RESULT_BUDGET_BYTES);
+    expect(result.truncated).toBe(true);
+    expect(result.sessions.length).toBeGreaterThan(1);
+  });
+
+  it("answer a session whose index is missing as missing, and still search the rest", async () => {
+    const records = ["gone", "here"].map((id, index) => ({
+      id,
+      projectId: "p1",
+      terminalIds: ["t1"],
+      sourceAgent: "codex",
+      targetAgent: "claude",
+      sourceSessionId: "s",
+      sourcePath: "/p",
+      createdAt: index,
+    }));
+    const tool = createSearchTool({
+      catalog: {
+        list: async () => records,
+        sharedProjects: async () => new Set<string>(),
+      } as unknown as Catalog,
+      store: {
+        search: (id: string) => {
+          if (id === "gone") throw new Error("SQLITE_CANTOPEN");
+          return [];
+        },
+      } as unknown as IndexStore,
+      log: () => {},
+    });
+    const result = (await tool.execute(
+      { query: "word" },
+      { credentialId: "c", projectId: "p1", terminalId: "t1" },
+      new AbortController().signal
+    )) as { sessions: { convertedSessionId: string; error?: string }[] };
+    expect(result.sessions.map((session) => [session.convertedSessionId, !!session.error])).toEqual(
+      [
+        ["here", false],
+        ["gone", true],
+      ]
+    );
   });
 });

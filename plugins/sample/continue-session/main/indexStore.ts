@@ -28,7 +28,12 @@ export class IndexStore {
     const finalPath = this.pathOf(id);
     const partialPath = `${finalPath}.partial`;
     await rm(partialPath, { force: true });
-    return new IndexBuilder(partialPath, finalPath);
+    try {
+      return new IndexBuilder(partialPath, finalPath);
+    } catch (error) {
+      await rm(partialPath, { force: true });
+      throw error;
+    }
   }
 
   async sizeOf(id: string): Promise<number | null> {
@@ -101,15 +106,26 @@ export class IndexStore {
             ORDER BY bm25(fragments_fts)
             LIMIT ?`
         )
-        .all(match, limit);
-      return rows.map((row) => ({
-        kind: String(row.kind) as FragmentKind,
-        line: Number(row.line),
-        byteOffset: Number(row.byteOffset),
-        charOffset: Number(row.charOffset),
-        timestamp: typeof row.timestamp === "string" ? row.timestamp : null,
-        excerpt: clipExcerpt(String(row.excerpt)),
-      }));
+        .all(match, limit * 4);
+      // A long record is indexed as overlapping chunks, so one match can hit
+      // two of them: the best-ranked chunk stands for its record.
+      const hits: SearchHit[] = [];
+      const seen = new Set<number>();
+      for (const row of rows) {
+        const byteOffset = Number(row.byteOffset);
+        if (seen.has(byteOffset)) continue;
+        seen.add(byteOffset);
+        hits.push({
+          kind: String(row.kind) as FragmentKind,
+          line: Number(row.line),
+          byteOffset,
+          charOffset: Number(row.charOffset),
+          timestamp: typeof row.timestamp === "string" ? row.timestamp : null,
+          excerpt: clipExcerpt(String(row.excerpt)),
+        });
+        if (hits.length >= limit) break;
+      }
+      return hits;
     } finally {
       db.close();
     }
@@ -130,6 +146,7 @@ export interface SearchHit {
 
 /** Long texts are split so a snippet comes from near the match, not from a whole log. */
 const CHUNK_CHARS = 4_000;
+const OVERLAP_CHARS = 400;
 const BATCH_ROWS = 2_000;
 
 export class IndexBuilder {
@@ -145,9 +162,10 @@ export class IndexBuilder {
     private readonly finalPath: string
   ) {
     this.db = new DatabaseSync(partialPath);
-    // The file is rebuilt from the session on any failure, so durability
-    // during the build buys nothing.
-    this.db.exec(`
+    try {
+      // The file is rebuilt from the session on any failure, so durability
+      // during the build buys nothing.
+      this.db.exec(`
       PRAGMA journal_mode = OFF;
       PRAGMA synchronous = OFF;
       CREATE TABLE fragments (
@@ -161,10 +179,14 @@ export class IndexBuilder {
       CREATE VIRTUAL TABLE fragments_fts USING fts5(text, tokenize = 'unicode61 remove_diacritics 2');
       BEGIN;
     `);
-    this.insertFragment = this.db.prepare(
-      "INSERT INTO fragments (kind, line, byte_offset, char_offset, timestamp) VALUES (?, ?, ?, ?, ?)"
-    );
-    this.insertText = this.db.prepare("INSERT INTO fragments_fts (rowid, text) VALUES (?, ?)");
+      this.insertFragment = this.db.prepare(
+        "INSERT INTO fragments (kind, line, byte_offset, char_offset, timestamp) VALUES (?, ?, ?, ?, ?)"
+      );
+      this.insertText = this.db.prepare("INSERT INTO fragments_fts (rowid, text) VALUES (?, ?)");
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   add(
@@ -215,24 +237,41 @@ export class IndexBuilder {
   }
 }
 
-function* chunks(text: string): Generator<[number, string]> {
+/**
+ * Splits a long text into chunks of at most `CHUNK_CHARS`, cut at a space
+ * where one is near, each starting `OVERLAP_CHARS` or so before the last one
+ * ended, so a phrase that crosses a cut is still whole in one chunk. Every
+ * search for a cut looks back a bounded distance, so a text with no spaces
+ * at all costs linear time.
+ */
+export function* chunks(text: string): Generator<[number, string]> {
   if (text.length <= CHUNK_CHARS) {
     yield [0, text];
     return;
   }
   let start = 0;
-  while (start < text.length) {
+  for (;;) {
     let end = Math.min(start + CHUNK_CHARS, text.length);
-    if (end < text.length) {
-      const space = text.lastIndexOf(" ", end);
-      if (space > start + CHUNK_CHARS / 2) end = space;
-      // Never split a surrogate pair.
-      const code = text.charCodeAt(end - 1);
-      if (code >= 0xd800 && code <= 0xdbff) end -= 1;
-    }
+    if (end < text.length) end = keepPairWhole(text, backToSpace(text, end, end - CHUNK_CHARS / 2));
     yield [start, text.slice(start, end)];
-    start = end;
+    if (end >= text.length) return;
+    const overlapStart = end - OVERLAP_CHARS;
+    start = keepPairWhole(text, backToSpace(text, overlapStart, overlapStart - OVERLAP_CHARS));
   }
+}
+
+/** The position just after the last space in `(floor, from]`, or `from` when there is none. */
+function backToSpace(text: string, from: number, floor: number): number {
+  for (let index = from; index > floor; index -= 1) {
+    if (text.charCodeAt(index - 1) === 0x20) return index;
+  }
+  return from;
+}
+
+/** Moves a cut that would land between a surrogate pair's halves to before the pair. */
+function keepPairWhole(text: string, index: number): number {
+  const code = text.charCodeAt(index);
+  return code >= 0xdc00 && code <= 0xdfff ? index - 1 : index;
 }
 
 /** A snippet is a few dozen tokens, but one token can be a long unbroken blob. */

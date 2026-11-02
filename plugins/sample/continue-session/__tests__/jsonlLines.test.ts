@@ -41,22 +41,30 @@ describe("readJsonlLines", () => {
   });
 
   it("keeps a multi-byte character whole when it straddles a read chunk", async () => {
-    // The 1 MiB read boundary falls inside the 4-byte emoji.
-    const filler = "x".repeat(1024 * 1024 - 10);
-    const line = `{"t":"${filler}😀"}`;
+    const prefix = '{"t":"';
+    // The 4-byte emoji starts two bytes before the 1 MiB read boundary.
+    const filler = "x".repeat(1024 * 1024 - 2 - prefix.length);
+    const line = `${prefix}${filler}😀"}`;
+    const emojiAt = Buffer.from(line).indexOf(Buffer.from("😀"));
+    expect(emojiAt).toBe(1024 * 1024 - 2);
     const lines = await readAll(file("b.jsonl", `${line}\n{"n":2}\n`), 4 * 1024 * 1024);
     expect(lines[0]!.text).toBe(line);
-    expect(lines[1]).toMatchObject({ line: 2, byteOffset: Buffer.byteLength(line) + 1 });
+    expect(lines[1]).toMatchObject({
+      line: 2,
+      byteOffset: Buffer.byteLength(line) + 1,
+      text: '{"n":2}',
+    });
   });
 
-  it("skips a line past the size limit without holding it, and keeps counting", async () => {
-    const big = `{"t":"${"y".repeat(5000)}"}`;
+  it("skips a multi-chunk line past the size limit without holding it, and keeps counting", async () => {
+    const big = `{"t":"${"y".repeat(3 * 1024 * 1024)}"}`;
     const lines = await readAll(file("c.jsonl", `{"a":1}\n${big}\n{"b":2}\n`), 1000);
     expect(lines.map((line) => [line.line, line.text])).toEqual([
       [1, '{"a":1}'],
       [2, null],
       [3, '{"b":2}'],
     ]);
+    expect(lines[1]!.byteLength).toBe(big.length);
     expect(lines[2]!.byteOffset).toBe(8 + big.length + 1);
   });
 

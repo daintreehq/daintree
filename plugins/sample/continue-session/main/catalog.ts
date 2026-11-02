@@ -17,11 +17,12 @@ export interface ConversionRecord {
   readonly skippedLines: number;
   readonly createdAt: number;
   /**
-   * The terminal the continuing agent was launched in, or null while it hasn't
-   * been. Only that terminal's agent can search this session, unless its
-   * project shares converted sessions.
+   * The terminals continuing agents were launched in for this session. Only
+   * their agents can search it, unless its project shares converted
+   * sessions. A launch adds its terminal before it starts and takes it back
+   * if it doesn't, without touching another launch's.
    */
-  readonly terminalId: string | null;
+  readonly terminalIds: readonly string[];
 }
 
 const CONVERSIONS_KEY = "conversions";
@@ -42,7 +43,14 @@ export class Catalog {
   async list(): Promise<ConversionRecord[]> {
     const stored = await this.storage.get<Record<string, ConversionRecord>>(CONVERSIONS_KEY);
     if (!stored || typeof stored !== "object") return [];
-    return Object.values(stored).filter(isRecord);
+    return Object.values(stored)
+      .filter(isRecord)
+      .map((record) => ({
+        ...record,
+        terminalIds: Array.isArray(record.terminalIds)
+          ? record.terminalIds.filter((id): id is string => typeof id === "string")
+          : [],
+      }));
   }
 
   async get(id: string): Promise<ConversionRecord | null> {
@@ -55,14 +63,24 @@ export class Catalog {
     });
   }
 
-  update(id: string, change: Partial<ConversionRecord>): Promise<ConversionRecord | null> {
-    let updated: ConversionRecord | null = null;
+  /** Lets one more terminal's agent search the session. */
+  grant(id: string, terminalId: string): Promise<void> {
+    return this.mutate((all) => {
+      const current = all[id];
+      if (!current || current.terminalIds.includes(terminalId)) return;
+      all[id] = { ...current, terminalIds: [...current.terminalIds, terminalId] };
+    });
+  }
+
+  /** Takes back one terminal's grant, leaving every other one. */
+  revoke(id: string, terminalId: string, replacement?: string): Promise<void> {
     return this.mutate((all) => {
       const current = all[id];
       if (!current) return;
-      updated = { ...current, ...change, id };
-      all[id] = updated;
-    }).then(() => updated);
+      const kept = current.terminalIds.filter((candidate) => candidate !== terminalId);
+      if (replacement && !kept.includes(replacement)) kept.push(replacement);
+      all[id] = { ...current, terminalIds: kept };
+    });
   }
 
   remove(ids: readonly string[]): Promise<void> {
