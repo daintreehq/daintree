@@ -56,9 +56,7 @@ export interface ScheduledAssistantLaunchRequest {
  * the project is taken, and none is ever displaced for a schedule.
  */
 export type ScheduledAssistantLaunchResult =
-  | { status: "started" }
-  | { status: "no-session" }
-  | { status: "failed"; message: string };
+  { status: "started" } | { status: "no-session" } | { status: "failed"; message: string };
 
 /** Why the view launching a run gave no answer: it closed, or took too long. */
 export class ScheduledLaunchUnansweredError extends Error {

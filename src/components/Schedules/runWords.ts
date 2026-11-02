@@ -69,9 +69,7 @@ export function runDetail(run: ScheduledRun): RunDetail | null {
       }
       if (skip.kind === "overlap") return reason("The last run was still going");
       if (skip.kind === "assistant-sessions-full") {
-        return reason(
-          `All ${MAX_ASSISTANT_SLOTS} of the project's Assistant sessions were in use`
-        );
+        return reason(`All ${MAX_ASSISTANT_SLOTS} of the project's Assistant sessions were in use`);
       }
       if (skip.error !== null) return reason(`The check command couldn't run: ${skip.error}`);
       if (skip.signal !== null) {

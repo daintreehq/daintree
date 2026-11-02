@@ -709,7 +709,8 @@ export function recordOwnershipFromDispatch(
       hostId: null,
       hostName: null,
       projectId:
-        envelope.dispatchedWorkspace?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId),
+        envelope.dispatchedWorkspace?.workspaceId ??
+        sessionStore.sessionWorkspaceMap.get(sessionId),
       askedAt: call.askedAt ?? Date.now(),
     });
   }
