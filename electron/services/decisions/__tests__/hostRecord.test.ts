@@ -46,9 +46,10 @@ describe("an enrolled Host's record (#16022)", () => {
     expect(sanitizeHostRecord({ ...RECORD, credentialsRemovedAt: 9 })?.credentialsRemovedAt).toBe(
       null
     );
-    expect(
-      sanitizeHostRecord({ ...RECORD, revokedAt: 5, credentialsRemovedAt: 9 })
-    ).toMatchObject({ revokedAt: 5, credentialsRemovedAt: 9 });
+    expect(sanitizeHostRecord({ ...RECORD, revokedAt: 5, credentialsRemovedAt: 9 })).toMatchObject({
+      revokedAt: 5,
+      credentialsRemovedAt: 9,
+    });
   });
 
   it("writes its sanitised form, and refuses one that isn't whole", () => {

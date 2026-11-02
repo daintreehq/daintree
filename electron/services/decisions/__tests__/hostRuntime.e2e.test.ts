@@ -454,8 +454,9 @@ async function askHuman(port: number, token: string, question: string): Promise<
     req.end(body);
   });
   expect(answer.status).toBe(200);
-  const result = (JSON.parse(answer.body) as { result: { structuredContent: { question_id: string } } })
-    .result;
+  const result = (
+    JSON.parse(answer.body) as { result: { structuredContent: { question_id: string } } }
+  ).result;
   return result.structuredContent.question_id;
 }
 
@@ -619,7 +620,10 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
 
     // Another device's question, answered in the same ledger: kept for sync, never typed here.
     const foreign = newId();
-    relay.questions.set(foreign, { target_host_id: "host_owner_mac", signer_device_id: owner.deviceId });
+    relay.questions.set(foreign, {
+      target_host_id: "host_owner_mac",
+      signer_device_id: owner.deviceId,
+    });
     relay.append({
       event_type: "decision.created",
       question_id: foreign,

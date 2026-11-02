@@ -158,4 +158,3 @@ export const HostRuntimeSchema = z.discriminatedUnion("state", [
 
 export const HostRuntimePayloadSchema = z.object({ runtime: HostRuntimeSchema }).strict();
 export type HostRuntimePayload = z.infer<typeof HostRuntimePayloadSchema>;
-

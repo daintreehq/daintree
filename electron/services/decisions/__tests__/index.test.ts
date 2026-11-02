@@ -2214,7 +2214,10 @@ describe("Decisions entry", () => {
 
       expect(existsSync(keyFile.path)).toBe(false);
       expect(storedRows.count).toBe(0);
-      expect(savedHost.value).toMatchObject({ revokedAt: 50, credentialsRemovedAt: expect.any(Number) });
+      expect(savedHost.value).toMatchObject({
+        revokedAt: 50,
+        credentialsRemovedAt: expect.any(Number),
+      });
       // Nothing connected on the way.
       expect(connections).toHaveLength(0);
     });

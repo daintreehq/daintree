@@ -12,10 +12,7 @@ import {
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
 import type { DecisionsHostRuntime } from "../../../../shared/types/decisionsHosts.js";
-import type {
-  DecisionsHostLink,
-  OwnerStateAnnouncement,
-} from "../../../types/decisionsHosts.js";
+import type { DecisionsHostLink, OwnerStateAnnouncement } from "../../../types/decisionsHosts.js";
 import { HostEnrollments } from "../../../services/decisions/hostEnrollmentHost.js";
 import type { LinkSession } from "../../link/session.js";
 import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests__/linkTestUtils.js";

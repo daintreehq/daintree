@@ -260,8 +260,13 @@ describe("Remote Host copy", () => {
       /It reports Decisions connected to the relay\.$/
     );
     expect(
-      hostEnrollmentText({ ...enrolled, connected: false, runtime: { ...connected, live: false } }, true)
-    ).toMatch(/Not connected\. Before its connection closed, it reported Decisions connected to the relay\.$/);
+      hostEnrollmentText(
+        { ...enrolled, connected: false, runtime: { ...connected, live: false } },
+        true
+      )
+    ).toMatch(
+      /Not connected\. Before its connection closed, it reported Decisions connected to the relay\.$/
+    );
     expect(
       hostEnrollmentText(
         {

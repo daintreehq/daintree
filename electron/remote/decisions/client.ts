@@ -269,9 +269,13 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     this.announced.set(hostId, turn);
     let raw: unknown;
     try {
-      raw = await session.call(DecisionsLinkMethod.OWNER_STATE, OwnerStatePayloadSchema.parse(state), {
-        timeoutMs: OWNER_STATE_TIMEOUT_MS,
-      });
+      raw = await session.call(
+        DecisionsLinkMethod.OWNER_STATE,
+        OwnerStatePayloadSchema.parse(state),
+        {
+          timeoutMs: OWNER_STATE_TIMEOUT_MS,
+        }
+      );
     } catch {
       // A Host from before Hosts ran Decisions, or a link that went: nothing to keep.
       return;
@@ -281,7 +285,11 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     if (parsed.success) this.observe(hostId, session, parsed.data.runtime);
   }
 
-  private observe(hostId: string, session: DecisionsHostSession, runtime: DecisionsHostRuntime): void {
+  private observe(
+    hostId: string,
+    session: DecisionsHostSession,
+    runtime: DecisionsHostRuntime
+  ): void {
     if (!session.isOpen) return;
     this.reports.set(hostId, { session, runtime, at: this.now() });
     this.changed();
