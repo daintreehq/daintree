@@ -792,6 +792,11 @@ export const helpNamespace = defineIpcNamespace({
       globalAssistant.handleReleaseGlobalAssistantInput,
       { withContext: true }
     ),
+    setGlobalAssistantInputEligible: op(
+      HELP_METHOD_CHANNELS.setGlobalAssistantInputEligible,
+      globalAssistant.handleSetGlobalAssistantInputEligible,
+      { withContext: true }
+    ),
     restartGlobalAssistant: op(
       HELP_METHOD_CHANNELS.restartGlobalAssistant,
       globalAssistant.handleRestartGlobalAssistant,

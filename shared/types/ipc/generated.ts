@@ -2075,7 +2075,7 @@ export interface GeneratedIpcInvokeMap {
     result: string[];
   };
   "help:global-assistant-attach": {
-    args: [];
+    args: [eligible?: boolean | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
   };
   "help:global-assistant-claim-input": {
@@ -2093,6 +2093,10 @@ export interface GeneratedIpcInvokeMap {
   "help:global-assistant-ensure": {
     args: [];
     result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-input-eligible": {
+    args: [attachmentId: string, eligible: boolean];
+    result: void;
   };
   "help:global-assistant-release-input": {
     args: [attachmentId: string];

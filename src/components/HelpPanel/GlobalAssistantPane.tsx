@@ -23,7 +23,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isSameAssistantRun, type AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
+import type { GlobalAssistantInputStamp, GlobalAssistantView } from "@shared/types/ipc/help";
 import { useGlobalAssistant } from "./useGlobalAssistant";
 import {
   refusalReason,
@@ -51,17 +51,43 @@ function subscribeViewCache(onChange: () => void): () => void {
   return subscribeProjectViewLifecycle(() => onChange());
 }
 
+function runningSubject(view: GlobalAssistantView | null): AgentDirectorySubject | null {
+  return view?.phase === "running" ? (view.subject ?? null) : null;
+}
+
+/** The run "Open in Assistant" chose is gone, whatever runs now. */
+function chosenRunEnded(
+  target: AgentDirectorySubject | null,
+  view: GlobalAssistantView | null
+): boolean {
+  return target !== null && view !== null && !isSameAssistantRun(runningSubject(view), target);
+}
+
+/**
+ * Whether the pane could type to the run `view` shows: not behind Canopy, and
+ * showing the run "Open in Assistant" chose only once that run is seen running.
+ */
+function canTypeTo(
+  canopyOpen: boolean,
+  target: AgentDirectorySubject | null,
+  view: GlobalAssistantView | null
+): boolean {
+  if (canopyOpen) return false;
+  return target === null || isSameAssistantRun(runningSubject(view), target);
+}
+
 /**
  * The installation's one global Daintree Assistant, in the Assistant panel
  * (#14454). Main owns its run; this view attaches to read it while the pane is
  * on screen and lets go when it isn't, which never ends the run. Nothing here
  * starts a session except the person pressing Start.
  *
- * Every window shows the same terminal. One holds its input at a time, and only
- * by taking it: the pane types under the ownership it opened with, so once
- * input moves — even away and back — its stream is reopened and anything still
- * queued under the old ownership is refused by main. Each window's composer
- * keeps its own draft through all of that.
+ * Every window shows the same terminal. One holds its input at a time: taken
+ * from another window only by asking, and handed by main to a window that can
+ * type when its holder goes. The pane types under the ownership it opened with,
+ * so once input moves — even away and back — its stream is reopened and
+ * anything still queued under the old ownership is refused by main. Each
+ * window's composer keeps its own draft through all of that.
  */
 export function GlobalAssistantPane({
   isVisible,
@@ -88,8 +114,12 @@ export function GlobalAssistantPane({
   // A window bound to another host reaches that host's assistants, not this one's.
   const boundElsewhere = getViewHostId() !== null;
   const active = isOpen && isVisible && !viewCached && !boundElsewhere;
-  const { view, attachmentId, error, start, claimInput, restart, discard } =
-    useGlobalAssistant(active);
+  // Attached behind Canopy or an ended run, the pane can't type, so input
+  // nobody holds passes it over.
+  const { view, attachmentId, error, start, claimInput, restart, discard } = useGlobalAssistant(
+    active,
+    (shown) => canTypeTo(canopyOpen, target, shown)
+  );
   const [pendingConfirm, setPendingConfirm] = useState<{
     kind: "restart" | "discard";
     generation: number;
@@ -100,10 +130,10 @@ export function GlobalAssistantPane({
   useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const subject = view?.phase === "running" ? (view.subject ?? null) : null;
+  const subject = runningSubject(view);
   // The run "Open in Assistant" chose, gone by now: said, and its successor
   // never put in its place.
-  const targetEnded = target !== null && view !== null && !isSameAssistantRun(subject, target);
+  const targetEnded = chosenRunEnded(target, view);
   const shown = targetEnded ? null : subject;
   const holdsInput = attachmentId !== null && view?.inputOwner === attachmentId;
   const stamp: GlobalAssistantInputStamp | null =

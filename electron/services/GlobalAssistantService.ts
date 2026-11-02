@@ -13,11 +13,14 @@ import type { GlobalAssistantState } from "../../shared/types/ipc/help.js";
  * session, which is what ends a project lane with its view.
  *
  * Input has one owner at a time. Every attachment shows the same PTY; the
- * owner is the one whose keystrokes are accepted, and moving it is an explicit
- * claim, never a side effect of focus. Each change of owner bumps an epoch so
- * a write queued by the previous owner is refused rather than landing in the
- * new owner's line. Composer drafts live in the windows, not here, so a claim
- * cannot overwrite one.
+ * owner is the one whose keystrokes are accepted. Taking input from another
+ * owner is an explicit claim, never a side effect of focus. A vacancy is
+ * filled, though (#16098): when the owner's attachment goes, or input has no
+ * owner, it goes to the attachment in the most recently focused window that
+ * can type, so one person moving between windows never has to take it back.
+ * Each change of owner bumps an epoch so a write queued by the previous owner
+ * is refused rather than landing in the new owner's line. Composer drafts live
+ * in the windows, not here, so a handover cannot overwrite one.
  */
 
 /** Why a run ended; decides whether its conversation is kept for the next one. */
@@ -64,12 +67,19 @@ export interface GlobalAssistantDeps {
   revoke(sessionId: string, options: { capture: boolean }): Promise<void>;
   /** Kill a PTY the session record may not know yet. */
   kill(terminalId: string): void;
+  /** Ids of the windows that have been focused, most recent first; read when input needs an owner. */
+  focusedWindows(): readonly number[];
 }
 
 interface Attachment {
   attachmentId: string;
   webContentsId: number;
   windowId: number;
+  /**
+   * Whether its view could type to the run now (not behind Canopy, say), so
+   * an empty owner's seat may be given to it. An owner keeps input either way.
+   */
+  eligible: boolean;
 }
 
 interface Run {
@@ -257,6 +267,8 @@ export class GlobalAssistantService {
 
     this.starting = null;
     this.run = run;
+    // Teardown left input with nobody: the new run's goes to a reader that can type.
+    this.fillVacancy();
     return this.getState();
   }
 
@@ -343,13 +355,21 @@ export class GlobalAssistantService {
     await this.teardown("shutdown");
   }
 
-  attach(webContentsId: number, windowId: number): string {
+  attach(webContentsId: number, windowId: number, eligible = true): string {
     if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
     const attachmentId = randomUUID();
-    this.attachments.set(attachmentId, { attachmentId, webContentsId, windowId });
-    if (this.inputOwner === null) this.setInputOwner(attachmentId);
+    this.attachments.set(attachmentId, { attachmentId, webContentsId, windowId, eligible });
+    this.fillVacancy();
     this.emit();
     return attachmentId;
+  }
+
+  /** Whether the attachment's view can type now; one that can fills a vacancy. */
+  setEligible(attachmentId: string, webContentsId: number, eligible: boolean): void {
+    const attachment = this.requireAttachment(attachmentId, webContentsId);
+    if (attachment.eligible === eligible) return;
+    attachment.eligible = eligible;
+    if (eligible && this.fillVacancy()) this.emit();
   }
 
   detach(attachmentId: string, webContentsId?: number): boolean {
@@ -357,7 +377,7 @@ export class GlobalAssistantService {
     if (!attachment) return false;
     if (webContentsId !== undefined && attachment.webContentsId !== webContentsId) return false;
     this.attachments.delete(attachmentId);
-    if (this.inputOwner === attachmentId) this.releaseInputOwner();
+    if (this.inputOwner === attachmentId) this.setInputOwner(this.successor());
     this.emit();
     return true;
   }
@@ -374,12 +394,15 @@ export class GlobalAssistantService {
 
   private detachWhere(match: (attachment: Attachment) => boolean): void {
     let changed = false;
+    let ownerLeft = false;
     for (const attachment of [...this.attachments.values()]) {
       if (!match(attachment)) continue;
       this.attachments.delete(attachment.attachmentId);
-      if (this.inputOwner === attachment.attachmentId) this.releaseInputOwner();
+      if (this.inputOwner === attachment.attachmentId) ownerLeft = true;
       changed = true;
     }
+    // Chosen once every match has gone, so input never lands on one leaving with it.
+    if (ownerLeft) this.setInputOwner(this.successor());
     if (changed) this.emit();
   }
 
@@ -418,15 +441,45 @@ export class GlobalAssistantService {
     return attachment;
   }
 
-  private setInputOwner(attachmentId: string): void {
+  private setInputOwner(attachmentId: string | null): void {
     this.inputOwner = attachmentId;
     this.inputEpoch += 1;
   }
 
   private releaseInputOwner(): void {
     if (this.inputOwner === null) return;
-    this.inputOwner = null;
-    this.inputEpoch += 1;
+    this.setInputOwner(null);
+  }
+
+  /** Give input with no owner to the best attachment for it; true when one took it. */
+  private fillVacancy(): boolean {
+    if (this.inputOwner !== null) return false;
+    const next = this.successor();
+    if (next === null) return false;
+    this.setInputOwner(next);
+    return true;
+  }
+
+  /**
+   * The attachment input goes to when nobody holds it: one that can type, in
+   * the most recently focused window, the latest to attach breaking ties and
+   * standing in where no window it is in has been focused.
+   */
+  private successor(): string | null {
+    const focused = this.deps.focusedWindows();
+    let best: Attachment | null = null;
+    let bestRank = Infinity;
+    // Attachments iterate in the order they attached, so `<=` lets the later one win a tie.
+    for (const attachment of this.attachments.values()) {
+      if (!attachment.eligible) continue;
+      const at = focused.indexOf(attachment.windowId);
+      const rank = at === -1 ? focused.length : at;
+      if (rank <= bestRank) {
+        best = attachment;
+        bestRank = rank;
+      }
+    }
+    return best?.attachmentId ?? null;
   }
 
   private emit(): void {

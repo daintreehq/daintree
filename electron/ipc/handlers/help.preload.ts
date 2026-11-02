@@ -23,6 +23,7 @@ export const HELP_METHOD_CHANNELS = {
   detachGlobalAssistant: "help:global-assistant-detach",
   claimGlobalAssistantInput: "help:global-assistant-claim-input",
   releaseGlobalAssistantInput: "help:global-assistant-release-input",
+  setGlobalAssistantInputEligible: "help:global-assistant-input-eligible",
   restartGlobalAssistant: "help:global-assistant-restart",
   discardGlobalAssistant: "help:global-assistant-discard",
 } as const satisfies Record<string, keyof IpcInvokeMap>;

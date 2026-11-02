@@ -676,6 +676,7 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_DETACH: "help:global-assistant-detach",
   HELP_GLOBAL_ASSISTANT_CLAIM_INPUT: "help:global-assistant-claim-input",
   HELP_GLOBAL_ASSISTANT_RELEASE_INPUT: "help:global-assistant-release-input",
+  HELP_GLOBAL_ASSISTANT_INPUT_ELIGIBLE: "help:global-assistant-input-eligible",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
   HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",

@@ -56,6 +56,7 @@ function makeService() {
     spawn: async () => true,
     revoke: async () => {},
     kill: () => {},
+    focusedWindows: () => [],
   });
 }
 
@@ -171,7 +172,56 @@ describe("global assistant IPC handlers", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("moves input only on an explicit claim and frees it on release", async () => {
+  it("hands nobody's input only to a view that can type, and fills it once one can (#16098)", async () => {
+    const behindCanopy = await handlers.handleAttachGlobalAssistant(ctx(10, 1), false);
+    expect(behindCanopy.state.inputOwner).toBeNull();
+    await expect(
+      handlers.handleSetGlobalAssistantInputEligible(ctx(20, 2), behindCanopy.attachmentId, true)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      handlers.handleSetGlobalAssistantInputEligible(
+        ctx(10, 1),
+        behindCanopy.attachmentId,
+        "yes" as never
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      handlers.handleAttachGlobalAssistant(ctx(10, 1), 1 as never)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await handlers.handleGetGlobalAssistantState()).inputOwner).toBeNull();
+
+    broadcast.mockClear();
+    await handlers.handleSetGlobalAssistantInputEligible(
+      ctx(10, 1),
+      behindCanopy.attachmentId,
+      true
+    );
+    expect((await handlers.handleGetGlobalAssistantState()).inputOwner).toBe(
+      behindCanopy.attachmentId
+    );
+    expect(broadcast.mock.calls.at(-1)?.[1]).toMatchObject({
+      inputOwner: behindCanopy.attachmentId,
+    });
+  });
+
+  it("passes over a view that said it can no longer type", async () => {
+    const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    const c = await handlers.handleAttachGlobalAssistant(ctx(30, 3));
+    await handlers.handleSetGlobalAssistantInputEligible(ctx(30, 3), c.attachmentId, false);
+    await handlers.handleDetachGlobalAssistant(ctx(10, 1), a.attachmentId);
+    expect((await handlers.handleGetGlobalAssistantState()).inputOwner).toBe(b.attachmentId);
+  });
+
+  it("tells every window when a departing owner's input moves to another", async () => {
+    const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    broadcast.mockClear();
+    await handlers.handleDetachGlobalAssistant(ctx(10, 1), a.attachmentId);
+    expect(broadcast.mock.calls.at(-1)?.[1]).toMatchObject({ inputOwner: b.attachmentId });
+  });
+
+  it("moves input between holders only on an explicit claim and frees it on release", async () => {
     const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
     const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
     expect(b.state.inputOwner).toBe(a.attachmentId);

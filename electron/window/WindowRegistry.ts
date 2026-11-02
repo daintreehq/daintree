@@ -289,8 +289,9 @@ export class WindowRegistry {
    * registration order rather than dropped — the open-window manifest (#11492)
    * has to describe every window, and its cap trims from the tail, so a window
    * missing from this list would be the first one silently lost.
+   * `focusedOnly` leaves them out, for a caller that ranks by focus alone.
    */
-  focusOrder(): WindowContext[] {
+  focusOrder(options?: { focusedOnly?: boolean }): WindowContext[] {
     const ordered: WindowContext[] = [];
     const seen = new Set<number>();
 
@@ -302,6 +303,7 @@ export class WindowRegistry {
       seen.add(id);
       ordered.push(ctx);
     }
+    if (options?.focusedOnly) return ordered;
 
     for (const [id, ctx] of this.windows) {
       if (seen.has(id)) continue;

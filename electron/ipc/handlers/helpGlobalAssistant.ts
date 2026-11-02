@@ -149,6 +149,13 @@ function requireId(value: unknown): string {
   return value;
 }
 
+function requireEligible(value: unknown): boolean {
+  if (typeof value !== "boolean") {
+    throw new AppError({ code: "VALIDATION", message: "Whether the view can type is required." });
+  }
+  return value;
+}
+
 export async function handleEnsureGlobalAssistant(ctx: IpcContext): Promise<GlobalAssistantView> {
   requireWindow(ctx);
   const instance = service();
@@ -160,13 +167,29 @@ export async function handleGetGlobalAssistantState(): Promise<GlobalAssistantVi
   return globalAssistantView(service());
 }
 
+/**
+ * `eligible` says whether the attaching view could type to the run now; one
+ * that can't (Canopy covers it) is never handed input that nobody holds.
+ */
 export async function handleAttachGlobalAssistant(
-  ctx: IpcContext
+  ctx: IpcContext,
+  eligible?: boolean
 ): Promise<GlobalAssistantAttachment> {
   const { webContentsId, windowId } = requireWindow(ctx);
+  const canType = eligible === undefined ? true : requireEligible(eligible);
   const instance = service();
-  const attachmentId = instance.attach(webContentsId, windowId);
+  const attachmentId = instance.attach(webContentsId, windowId, canType);
   return { attachmentId, state: globalAssistantView(instance) };
+}
+
+/** The attachment's view can, or can no longer, type to the run; it may fill a vacancy. */
+export async function handleSetGlobalAssistantInputEligible(
+  ctx: IpcContext,
+  attachmentId: string,
+  eligible: boolean
+): Promise<void> {
+  const { webContentsId } = requireWindow(ctx);
+  service().setEligible(requireId(attachmentId), webContentsId, requireEligible(eligible));
 }
 
 export async function handleDetachGlobalAssistant(
