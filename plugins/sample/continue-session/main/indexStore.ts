@@ -116,10 +116,12 @@ export class IndexStore {
                 f.timestamp AS timestamp, f.char_offset AS charOffset,
                 snippet(fragments_fts, 0, '[', ']', '…', 48) AS excerpt
            FROM fragments_fts JOIN fragments f ON f.id = fragments_fts.rowid
-          WHERE fragments_fts MATCH ? AND fragments_fts.rowid = ?`
+          WHERE fragments_fts MATCH ? AND fragments_fts.rowid = CAST(? AS INTEGER)`
       );
       const hits: SearchHit[] = [];
       for (const { id: rowid } of best) {
+        // Cast in SQL: a JS number binds as REAL, and FTS5 then ignores the
+        // rowid and answers with the first matching chunk.
         const row = detail.get(match, rowid as number);
         if (!row) continue;
         hits.push({

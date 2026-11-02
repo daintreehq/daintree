@@ -166,6 +166,19 @@ describe("convertSession and IndexStore", () => {
     expect(store.search("c10", buildMatch(`"${phrase}"`, "all")!, 5)).toHaveLength(1);
   });
 
+  it("gives each hit its own record's excerpt", async () => {
+    const store = await indexTexts("c12", [
+      "needle first",
+      "needle second needle",
+      "third needle here",
+    ]);
+    const hits = store.search("c12", buildMatch("needle", "all")!, 8);
+    const byLine = new Map(hits.map((hit) => [hit.line, hit.excerpt]));
+    expect(byLine.get(2)).toContain("first");
+    expect(byLine.get(3)).toContain("second");
+    expect(byLine.get(4)).toContain("third");
+  });
+
   it("counts the limit in records, so one record matching everywhere hides no other", async () => {
     const store = await indexTexts("c11", [
       "needle ".repeat(30_000),
