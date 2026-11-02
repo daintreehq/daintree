@@ -8,6 +8,7 @@ import {
   MemoryKeyStore,
   MemoryLocalStore,
   type KeyStore,
+  type ProxyEngine,
   type StoredIdentity,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
@@ -670,6 +671,75 @@ describe("RelayConnection", () => {
     expect(await second.waitFor((frame) => frame.t === "sync")).toEqual({ t: "sync", after: 1 });
     await h.status("connected");
     expect(h.relay.tickets).toHaveLength(2);
+    h.connection.stop();
+  });
+
+  it("gives each attempt's bridge the model's learner and the proxy armed as it began, and replaces it when that changes (#16026)", async () => {
+    const learner = { learn: vi.fn() };
+    const proxy: ProxyEngine = {
+      gateAware: true,
+      suggest: vi.fn(async () => ({ action: "abstain" as const, reason: "test" })),
+    };
+    let armed: ProxyEngine | null = null;
+    const bridges: DecisionsBridge[] = [];
+    const original = DecisionsBridge.prototype.start;
+    const start = vi
+      .spyOn(DecisionsBridge.prototype, "start")
+      .mockImplementation(function (this: DecisionsBridge, ...args) {
+        bridges.push(this);
+        return original.apply(this, args);
+      });
+    const proxyOf = (bridge: DecisionsBridge) =>
+      (bridge as unknown as { o: { proxy?: ProxyEngine } }).o.proxy ?? null;
+    const h = await harness({ overrides: { model: { learner, proxy: () => armed } } });
+    h.connection.start();
+    const first = await connectLive(h);
+    expect(bridges[0]!.ctx.learner).toBe(learner);
+    expect(proxyOf(bridges[0]!)).toBeNull();
+
+    // Nothing changed for the attempt running: it carries on.
+    h.connection.modelChanged();
+    expect(h.relay.tickets).toHaveLength(1);
+
+    armed = proxy;
+    h.connection.modelChanged();
+    const second = await h.relay.socket(1);
+    expect(first.closedByClient).toBe(1000);
+    second.accept();
+    await h.status("connected");
+    expect(bridges).toHaveLength(2);
+    expect(proxyOf(bridges[1]!)).toBe(proxy);
+    expect(bridges[1]!.ctx.learner).toBe(learner);
+
+    armed = null;
+    h.connection.modelChanged();
+    const third = await h.relay.socket(2);
+    expect(second.closedByClient).toBe(1000);
+    third.accept();
+    await h.status("connected");
+    expect(proxyOf(bridges[2]!)).toBeNull();
+    h.connection.stop();
+    start.mockRestore();
+  });
+
+  it("leaves a 4409's wait alone when the proxy changes (#16026)", async () => {
+    const proxy: ProxyEngine = {
+      suggest: vi.fn(async () => ({ action: "abstain" as const, reason: "test" })),
+    };
+    let armed: ProxyEngine | null = null;
+    const h = await harness({
+      rand: () => 0.5,
+      overrides: { model: { learner: { learn: () => {} }, proxy: () => armed } },
+    });
+    h.connection.start();
+    const first = await connectLive(h);
+    first.drop(4409);
+    await h.status("replaced");
+
+    armed = proxy;
+    h.connection.modelChanged();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.relay.tickets).toHaveLength(1);
     h.connection.stop();
   });
 

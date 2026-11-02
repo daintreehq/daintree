@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -286,6 +286,89 @@ describe("local Decisions data deletion", () => {
     expect(rows.erase).not.toHaveBeenCalled();
     expect(forgotten).toBe(1);
     expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
+  });
+
+  describe("the decision model's files (#16026)", () => {
+    const HISTORY = "examples in clear";
+    let history: string;
+    let evaluation: string;
+
+    function withModel(rows: DecisionsRows): LocalEraseDeps {
+      return { ...deps(rows), modelFiles: [history, `${history}-journal`, evaluation] };
+    }
+
+    beforeEach(() => {
+      history = join(dir, "model-history.sqlite");
+      evaluation = join(dir, "model-evaluation.json");
+    });
+
+    it("deletes them with the rows, learning on or not, and with no keys at all", async () => {
+      writeFileSync(history, HISTORY);
+      writeFileSync(evaluation, "{}");
+      const { rows, state } = fakeRows();
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "deleted",
+      });
+
+      expect(state.count).toBe(0);
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(1);
+    });
+
+    it("puts them back with the keys when the rows can't be deleted", async () => {
+      writeFileSync(keyFile, KEYS);
+      writeFileSync(history, HISTORY);
+      const { rows, state } = fakeRows();
+      state.failErase = new Error("database is locked");
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "failed",
+        reason: "storage",
+      });
+
+      expect(readFileSync(history, "utf8")).toBe(HISTORY);
+      expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
+      expect(readdirSync(dir).sort()).toEqual(["keys.bin", "model-history.sqlite"]);
+    });
+
+    it("changes nothing, keys included, when one of them can't be moved aside", async () => {
+      writeFileSync(keyFile, KEYS);
+      writeFileSync(history, HISTORY);
+      fsFaults.rename = (src) => src === history;
+      const { rows } = fakeRows();
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "failed",
+        reason: "model",
+      });
+
+      expect(rows.erase).not.toHaveBeenCalled();
+      expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
+      expect(readFileSync(history, "utf8")).toBe(HISTORY);
+    });
+
+    it("finishes a deletion that committed with no keys set aside, from the model's own marker", async () => {
+      writeFileSync(erasingKeyFilePath(history), HISTORY);
+      const { rows } = fakeRows(0);
+
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("finished");
+
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(1);
+    });
+
+    it("puts them back when a deletion stopped before the rows went", async () => {
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(erasingKeyFilePath(history), HISTORY);
+      const { rows } = fakeRows();
+
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("restored");
+
+      expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
+      expect(readFileSync(history, "utf8")).toBe(HISTORY);
+      expect(forgotten).toBe(0);
+    });
   });
 
   describe("finishing a deletion that stopped partway", () => {
