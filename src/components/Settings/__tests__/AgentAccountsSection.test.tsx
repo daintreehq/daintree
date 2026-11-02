@@ -39,7 +39,7 @@ afterEach(() => {
 
 describe("AgentAccountsSection (#16040)", () => {
   it.each(["cursor", "gemini", "amp"])(
-    "renders nothing for %s, whose CLI can't hold an account per launch",
+    "renders nothing for %s, whose login no account folder can hold",
     (agentId) => {
       const { container } = renderSection({}, { agentId });
       expect(container.innerHTML).toBe("");
