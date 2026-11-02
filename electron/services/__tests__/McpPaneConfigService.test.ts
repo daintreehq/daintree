@@ -24,7 +24,7 @@ vi.mock("electron", () => ({
 // preparation for the same pane has since unlinked and rewritten.
 const writeControl = vi.hoisted(() => ({
   error: null as Error | null,
-  hooks: [] as Array<() => Promise<void>>,
+  hooks: [] as Array<(data: string) => Promise<void>>,
   written: [] as Array<{ path: string; data: string }>,
 }));
 
@@ -36,7 +36,7 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.resilientAtomicWriteFile>
     ) => {
       const hook = writeControl.hooks.shift();
-      if (hook) await hook();
+      if (hook) await hook(String(args[1]));
       if (writeControl.error) throw writeControl.error;
       await actual.resilientAtomicWriteFile(...args);
       writeControl.written.push({ path: String(args[0]), data: String(args[1]) });
@@ -1229,12 +1229,13 @@ describe("McpPaneConfigService", () => {
       const servers = await readServers(prepared.configPath!);
       expect(Object.keys(servers)).toEqual(["daintree-ledger", "daintree-decisions"]);
       const pluginBearer = bearerOf(servers["daintree-ledger"]);
+      const decisionsBearer = bearerOf(servers["daintree-decisions"]);
+      expect(decisionsBearer).toBe(prepared.decisionsToken);
+      expect(decisionsBearer).not.toBe(pluginBearer);
       expect(grants.authenticate(pluginBearer)?.terminalId).toBe("pane-dec-plugin");
       expect(service.getDecisionsBearerForToken(pluginBearer)).toBeNull();
-      expect(grants.authenticate(prepared.decisionsToken!)).toBeNull();
-      expect(service.getDecisionsBearerForToken(prepared.decisionsToken!)?.paneId).toBe(
-        "pane-dec-plugin"
-      );
+      expect(grants.authenticate(decisionsBearer)).toBeNull();
+      expect(service.getDecisionsBearerForToken(decisionsBearer)?.paneId).toBe("pane-dec-plugin");
     });
 
     it("gives a plugin-granted Codex pane the plugin and Decisions overrides with their own env bearers", async () => {
@@ -1247,12 +1248,29 @@ describe("McpPaneConfigService", () => {
         injection: CODEX,
       });
 
-      expect(codexArgsFor(prepared.args, "daintree-ledger")).toHaveLength(2);
-      expect(codexArgsFor(prepared.args, "daintree-decisions")).toHaveLength(2);
+      const [key] = prepared.pluginServerKeys;
+      expect(prepared.args).toEqual([
+        "-c",
+        `mcp_servers.${key}.url="http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger")}"`,
+        "-c",
+        `mcp_servers.${key}.bearer_token_env_var="DAINTREE_PLUGIN_MCP_TOKEN_1"`,
+        "-c",
+        'mcp_servers.daintree-decisions.url="http://127.0.0.1:45454/mcp/decisions"',
+        "-c",
+        'mcp_servers.daintree-decisions.bearer_token_env_var="DAINTREE_DECISIONS_MCP_TOKEN"',
+      ]);
+      expect(prepared.env.DAINTREE_DECISIONS_MCP_TOKEN).toBe(prepared.decisionsToken);
+      const pluginBearer = prepared.env.DAINTREE_PLUGIN_MCP_TOKEN_1;
       expect(Object.keys(prepared.env).sort()).toEqual([
         "DAINTREE_DECISIONS_MCP_TOKEN",
         "DAINTREE_PLUGIN_MCP_TOKEN_1",
       ]);
+      expect(grants.authenticate(pluginBearer)?.terminalId).toBe("pane-dec-plugin-codex");
+      expect(grants.authenticate(prepared.decisionsToken!)).toBeNull();
+      expect(service.getDecisionsBearerForToken(pluginBearer)).toBeNull();
+      expect(service.getDecisionsBearerForToken(prepared.decisionsToken!)?.paneId).toBe(
+        "pane-dec-plugin-codex"
+      );
     });
 
     it("still prepares the Decisions entry when every plugin grant is refused", async () => {
@@ -1282,9 +1300,28 @@ describe("McpPaneConfigService", () => {
       });
 
       expect(claude.decisionsToken).toBeNull();
-      expect(Object.keys(await readServers(claude.configPath!))).toEqual(["daintree"]);
-      expect(codex.args.some((arg) => arg.includes("decisions"))).toBe(false);
-      expect(Object.keys(codex.env)).toEqual(["DAINTREE_MCP_TOKEN"]);
+      expect(codex.decisionsToken).toBeNull();
+      // Exactly what a launch got before Decisions existed.
+      expect(JSON.parse(await fs.readFile(claude.configPath!, "utf-8"))).toEqual({
+        mcpServers: {
+          daintree: {
+            type: "sse",
+            url: "http://127.0.0.1:45454/sse",
+            headers: { Authorization: `Bearer ${claude.token}` },
+          },
+        },
+      });
+      expect(claude.args).toEqual(["--mcp-config", claude.configPath]);
+      expect(claude.env).toEqual({});
+      expect(codex.args).toEqual([
+        "-c",
+        'mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"',
+        "-c",
+        'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
+        "-c",
+        `mcp_servers.daintree.tool_timeout_sec=${Math.ceil(MCP_CONFIRMABLE_CALL_MAX_MS / 1_000)}`,
+      ]);
+      expect(codex.env).toEqual({ DAINTREE_MCP_TOKEN: codex.token });
       expect(service.getDecisionsPrincipal("pane-no-dec")).toBeNull();
       await expect(
         service.preparePaneConfig({ paneId: "pane-none", port: 45454, tier: "off" })
@@ -1309,8 +1346,14 @@ describe("McpPaneConfigService", () => {
       const offPrincipal = service.getDecisionsPrincipal("pane-dec-revoke-off");
       const bothPrincipal = service.getDecisionsPrincipal("pane-dec-revoke-both");
 
-      await service.revokePaneConfig("pane-dec-revoke-off");
-      await service.revokePaneConfig("pane-dec-revoke-both");
+      // Gone in the same step the revocation starts, before its file is unlinked.
+      const revokingOff = service.revokePaneConfig("pane-dec-revoke-off");
+      expect(service.getDecisionsBearerForToken(off.decisionsToken!)).toBeNull();
+      expect(revoked).toEqual([offPrincipal]);
+      const revokingBoth = service.revokePaneConfig("pane-dec-revoke-both");
+      expect(service.getDecisionsBearerForToken(both.decisionsToken!)).toBeNull();
+      expect(service.isValidPaneToken(both.token!)).toBe(false);
+      await Promise.all([revokingOff, revokingBoth]);
 
       expect(revoked).toEqual([offPrincipal, bothPrincipal]);
       expect(service.getDecisionsBearerForToken(off.decisionsToken!)).toBeNull();
@@ -1343,6 +1386,10 @@ describe("McpPaneConfigService", () => {
     });
 
     it("registers no Decisions bearer when the file can't be written", async () => {
+      let attempted = "";
+      writeControl.hooks.push(async (data) => {
+        attempted = data;
+      });
       writeControl.error = new Error("EIO");
       await expect(
         service.preparePaneConfig({
@@ -1352,6 +1399,8 @@ describe("McpPaneConfigService", () => {
           decisions: DECISIONS,
         })
       ).rejects.toThrow("EIO");
+      const bearer = bearerOf(JSON.parse(attempted).mcpServers["daintree-decisions"]);
+      expect(service.getDecisionsBearerForToken(bearer)).toBeNull();
       expect(service.getDecisionsPrincipal("pane-dec-write-fail")).toBeNull();
     });
 

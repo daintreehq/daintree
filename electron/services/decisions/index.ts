@@ -917,8 +917,13 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * The running lifetime once its start has finished. Always behind the switch's
+ * transitions, never on `getSettings()` alone: a start sets the settings
+ * before its store opens and its connection is made, so a launch that came
+ * in between would find nothing pending and miss the route.
+ */
 async function startedLifetime(): Promise<DecisionsService | null> {
-  if (service?.getSettings()) return service;
   await startDecisionsIfEnabled();
   return service?.getSettings() ? service : null;
 }

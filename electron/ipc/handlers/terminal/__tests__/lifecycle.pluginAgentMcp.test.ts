@@ -392,9 +392,23 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
       mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
       await spawn({ id: "term-dec-disabled-core" });
-      const { command, env } = ptyClient.spawn.mock.calls[1][1];
-      expect(Object.keys(await readServers(configPathFromCommand(command)))).toEqual(["daintree"]);
-      expect(env?.DAINTREE_DECISIONS_MCP_TOKEN).toBeUndefined();
+      await spawn({ id: "term-dec-disabled-codex", command: "codex", launchAgentId: "codex" });
+      const claude = ptyClient.spawn.mock.calls[1][1];
+      const token = claude.env?.DAINTREE_MCP_TOKEN as string;
+      expect(await readServers(configPathFromCommand(claude.command))).toEqual({
+        daintree: {
+          type: "sse",
+          url: "http://127.0.0.1:45454/sse",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      });
+      const codex = ptyClient.spawn.mock.calls[2][1];
+      expect(codex.command.match(/mcp_servers\.[\w-]+\.url=/g)).toEqual([
+        "mcp_servers.daintree.url=",
+      ]);
+      for (const { env } of [claude, codex]) {
+        expect(Object.keys(env ?? {}).filter((key) => key.includes("DECISIONS"))).toEqual([]);
+      }
       expect(mockDecisionsLaunchPort).not.toHaveBeenCalled();
     });
 
@@ -459,7 +473,14 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       expect(codex.command).toContain(
         'mcp_servers.daintree-decisions.url="http://127.0.0.1:45454/mcp/decisions"'
       );
-      expect(codex.env?.DAINTREE_MCP_TOKEN).not.toBe(codex.env?.DAINTREE_DECISIONS_MCP_TOKEN);
+      const codexControl = codex.env?.DAINTREE_MCP_TOKEN as string;
+      const codexDecisions = codex.env?.DAINTREE_DECISIONS_MCP_TOKEN as string;
+      expect(mcpPaneConfigService.getTierForToken(codexControl)).toBe("core");
+      expect(mcpPaneConfigService.getDecisionsBearerForToken(codexDecisions)).toEqual({
+        paneId: "term-dec-core-codex",
+        principal: mcpPaneConfigService.getOwnershipPrincipalForToken(codexControl),
+        workspaceId: PROJECT_A,
+      });
     });
 
     it("hands a plugin-granted pane its plugin server and the Decisions server", async () => {
@@ -474,6 +495,49 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       expect(Object.keys(servers)).toEqual(["daintree-ledger", "daintree-decisions"]);
       expect(servers["daintree-decisions"].url).toBe("http://127.0.0.1:45454/mcp/decisions");
       expect(pluginMcpGrantRegistry.listForTerminal("term-dec-plugin")).toHaveLength(1);
+    });
+
+    it("tells the MCP server when a Decisions-only pane's bearer goes, so what its run owns goes too", async () => {
+      decisionsOn();
+      mcpPaneConfigService.setOwnershipPrincipalRevokedListener(null);
+
+      await spawn({ id: "term-dec-revoke" });
+      const principal = mcpPaneConfigService.getDecisionsPrincipal("term-dec-revoke");
+      expect(principal).not.toBeNull();
+      await mcpPaneConfigService.revokePaneConfig("term-dec-revoke");
+
+      expect(mcpServerService.revokePaneBearer).toHaveBeenCalledWith(principal);
+    });
+
+    it("revokes the Decisions bearer and file when a plugin agent's settings template can't be filled", async () => {
+      decisionsOn();
+      registerPluginAgents("acme.agents", [
+        {
+          id: "acme-agent",
+          name: "Acme Agent",
+          command: "acme",
+          color: "#3366ff",
+          iconId: "terminal",
+          launchMcp: { format: "claude-mcp-config" },
+        },
+      ]);
+      const prepare = vi.spyOn(mcpPaneConfigService, "preparePaneConfig");
+
+      await expect(
+        spawn({
+          id: "term-dec-template",
+          command: "acme --token=${settings:apiToken}",
+          launchAgentId: "acme-agent",
+        })
+      ).rejects.toThrow(/apiToken/);
+
+      const prepared = await prepare.mock.results[0]!.value;
+      prepare.mockRestore();
+      expect(prepared.decisionsToken).not.toBeNull();
+      expect(mcpPaneConfigService.getDecisionsBearerForToken(prepared.decisionsToken)).toBeNull();
+      expect(mcpPaneConfigService.getDecisionsPrincipal("term-dec-template")).toBeNull();
+      await expect(fs.stat(prepared.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
     });
 
     it("launches as before when the route isn't there in time, and never for the Assistant's pane", async () => {

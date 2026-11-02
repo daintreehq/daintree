@@ -1060,6 +1060,47 @@ describe("DecisionsService relay connection", () => {
     await slow.service.stop();
   });
 
+  it("keeps a waiting launch waiting while a new identity's connection waits for the old one to settle", async () => {
+    const routes = questionRoutes();
+    const made: Array<{ options: RelayConnectionOptions; settle: () => void }> = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      openQuestions: routes.openQuestions,
+      connect: (options) => {
+        let settle!: () => void;
+        const stopped = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+        made.push({ options, settle });
+        // Its delivery is still typing: the stop settles later.
+        return { start: () => {}, stop: () => stopped };
+      },
+    });
+    await service.start(on(RELAY));
+    const port = service.questionsPort(60_000);
+
+    service.updateSettings(on({ ...RELAY, deviceId: "dev_another1" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // No connection yet, but one is coming: the launch keeps waiting.
+    expect(made).toHaveLength(1);
+    await expect(service.questionsPort(0)).resolves.toBeNull();
+    let settled = false;
+    void port.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    made[0]!.settle();
+    await vi.waitFor(() => expect(made).toHaveLength(2));
+    made[1]!.options.onQuestionsReady!(SOURCE);
+    await expect(port).resolves.toBe(4100);
+    made[1]!.settle();
+    routes.opened[0]!.release();
+    await service.stop();
+  });
+
   it("closes the questions when the connection stops for the lifetime, is revoked or let go", async () => {
     for (const end of [
       (options: RelayConnectionOptions) =>

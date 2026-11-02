@@ -1,9 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import {
   getPluginAgentRegistrySnapshot,
   subscribeToPluginAgentRegistry,
@@ -55,17 +57,23 @@ function AgentRow({ id }: { id: string }) {
  * Agents (#16012): which installed agents a launch hands `ask_human`, and
  * which can't be handed it yet. An agent gets it only through its launch-time
  * MCP path, so there is no manual setup to offer the rest: a server set up
- * by hand has no pane to answer into.
+ * by hand has no pane to answer into. Not shown in a remote window: its
+ * agents are the host's, launched there under the host's own Decisions.
  */
 export function DecisionsAgentsSection() {
   const availability = useCliAvailabilityStore((state) => state.availability);
   const hasRealData = useCliAvailabilityStore((state) => state.hasRealData);
+  const loadError = useCliAvailabilityStore((state) => state.error);
+  const refresh = useCliAvailabilityStore((state) => state.refresh);
   // Both registries feed `getAgentIds`; read here so a change re-renders the list.
   useUserAgentRegistryStore((state) => state.registry);
   useSyncExternalStore(subscribeToPluginAgentRegistry, getPluginAgentRegistrySnapshot);
+  const remoteHostName = useRemoteHostName();
+  if (remoteHostName !== null) return null;
 
   const { supported, unsupported } = decisionsAgentSupport(getAgentIds(), availability);
   const none = supported.length === 0 && unsupported.length === 0;
+  const failed = !hasRealData && loadError !== null;
 
   return (
     <SettingsSection
@@ -73,7 +81,13 @@ export function DecisionsAgentsSection() {
       id="decisions-agents"
       description="Agents launched while Decisions is on can ask you with ask_human. One already running gets it at its next launch."
     >
-      {none ? (
+      {failed ? (
+        <SettingsLoadErrorBanner
+          title="Couldn't check which agents are installed"
+          message={loadError}
+          onRetry={() => void refresh(true)}
+        />
+      ) : none ? (
         <SettingsGroup>
           <SettingsEmptyRow>
             {hasRealData

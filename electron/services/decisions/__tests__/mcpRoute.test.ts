@@ -824,5 +824,23 @@ describe("DecisionsMcpRoute", () => {
     });
     await refused.open().catch(() => {});
     await expect(refused.listenerPort()).resolves.toBeNull();
+
+    // Closed while the hold was still being taken: no port, though the hold had one.
+    let grant!: (hold: DecisionsListenerHold) => void;
+    const racing = new DecisionsMcpRoute(
+      bridge,
+      authenticator,
+      () =>
+        new Promise((resolve) => {
+          grant = resolve;
+        })
+    );
+    void racing.open();
+    const asked = racing.listenerPort();
+    await vi.waitFor(() => expect(grant).toBeDefined());
+    const closing = racing.close();
+    grant({ port: 4100, release: vi.fn(async () => {}) });
+    await expect(asked).resolves.toBeNull();
+    await closing;
   });
 });

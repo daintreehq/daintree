@@ -157,9 +157,12 @@ export class DecisionsService {
   private questions: DecisionsQuestions | null = null;
   /** Routes closed and not yet let go of the listener; a stop waits for them. */
   private questionsClosing: Promise<void> = Promise.resolve();
-  /** The connection is loading its identity: the route opens, or it stops, soon. */
+  /**
+   * A connection is loading its identity, or is about to be made once the one
+   * before it settles: the route opens, or it stops, soon.
+   */
   private questionsPending = false;
-  /** Launches waiting on that, each woken once it is settled. */
+  /** Launches waiting on that, woken at every change to look again. */
   private readonly questionsWaiters = new Set<() => void>();
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
@@ -319,14 +322,19 @@ export class DecisionsService {
    * no connection, or with one that stopped for the lifetime.
    */
   async questionsPort(waitMs: number): Promise<number | null> {
-    if (this.questions === null && this.questionsPending) {
+    const deadline = Date.now() + waitMs;
+    // Woken by every change, since one connection can give way to the next
+    // (a new identity) without the route ever being there in between.
+    while (this.questions === null && this.questionsPending) {
+      const left = deadline - Date.now();
+      if (left <= 0) return null;
       await new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(timer);
           this.questionsWaiters.delete(done);
           resolve();
         };
-        const timer = setTimeout(done, waitMs);
+        const timer = setTimeout(done, left);
         this.questionsWaiters.add(done);
       });
     }
@@ -519,6 +527,7 @@ export class DecisionsService {
     const key = wanted ? relayKey : null;
     if (this.connectionKey !== key) this.dropConnection();
     if (wanted === null || key === null) {
+      this.settleQuestions();
       if (this.disposed || settings === null) return;
       if (revoked) this.setStatus({ state: "revoked" });
       else if (relay !== null && this.storeFailed) {
@@ -529,13 +538,18 @@ export class DecisionsService {
     if (this.connection) return;
     const store = this.store;
     const policy = this.policy;
-    if (!store || !policy) return;
+    if (!store || !policy) {
+      this.settleQuestions();
+      return;
+    }
     if (this.stopping.size > 0) {
       // One connection's delivery at a time: a replacement waits for the one
       // stopped before it to settle what it was typing, or its recovery would
-      // take that injection for a crashed one.
+      // take that injection for a crashed one. Launches wait for it meanwhile.
+      this.questionsPending = true;
       void this.settledConnections().then(() => {
         if (!this.disposed && this.store === store) this.reconcileConnection();
+        else if (this.connection === null) this.settleQuestions();
       });
       return;
     }

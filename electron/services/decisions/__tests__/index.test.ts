@@ -10,6 +10,8 @@ const loads = vi.hoisted(() => ({
   failNextOpen: false,
   // While set, closing a store waits for it, holding the service's transitions.
   closing: null as Promise<void> | null,
+  // While set, opening a store waits for it, holding a start partway.
+  opening: null as Promise<void> | null,
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 // The relay check's network: Chromium's, which tests answer by hand.
@@ -237,6 +239,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
           };
         },
         openStore: async () => {
+          await loads.opening;
           if (loads.failNextOpen) {
             loads.failNextOpen = false;
             throw new Error("store unavailable");
@@ -336,6 +339,7 @@ describe("Decisions entry", () => {
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
     loads.closing = null;
+    loads.opening = null;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
     netFetch.mockReset();
@@ -1828,6 +1832,50 @@ describe("Decisions entry", () => {
       await stopDecisions();
     });
 
+    it("hands the port to every launch that came in while the lifetime was starting", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      let open!: () => void;
+      loads.opening = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const first = decisionsLaunchPort();
+      // The start has its settings but no store or connection yet.
+      await vi.waitFor(() => expect(peekDecisionsService()?.getSettings()).not.toBeNull());
+      const second = decisionsLaunchPort();
+      expect(connections).toHaveLength(0);
+
+      open();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      connections[0]!.options.onQuestionsReady!(SOURCE);
+      await expect(Promise.all([first, second])).resolves.toEqual([4100, 4100]);
+      openedRoutes[0]!.letGo();
+      await stopDecisions();
+    });
+
+    it("goes ahead without the route when the lifetime is still starting at the deadline", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      let open!: () => void;
+      loads.opening = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      let settled = false;
+      try {
+        const port = decisionsLaunchPort();
+        void port.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(port).resolves.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+      open();
+      await stopDecisions();
+    });
+
     it("is null at once with no relay set up, and after quitting", async () => {
       saved.value = { enabled: true };
       await expect(decisionsLaunchPort()).resolves.toBeNull();
@@ -1844,8 +1892,14 @@ describe("Decisions entry", () => {
       await startDecisionsIfEnabled();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       try {
+        let settled = false;
         const port = decisionsLaunchPort();
-        await vi.advanceTimersByTimeAsync(5_000);
+        void port.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
         await expect(port).resolves.toBeNull();
         expect(connections).toHaveLength(1);
         expect(openedRoutes).toHaveLength(0);

@@ -1068,6 +1068,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // control surface's port when it has one. A listener open for
         // Decisions alone serves neither the control surface nor a plugin.
         const launchPort = controlPort ?? decisionsPort;
+        // Already loaded by the route's hold; it takes the revocation notice
+        // for a Decisions bearer as for a control one.
+        if (decisionsPort !== null) mcpServerService ??= await getMcpServerService();
         if (launchPort !== null) {
           const prepared = await mcpPaneConfigService.preparePaneConfig({
             paneId: id,
@@ -1105,13 +1108,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             if (Object.keys(prepared.env).length > 0) {
               spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, prepared.env);
             }
-            if (prepared.token !== null && mcpServerService !== null) {
+            // Revoking either bearer drops what the launch's principal owns,
+            // a queued Decisions answer included, so the listener is wired
+            // for a Decisions-only pane too.
+            if (
+              mcpServerService !== null &&
+              (prepared.token !== null || prepared.decisionsToken !== null)
+            ) {
+              wirePaneTokenResolvers(mcpServerService);
+            }
+            if (prepared.token !== null) {
               // Bind the bearer to the workspace this pane was launched in, so
               // its MCP session acts there for its whole life instead of on
               // whichever window has focus when a call lands (#12486).
               // Registered before this IPC resolves, because the CLI's first
               // handshake can race ahead of anything later. Revoked with the token on PTY exit.
-              wirePaneTokenResolvers(mcpServerService);
               mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
                 workspaceId: resolvedProject.id,
                 ...(launchViewWebContentsId !== null
@@ -1213,15 +1224,22 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (launchAgentId && safeCommand.includes("${settings:")) {
       const pluginId = getPluginIdForAgent(launchAgentId);
       if (pluginId) {
-        const pluginService = await getPluginService();
-        safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
-          const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
-          // `resolveSettingTemplate` returns "" for an unset/missing setting;
-          // treat that as unresolved so the command never spawns with a blank
-          // secret silently swapped in.
-          if (!value) throw new SettingTemplateError(pluginId, settingId);
-          return value;
-        });
+        try {
+          const pluginService = await getPluginService();
+          safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
+            const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
+            // `resolveSettingTemplate` returns "" for an unset/missing setting;
+            // treat that as unresolved so the command never spawns with a blank
+            // secret silently swapped in.
+            if (!value) throw new SettingTemplateError(pluginId, settingId);
+            return value;
+          });
+        } catch (templateErr) {
+          // No PTY starts, so no exit would revoke the config minted above.
+          await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
+          forgetPluginToolsLaunch(id);
+          throw templateErr;
+        }
       }
     }
 
