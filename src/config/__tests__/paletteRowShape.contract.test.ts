@@ -161,6 +161,7 @@ const POPOVER_FILES = [
   "src/components/Settings/EnvVarEditor.tsx",
   "src/components/Panel/MoveToWorktreePicker.tsx",
   "src/components/Layout/DockLaunchButton.tsx",
+  "src/components/Layout/AssistantPicker.tsx",
   "src/components/Project/ProjectSwitcherRows.tsx",
 ];
 
