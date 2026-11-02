@@ -131,7 +131,8 @@ function slashRefusedWhy(
   } else {
     why = `The only slash commands that run in ${where} are ${forms.slice(0, -1).join(", ")} and ${forms.at(-1)}, each sent alone and exactly as written.`;
   }
-  return `${why} ${NOTHING_SENT} To run ${forms.length === 0 ? "one" : "another"}, the person can hand you the pane (right-click > Hand to orchestrator > Global Assistant), or type it themselves.`;
+  // A hand-over binds the pane to the global Assistant of the machine it runs on.
+  return `${why} ${NOTHING_SENT} To run ${forms.length === 0 ? "one" : "another"}, ask the person to type it there, or, for a pane on your own machine, to hand it to you (right-click > Hand to orchestrator > Global Assistant). Text that opens with \`/name\` is read as a command; to send it as a prompt, open it some other way.`;
 }
 
 /** Why a record is no agent worker to steer, or null while it is one. */

@@ -192,6 +192,17 @@ describe("GlobalWorkerSteer (#14551)", () => {
       expect(submits).toEqual([]);
     });
 
+    it("refuses one it can never run before asking whether the agent is free", async () => {
+      fake.record = atPrompt({
+        detectedAgentId: "codex",
+        agentState: "working",
+        waitingReason: undefined,
+      });
+
+      expect((await refusal(send("/clear"))).code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+      expect(submits).toEqual([]);
+    });
+
     it("holds each agent to its own forms", async () => {
       // Claude takes `/compact` alone: Codex's `/goal resume` is refused there.
       const claude = await refusal(send("/goal resume"));

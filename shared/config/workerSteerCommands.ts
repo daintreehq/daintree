@@ -7,6 +7,8 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "./agentIds.js";
  * and a user's or project's command can take a built-in's name. Fixed forms
  * only, so no free text rides in without the provenance stamp, and nothing
  * that ends the session, signs out, drops history or changes permissions.
+ * Each is a fixed session control of its CLI, which a custom command or skill
+ * of the same name doesn't replace.
  */
 export const WORKER_STEER_SLASH_FORMS: Readonly<
   Partial<Record<BuiltInAgentId, readonly string[]>>

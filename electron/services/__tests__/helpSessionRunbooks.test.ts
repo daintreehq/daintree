@@ -105,8 +105,9 @@ describe("buildRunbooksAddendum", () => {
     // #16101 — a steered slash command is refused unless it is one of these.
     it("tells only the global assistant the slash forms a steer runs, as the steer enforces them", () => {
       const global = buildRunbooksAddendum({ global: true });
-      for (const forms of Object.values(WORKER_STEER_SLASH_FORMS)) {
-        for (const form of forms) expect(global).toContain(`\`${form}\``);
+      for (const [agentId, forms] of Object.entries(WORKER_STEER_SLASH_FORMS)) {
+        // Each agent's forms are named under it, never under another agent.
+        expect(global).toContain(`${agentId}: ${forms.map((form) => `\`${form}\``).join(", ")}`);
       }
       expect(global).toContain("sent alone without `handback`");
       expect(text).not.toContain("`/goal resume`");

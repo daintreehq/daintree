@@ -40,6 +40,19 @@ describe("the fixed slash forms a steer may send (#16101)", () => {
     }
   });
 
+  // The forms #16101 asked for, by agent.
+  it.each([
+    ["codex", "/goal resume"],
+    ["codex", "/goal pause"],
+    ["codex", "/compact"],
+    ["codex", "/status"],
+    ["claude", "/compact"],
+    ["antigravity", "/compact"],
+    ["gemini", "/compress"],
+  ])("lets %s run %s", (agentId, form) => {
+    expect(classifyWorkerSteerCommand(form, agentId)).toEqual({ kind: "slash", form });
+  });
+
   it("takes a listed form, trimmed, as the whole input", () => {
     expect(classifyWorkerSteerCommand("  /goal resume\n", "codex")).toEqual({
       kind: "slash",

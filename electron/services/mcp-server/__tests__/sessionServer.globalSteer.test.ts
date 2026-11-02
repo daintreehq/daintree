@@ -298,17 +298,20 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
       const { deps, pty } = harness({ shellName, global: true });
       const server = await serve(deps);
 
-      const result = await callTool(server, {
-        name: "terminal.sendCommandOwned",
-        arguments: { terminalId, command: "/clear" },
-      });
+      // A form the steer would run and one it would refuse take the same path.
+      for (const command of ["/compact", "/clear"]) {
+        const result = await callTool(server, {
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId, command },
+        });
 
-      expect(result.isError).toBeFalsy();
-      expect(deps.dispatchAction).toHaveBeenCalledWith(
-        "terminal.sendCommand",
-        expect.objectContaining({ terminalId, command: "/clear" }),
-        expect.anything()
-      );
+        expect(result.isError, command).toBeFalsy();
+        expect(deps.dispatchAction).toHaveBeenLastCalledWith(
+          "terminal.sendCommand",
+          expect.objectContaining({ terminalId, command }),
+          expect.anything()
+        );
+      }
       expect(pty.submit).not.toHaveBeenCalled();
     }
   );
