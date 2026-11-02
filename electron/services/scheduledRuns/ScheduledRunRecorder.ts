@@ -27,7 +27,7 @@ export interface RegisterScheduledLaunchInput {
    */
   readonly handbackCode?: string | null;
   /** The run launches the project's Daintree Assistant (#16169), whose workers it lists. */
-  readonly assistant?: boolean;
+  readonly assistant?: true;
 }
 
 export interface RegisterRefusedLaunchInput {
@@ -273,7 +273,7 @@ export class ScheduledRunRecorder {
       process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
       pane: { state: "none" },
       resume: input.resume,
-      ...(input.assistant === true ? { assistant: true as const, workers: [] } : {}),
+      ...(input.assistant ? { assistant: true as const, workers: [] } : {}),
     };
     this.store.transaction(() => {
       this.store.insert(run);

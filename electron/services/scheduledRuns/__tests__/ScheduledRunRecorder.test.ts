@@ -25,7 +25,12 @@ import {
   type ScheduledRunHandbackFact,
   type ScheduledRunsChange,
 } from "../ScheduledRunRecorder.js";
-import type { ScheduledRunResume } from "../../../../shared/types/scheduledRuns.js";
+import type {
+  ScheduledRunResume,
+  ScheduledRunSkipReason,
+  ScheduledRunWorker,
+} from "../../../../shared/types/scheduledRuns.js";
+import { SCHEDULED_RUN_WORKERS_MAX } from "../../../../shared/types/scheduledRuns.js";
 import { occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1146,6 +1151,28 @@ describe("ScheduledRunRecorder", () => {
       expect(pendingIds(recorder)).toEqual(["refused"]);
     });
 
+    it("waits on a skip only when every Assistant session was taken (#16169)", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      const skip = (id: string, at: number, reason: ScheduledRunSkipReason) =>
+        recorder.registerSkip({
+          id,
+          scheduleId: "schedule-1",
+          projectId: "project-1",
+          origin: {
+            trigger: "scheduled",
+            dueAt: at,
+            occurrenceKey: occurrenceKeyFor(at),
+            coalesced: null,
+          },
+          reason,
+        });
+      skip("full", T0, { kind: "assistant-sessions-full" });
+      skip("missed", T0 + 60_000, { kind: "missed" });
+
+      expect(pendingIds(recorder)).toEqual(["full"]);
+    });
+
     it("waits on a run the next startup finds interrupted only when no window is open by then", () => {
       lifetime().registerLaunch(launch());
       lifetime().registerLaunch(launch({ id: "run-2", terminalId: "terminal-2" }));
@@ -1337,6 +1364,63 @@ describe("ScheduledRunRecorder", () => {
 
       expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "cancelled" });
       expect(pendingIds(recorder)).toEqual([]);
+    });
+  });
+
+  describe("an Assistant's workers (#16169)", () => {
+    const worker = (terminalId: string, hostId: string | null = null): ScheduledRunWorker => ({
+      terminalId,
+      hostId,
+      hostName: hostId === null ? null : "Studio",
+      projectId: "project-1",
+      projectName: "Repo",
+      agentId: "claude",
+      observedAt: now,
+    });
+
+    it("lists each worker once, per machine, on the Assistant's run alone", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch({ assistant: true }));
+      recorder.registerLaunch(launch({ id: "agent-run", terminalId: "terminal-2" }));
+
+      expect(recorder.get("run-1")).toMatchObject({ assistant: true, workers: [] });
+      expect(recorder.get("agent-run")).not.toHaveProperty("workers");
+
+      expect(recorder.noteWorkerLaunch("run-1", worker("w-1"), now)).toBe(true);
+      expect(recorder.noteWorkerLaunch("run-1", worker("w-1"), now)).toBe(false);
+      // The same id on a host is another terminal.
+      expect(recorder.noteWorkerLaunch("run-1", worker("w-1", "host-a"), now)).toBe(true);
+      expect(recorder.noteWorkerLaunch("agent-run", worker("w-2"), now)).toBe(false);
+
+      expect(recorder.get("run-1")?.workers?.map((w) => [w.hostId, w.terminalId])).toEqual([
+        [null, "w-1"],
+        ["host-a", "w-1"],
+      ]);
+      // Survives a restart: it's the run's record.
+      expect(restart().get("run-1")?.workers).toHaveLength(2);
+    });
+
+    it("takes a launch asked for while the run was open, never one asked after it settled", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch({ assistant: true }));
+      const askedWhileOpen = now;
+      now += 1_000;
+      recorder.settle("run-1", { kind: "cancel" });
+      now += 1_000;
+
+      expect(recorder.noteWorkerLaunch("run-1", worker("late"), askedWhileOpen)).toBe(true);
+      expect(recorder.noteWorkerLaunch("run-1", worker("after"), now)).toBe(false);
+      expect(recorder.get("run-1")?.workers?.map((w) => w.terminalId)).toEqual(["late"]);
+    });
+
+    it("stops at the list's limit", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch({ assistant: true }));
+      for (let index = 0; index < SCHEDULED_RUN_WORKERS_MAX; index++) {
+        expect(recorder.noteWorkerLaunch("run-1", worker(`w-${index}`), now)).toBe(true);
+      }
+      expect(recorder.noteWorkerLaunch("run-1", worker("one-more"), now)).toBe(false);
+      expect(recorder.get("run-1")?.workers).toHaveLength(SCHEDULED_RUN_WORKERS_MAX);
     });
   });
 });

@@ -291,3 +291,35 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
     await vi.waitFor(() => expect(state.ptyClient.gracefulKill).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("an Assistant run's done policy (#16169)", () => {
+  const assistantRun = (): ScheduledRun => ({ ...settledRun(), assistant: true, workers: [] });
+
+  it("closes the Assistant's own terminal and nothing else: no pane request, no layout write", async () => {
+    const views = [view(1)];
+    state.views = views;
+    state.ptyClient.getTerminalAsync.mockResolvedValue(terminalInfo({ isAssistantTerminal: true }));
+    state.runs.set("run-1", assistantRun());
+
+    arm("close");
+
+    await vi.waitFor(() => expect(state.ptyClient.gracefulKill).toHaveBeenCalledWith("terminal-1"));
+    // Its views and its session follow its terminal ending; workers aren't the run's to close.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.ptyClient.gracefulKill).toHaveBeenCalledTimes(1);
+    expect(views[0]!.send).not.toHaveBeenCalled();
+    expect(state.forget).not.toHaveBeenCalled();
+  });
+
+  it("leaves it where it is for a background policy stored before it was refused", async () => {
+    state.views = [view(1)];
+    state.runs.set("run-1", assistantRun());
+
+    arm("background");
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state.background).not.toHaveBeenCalled();
+    expect(state.views[0]!.send).not.toHaveBeenCalled();
+    expect(state.ptyClient.gracefulKill).not.toHaveBeenCalled();
+  });
+});

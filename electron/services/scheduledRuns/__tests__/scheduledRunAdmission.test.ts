@@ -41,6 +41,7 @@ function spawn(overrides: Partial<ScheduledSpawn> = {}): ScheduledSpawn {
     agentPresetId: "preset-1",
     agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
     handbackCode: "k7f3qa",
+    assistant: false,
     ...overrides,
   };
 }
@@ -266,5 +267,48 @@ describe("scheduled run admission", () => {
   it("refuses a second reservation of the same run", () => {
     reserveScheduledLaunch(reservation());
     expect(() => reserveScheduledLaunch(reservation())).toThrow(/already reserved/);
+  });
+
+  it("registers an Assistant's run with the CLI its spawn started", async () => {
+    const admit = vi.fn();
+    const reserved = reserveScheduledLaunch({
+      ...reservation(admit),
+      agentId: "daintree:assistant",
+      assistant: true,
+    });
+
+    expect(
+      admitScheduledSpawn(
+        spawn({
+          launchAgentId: "codex",
+          cwd: "/help/abc",
+          requestedCwd: "/help/abc",
+          assistant: true,
+        })
+      )
+    ).toBe(true);
+    expect(admit).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "codex", cwd: "/help/abc" }),
+      "k7f3qa"
+    );
+    await expect(reserved.admitted).resolves.toBeUndefined();
+  });
+
+  it("never lets a worker's spawn take an Assistant's run, or the other way round", async () => {
+    const assistantRun = reserveScheduledLaunch({
+      ...reservation(),
+      agentId: "daintree:assistant",
+      assistant: true,
+    });
+    expect(() => admitScheduledSpawn(spawn())).toThrow(/reserved/);
+    await expect(assistantRun.admitted).rejects.toThrow(/reserved/);
+
+    const workerRun = reserveScheduledLaunch({ ...reservation(), runId: "run-2" });
+    expect(() =>
+      admitScheduledSpawn(
+        spawn({ scheduledRun: { scheduleId: "schedule-1", runId: "run-2" }, assistant: true })
+      )
+    ).toThrow(/reserved/);
+    await expect(workerRun.admitted).rejects.toThrow(/reserved/);
   });
 });
