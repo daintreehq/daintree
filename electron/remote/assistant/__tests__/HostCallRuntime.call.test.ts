@@ -318,6 +318,83 @@ describe("HostCallRuntime host.call (#13493)", () => {
       ["other", false],
     ]);
   });
+
+  it("reports an answered call with where it ran and when it was asked, for a schedule's run (#16169)", async () => {
+    const noteAnswered = vi.fn();
+    const launched: McpCallAnswer = {
+      status: "done",
+      result: { isError: false, structured: { launched: true, terminalId: "t-w" }, text: null },
+    };
+    let answer!: (value: McpCallAnswer) => void;
+    relayCall
+      .mockReturnValueOnce(new Promise<McpCallAnswer>((resolve) => (answer = resolve)))
+      .mockResolvedValueOnce({ status: "refused", reason: "control-off" })
+      .mockResolvedValueOnce(launched);
+    let clock = 5_000;
+    runtime = new HostCallRuntime({
+      getSessionLane: (id) => lanes.get(id) ?? null,
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => ({ relayCall }) as never,
+      hosts: () => hosts,
+      inLocalView: (id) => localViews.has(id),
+      controlEnabled: (hostId) => control.has(hostId),
+      newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
+      now: () => clock,
+      noteAnswered,
+    });
+    const launch = { ...CALL, tool: "agent.launch", args: { agentId: "codex" } };
+
+    const first = runtime.call("a", launch, { tier: "full" });
+    await vi.waitFor(() => expect(relayCall).toHaveBeenCalledTimes(1));
+    // The answer comes later: the call still dates from when it was sent.
+    clock = 9_000;
+    answer(launched);
+    const settled = await first;
+    expect(noteAnswered).toHaveBeenCalledWith({
+      helpSessionId: "a",
+      hostId: "studio",
+      hostName: "studio-01",
+      projectId: "proj-2",
+      tool: "agent.launch",
+      args: { agentId: "codex" },
+      structured: { launched: true, terminalId: "t-w" },
+      askedAt: 5_000,
+    });
+
+    // A refused call ran nothing, so it says nothing.
+    await runtime.call("a", launch, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+
+    // A resend that gets the answer back still dates from the first send.
+    if (!settled.ok || settled.value.callId === null) throw new Error("not sent");
+    noteAnswered.mockClear();
+    clock = 20_000;
+    await runtime.call("a", { ...launch, callId: settled.value.callId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+    expect(noteAnswered).toHaveBeenCalledWith(expect.objectContaining({ askedAt: 5_000 }));
+
+    // So does a retry under the caller's own id, once nothing here holds the call.
+    const ownId = "00000000-0000-4000-8000-0000000000aa";
+    relayCall.mockResolvedValueOnce(launched).mockResolvedValueOnce(launched);
+    clock = 30_000;
+    await runtime.call("a", { ...launch, newCallId: ownId }, { tier: "full" });
+    noteAnswered.mockClear();
+    clock = 40_000;
+    await runtime.call("a", { ...launch, newCallId: ownId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+    expect(noteAnswered).toHaveBeenCalledWith(expect.objectContaining({ askedAt: 30_000 }));
+
+    // The same id on another host is another call, with a time of its own.
+    hosts = [host(), host({ hostId: "other", name: "other-01" })];
+    control.add("other");
+    relayCall.mockResolvedValueOnce(launched);
+    noteAnswered.mockClear();
+    clock = 50_000;
+    await runtime.call("a", { ...launch, hostId: "other", newCallId: ownId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "other", askedAt: 50_000 })
+    );
+  });
 });
 
 describe("relayRunMs", () => {

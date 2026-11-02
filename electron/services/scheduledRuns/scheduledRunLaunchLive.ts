@@ -23,6 +23,7 @@ import {
   type ScheduledRunLauncherDeps,
 } from "./ScheduledRunLauncher.js";
 import { runSchedulePrecondition } from "./scheduledRunPrecondition.js";
+import { launchScheduledAssistantLive } from "./scheduledAssistantLaunchLive.js";
 import { requestScheduledLaunchInView } from "./scheduledRunViewBridge.js";
 
 /** A run the user asked for: no occurrence of the cadence stands behind it. */
@@ -159,6 +160,7 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
     findView: findProjectView,
     launchInView: (view, request) => requestScheduledLaunchInView(view, request),
     launchWithoutView: (project, request) => runScheduledAgentLaunchLive(project, request),
+    launchAssistant: launchScheduledAssistantLive,
     runPrecondition: async ({ projectId, command, cwd, signal }) => {
       // The variables the user set for terminals, as a project command gets them.
       const layers = await readProjectCommandEnvLayers(projectId).catch((error: unknown) => {

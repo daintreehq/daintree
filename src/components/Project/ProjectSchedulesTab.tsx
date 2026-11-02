@@ -14,7 +14,7 @@ import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { usePanelStore } from "@/store/panelStore";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { actionService } from "@/services/ActionService";
-import { revealRunTerminal } from "@/services/scheduledRunLanding";
+import { revealAssistantRun, revealRunTerminal } from "@/services/scheduledRunLanding";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
@@ -324,12 +324,16 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
       if (closed) then();
     });
   };
+  // An Assistant's run lives in an Assistant tab (#16169): Open brings it
+  // forward and never starts anything, and it never resumes as an agent pane.
   const openRun = (run: ScheduledRun) => {
     const terminalId = run.terminalId;
+    if (run.assistant === true) return closeThen(() => revealAssistantRun(terminalId));
     if (!terminalId) return;
     closeThen(() => revealRunTerminal(terminalId));
   };
   const resumeRun = (run: ScheduledRun, schedule: Schedule) => {
+    if (run.assistant === true) return;
     const record = sessionRecordFor(run, schedule);
     if (!record) return;
     closeThen(() => void resumeSession(record));

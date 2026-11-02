@@ -3,6 +3,7 @@ import { createSchedule } from "../scheduledRuns.js";
 import { scheduleIssues } from "../scheduleValidation.js";
 import { parseCron } from "../cron.js";
 import type { Schedule } from "../../types/scheduledRuns.js";
+import { SCHEDULE_ASSISTANT_AGENT_ID } from "../scheduledRuns.js";
 
 const NOW = Date.UTC(2026, 10, 1, 12);
 
@@ -103,5 +104,30 @@ describe("scheduleIssues", () => {
 
     expect(issues).toHaveLength(1);
     expect(issues[0]!.path).toBe("");
+  });
+
+  it("names each field the Daintree Assistant can't take (#16169)", () => {
+    const base = schedule();
+    const assistant = (launch: Partial<Schedule["launch"]>, onDone = base.policies.onDone) =>
+      schedule({
+        launch: { ...base.launch, agentId: SCHEDULE_ASSISTANT_AGENT_ID, ...launch },
+        policies: { ...base.policies, onDone },
+      });
+
+    expect(scheduleIssues(assistant({}, "close"))).toEqual([]);
+    expect(
+      scheduleIssues(assistant({ presetId: "fast", worktreeId: "/wt" }, "background")).map(
+        (issue) => issue.path
+      )
+    ).toEqual(["launch.presetId", "launch.worktreeId", "policies.onDone"]);
+    // An agent keeps every choice it had.
+    expect(
+      scheduleIssues(
+        schedule({
+          launch: { ...base.launch, presetId: "fast", worktreeId: "/wt" },
+          policies: { ...base.policies, onDone: "background" },
+        })
+      )
+    ).toEqual([]);
   });
 });

@@ -1,6 +1,8 @@
 import { schedulesClient } from "@/clients/schedulesClient";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { isSchedulesViewHeld } from "@/store/schedulesViewStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
@@ -26,6 +28,24 @@ export function revealRunTerminal(terminalId: string): boolean {
   }
   usePanelStore.getState().activateTerminal(terminalId);
   return true;
+}
+
+/**
+ * Brings an Assistant run forward (#16169): the Assistant tab holding its
+ * terminal when this view has taken it over, else the Assistant panel, whose
+ * tabs include the one it runs in. Never starts, resumes or replaces a session.
+ */
+export function revealAssistantRun(terminalId: string | null): void {
+  const store = useHelpPanelStore.getState();
+  const slot = Object.entries(store.sessions).find(
+    ([, lane]) => terminalId !== null && lane?.terminalId === terminalId
+  )?.[0];
+  if (slot !== undefined) store.setActiveSlot(Number(slot));
+  if (!store.isOpen) {
+    suppressSidebarResizes();
+    store.setOpen(true);
+  }
+  store.requestFocus();
 }
 
 /** The run's pane in this view, if it still has one: a pane carrying the run, out of any dialog. */

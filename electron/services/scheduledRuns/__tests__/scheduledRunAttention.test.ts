@@ -50,6 +50,16 @@ describe("scheduledRunAttention", () => {
       { kind: "handback", report: "needs-you", summary: "a label needs a call", truncated: false },
       { kind: "needs-you" },
     ],
+    [
+      "a skip because every Assistant session was taken",
+      { kind: "skip", reason: { kind: "assistant-sessions-full" } },
+      { kind: "assistant-sessions-full" },
+    ],
+    [
+      "a skip by the overlap policy",
+      { kind: "skip", reason: { kind: "overlap", openRunId: "r" } },
+      null,
+    ],
     ["a clean exit", { kind: "exit", process: "pty", exitCode: 0, signal: null }, null],
     [
       "an exit ended by a signal alone",

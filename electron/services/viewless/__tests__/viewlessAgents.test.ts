@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
-import { runAgentLaunch } from "../viewlessAgents.js";
+import { runAgentLaunch, spawnHostAssistant } from "../viewlessAgents.js";
+import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import {
   makeDeps,
   makeHosts,
@@ -555,6 +556,53 @@ describe("a scheduled run's agent launched with no frontend (#15977)", () => {
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === payload.id);
     expect(snapshot?.spawnedBy).toBe("mcp");
     expect(snapshot).not.toHaveProperty("scheduledRun");
+  });
+});
+
+describe("a schedule's Assistant spawned with no frontend (#16169)", () => {
+  const RUN = { scheduleId: "schedule-1", runId: "run-1" };
+  const spec = {
+    terminalId: "terminal-assistant",
+    agentId: "claude",
+    cwd: "/help-sessions/abc",
+    env: { DAINTREE_MCP_TOKEN: "bearer" },
+    prompt: "Pick a host and run the nightly checks.",
+    agentLaunchFlags: [],
+  };
+
+  it("adds the run's handback instruction, and hands the spawn the run and its code", async () => {
+    const { deps, invoke } = launchDeps();
+
+    await expect(spawnHostAssistant(PROJECT, { ...spec, scheduledRun: RUN }, deps)).resolves.toBe(
+      true
+    );
+
+    const payload = spawned(invoke);
+    expect(payload.scheduledRun).toEqual(RUN);
+    const code = payload.handbackCode;
+    if (typeof code !== "string") throw new Error("no handback code");
+    const command = String(payload.command);
+    const instruction = buildHandbackInstruction(code, "run");
+    const count = (text: string, inText: string) => inText.split(text).length - 1;
+    // One complete run instruction, after the prompt as written.
+    for (const marker of [`DAINTREE-DONE-${code}`, `DAINTREE-NEEDS-YOU-${code}`, `END-${code}`]) {
+      expect(count(marker, command)).toBe(count(marker, instruction));
+    }
+    expect(count(`DAINTREE-DONE-${code}`, instruction)).toBe(1);
+    expect(command.indexOf("Pick a host and run the nightly checks.")).toBeLessThan(
+      command.indexOf(`DAINTREE-DONE-${code}`)
+    );
+  });
+
+  it("spawns an Assistant no schedule started with neither", async () => {
+    const { deps, invoke } = launchDeps();
+
+    await spawnHostAssistant(PROJECT, spec, deps);
+
+    const payload = spawned(invoke);
+    expect(payload).not.toHaveProperty("scheduledRun");
+    expect(payload).not.toHaveProperty("handbackCode");
+    expect(String(payload.command)).not.toContain("DAINTREE-");
   });
 });
 

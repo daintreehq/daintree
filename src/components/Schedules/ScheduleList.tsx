@@ -1,6 +1,6 @@
 import type { MouseEvent, ReactNode, Ref } from "react";
 import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { BrandMark, History, Play } from "@/components/icons";
+import { BrandMark, DaintreeIcon, History, Play } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -14,11 +14,13 @@ import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isScheduleAssistantAgentId } from "@shared/utils/scheduledRuns";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
 import type { ProjectSchedulesState } from "./useProjectSchedules";
 import type { LastRunsState } from "./useLastRuns";
 import { lastRunWords } from "./lastRunWords";
 import { RunGlyph } from "./RunGlyph";
+import { scheduleAgentName } from "./scheduleAgent";
 import { cadenceWords, formatNextRunRelative, formatRunInstant, nextRunAt } from "./scheduleWords";
 
 /** The controls a row offers, each findable by schedule for handing focus back to it. */
@@ -62,6 +64,9 @@ interface ScheduleListProps {
 }
 
 export function AgentMark({ agentId }: { agentId: string }) {
+  if (isScheduleAssistantAgentId(agentId)) {
+    return <DaintreeIcon size={14} className="text-text-secondary" />;
+  }
   const config = getEffectiveAgentConfig(agentId);
   const Icon = resolveAgentIcon(config?.iconId ?? agentId);
   return (
@@ -202,8 +207,7 @@ function ScheduleRow({
   onDelete: () => void;
 }) {
   const words = cadenceWords(schedule.cadence);
-  const agentName =
-    getEffectiveAgentConfig(schedule.launch.agentId)?.name ?? schedule.launch.agentId;
+  const agentName = scheduleAgentName(schedule.launch.agentId);
 
   return (
     <div data-schedule-id={schedule.id} className="px-4 py-3">

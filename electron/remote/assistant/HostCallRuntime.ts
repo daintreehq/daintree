@@ -204,6 +204,21 @@ export interface HostCallRuntimeDeps {
   /** The person's per-host "assistant control" switch, read at each call (#13493). */
   controlEnabled?(hostId: HostId): boolean;
   /**
+   * A call ran and was answered, on a host or this machine's other project,
+   * for a schedule's run to record the workers it launched (#16169).
+   */
+  noteAnswered?(answer: {
+    helpSessionId: string;
+    hostId: HostId;
+    /** The host's name as observed; null for this machine. */
+    hostName: string | null;
+    projectId: string;
+    tool: string;
+    args: Record<string, unknown>;
+    structured: Record<string, unknown> | null;
+    askedAt: number;
+  }): void;
+  /**
    * Queues a wake on a run's own notice line, the one writer that types into
    * its prompt, under its gate (#13500). Absent, hosts' notices are dropped.
    */
@@ -294,6 +309,8 @@ const NOTICE_PIN_TTL_MS = RELAY_NOTICE_WINDOW_MS;
 const MAX_SEEN_NOTICES = 1024;
 /** Host terminals whose recent prompts from here are remembered, for superseding. */
 const MAX_PROMPTED_TERMINALS = 512;
+/** First sends whose time a resend reports under (#16169); the oldest go first. */
+const MAX_CALL_TIMES = 512;
 /**
  * Prompts remembered per host terminal, newest kept: ones that ran apart from
  * ones still unanswered, so a burst of calls refused later never pushes out
@@ -897,6 +914,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly seenNotices = new Map<string, true>();
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
   private readonly prompted = new Map<string, PromptMark[]>();
+  /** When each call was first sent, by host, session and call, so its answer got later still dates from then. */
+  private readonly callTimes = new Map<string, number>();
   /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
   private readonly throwawaySessions = new Map<string, ThrowawaySession>();
   private disposed = false;
@@ -1452,6 +1471,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.settledPins.clear();
     this.seenNotices.clear();
     this.prompted.clear();
+    this.callTimes.clear();
     this.lastAgents.clear();
     this.agentsEpochs.clear();
     this.settingsRequests.dispose();
@@ -1532,6 +1552,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         };
       }
       const runMs = relayRunMs(args.tool, toolArgs);
+      // The same call sent again (a resend, or a retry under its own `newCallId`)
+      // dates from its first send.
+      const callKey = `${args.hostId}\u0000${helpSessionId}\u0000${callId}`;
+      const askedAt = this.callTimes.get(callKey) ?? this.now();
+      if (!this.callTimes.has(callKey)) remember(this.callTimes, callKey, askedAt, MAX_CALL_TIMES);
       const payload: RelayCallRequest = {
         helpSessionId,
         projectId,
@@ -1578,6 +1603,20 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         // A tool error may still have run some of a batch before it failed.
         case "done": {
           noted.ran(answer.result);
+          try {
+            this.deps.noteAnswered?.({
+              helpSessionId,
+              hostId: args.hostId,
+              hostName: local ? null : (host?.name ?? null),
+              projectId,
+              tool: args.tool,
+              args: toolArgs,
+              structured: answer.result.structured,
+              askedAt,
+            });
+          } catch (error) {
+            logger.debug("Couldn't note an answered call", { callId, error });
+          }
           // A resend that got the answer its first send lost: the host has the call.
           const pin = resend ? this.pinOf(callId) : undefined;
           if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {

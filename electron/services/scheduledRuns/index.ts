@@ -76,6 +76,7 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
     });
     created.reconcileInterrupted();
     recorder = created;
+    await followAssistantWorkers(created);
     return created;
   })().catch((error: unknown) => {
     console.warn("[ScheduledRuns] Couldn't open the run history:", error);
@@ -83,6 +84,51 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
     return null;
   });
   return creating;
+}
+
+/**
+ * Records the workers a schedule's Assistant launches on its run (#16169),
+ * from the calls its session makes. Followed once the history is open: before
+ * that no run exists to record them on.
+ */
+async function followAssistantWorkers(history: ScheduledRunRecorder): Promise<void> {
+  try {
+    // Loaded here, never at boot: a new static import from this module would
+    // change how the main bundle's eagerly loaded chunks are grouped.
+    // HelpSessionService is never imported here, not even lazily: this module
+    // is initialised lazily, and an import() from it makes the service's whole
+    // graph lazy too, which skips zod/mini's initialisation and crashes main
+    // at load.
+    const [{ scheduledRunOfSession, setAssistantWorkerSink, workerLaunchesIn }, { projectStore }] =
+      await Promise.all([import("./assistantWorkerLaunches.js"), import("../ProjectStore.js")]);
+    setAssistantWorkerSink((answer) => {
+      const runId = answer.runId ?? scheduledRunOfSession(answer.helpSessionId)?.runId;
+      if (runId === undefined || answer.projectId === undefined) return;
+      const { terminalIds, agentId } = workerLaunchesIn(answer.tool, answer.args, answer.result);
+      const projectName =
+        answer.hostId === null
+          ? (projectStore.getProjectById(answer.projectId)?.name ?? null)
+          : (answer.projectName ?? null);
+      const observedAt = Date.now();
+      for (const terminalId of terminalIds) {
+        history.noteWorkerLaunch(
+          runId,
+          {
+            terminalId,
+            hostId: answer.hostId,
+            hostName: answer.hostName || null,
+            projectId: answer.projectId,
+            projectName: projectName || null,
+            agentId,
+            observedAt,
+          },
+          answer.askedAt
+        );
+      }
+    });
+  } catch (error) {
+    console.warn("[ScheduledRuns] Couldn't follow assistants' workers:", error);
+  }
 }
 
 type ScheduledRunNotifierModule = typeof import("./scheduledRunNotifierLive.js");

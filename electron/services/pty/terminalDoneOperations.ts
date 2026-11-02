@@ -46,7 +46,16 @@ export interface KeepingSessionTarget {
 export async function closeTerminalKeepingSession(
   target: KeepingSessionTarget,
   killReason: string,
-  mayClose: () => boolean = () => true
+  mayClose: () => boolean = () => true,
+  /**
+   * An Assistant's capture stays out of the session journal; a caller that
+   * keeps its own record of the conversation hears it here (#16169).
+   */
+  onAssistantSession?: (capture: {
+    sessionId: string;
+    agentId: string;
+    projectId: string | null;
+  }) => void
 ): Promise<boolean> {
   const ptyClient = getPtyClient();
   if (!ptyClient) return false;
@@ -74,6 +83,13 @@ export async function closeTerminalKeepingSession(
   // A terminal whose agent had already exited isn't killed by a graceful close.
   if (info.isExited === true && !restarted) {
     ptyClient.kill(target.terminalId, killReason);
+  }
+  if (sessionId && info.launchAgentId && info.isAssistantTerminal === true) {
+    onAssistantSession?.({
+      sessionId,
+      agentId: info.launchAgentId,
+      projectId: info.projectId ?? null,
+    });
   }
   if (sessionId && info.launchAgentId && info.isAssistantTerminal !== true) {
     events.emit("agent-session:captured", {

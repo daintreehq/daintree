@@ -1,6 +1,11 @@
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import type { ScheduledRun, ScheduledRunTrigger } from "@shared/types/scheduledRuns";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import type {
+  ScheduledRun,
+  ScheduledRunTrigger,
+  ScheduledRunWorker,
+} from "@shared/types/scheduledRuns";
 import { machineTimeZone } from "@shared/utils/cron";
 import { localDayNumber } from "./scheduleWords";
 
@@ -63,6 +68,9 @@ export function runDetail(run: ScheduledRun): RunDetail | null {
         return reason("Missed while the computer slept or Daintree was closed");
       }
       if (skip.kind === "overlap") return reason("The last run was still going");
+      if (skip.kind === "assistant-sessions-full") {
+        return reason(`All ${MAX_ASSISTANT_SLOTS} of the project's Assistant sessions were in use`);
+      }
       if (skip.error !== null) return reason(`The check command couldn't run: ${skip.error}`);
       if (skip.signal !== null) {
         return reason(`The check command was stopped by signal ${skip.signal}`);
@@ -88,6 +96,15 @@ export function runDetail(run: ScheduledRun): RunDetail | null {
   }
 }
 
+/** A worker an Assistant run launched, in words: the agent, the machine and the project. */
+export function workerWords(worker: ScheduledRunWorker): string {
+  const agent = worker.agentId
+    ? (getEffectiveAgentConfig(worker.agentId)?.name ?? worker.agentId)
+    : "An agent";
+  const machine = worker.hostId === null ? "this machine" : (worker.hostName ?? worker.hostId);
+  return `${agent} on ${machine}, in ${worker.projectName ?? worker.projectId}`;
+}
+
 export type RunAction =
   | { kind: "open" }
   | { kind: "resume"; sessionId: string }
@@ -109,6 +126,19 @@ export function runAction(
   // which the row already says; Open would show nothing more.
   const seenStarting = runStartedAt(run) !== null || run.settlement.state === "open";
   if (context.terminalExists && seenStarting) return { kind: "open" };
+  // An Assistant's terminal still running is in an Assistant tab, taken over
+  // by this view or not yet (#16169): reopening its conversation beside it
+  // would start a second one, or end the first.
+  if (run.assistant === true && run.process.pty.state === "running") return { kind: "open" };
+  // Reopened here, it could land in a tab whose Assistant this view hasn't
+  // taken over and end it; the Assistant's own past sessions are where it's chosen.
+  if (run.assistant === true && run.resume !== null) {
+    return {
+      kind: "none",
+      label: "In past sessions",
+      explanation: "Reopen this conversation from the Daintree Assistant's past sessions",
+    };
+  }
   const neverStarted =
     run.process.pty.state === "not-started" &&
     run.settlement.state === "settled" &&

@@ -6,6 +6,10 @@ import { projectStore } from "../ProjectStore.js";
 import { soundService } from "../SoundService.js";
 import type { Schedule, ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
+import {
+  isScheduleAssistantAgentId,
+  SCHEDULE_ASSISTANT_NAME,
+} from "../../../shared/utils/scheduledRuns.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import {
   describeScheduledRunAttention,
@@ -47,7 +51,10 @@ export async function notifyScheduledRunAttention(
   if (getActiveShutdown() !== null || isHeldBack(run.projectId)) return;
 
   const agentId = run.resume?.agentId ?? schedule?.launch.agentId;
-  const agentName = (agentId ? getEffectiveRegistry()[agentId]?.name?.trim() : "") || "The agent";
+  const agentName =
+    run.assistant === true || isScheduleAssistantAgentId(agentId)
+      ? SCHEDULE_ASSISTANT_NAME
+      : (agentId ? getEffectiveRegistry()[agentId]?.name?.trim() : "") || "The agent";
   const { title, body } = describeScheduledRunAttention(attention, {
     scheduleName: schedule?.name ?? null,
     agentName,

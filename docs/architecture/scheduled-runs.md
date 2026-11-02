@@ -32,6 +32,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | The macOS LaunchAgent, keeping it current, its status and repair (`window.electron.schedules.osJobStatus`, `repairOsJob`) | `electron/services/scheduledRuns/launchAgentScheduleJob.ts`, `ScheduleOsJobService.ts`, `scheduleOsJobLive.ts`, `src/components/Schedules/ScheduleOsJobStatus.tsx`, `useScheduleOsJob.ts` |
 | The Linux `systemd --user` timer, its launcher and Daintree's unit | `electron/services/scheduledRuns/systemdScheduleJob.ts`, `electron/utils/systemdUnit.ts` (shared with Host mode's unit) |
 | The Windows Task Scheduler task | `electron/services/scheduledRuns/taskSchedulerScheduleJob.ts` |
+| A schedule that runs the Daintree Assistant: its id, its start in main, the workers it launches | `shared/utils/scheduledRuns.ts`, `electron/services/scheduledRuns/scheduledAssistantLaunchLive.ts`, `electron/services/assistants/assistantLaunch.ts`, `electron/services/scheduledRuns/assistantWorkerLaunches.ts` |
 
 ## Boundaries
 
@@ -52,7 +53,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | `enabled` | Whether it fires | `true`: creating a schedule is the opt-in |
 | `cadence.cron` | Five-field cron expression | `0 9 * * *` |
 | `cadence.timeZone` | IANA zone the expression is read in | the machine's zone, fixed at creation; a given zone is stored under the name `Intl` resolves it to |
-| `launch.agentId`, `launch.prompt` | The agent and its first turn; the prompt is non-blank and kept verbatim | from the caller |
+| `launch.agentId`, `launch.prompt` | The agent and its first turn; the prompt is non-blank and kept verbatim. `daintree:assistant` is the project's Daintree Assistant (see The Daintree Assistant), which takes no preset, no worktree and no `background` done policy | from the caller |
 | `launch.presetId` | A saved launch preset; `null` launches with no preset, as an explicit `null` does for `agent.launch` | `null` |
 | `launch.worktreeId` | Worktree id (its normalized path); `null` is the project's main checkout, never whichever worktree is active | `null` |
 | `policies.missedRuns` | `run-once-late` (missed occurrences coalesce into one late run) or `skip` | `run-once-late` |
@@ -139,6 +140,7 @@ In the second pass of a repeated hour, `previousCronOccurrence` can return a min
 - `origin`: why the run exists.
 - `settlement`, `process` and `pane`: three independent axes, below.
 - `resume`: what a closed run's terminal needs to resume.
+- `assistant` and `workers`: only on a run of the Daintree Assistant, `true` and the workers it launched (see The Daintree Assistant). An agent's run has neither.
 
 ### Origin and occurrence keys
 
@@ -176,7 +178,7 @@ The outcome follows from the evidence (`outcomeForEvidence`), and the schema ref
 
 A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only the agent's `done` handback applies the done policy, never an exit that reads as `done`. A restart that hasn't yet reconnected to a run's terminal is not `lost`. A run Daintree's quit or crash left open is `interrupted`, settled at the next startup.
 
-Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` with the `openRunId` that was still open, and `precondition` with its exit code, signal, or the error that stopped it running (an exit 0 isn't a skip). A skipped run never launches: no pane, neither process started, and no resume snapshot. It may hold a reserved terminal id, since registration can reserve one before the precondition runs.
+Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` with the `openRunId` that was still open, `precondition` with its exit code, signal, or the error that stopped it running (an exit 0 isn't a skip), and `assistant-sessions-full` for an Assistant's run that found every one of the project's Assistant sessions taken. A skipped run never launches: no pane, neither process started, and no resume snapshot. It may hold a reserved terminal id, since registration can reserve one before the precondition runs.
 
 ### Resume snapshot
 
@@ -343,6 +345,7 @@ A run that settles needing a person puts up a native notification on this machin
 | `launch-error`, a refused launch included | "Scheduled run couldn't start"        |
 | `exit` with a non-zero code               | "Scheduled run failed", with the code |
 | `handback` `needs-you`                    | "Scheduled run needs you"             |
+| `skip` with `assistant-sessions-full`     | "Scheduled run skipped"               |
 | Anything else                             | Nothing                               |
 
 - **Exits by signal alone stay quiet.** An exit with code 0 and a signal is how Daintree's own kills end a terminal (the trash's expiry, a kill), so it says nothing about the agent's work. A run that went fine, was skipped by its policy, cancelled, replaced, lost or interrupted is in its history and pages nobody.
@@ -351,6 +354,19 @@ A run that settles needing a person puts up a native notification on this machin
 - **The same gates as agent notifications.** It is held back while the project's notifications are off, in quiet hours, or while this machine's session is muted, read again after the schedule is so a mute set meanwhile counts. It plays the waiting sound when sounds are on. A run in a worktree on screen still notifies: what it reports is a recorded outcome, not a wait the user can see.
 - **The click.** Main brings the run's project on screen: the window holding it comes forward, or failing that a window on this machine switches to it, as picking it there would, once that window's view (or, in a window showing the project picker, the renderer it started with) has hydrated and can take the request; with none (a windowless Host, or macOS after the last window closed) it opens one on the project through the opener `main.ts` sets (`setScheduledRunWindowOpener`), and any click while that window opens waits for it to hydrate, for two minutes at most, so two clicks never open two windows and one that never comes up holds nothing back. A closed project opens, since the click asked for it; one that is gone or missing on disk opens nothing, and nor does a Host with no display. The view showing the project is sent a `focus-scheduled-run` intent once it has hydrated, and only if it still shows the project then (a cached or activating view gets it through the switch it runs); a window opened for the click is waited on for up to a minute. The view decides from its own panes: the run's pane, trashed or backgrounded included and whatever its terminal did since (a spawn that failed can leave one showing the error), comes forward and takes focus; with none, the schedule's history opens, or the list when the schedule is gone. A Schedules tab already showing, or a schedule's editor open, is left as it is: moving it to another page would drop an edit in progress without asking, and a focused pane would sit under Project settings or the editor.
 - Clicks are routed while Daintree runs: the handler lives in the process that showed the banner, so one clicked after Daintree quit isn't routed to the run.
+
+## The Daintree Assistant
+
+A schedule's agent can be the project's Daintree Assistant (#16169), stored as `launch.agentId` `daintree:assistant` (`SCHEDULE_ASSISTANT_AGENT_ID`, kept apart from agent ids by its colon). Where the work runs is the prompt's business: the Assistant on this machine sees every paired host (`host.list`) and launches work there (`host.call`), so a schedule can live on this machine while its prompt says which hosts to prefer, to fall back to this machine when none answers, or to go by load. No host list is stored on the schedule.
+
+- **Same policies.** It goes through `launchScheduledRun` like any run: the per-schedule turn, the switches and the scheduler's epoch, `already-recorded`, the overlap policy, the precondition (in the project folder) and Run now's confirmation, and the scheduler's missed-run handling.
+- **Started by main, always.** With or without a view, main starts it the way an Assistant is started with no view (`startAssistantWithoutView`): a new session in a vacant slot only, provisioned with `vacantOnly` so no session is ever displaced, preferring a slot that holds no stopped session's kept conversation; its own CLI, model and arguments from the Assistant's settings; its session folder's trust question answered; and the schedule's prompt with the run's handback instruction as its launch prompt, in place of a greeting. The session records `startedBy` `{ kind: "schedule", scheduleId, runId }` and outlives views as any viewless Assistant does. A view showing the project gets a tab for its lane when the run's history changes, and opening the tab takes the running Assistant over (`adoptDetachedSession`).
+- **Registered at the spawn.** The reservation is marked `assistant`, and only a spawn the handler authenticated as an Assistant's (its help session's bearer) can take it; a worker's spawn can't take an Assistant's run, nor the other way round. The run's `resume.agentId` is the CLI that started, and its `cwd` the session folder.
+- **No vacant session.** With all `MAX_ASSISTANT_SLOTS` sessions taken, the reservation is withdrawn and the occurrence is recorded as skipped with `assistant-sessions-full`. Unlike a policy's skip it notifies, and waits for the inbox when no window is open, as a refused launch does: only the person can free a session.
+- **Hosts with no view.** A schedule-started Assistant no view has taken over yet counts as this machine's own for the host tools, as the global Assistant does, so it reaches hosts with Daintree's windows closed. Approvals a host asks for need a window; with none they go unanswered.
+- **The done policy.** `close` closes the Assistant's own terminal the quit way, with the incarnation guards above, and records the conversation id the close captured on the run (an Assistant's capture stays out of the session journal); its views and help session follow the terminal ending. `keep` leaves it. `background` is refused for an Assistant schedule, and one stored before that leaves it where it is. Workers it launched, here or on a host, are never closed by it.
+- **Workers.** A worker is recorded on the run when a launch by its Assistant's help session is answered with a terminal (`agent.launch`, `workflow.startWorkOnIssue`), from the answer only: at the ownership seam for this project (`recordOwnershipFromDispatch`), and at `host.call`'s answer for another project here or a paired host, with the host's name and its project's name when its listing answers within two seconds. Each is recorded once per machine and terminal, for a call made while the run was open (a late answer still lands, even after the session ended, since a live session's run is read from its record and an ended one's is remembered for the 64 newest; a resend, or a retry under the caller's own call id, dates from its first send; a call made after the run settled doesn't count), up to `SCHEDULED_RUN_WORKERS_MAX`. A launch whose answer didn't name a terminal, including one cut short by a lost link, isn't recorded. The history lists them under the run as launch facts, never as how those agents did.
+- **Opening and resuming.** While an Assistant's terminal runs, the history offers Open, which brings the Assistant panel forward on the tab holding it and starts nothing. It never offers Resume: reopened from the history, the conversation could land in a tab whose running Assistant this view hasn't taken over, and a resume provisions that tab, ending it. An ended run points to the Assistant's own past sessions instead. Its conversation id is still recorded (a Codex Assistant's once a close captures it).
 
 ## Running due schedules from an OS job
 
@@ -449,3 +465,4 @@ Each entry is titled with the schedule's name and says the outcome as the histor
 | #15991 | The Linux systemd timer (see The Linux systemd timer) |
 | #15993 | The Windows task, the trigger limit, and the Microsoft Store refusal (see The Windows task) |
 | #15992 | Windows' windowless start, the end of the session with no window, and a last window closed with a run open |
+| #16169 | A schedule that runs the Daintree Assistant, and the workers it launched (see The Daintree Assistant) |

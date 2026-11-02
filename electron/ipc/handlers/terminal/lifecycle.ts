@@ -1337,6 +1337,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentPresetId: validatedOptions.agentPresetId,
         agentSessionId: spawnAgentSessionId,
         handbackCode: validatedOptions.handbackCode,
+        assistant: isHelpLaunch,
       });
       // A recipe step's When done (#16172) arms only a fresh agent launch whose
       // prompt carries the instruction for its code, asked for by the

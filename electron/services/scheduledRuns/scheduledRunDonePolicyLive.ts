@@ -39,9 +39,18 @@ function askViews(target: ArmedScheduledRun, action: ScheduledRunFinishRequest["
  * one running under its id.
  */
 function closeRunTerminal(target: ArmedScheduledRun, run: ScheduledRun): Promise<boolean> {
+  const { terminalSpawnedAt } = run;
   return closeTerminalKeepingSession(
-    { terminalId: target.terminalId, spawnedAt: run.terminalSpawnedAt },
-    "scheduled-run-done"
+    { terminalId: target.terminalId, spawnedAt: terminalSpawnedAt },
+    "scheduled-run-done",
+    undefined,
+    // An Assistant's run keeps its conversation (#16169): a Codex Assistant's id is only known now.
+    (capture) => {
+      if (terminalSpawnedAt === null) return;
+      peekScheduledRunRecorder()?.handleSessionCaptured({
+        record: { ...capture, terminal: { id: target.terminalId, spawnedAt: terminalSpawnedAt } },
+      });
+    }
   );
 }
 
@@ -50,6 +59,13 @@ async function applyDonePolicy(
   action: ScheduledRunDoneAction,
   run: ScheduledRun
 ): Promise<void> {
+  // An Assistant (#16169) runs in its own tab, never the grid or the saved
+  // layout: closing it is its own terminal ending, which its views and its
+  // session follow, and the workers it launched are left running.
+  if (run.assistant === true) {
+    if (action === "close") await closeRunTerminal(target, run);
+    return;
+  }
   // The saved layout is written whether or not a view holds the pane: a view
   // that does saves the same placement from its own store.
   if (action === "background") {

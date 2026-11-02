@@ -217,7 +217,9 @@ function startedByCaller(caller: AssistantCaller): HelpSessionStartedBy {
  */
 export function wasStartedBy(target: AssistantTarget, caller: AssistantCaller): boolean {
   const startedBy = target.startedBy;
-  if (startedBy === undefined || startedBy.kind !== caller.kind) return false;
+  // A schedule's run was asked for by no assistant (#16169).
+  if (startedBy === undefined || startedBy.kind === "schedule") return false;
+  if (startedBy.kind !== caller.kind) return false;
   if (startedBy.askingHelpSessionId !== caller.helpSessionId) return false;
   return (
     startedBy.kind === "local" ||

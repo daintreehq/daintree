@@ -8,9 +8,11 @@ import type {
   ScheduledRunOrigin,
 } from "../../../../shared/types/scheduledRuns.js";
 import { createSchedule, occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
+import { SCHEDULE_ASSISTANT_AGENT_ID } from "../../../../shared/utils/scheduledRuns.js";
 import {
   launchScheduledRun,
   ScheduledLaunchUnansweredError,
+  type ScheduledAssistantLaunchRequest,
   type ScheduledLaunchRequest,
   type ScheduledRunLauncherDeps,
 } from "../ScheduledRunLauncher.js";
@@ -67,6 +69,30 @@ function spawnFor(request: ScheduledLaunchRequest, overrides: Record<string, unk
     agentPresetId: request.args.presetId ?? undefined,
     agentSessionId: SESSION_ID,
     handbackCode: "k7f3qa",
+    assistant: false,
+    ...overrides,
+  });
+}
+
+/** What the spawn handler does for main's Assistant start: its own session folder and CLI. */
+function spawnAssistantFor(
+  request: ScheduledAssistantLaunchRequest,
+  overrides: Record<string, unknown> = {}
+): boolean {
+  return admitScheduledSpawn({
+    terminalId: request.terminalId,
+    projectId: "project-1",
+    scheduledRun: request.scheduledRun,
+    launchAgentId: "claude",
+    requestedCwd: "/help-sessions/abc",
+    cwd: "/help-sessions/abc",
+    worktreeId: undefined,
+    agentLaunchFlags: [],
+    agentModelId: undefined,
+    agentPresetId: undefined,
+    agentSessionId: SESSION_ID,
+    handbackCode: "k7f3qa",
+    assistant: true,
     ...overrides,
   });
 }
@@ -111,6 +137,10 @@ beforeEach(() => {
     launchWithoutView: vi.fn(async (_project, request) => {
       spawnFor(request);
       return launched(request.args.requestedId);
+    }),
+    launchAssistant: vi.fn(async (_project, request) => {
+      spawnAssistantFor(request);
+      return { status: "started" as const };
     }),
     runPrecondition: vi.fn(async () => null),
     closeRunTerminal: vi.fn(async () => null),
@@ -1208,5 +1238,127 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
 
     pass();
     await expect(first).resolves.toMatchObject({ status: "started" });
+  });
+});
+
+describe("launchScheduledRun with the Daintree Assistant", () => {
+  beforeEach(() => {
+    schedule = {
+      ...schedule,
+      launch: { ...schedule.launch, agentId: SCHEDULE_ASSISTANT_AGENT_ID },
+    };
+  });
+
+  it("starts the Assistant in main even with a view, registering the CLI it started", async () => {
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "started",
+      runId: "id-1",
+      terminalId: "terminal-id-2",
+    });
+
+    expect(deps.launchAssistant).toHaveBeenCalledWith(project, {
+      prompt: "Triage the new issues.\n",
+      terminalId: "terminal-id-2",
+      scheduledRun: { scheduleId: "schedule-1", runId: "id-1" },
+    });
+    expect(deps.launchInView).not.toHaveBeenCalled();
+    expect(deps.launchWithoutView).not.toHaveBeenCalled();
+    // Its session folder isn't the project's, and that's no refusal.
+    expect(recorder.registerLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "id-1",
+        origin: SCHEDULED,
+        terminalId: "terminal-id-2",
+        assistant: true,
+        resume: expect.objectContaining({ agentId: "claude", cwd: "/help-sessions/abc" }),
+        handbackCode: "k7f3qa",
+      })
+    );
+  });
+
+  it("records a skip that names the full sessions, and refuses a late spawn", async () => {
+    let request: ScheduledAssistantLaunchRequest | undefined;
+    deps.launchAssistant = vi.fn(async (_project, asked) => {
+      request = asked;
+      return { status: "no-session" as const };
+    });
+
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "skipped",
+      runId: "id-1",
+      reason: { kind: "assistant-sessions-full" },
+    });
+    expect(recorder.registerSkip).toHaveBeenCalledWith({
+      id: "id-1",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      origin: SCHEDULED,
+      reason: { kind: "assistant-sessions-full" },
+      terminalId: "terminal-id-2",
+    });
+    expect(recorder.registerLaunch).not.toHaveBeenCalled();
+    expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+    // Nothing holds the reservation any more, so a stray spawn registers nothing.
+    expect(spawnAssistantFor(request!)).toBe(false);
+    expect(recorder.registerLaunch).not.toHaveBeenCalled();
+  });
+
+  it("records a launch the Assistant couldn't make as refused, with its reason", async () => {
+    deps.launchAssistant = vi.fn(async () => ({
+      status: "failed" as const,
+      message: "The Daintree Assistant couldn't start.",
+    }));
+
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "failed",
+      runId: "id-1",
+      message: "The Daintree Assistant couldn't start.",
+    });
+    expect(recorder.registerRefusedLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "The Daintree Assistant couldn't start." })
+    );
+  });
+
+  it("is admitted only by an Assistant's spawn", async () => {
+    deps.launchAssistant = vi.fn(async (_project, request) => {
+      expect(() => spawnAssistantFor(request, { assistant: false })).toThrow(/reserved/);
+      return { status: "started" as const };
+    });
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "failed" });
+    expect(recorder.registerLaunch).not.toHaveBeenCalled();
+  });
+
+  it("meets the overlap policy before it starts anything", async () => {
+    history = [recordedRun("run-a")];
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({
+      status: "skipped",
+      reason: { kind: "overlap", openRunId: "run-a" },
+    });
+    expect(deps.launchAssistant).not.toHaveBeenCalled();
+  });
+
+  it("runs the precondition in the project folder first", async () => {
+    withPolicies({ precondition: { command: "test -f ready" } });
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "started" });
+    expect(deps.runPrecondition).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "test -f ready", cwd: "/repo" })
+    );
+  });
+
+  it("starts no Assistant when the precondition fails", async () => {
+    withPolicies({ precondition: { command: "test -f ready" } });
+    const reason = { kind: "precondition" as const, exitCode: 1, signal: null, error: null };
+    deps.runPrecondition = vi.fn(async () => reason);
+
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "skipped",
+      runId: "id-1",
+      reason,
+    });
+    expect(deps.launchAssistant).not.toHaveBeenCalled();
+    expect(recorder.registerSkip).toHaveBeenCalledWith(expect.objectContaining({ reason }));
   });
 });

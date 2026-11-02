@@ -43,6 +43,7 @@ import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
 import { agentSupportsAssistantContent } from "./AssistantContentMirror.js";
 import { resolveAssistantPluginKnowledge } from "./AssistantPluginKnowledge.js";
+import { setScheduledRunOfSession } from "./scheduledRuns/assistantWorkerLaunches.js";
 import type { HelpSessionProjectFacts } from "./helpSessionProjectMetadata.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
@@ -98,6 +99,8 @@ const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_RUNBOOK_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
+/** Schedule-started sessions whose run is remembered past their end; the oldest go first. */
+const SCHEDULED_RUN_SESSIONS_KEPT = 64;
 
 function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
   const parts =
@@ -105,7 +108,9 @@ function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
       ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
       : startedBy.kind === "local"
         ? [startedBy.askingHelpSessionId]
-        : [];
+        : startedBy.kind === "schedule"
+          ? [startedBy.scheduleId, startedBy.runId]
+          : [];
   return parts.length > 0 && parts.every((part) => typeof part === "string" && part.length > 0);
 }
 
@@ -184,7 +189,9 @@ interface ProvisionInput {
  */
 export type HelpSessionStartedBy =
   | { kind: "local"; askingHelpSessionId: string }
-  | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string };
+  | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string }
+  /** A due schedule whose agent is the Assistant (#16169), for one run of it. */
+  | { kind: "schedule"; scheduleId: string; runId: string };
 
 export interface ProvisionResult {
   sessionId: string;
@@ -391,6 +398,13 @@ function agentSessionDirName(pathHash: string, agentId: string): string {
 export class HelpSessionService {
   private readonly sessionsByToken = new Map<string, HelpSessionRecord>();
   private readonly sessionsById = new Map<string, HelpSessionRecord>();
+  /**
+   * The run each schedule-started session was provisioned for (#16169), kept
+   * past its revocation: a worker launch it asked for while the run was open
+   * can be answered after the session ends, and still belongs to that run.
+   * Session ids are minted per provision, so an entry never names a successor.
+   */
+  private readonly scheduledRunBySession = new Map<string, { scheduleId: string; runId: string }>();
   private readonly sessionFiles = new AssistantSessionFiles({
     byToken: (token) => this.sessionsByToken.get(token),
     bySessionId: (sessionId) => this.sessionsById.get(sessionId),
@@ -1278,7 +1292,7 @@ export class HelpSessionService {
       } catch (err) {
         record.revoked = true;
         this.sessionsByToken.delete(token);
-        this.sessionsById.delete(sessionId);
+        this.dropSessionRecord(record);
         // The probe connects with this bearer, so a session may already be
         // bound to its ownership principal (#12993). Revoke it with the token.
         try {
@@ -1413,6 +1427,34 @@ export class HelpSessionService {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked || record.ending) return null;
     return { projectId: record.projectId, slot: record.slot };
+  }
+
+  /** A session's record goes; a schedule's run it was started for is remembered (#16169). */
+  private dropSessionRecord(record: HelpSessionRecord): void {
+    this.sessionsById.delete(record.sessionId);
+    if (record.startedBy?.kind !== "schedule") return;
+    const { scheduleId, runId } = record.startedBy;
+    this.scheduledRunBySession.delete(record.sessionId);
+    this.scheduledRunBySession.set(record.sessionId, { scheduleId, runId });
+    if (this.scheduledRunBySession.size > SCHEDULED_RUN_SESSIONS_KEPT) {
+      this.scheduledRunBySession.delete(this.scheduledRunBySession.keys().next().value as string);
+    }
+  }
+
+  /**
+   * The run a session was started for by a schedule on this machine (#16169),
+   * or null; answered after the session ends too, for what it did meanwhile.
+   * Says nothing about whether the session may still act: ask its lane.
+   */
+  getScheduledRunOf(sessionId: string): { scheduleId: string; runId: string } | null {
+    // A live session answers from its own record, so the bounded memory of
+    // ended ones never costs a running one its run.
+    const startedBy = this.sessionsById.get(sessionId)?.startedBy;
+    if (startedBy?.kind === "schedule") {
+      return { scheduleId: startedBy.scheduleId, runId: startedBy.runId };
+    }
+    const run = this.scheduledRunBySession.get(sessionId);
+    return run ? { ...run } : null;
   }
 
   /**
@@ -1556,7 +1598,7 @@ export class HelpSessionService {
     const displacedDuringCapture = record.revoked;
 
     record.revoked = true;
-    this.sessionsById.delete(sessionId);
+    this.dropSessionRecord(record);
     this.sessionsByToken.delete(record.token);
 
     // Single-backend invariant (#7509): kill the bound PTY now so the orphan
@@ -2019,7 +2061,7 @@ export class HelpSessionService {
     for (const prior of priors) {
       prior.revoked = true;
       this.sessionsByToken.delete(prior.token);
-      this.sessionsById.delete(prior.sessionId);
+      this.dropSessionRecord(prior);
       // #9639: if this displaced session owns an in-flight capture, release
       // ownership so its late finalize can't write the old resume ID over the
       // fresh session now taking this lane. The entry itself stays (#13205):
@@ -2853,3 +2895,4 @@ export class HelpSessionService {
 }
 
 export const helpSessionService = new HelpSessionService();
+setScheduledRunOfSession((sessionId) => helpSessionService.getScheduledRunOf(sessionId));

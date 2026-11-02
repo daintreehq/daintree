@@ -33,6 +33,8 @@ export interface ScheduledSpawn {
   readonly agentSessionId: string | undefined;
   /** The handback code minted for its launch prompt, which the run reports back with (#15982). */
   readonly handbackCode: string | undefined;
+  /** It starts a Daintree Assistant, its help session's bearer checked by the spawn handler (#16169). */
+  readonly assistant: boolean;
 }
 
 export interface ScheduledLaunchReservation {
@@ -40,7 +42,13 @@ export interface ScheduledLaunchReservation {
   readonly scheduleId: string;
   readonly projectId: string;
   readonly terminalId: string;
+  /**
+   * The agent it launches. An Assistant's run (#16169) names the schedule's
+   * Assistant id; its CLI is the one the Assistant's settings pick at launch.
+   */
   readonly agentId: string;
+  /** It launches the project's Daintree Assistant, never a worker (#16169). */
+  readonly assistant?: true;
   /**
    * The scheduler's launch of an occurrence (#15979), which switching the
    * schedule off cancels; Run now's isn't.
@@ -196,11 +204,16 @@ export function admitScheduledSpawn(spawn: ScheduledSpawn): boolean {
   const { reservation } = entry;
   pending.delete(ref.runId);
   try {
+    const assistant = reservation.assistant === true;
+    // An Assistant's run records the CLI it actually started.
+    const agentId = assistant ? spawn.launchAgentId : reservation.agentId;
     if (
       reservation.terminalId !== spawn.terminalId ||
       reservation.scheduleId !== ref.scheduleId ||
       reservation.projectId !== spawn.projectId ||
-      reservation.agentId !== spawn.launchAgentId
+      assistant !== spawn.assistant ||
+      agentId === undefined ||
+      agentId !== spawn.launchAgentId
     ) {
       throw new Error("The terminal that started isn't the one this scheduled run reserved");
     }
@@ -211,7 +224,7 @@ export function admitScheduledSpawn(spawn: ScheduledSpawn): boolean {
     }
     reservation.admit(
       {
-        agentId: reservation.agentId,
+        agentId,
         agentSessionId: spawn.agentSessionId ?? null,
         cwd: spawn.cwd,
         worktreeId: spawn.worktreeId ?? null,

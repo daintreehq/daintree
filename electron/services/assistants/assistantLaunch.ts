@@ -10,6 +10,7 @@ import {
 import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import type { HelpSessionStartedBy } from "../HelpSessionService.js";
+import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { AssistantLaunchSettings } from "../../../shared/utils/assistantLaunchFlags.js";
 import { READY_SCREEN_LINES, untilAssistantReady } from "./assistantReadiness.js";
@@ -29,6 +30,16 @@ export interface AssistantLaunchRequest {
   /** Absent: this machine's own default among the agents it starts this way. */
   agentId?: string;
   startedBy: HelpSessionStartedBy;
+  /**
+   * A schedule's run (#16169): its reserved terminal id, and its prompt in
+   * place of the hub's greeting. The spawn adds the run's handback instruction
+   * and carries the run, so the spawn handler registers it.
+   */
+  scheduled?: {
+    terminalId: string;
+    prompt: string;
+    scheduledRun: ScheduledRunRef;
+  };
 }
 
 export type AssistantLaunchRefusal = "no-project" | "no-slot" | "launch-failed";
@@ -50,6 +61,11 @@ export interface AssistantLaunchDeps {
   getProject(projectId: string): { id: string; path: string } | null;
   /** Slots of the project an assistant runs in now, which a start without a slot skips. */
   occupiedSlots(projectId: string): readonly number[];
+  /**
+   * Slots holding a stopped session's conversation for the person to resume,
+   * which a start without a slot tries last, so it keeps them when it can.
+   */
+  keptSlots?(projectId: string): readonly number[];
   /**
    * The agents this host can start as its assistant right now, its default
    * first. `byDefault`: one a start that names no agent may pick, as the
@@ -85,6 +101,8 @@ export interface AssistantLaunchDeps {
       env: Record<string, string>;
       prompt: string;
       agentLaunchFlags: string[];
+      /** A schedule's run, whose handback instruction the spawn adds to `prompt`. */
+      scheduledRun?: ScheduledRunRef;
     }
   ): Promise<boolean>;
   /** Whether the session is still the one running in its lane. */
@@ -132,12 +150,14 @@ export async function startAssistantWithoutView(
   }
 
   const occupied = new Set(deps.occupiedSlots(project.id));
+  const kept = new Set(deps.keptSlots?.(project.id) ?? []);
+  const vacant = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
+    (slot) => !occupied.has(slot)
+  );
   const slots =
     request.slot !== undefined
       ? [request.slot]
-      : Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
-          (slot) => !occupied.has(slot)
-        );
+      : [...vacant.filter((slot) => !kept.has(slot)), ...vacant.filter((slot) => kept.has(slot))];
   let session: Awaited<ReturnType<AssistantLaunchDeps["provision"]>> = null;
   let slot: number | undefined;
   for (const candidate of slots) {
@@ -163,7 +183,8 @@ export async function startAssistantWithoutView(
   }
   if (!session || slot === undefined) return refused("no-slot");
 
-  const terminalId = `terminal-${randomUUID()}`;
+  const { scheduled } = request;
+  const terminalId = scheduled?.terminalId ?? `terminal-${randomUUID()}`;
   const env: Record<string, string> = {
     DAINTREE_MCP_TOKEN: session.token,
     DAINTREE_PROJECT_ID: project.id,
@@ -175,8 +196,9 @@ export async function startAssistantWithoutView(
       agentId,
       cwd: session.sessionPath,
       env,
-      prompt: HUB_STARTED_ASSISTANT_GREETING,
+      prompt: scheduled?.prompt ?? HUB_STARTED_ASSISTANT_GREETING,
       agentLaunchFlags: await deps.launchFlags(agentId).catch(() => []),
+      ...(scheduled ? { scheduledRun: scheduled.scheduledRun } : {}),
     })
     .catch(() => false);
   if (!spawned) {
@@ -206,6 +228,7 @@ export async function startAssistantWithoutView(
     },
     // Only this run, while it still holds its lane, is ever typed into.
     authorized: stillOurs,
+    ...(scheduled ? { greeted: false } : {}),
     now,
     sleep,
   });

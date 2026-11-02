@@ -1,3 +1,5 @@
+// Types only from the schema module: a value import would pull zod into
+// this lazily loaded module's split point and regroup the shared chunks.
 import type {
   ScheduledRun,
   ScheduledRunEvidence,
@@ -5,8 +7,12 @@ import type {
   ScheduledRunProcess,
   ScheduledRunResume,
   ScheduledRunSkipReason,
+  ScheduledRunWorker,
 } from "../../../shared/types/scheduledRuns.js";
-import { outcomeForEvidence } from "../../../shared/utils/scheduledRuns.js";
+import {
+  outcomeForEvidence,
+  SCHEDULED_RUN_WORKERS_MAX,
+} from "../../../shared/utils/scheduledRuns.js";
 import type { DaintreeEventMap } from "../events.js";
 import type { ScheduledRunStore } from "./ScheduledRunStore.js";
 
@@ -24,6 +30,8 @@ export interface RegisterScheduledLaunchInput {
    * on a marker for this code alone; null for a launch that asked for none.
    */
   readonly handbackCode?: string | null;
+  /** The run launches the project's Daintree Assistant (#16169), whose workers it lists. */
+  readonly assistant?: true;
 }
 
 export interface RegisterRefusedLaunchInput {
@@ -269,6 +277,7 @@ export class ScheduledRunRecorder {
       process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
       pane: { state: "none" },
       resume: input.resume,
+      ...(input.assistant ? { assistant: true as const, workers: [] } : {}),
     };
     this.store.transaction(() => {
       this.store.insert(run);
@@ -305,10 +314,36 @@ export class ScheduledRunRecorder {
 
   /**
    * Records an occurrence that was skipped, with its reason. It never launches,
-   * so it never waits for the notification inbox: the history shows it.
+   * so it never waits for the notification inbox: the history shows it. A run
+   * every Assistant session was taken for (#16169) is told like a refused
+   * launch, since only the person can free one.
    */
   registerSkip(input: RegisterScheduledSkipInput): ScheduledRun {
-    return this.insertSettled(input, { kind: "skip", reason: input.reason }, false);
+    const toldLikeRefusal = input.reason.kind === "assistant-sessions-full";
+    return this.insertSettled(
+      input,
+      { kind: "skip", reason: input.reason },
+      toldLikeRefusal && this.windowless()
+    );
+  }
+
+  /**
+   * A worker an Assistant run launched (#16169), as the launch was answered.
+   * Recorded once per machine and terminal, and only for a call made while
+   * the run was open (`askedAt`): what its Assistant launches after handing
+   * the run back is the person's conversation, not the run's.
+   */
+  noteWorkerLaunch(runId: string, worker: ScheduledRunWorker, askedAt: number): boolean {
+    const run = this.store.get(runId);
+    if (!run || run.assistant !== true) return false;
+    const { settlement } = run;
+    if (settlement.state === "settled" && settlement.settledAt < askedAt) return false;
+    const workers = run.workers ?? [];
+    const seen = workers.some(
+      (known) => known.terminalId === worker.terminalId && known.hostId === worker.hostId
+    );
+    if (seen || workers.length >= SCHEDULED_RUN_WORKERS_MAX) return false;
+    return this.commit({ ...run, workers: [...workers, worker] });
   }
 
   /** Whether a run of the project is registered and not yet settled. */

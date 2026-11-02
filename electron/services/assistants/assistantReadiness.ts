@@ -103,6 +103,12 @@ export interface AssistantReadinessIo {
   answerTrust(answer: string): Promise<void>;
   /** Asked again before each look at the screen and before anything is typed; false stops the wait. */
   authorized(): boolean;
+  /**
+   * False when the assistant started on work of its own (a schedule's prompt,
+   * #16169), not the greeting: its prompt opening is ready, with no answer to
+   * wait for.
+   */
+  greeted?: boolean;
   now(): number;
   sleep(ms: number): Promise<void>;
 }
@@ -133,6 +139,7 @@ export async function untilAssistantReady(io: AssistantReadinessIo): Promise<Ass
         if (atPrompt(screen)) {
           atPromptNow = true;
           promptAt ??= io.now();
+          if (io.greeted === false) return "ready";
           if (answer === "answered" || io.now() - promptAt >= GREETING_WAIT_MS) return "ready";
         }
       }
