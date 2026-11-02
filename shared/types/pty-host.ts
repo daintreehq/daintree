@@ -866,6 +866,17 @@ export type PtyHostEvent =
       timestamp: number;
     }
   | {
+      /** A Claude Code usage message in this pane (#15727), as parsed fields only. */
+      type: "agent-claude-usage-observed";
+      terminalId: string;
+      window: import("./ipc/agentQuota.js").ClaudeUsageWindow;
+      statement: import("./ipc/agentQuota.js").ClaudeUsageStatement;
+      usedPercent: number | null;
+      resetsAt: number | null;
+      observedAt: number;
+      timestamp: number;
+    }
+  | {
       /** This pane may move to its next fallback preset (#14370). */
       type: "agent-fallback-triggered";
       payload: AgentFallbackTriggeredPayload;

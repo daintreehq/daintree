@@ -18,6 +18,12 @@ import type {
   AgentFallbackReason,
   AgentFallbackTriggeredPayload,
 } from "../../../shared/types/ipc/agent.js";
+import {
+  CLAUDE_USAGE_STATEMENTS,
+  CLAUDE_USAGE_WINDOWS,
+  type ClaudeUsageObservation,
+} from "../../../shared/types/ipc/agentQuota.js";
+import { recordClaudeUsageObservation } from "../claude/ClaudeUsageObservations.js";
 
 const FALLBACK_REASONS: ReadonlySet<AgentFallbackReason> = new Set([
   "connection",
@@ -72,6 +78,28 @@ function normalizeConfidence(confidence: number): number {
   if (confidence < 0) return 0;
   if (confidence > 1) return 1;
   return confidence;
+}
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+/**
+ * A Claude usage observation copied field by field (#15727), or null for one
+ * this build can't read, so nothing but the parsed fields is ever kept.
+ */
+function claudeUsageObservation(
+  event: Extract<PtyHostEvent, { type: "agent-claude-usage-observed" }>
+): ClaudeUsageObservation | null {
+  const { terminalId, window, statement, usedPercent, resetsAt, observedAt } = event;
+  if (typeof terminalId !== "string" || terminalId === "") return null;
+  if (!(CLAUDE_USAGE_WINDOWS as readonly string[]).includes(window)) return null;
+  if (!(CLAUDE_USAGE_STATEMENTS as readonly string[]).includes(statement)) return null;
+  if (usedPercent !== null && !(isFiniteNumber(usedPercent) && usedPercent >= 0 && usedPercent <= 100)) {
+    return null;
+  }
+  if (resetsAt !== null && !isFiniteNumber(resetsAt)) return null;
+  if (!isFiniteNumber(observedAt)) return null;
+  return { terminalId, window, statement, usedPercent, resetsAt, observedAt };
 }
 
 /** The terminal an agent event is about, wherever its shape carries it. */
@@ -206,6 +234,14 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         timestamp: event.timestamp,
       });
       return true;
+
+    // Main's record for `agent.readQuota`, not the bus: no renderer, plugin or
+    // notice has a use for it.
+    case "agent-claude-usage-observed": {
+      const observation = claudeUsageObservation(event);
+      if (observation !== null) recordClaudeUsageObservation(observation);
+      return true;
+    }
 
     case "agent-fallback-triggered": {
       // Crossed a process boundary, and the renderer may end a live pane on it.

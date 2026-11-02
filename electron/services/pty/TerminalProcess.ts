@@ -41,6 +41,8 @@ import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
+import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
+import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { TERMINAL_SESSION_PERSISTENCE_ENABLED } from "./terminalSessionPersistence.js";
@@ -238,6 +240,14 @@ export class TerminalProcess {
    * appearance, reset when the banner goes.
    */
   private rateLimitFallbackDecided = false;
+  /**
+   * The Claude Code usage message last observed per limit (#15727), so one that
+   * stays on screen, or blinks out for a repaint, is a single observation.
+   */
+  private readonly claudeUsageSeen = new Map<
+    ClaudeUsageWindow,
+    { key: string; visible: boolean; lastSeenAt: number }
+  >();
   /** True only while the exit path settles the mirror's last frame. */
   private samplingFinalFrame = false;
 
@@ -1875,6 +1885,7 @@ export class TerminalProcess {
       this.terminalInfo.lastOutputChangeAt = now;
     }
     this.observeRateLimitBanner(lines, now);
+    this.observeClaudeUsage(lines, now);
     this.observeHandback(now);
   }
 
@@ -1961,6 +1972,50 @@ export class TerminalProcess {
     }
     this.rateLimitBannerVisible = visible;
     this.trackRateLimitSettle(visible, lines);
+  }
+
+  /**
+   * Report a Claude Code usage message this pane shows (#15727): the limit it
+   * names, what it says about use and when it resets, never the line itself.
+   * One is observed when it shows or changes, and again only once it has been
+   * off screen for the cooldown, so `observedAt` is when the pane showed what
+   * it says.
+   */
+  private observeClaudeUsage(lines: readonly string[], now: number): void {
+    const seen = this.claudeUsageSeen;
+    // The rate-limit banner's liveness rule, for Claude Code alone: a detected
+    // agent outranks the launch, and a shell its agent left is never read.
+    const isClaude =
+      getLiveAgentId(this.terminalInfo) === "claude" &&
+      (this.isAgentLive || this.samplingFinalFrame);
+    if (!isClaude) {
+      if (seen.size > 0) seen.clear();
+      return;
+    }
+    const visible = new Set<ClaudeUsageWindow>();
+    for (const message of scanClaudeUsageMessages(lines)) {
+      visible.add(message.window);
+      const key = `${message.statement}|${message.usedPercent}|${message.resetText}`;
+      const last = seen.get(message.window);
+      const fresh =
+        last === undefined ||
+        last.key !== key ||
+        (!last.visible && now - last.lastSeenAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS);
+      seen.set(message.window, { key, visible: true, lastSeenAt: now });
+      if (!fresh) continue;
+      events.emit("agent:claude-usage-observed", {
+        terminalId: this.id,
+        window: message.window,
+        statement: message.statement,
+        usedPercent: message.usedPercent,
+        resetsAt: resolveResetsAt(message.resetText, now),
+        observedAt: now,
+        timestamp: now,
+      });
+    }
+    for (const [window, last] of seen) {
+      if (!visible.has(window)) last.visible = false;
+    }
   }
 
   /**

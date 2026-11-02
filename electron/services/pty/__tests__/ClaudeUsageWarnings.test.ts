@@ -14,73 +14,73 @@ describe("scanClaudeUsageMessages", () => {
     [
       "the hit-limit banner under a tool result",
       "  ⎿  You've hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)",
-      { window: "weekly", statement: "reached", usedPercent: null },
+      { window: "weekly limit", statement: "reached", usedPercent: null },
       "Oct 2 at 9pm (Europe/Lisbon)",
     ],
     [
       "a used-percent warning on its own footer row",
       "  You've used 87% of your weekly limit · resets Nov 2 at 6pm (Australia/Sydney)",
-      { window: "weekly", statement: "used", usedPercent: 87 },
+      { window: "weekly limit", statement: "used", usedPercent: 87 },
       "Nov 2 at 6pm (Australia/Sydney)",
     ],
     [
       "a used-percent warning beside the footer's shortcuts hint",
       "  ? for shortcuts                       You’ve used 91% of your 5-hour limit · resets 3:30pm (America/New_York)",
-      { window: "5-hour", statement: "used", usedPercent: 91 },
+      { window: "5-hour limit", statement: "used", usedPercent: 91 },
       "3:30pm (America/New_York)",
     ],
     [
       "a threshold warning with an upgrade hint",
       "  ⏵⏵ accept edits on (shift+tab to cycle)     Over 75% of your weekly limit used · resets Nov 4 at 9am (Europe/London) · /upgrade to keep using Claude Code",
-      { window: "weekly", statement: "over", usedPercent: 75 },
+      { window: "weekly limit", statement: "over", usedPercent: 75 },
       "Nov 4 at 9am (Europe/London)",
     ],
     [
       "an approaching warning for a model's limit",
       "Approaching Opus limit · resets Nov 4 at 9am (Europe/London)",
-      { window: "opus", statement: "approaching", usedPercent: null },
+      { window: "Opus limit", statement: "approaching", usedPercent: null },
       "Nov 4 at 9am (Europe/London)",
     ],
     [
       "an approaching warning with no reset",
       "Approaching 5-hour limit",
-      { window: "5-hour", statement: "approaching", usedPercent: null },
+      { window: "5-hour limit", statement: "approaching", usedPercent: null },
       null,
     ],
     [
       "a model's hit limit",
       "You've hit your Sonnet limit · resets Oct 3 at 1am",
-      { window: "sonnet", statement: "reached", usedPercent: null },
+      { window: "Sonnet limit", statement: "reached", usedPercent: null },
       "Oct 3 at 1am",
     ],
     [
       "a hit limit with progress saved",
       "  ⎿  You've hit your 5-hour limit · resets 4pm (Europe/Lisbon) · progress saved",
-      { window: "5-hour", statement: "reached", usedPercent: null },
+      { window: "5-hour limit", statement: "reached", usedPercent: null },
       "4pm (Europe/Lisbon)",
     ],
     [
       "an older build's session limit",
       "You've hit your session limit · resets 6pm",
-      { window: "session", statement: "reached", usedPercent: null },
+      { window: "session limit", statement: "reached", usedPercent: null },
       "6pm",
     ],
     [
       "an older build's window-first banner",
       "5-hour limit reached ∙ resets 3pm",
-      { window: "5-hour", statement: "reached", usedPercent: null },
+      { window: "5-hour limit", statement: "reached", usedPercent: null },
       "3pm",
     ],
     [
-      "an unnamed limit with its reset",
+      "an unqualified limit with its reset",
       "You've hit your limit · resets 2pm (America/New_York)",
-      { window: "unnamed", statement: "reached", usedPercent: null },
+      { window: "limit", statement: "reached", usedPercent: null },
       "2pm (America/New_York)",
     ],
     [
-      "an unnamed usage limit",
+      "an unqualified usage limit",
       "  ⎿  You've hit your usage limit",
-      { window: "unnamed", statement: "reached", usedPercent: null },
+      { window: "usage limit", statement: "reached", usedPercent: null },
       null,
     ],
   ])("reads %s", (_name, row, expected, resetText) => {
@@ -114,8 +114,8 @@ describe("scanClaudeUsageMessages", () => {
         "You've used 87% of your weekly limit · resets Nov 2 at 6pm"
       )
     ).toEqual([
-      { window: "weekly", statement: "used", usedPercent: 87, resetText: "Nov 2 at 6pm" },
-      { window: "5-hour", statement: "reached", usedPercent: null, resetText: "4pm" },
+      { window: "weekly limit", statement: "used", usedPercent: 87, resetText: "Nov 2 at 6pm" },
+      { window: "5-hour limit", statement: "reached", usedPercent: null, resetText: "4pm" },
     ]);
   });
 
@@ -126,7 +126,7 @@ describe("scanClaudeUsageMessages", () => {
 
   it("strips colour before matching", () => {
     expect(scan("\x1b[33mYou've used 87% of your weekly limit\x1b[39m")).toEqual([
-      { window: "weekly", statement: "used", usedPercent: 87, resetText: null },
+      { window: "weekly limit", statement: "used", usedPercent: 87, resetText: null },
     ]);
   });
 
@@ -135,7 +135,7 @@ describe("scanClaudeUsageMessages", () => {
       scan("You've used 87% of your weekly limit · resets Nov 2 at", "  6pm (Australia/Sydney)")
     ).toEqual([
       {
-        window: "weekly",
+        window: "weekly limit",
         statement: "used",
         usedPercent: 87,
         resetText: "Nov 2 at 6pm (Australia/Sydney)",
@@ -146,7 +146,7 @@ describe("scanClaudeUsageMessages", () => {
   it("leaves an unrelated row under a cut-off reset out of it", () => {
     expect(
       scan("You've used 87% of your weekly limit · resets Nov 2 at", "  ✻ Thinking…")
-    ).toEqual([{ window: "weekly", statement: "used", usedPercent: 87, resetText: "Nov 2 at" }]);
+    ).toEqual([{ window: "weekly limit", statement: "used", usedPercent: 87, resetText: "Nov 2 at" }]);
   });
 });
 

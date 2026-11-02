@@ -69,7 +69,7 @@ const FORMS: readonly Form[] = [
   },
   {
     pattern: new RegExp(
-      String.raw`^${CHROME}${YOUVE}\s+(?:hit|reached)\s+your\s+()usage\s+limit${TAIL}`,
+      String.raw`^${CHROME}${YOUVE}\s+(?:hit|reached)\s+your\s+(usage)\s+limit${TAIL}`,
       "i"
     ),
     statement: "reached",
@@ -95,11 +95,19 @@ const FORMS: readonly Form[] = [
 
 const PERCENT_FORMS = new Set<ClaudeUsageStatement>(["used", "over"]);
 
+const WINDOW_LABELS: Record<string, ClaudeUsageWindow> = {
+  "": "limit",
+  usage: "usage limit",
+  session: "session limit",
+  weekly: "weekly limit",
+  opus: "Opus limit",
+  sonnet: "Sonnet limit",
+  fable: "Fable limit",
+};
+
 function windowOf(named: string): ClaudeUsageWindow {
   const word = named.toLowerCase();
-  if (word === "") return "unnamed";
-  if (word.startsWith("5")) return "5-hour";
-  return word as ClaudeUsageWindow;
+  return word.startsWith("5") ? "5-hour limit" : WINDOW_LABELS[word]!;
 }
 
 /**
