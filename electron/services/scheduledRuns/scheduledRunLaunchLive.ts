@@ -159,6 +159,10 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
     findView: findProjectView,
     launchInView: (view, request) => requestScheduledLaunchInView(view, request),
     launchWithoutView: (project, request) => runScheduledAgentLaunchLive(project, request),
+    launchAssistant: async (project, request) => {
+      const { launchScheduledAssistantLive } = await import("./scheduledAssistantLaunchLive.js");
+      return launchScheduledAssistantLive(project, request);
+    },
     runPrecondition: async ({ projectId, command, cwd, signal }) => {
       // The variables the user set for terminals, as a project command gets them.
       const layers = await readProjectCommandEnvLayers(projectId).catch((error: unknown) => {

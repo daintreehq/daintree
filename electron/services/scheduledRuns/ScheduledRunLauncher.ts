@@ -14,6 +14,7 @@ import type {
 import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { pathComparisonKey } from "../../../shared/utils/path.js";
+import { isScheduleAssistantAgentId } from "../../../shared/config/scheduleAssistant.js";
 import type { ScheduledRunRecorder } from "./ScheduledRunRecorder.js";
 import { reserveScheduledLaunch } from "./scheduledRunAdmission.js";
 import type { ArmedScheduledRun } from "./ScheduledRunDonePolicy.js";
@@ -40,6 +41,24 @@ export interface ScheduledLaunchRequest {
   args: ScheduledLaunchArgs;
   scheduledRun: ScheduledRunRef;
 }
+
+/** A schedule's run of the project's Daintree Assistant (#16169), which main always starts. */
+export interface ScheduledAssistantLaunchRequest {
+  /** The schedule's prompt as written; the run's handback instruction is added at launch. */
+  prompt: string;
+  /** The terminal id the run reserved. */
+  terminalId: string;
+  scheduledRun: ScheduledRunRef;
+}
+
+/**
+ * How starting the Assistant went. `no-session`: every Assistant session of
+ * the project is taken, and none is ever displaced for a schedule.
+ */
+export type ScheduledAssistantLaunchResult =
+  | { status: "started" }
+  | { status: "no-session" }
+  | { status: "failed"; message: string };
 
 /** Why the view launching a run gave no answer: it closed, or took too long. */
 export class ScheduledLaunchUnansweredError extends Error {
@@ -76,6 +95,15 @@ export interface ScheduledRunLauncherDeps<View> {
     project: Project,
     request: ScheduledLaunchRequest
   ) => Promise<ActionDispatchResult>;
+  /**
+   * Starts the project's Daintree Assistant for the run in main, in a vacant
+   * session only (#16169); a view showing the project takes it over as it
+   * does any Assistant started without one.
+   */
+  launchAssistant: (
+    project: Project,
+    request: ScheduledAssistantLaunchRequest
+  ) => Promise<ScheduledAssistantLaunchResult>;
   /**
    * Runs the schedule's precondition in `cwd`, ending it when `signal`
    * aborts. Null when it exited 0; otherwise the skip the history records.
@@ -274,6 +302,9 @@ async function launchInScheduleTurn<View>(
   const terminalId = `terminal-${deps.newId()}`;
   const { launch } = schedule;
   const target = launch.worktreeId ?? project.path;
+  // The Assistant (#16169) starts in its own session folder, with its own
+  // settings, under whichever CLI they pick.
+  const assistant = isScheduleAssistantAgentId(launch.agentId);
 
   const recordSkip = (
     reason: ScheduledRunSkipReason,
@@ -334,24 +365,28 @@ async function launchInScheduleTurn<View>(
     projectId,
     terminalId,
     agentId: launch.agentId,
+    ...(assistant ? { assistant: true as const } : {}),
     automatic: origin.trigger !== "run-now",
     admit: (resume, handbackCode) => {
       if (isShuttingDown()) throw new Error("Daintree was quitting.");
       // A launcher falls back from a preset it can't find, and a launch with
       // no worktree list from a worktree it can't place; a run that would
-      // start differently from its schedule doesn't start.
-      if (launch.presetId !== null && resume.agentPresetId !== launch.presetId) {
-        throw new Error("The schedule's preset isn't available any more.");
-      }
-      if (launch.worktreeId !== null && resume.worktreeId !== launch.worktreeId) {
-        throw new Error("The schedule's worktree isn't part of the project any more.");
-      }
-      if (!samePath(resume.cwd, target)) {
-        throw new Error(
-          launch.worktreeId !== null
-            ? "The schedule's worktree couldn't be found."
-            : "The project's folder couldn't be found."
-        );
+      // start differently from its schedule doesn't start. An Assistant has
+      // neither, and starts in its session folder.
+      if (!assistant) {
+        if (launch.presetId !== null && resume.agentPresetId !== launch.presetId) {
+          throw new Error("The schedule's preset isn't available any more.");
+        }
+        if (launch.worktreeId !== null && resume.worktreeId !== launch.worktreeId) {
+          throw new Error("The schedule's worktree isn't part of the project any more.");
+        }
+        if (!samePath(resume.cwd, target)) {
+          throw new Error(
+            launch.worktreeId !== null
+              ? "The schedule's worktree couldn't be found."
+              : "The project's folder couldn't be found."
+          );
+        }
       }
       if (deps.isProjectSleeping(projectId)) throw new Error("The project was going to sleep.");
       recorder.registerLaunch({
@@ -362,6 +397,7 @@ async function launchInScheduleTurn<View>(
         terminalId,
         resume,
         handbackCode,
+        ...(assistant ? { assistant: true } : {}),
       });
       try {
         deps.markProjectRunning(projectId);
@@ -453,40 +489,65 @@ async function launchInScheduleTurn<View>(
       if (failure !== null) return refuseBeforeLaunch(failure);
     }
 
-    const request: ScheduledLaunchRequest = {
-      args: {
-        agentId: launch.agentId,
-        prompt: launch.prompt,
-        handback: true,
-        presetId: launch.presetId,
-        worktreeId: launch.worktreeId ?? "",
-        location: "grid",
-        focusPolicy: "preserve",
-        requestedId: terminalId,
-      },
-      scheduledRun: { scheduleId, runId },
-    };
-
-    let result: ActionDispatchResult | null = null;
+    const scheduledRun: ScheduledRunRef = { scheduleId, runId };
+    // What the launch answered: started, or why not. Null when it didn't answer.
+    let answer: { launched: true } | { launched: false; reason: string } | null = null;
     let unanswered: string | null = null;
-    const view = deps.findView(projectId, input.preferredWebContentsId);
     try {
-      // A view's bridge keeps its own deadline; main's launch waits on the
-      // workspace host, which nothing else bounds.
-      result = view
-        ? await deps.launchInView(view, request)
-        : await withDeadline(
-            deps.launchWithoutView(project, request),
-            deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
-            "The launch didn't finish in time."
-          );
+      if (assistant) {
+        // Main's own start, bounded like main's agent launch.
+        const started = await withDeadline(
+          deps.launchAssistant(project, { prompt: launch.prompt, terminalId, scheduledRun }),
+          deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
+          "The launch didn't finish in time."
+        );
+        if (started.status === "no-session") {
+          // Nothing was spawned for it, so nothing can take the reservation late.
+          if (!reserved.withdraw()) return { status: "not-found" };
+          if (reserved.removed() || isShuttingDown() || !deps.getProject(projectId)) {
+            return { status: "not-found" };
+          }
+          return recordSkip({ kind: "assistant-sessions-full" }, terminalId);
+        }
+        answer =
+          started.status === "started"
+            ? { launched: true }
+            : { launched: false, reason: started.message };
+      } else {
+        const request: ScheduledLaunchRequest = {
+          args: {
+            agentId: launch.agentId,
+            prompt: launch.prompt,
+            handback: true,
+            presetId: launch.presetId,
+            worktreeId: launch.worktreeId ?? "",
+            location: "grid",
+            focusPolicy: "preserve",
+            requestedId: terminalId,
+          },
+          scheduledRun,
+        };
+        const view = deps.findView(projectId, input.preferredWebContentsId);
+        // A view's bridge keeps its own deadline; main's launch waits on the
+        // workspace host, which nothing else bounds.
+        const result = view
+          ? await deps.launchInView(view, request)
+          : await withDeadline(
+              deps.launchWithoutView(project, request),
+              deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
+              "The launch didn't finish in time."
+            );
+        answer = launchedTerminal(result)
+          ? { launched: true }
+          : { launched: false, reason: declineReason(result) };
+      }
     } catch (error) {
       unanswered = formatErrorMessage(error, "The launch didn't answer.");
     }
 
     // A view answers once its pane is committed, which can be before the
     // terminal's spawn reaches main; the run is registered only then.
-    if (result !== null && launchedTerminal(result) && reserved.state().kind === "pending") {
+    if (answer?.launched === true && reserved.state().kind === "pending") {
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         reserved.admitted.catch(() => {}),
@@ -503,12 +564,12 @@ async function launchInScheduleTurn<View>(
     if (state.kind === "pending") {
       reserved.giveUp();
       if (unanswered !== null) return failed(unanswered);
-      if (result !== null && !launchedTerminal(result)) return failed(declineReason(result));
+      if (answer !== null && !answer.launched) return failed(answer.reason);
       return failed("The agent's terminal didn't start in time.");
     }
-    if (result !== null && !launchedTerminal(result)) {
+    if (answer !== null && !answer.launched) {
       // Registered, then the launch failed: the spawn threw after its admission.
-      const message = declineReason(result);
+      const message = answer.reason;
       const run = recorder.get(runId);
       if (run?.process.pty.state === "not-started") {
         recorder.settle(runId, { kind: "launch-error", message });

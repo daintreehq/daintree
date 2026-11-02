@@ -105,7 +105,9 @@ function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
       ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
       : startedBy.kind === "local"
         ? [startedBy.askingHelpSessionId]
-        : [];
+        : startedBy.kind === "schedule"
+          ? [startedBy.scheduleId, startedBy.runId]
+          : [];
   return parts.length > 0 && parts.every((part) => typeof part === "string" && part.length > 0);
 }
 
@@ -184,7 +186,9 @@ interface ProvisionInput {
  */
 export type HelpSessionStartedBy =
   | { kind: "local"; askingHelpSessionId: string }
-  | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string };
+  | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string }
+  /** A due schedule whose agent is the Assistant (#16169), for one run of it. */
+  | { kind: "schedule"; scheduleId: string; runId: string };
 
 export interface ProvisionResult {
   sessionId: string;
@@ -1413,6 +1417,15 @@ export class HelpSessionService {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked || record.ending) return null;
     return { projectId: record.projectId, slot: record.slot };
+  }
+
+  /** The run a live session was started for by a schedule on this machine (#16169), or null. */
+  getScheduledRunOf(sessionId: string): { scheduleId: string; runId: string } | null {
+    const record = this.sessionsById.get(sessionId);
+    const startedBy = record && !record.revoked ? record.startedBy : undefined;
+    return startedBy?.kind === "schedule"
+      ? { scheduleId: startedBy.scheduleId, runId: startedBy.runId }
+      : null;
   }
 
   /**

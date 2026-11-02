@@ -1,10 +1,12 @@
-import type {
-  ScheduledRun,
-  ScheduledRunEvidence,
-  ScheduledRunOrigin,
-  ScheduledRunProcess,
-  ScheduledRunResume,
-  ScheduledRunSkipReason,
+import {
+  SCHEDULED_RUN_WORKERS_MAX,
+  type ScheduledRun,
+  type ScheduledRunEvidence,
+  type ScheduledRunOrigin,
+  type ScheduledRunProcess,
+  type ScheduledRunResume,
+  type ScheduledRunSkipReason,
+  type ScheduledRunWorker,
 } from "../../../shared/types/scheduledRuns.js";
 import { outcomeForEvidence } from "../../../shared/utils/scheduledRuns.js";
 import type { DaintreeEventMap } from "../events.js";
@@ -24,6 +26,8 @@ export interface RegisterScheduledLaunchInput {
    * on a marker for this code alone; null for a launch that asked for none.
    */
   readonly handbackCode?: string | null;
+  /** The run launches the project's Daintree Assistant (#16169), whose workers it lists. */
+  readonly assistant?: boolean;
 }
 
 export interface RegisterRefusedLaunchInput {
@@ -269,6 +273,7 @@ export class ScheduledRunRecorder {
       process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
       pane: { state: "none" },
       resume: input.resume,
+      ...(input.assistant === true ? { assistant: true as const, workers: [] } : {}),
     };
     this.store.transaction(() => {
       this.store.insert(run);
@@ -305,10 +310,34 @@ export class ScheduledRunRecorder {
 
   /**
    * Records an occurrence that was skipped, with its reason. It never launches,
-   * so it never waits for the notification inbox: the history shows it.
+   * so it never waits for the notification inbox: the history shows it. A run
+   * every Assistant session was taken for (#16169) is told like a refused
+   * launch, since only the person can free one.
    */
   registerSkip(input: RegisterScheduledSkipInput): ScheduledRun {
-    return this.insertSettled(input, { kind: "skip", reason: input.reason }, false);
+    const toldLikeRefusal = input.reason.kind === "assistant-sessions-full";
+    return this.insertSettled(
+      input,
+      { kind: "skip", reason: input.reason },
+      toldLikeRefusal && this.windowless()
+    );
+  }
+
+  /**
+   * A worker an open Assistant run launched (#16169), as the launch was
+   * answered. Recorded once per machine and terminal, and only while the run
+   * is open: what its Assistant launches after handing it back is the
+   * person's conversation, not the run's.
+   */
+  noteWorkerLaunch(runId: string, worker: ScheduledRunWorker): boolean {
+    const run = this.store.get(runId);
+    if (!run || run.assistant !== true || run.settlement.state !== "open") return false;
+    const workers = run.workers ?? [];
+    const seen = workers.some(
+      (known) => known.terminalId === worker.terminalId && known.hostId === worker.hostId
+    );
+    if (seen || workers.length >= SCHEDULED_RUN_WORKERS_MAX) return false;
+    return this.commit({ ...run, workers: [...workers, worker] });
   }
 
   /** Whether a run of the project is registered and not yet settled. */

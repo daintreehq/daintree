@@ -2,6 +2,7 @@ import { z } from "zod";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "./handback.js";
 import { parseCron, validateTimeZone } from "../utils/cron.js";
 import { occurrenceKeyFor, outcomeForEvidence } from "../utils/scheduledRuns.js";
+import { isScheduleAssistantAgentId } from "../config/scheduleAssistant.js";
 
 // The contract for scheduled agent runs (#15973). docs/architecture/scheduled-runs.md
 // says which child writes each part; records are complete on disk, and defaults
@@ -60,20 +61,47 @@ export const SchedulePoliciesSchema = z.strictObject({
   runWhenClosed: z.boolean(),
 });
 
-export const ScheduleSchema = z.strictObject({
-  id: IdSchema,
-  projectId: IdSchema,
-  name: z
-    .string()
-    .max(200)
-    .refine((value) => value.trim() !== "", { message: "Name the schedule" }),
-  enabled: z.boolean(),
-  cadence: ScheduleCadenceSchema,
-  launch: ScheduleLaunchSchema,
-  policies: SchedulePoliciesSchema,
-  createdAt: EpochMsSchema,
-  updatedAt: EpochMsSchema,
-});
+export const ScheduleSchema = z
+  .strictObject({
+    id: IdSchema,
+    projectId: IdSchema,
+    name: z
+      .string()
+      .max(200)
+      .refine((value) => value.trim() !== "", { message: "Name the schedule" }),
+    enabled: z.boolean(),
+    cadence: ScheduleCadenceSchema,
+    launch: ScheduleLaunchSchema,
+    policies: SchedulePoliciesSchema,
+    createdAt: EpochMsSchema,
+    updatedAt: EpochMsSchema,
+  })
+  .superRefine((schedule, ctx) => {
+    // The Assistant (#16169) starts in its own session folder with its own
+    // settings, in a tab of its own: no preset, no worktree, no grid to leave.
+    if (!isScheduleAssistantAgentId(schedule.launch?.agentId)) return;
+    if (schedule.launch.presetId !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["launch", "presetId"],
+        message: "The Daintree Assistant runs with its own settings, not a preset",
+      });
+    }
+    if (schedule.launch.worktreeId !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["launch", "worktreeId"],
+        message: "The Daintree Assistant works across the project; name a worktree in the prompt",
+      });
+    }
+    if (schedule.policies?.onDone === "background") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["policies", "onDone"],
+        message: "The Daintree Assistant runs in its own tab, so keep it or close it",
+      });
+    }
+  });
 
 /**
  * A project's own say over its schedules (#16166), kept on this machine beside
@@ -158,6 +186,11 @@ export const ScheduledRunSkipReasonSchema = z.discriminatedUnion("kind", [
     signal: SignalSchema,
     error: z.string().nullable(),
   }),
+  /**
+   * The schedule's agent is the Daintree Assistant (#16169) and every one of
+   * the project's Assistant sessions was taken: none is ever displaced for it.
+   */
+  z.strictObject({ kind: z.literal("assistant-sessions-full") }),
 ]);
 
 /** The fact a run settled on. Agent state heuristics are never evidence. */
@@ -254,6 +287,27 @@ export const ScheduledRunResumeSchema = z.strictObject({
   agentPresetId: IdSchema.nullable(),
 });
 
+/** Most workers one run's history lists; later ones aren't recorded. */
+export const SCHEDULED_RUN_WORKERS_MAX = 50;
+
+/**
+ * A worker an Assistant run launched (#16169), as its launch was answered:
+ * a terminal the answer named, never one inferred from what runs.
+ */
+export const ScheduledRunWorkerSchema = z.strictObject({
+  terminalId: IdSchema,
+  /** The paired host it landed on; null for this machine. */
+  hostId: IdSchema.nullable(),
+  /** The host's name when the launch was seen; null for this machine or one unnamed then. */
+  hostName: z.string().min(1).nullable(),
+  projectId: IdSchema,
+  /** The project's name when the launch was seen, if known then. */
+  projectName: z.string().min(1).nullable(),
+  /** The agent the launch asked for, when it named one. */
+  agentId: IdSchema.nullable(),
+  observedAt: EpochMsSchema,
+});
+
 export const ScheduledRunSchema = z
   .strictObject({
     id: IdSchema,
@@ -281,9 +335,20 @@ export const ScheduledRunSchema = z
     }),
     pane: ScheduledRunPaneSchema,
     resume: ScheduledRunResumeSchema.nullable(),
+    /** The run launched the project's Daintree Assistant (#16169); absent for an agent's run. */
+    assistant: z.literal(true).optional(),
+    /** An Assistant run's workers, as each launch was seen; only on an Assistant's run. */
+    workers: z.array(ScheduledRunWorkerSchema).max(SCHEDULED_RUN_WORKERS_MAX).optional(),
   })
   .superRefine((run, ctx) => {
     const { origin, settlement } = run;
+    if (run.workers !== undefined && run.assistant !== true) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["workers"],
+        message: "Only an Assistant's run lists workers",
+      });
+    }
     // A failed number check doesn't stop this refinement, and `toISOString`
     // throws outside Date's range.
     const { dueAt } = origin;
@@ -388,3 +453,4 @@ export type ScheduledRunProcess = z.infer<typeof ScheduledRunProcessSchema>;
 export type ScheduledRunPane = z.infer<typeof ScheduledRunPaneSchema>;
 export type ScheduledRunResume = z.infer<typeof ScheduledRunResumeSchema>;
 export type ScheduledRun = z.infer<typeof ScheduledRunSchema>;
+export type ScheduledRunWorker = z.infer<typeof ScheduledRunWorkerSchema>;

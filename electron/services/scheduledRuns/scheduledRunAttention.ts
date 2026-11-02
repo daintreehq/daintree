@@ -3,10 +3,13 @@ import type { ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 /**
  * Why a settled run needs a person (#15988). Nothing else does: a run that
  * finished, was skipped by its policy, was replaced, cancelled, lost or
- * interrupted is in its history and pages nobody.
+ * interrupted is in its history and pages nobody. A run skipped because every
+ * Assistant session was taken (#16169) isn't the policy's doing, and pages.
  */
 export type ScheduledRunAttention =
   | { kind: "launch-failed" }
+  /** Every Assistant session of the project was taken (#16169): only the person can free one. */
+  | { kind: "assistant-sessions-full" }
   | { kind: "exited"; process: "agent" | "pty"; exitCode: number }
   | { kind: "needs-you" };
 
@@ -29,6 +32,10 @@ export function scheduledRunAttention(run: ScheduledRun): ScheduledRunAttention 
         : null;
     case "handback":
       return evidence.report === "needs-you" ? { kind: "needs-you" } : null;
+    case "skip":
+      return evidence.reason.kind === "assistant-sessions-full"
+        ? { kind: "assistant-sessions-full" }
+        : null;
     default:
       return null;
   }
@@ -64,6 +71,11 @@ export function describeScheduledRunAttention(
         body: `${who} exited with code ${attention.exitCode} during ${schedule}.`,
       };
     }
+    case "assistant-sessions-full":
+      return {
+        title: "Scheduled run skipped",
+        body: `All of the project's Assistant sessions were in use, so ${schedule} didn't start. Close one for the next run.`,
+      };
     case "needs-you":
       return {
         title: "Scheduled run needs you",

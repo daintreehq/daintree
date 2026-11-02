@@ -540,6 +540,10 @@ export async function spawnHostAssistant(
     agentLaunchFlags: string[];
     /** Reopen this exact conversation instead of starting one (#14159); never "the latest". */
     resumeAgentSessionId?: string;
+    /** A schedule's run (#16169), which the spawn handler registers from this spawn. */
+    scheduledRun?: ScheduledRunRef;
+    /** The run's handback code, already in `prompt` with the run's instruction. */
+    handbackCode?: string;
   },
   deps: ViewlessDeps
 ): Promise<boolean> {
@@ -618,6 +622,8 @@ export async function spawnHostAssistant(
         agentPresetId: plan.preset?.id,
         agentPresetColor: plan.preset?.color,
         originalAgentPresetId: plan.preset?.id,
+        ...(spec.handbackCode !== undefined ? { handbackCode: spec.handbackCode } : {}),
+        ...(spec.scheduledRun !== undefined ? { scheduledRun: spec.scheduledRun } : {}),
       },
     ]);
     return true;

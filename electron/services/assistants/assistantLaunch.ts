@@ -10,6 +10,7 @@ import {
 import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import type { HelpSessionStartedBy } from "../HelpSessionService.js";
+import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { AssistantLaunchSettings } from "../../../shared/utils/assistantLaunchFlags.js";
 import { READY_SCREEN_LINES, untilAssistantReady } from "./assistantReadiness.js";
@@ -29,6 +30,17 @@ export interface AssistantLaunchRequest {
   /** Absent: this machine's own default among the agents it starts this way. */
   agentId?: string;
   startedBy: HelpSessionStartedBy;
+  /**
+   * A schedule's run (#16169): its reserved terminal id, and its prompt with
+   * the run's handback instruction, in place of the hub's greeting. The spawn
+   * carries the run so the spawn handler registers it.
+   */
+  scheduled?: {
+    terminalId: string;
+    prompt: string;
+    scheduledRun: ScheduledRunRef;
+    handbackCode: string;
+  };
 }
 
 export type AssistantLaunchRefusal = "no-project" | "no-slot" | "launch-failed";
@@ -85,6 +97,8 @@ export interface AssistantLaunchDeps {
       env: Record<string, string>;
       prompt: string;
       agentLaunchFlags: string[];
+      scheduledRun?: ScheduledRunRef;
+      handbackCode?: string;
     }
   ): Promise<boolean>;
   /** Whether the session is still the one running in its lane. */
@@ -163,7 +177,8 @@ export async function startAssistantWithoutView(
   }
   if (!session || slot === undefined) return refused("no-slot");
 
-  const terminalId = `terminal-${randomUUID()}`;
+  const { scheduled } = request;
+  const terminalId = scheduled?.terminalId ?? `terminal-${randomUUID()}`;
   const env: Record<string, string> = {
     DAINTREE_MCP_TOKEN: session.token,
     DAINTREE_PROJECT_ID: project.id,
@@ -175,8 +190,11 @@ export async function startAssistantWithoutView(
       agentId,
       cwd: session.sessionPath,
       env,
-      prompt: HUB_STARTED_ASSISTANT_GREETING,
+      prompt: scheduled?.prompt ?? HUB_STARTED_ASSISTANT_GREETING,
       agentLaunchFlags: await deps.launchFlags(agentId).catch(() => []),
+      ...(scheduled
+        ? { scheduledRun: scheduled.scheduledRun, handbackCode: scheduled.handbackCode }
+        : {}),
     })
     .catch(() => false);
   if (!spawned) {
@@ -206,6 +224,7 @@ export async function startAssistantWithoutView(
     },
     // Only this run, while it still holds its lane, is ever typed into.
     authorized: stillOurs,
+    ...(scheduled ? { greeted: false } : {}),
     now,
     sleep,
   });

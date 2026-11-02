@@ -1,5 +1,6 @@
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import type { ScheduledRun, ScheduledRunTrigger } from "@shared/types/scheduledRuns";
 import { machineTimeZone } from "@shared/utils/cron";
 import { localDayNumber } from "./scheduleWords";
@@ -63,6 +64,11 @@ export function runDetail(run: ScheduledRun): RunDetail | null {
         return reason("Missed while the computer slept or Daintree was closed");
       }
       if (skip.kind === "overlap") return reason("The last run was still going");
+      if (skip.kind === "assistant-sessions-full") {
+        return reason(
+          `All ${MAX_ASSISTANT_SLOTS} of the project's Assistant sessions were in use`
+        );
+      }
       if (skip.error !== null) return reason(`The check command couldn't run: ${skip.error}`);
       if (skip.signal !== null) {
         return reason(`The check command was stopped by signal ${skip.signal}`);
