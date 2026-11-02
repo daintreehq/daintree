@@ -49,6 +49,7 @@ import type { RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { buildFirstPrompt } from "@shared/utils/firstPrompt";
+import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import { resolveRecipeAgentStep } from "@/utils/recipeAgentStep";
 import { getPanelKindConfig, panelKindIsProjectScoped } from "@shared/config/panelKindRegistry";
 import { pluginAgentToolsProblem, recipeRunNeedsAgentTools } from "@/utils/pluginRecipeAgentTools";
@@ -256,6 +257,11 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     initialPrompt: isAgent ? initialPrompt : undefined,
     devCommand: terminal.type === "dev-preview" ? devCommand : undefined,
     args,
+    // Keep is the default and never stored; only an agent step can be armed.
+    whenDone:
+      isAgent && (terminal.whenDone === "background" || terminal.whenDone === "close")
+        ? terminal.whenDone
+        : undefined,
     // Session-scoped overrides must never leak into disk-saved recipes.
     agentModelId: undefined,
     agentLaunchFlags: undefined,
@@ -1501,8 +1507,20 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             const finalEnv =
               baseEnv || terminal.env ? { ...baseEnv, ...terminal.env } : terminal.env;
 
+            // A step's When done (#16172) is armed on this launch alone, its
+            // prompt the request a fresh code answers. A step that launches
+            // with no prompt has no request to answer; its pane is armed from
+            // the menu like any other.
+            const whenDone =
+              initialPrompt && (terminal.whenDone === "background" || terminal.whenDone === "close")
+                ? terminal.whenDone
+                : undefined;
+            const handbackCode = whenDone !== undefined ? mintHandbackCode() : undefined;
             const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-              initialPrompt,
+              initialPrompt:
+                handbackCode !== undefined && initialPrompt
+                  ? appendHandbackInstruction(initialPrompt, handbackCode, "run")
+                  : initialPrompt,
               clipboardDirectory,
               modelId: terminal.agentModelId,
               // An in-memory recipe's captured flags can carry a standing
@@ -1553,6 +1571,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               env: finalEnv,
               exitBehavior: terminal.exitBehavior,
               ...(firstPrompt && { launchPrompt: firstPrompt }),
+              ...(handbackCode !== undefined && whenDone !== undefined && { handbackCode, whenDone }),
               spawnedBy,
               focusPolicy,
               bypassLimits: true,

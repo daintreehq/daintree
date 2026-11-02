@@ -96,6 +96,12 @@ export interface TerminalSpawnOptions {
    */
   handbackCode?: string;
   /**
+   * A recipe step's When done (#16172): main arms this launch with it, its
+   * `handbackCode` as the outstanding request, when the launch is a fresh agent
+   * terminal. Never persisted, so a restart doesn't re-arm.
+   */
+  whenDone?: "background" | "close";
+  /**
    * The pane already has its first-prompt record, or this launch hands the
    * agent the prompt that becomes it (#15521). Absent, the first send written
    * to the run is offered as its record.

@@ -12,6 +12,7 @@ import { peekDriveLeaseService } from "../DriveLeaseService.js";
 import { events } from "../events.js";
 import { projectStore } from "../ProjectStore.js";
 import type { PtyIncarnationExit, PtyIncarnationLost } from "../PtyClient.js";
+import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import { getLifecycleLedger } from "../pty/lifecycleLedger.js";
 import {
   closeTerminalKeepingSession,
@@ -29,6 +30,7 @@ import {
   TerminalWhenDone,
   type ArmedTerminal,
   type WhenDoneIncarnation,
+  type WhenDoneLaunch,
   type WhenDoneOutcome,
 } from "./TerminalWhenDone.js";
 
@@ -187,6 +189,8 @@ function startListening(target: TerminalWhenDone): void {
   const onLost = (fact: PtyIncarnationLost) =>
     target.handleIncarnationLost(fact.terminalId, fact.launchGeneration);
   const onTerminalLost = (id: string) => target.handleExit(id);
+  const onSpawnResult = (id: string, result: SpawnResult) => target.handleSpawnResult(id, result);
+  ptyClient?.on("spawn-result", onSpawnResult);
   ptyClient?.on("incarnation-exit", onExit);
   ptyClient?.on("incarnation-lost", onLost);
   ptyClient?.on("terminal-lost", onTerminalLost);
@@ -194,6 +198,7 @@ function startListening(target: TerminalWhenDone): void {
   stopListening = () => {
     offReport();
     offAgentExit();
+    ptyClient?.off("spawn-result", onSpawnResult);
     ptyClient?.off("incarnation-exit", onExit);
     ptyClient?.off("incarnation-lost", onLost);
     ptyClient?.off("terminal-lost", onTerminalLost);
@@ -223,6 +228,14 @@ export function getTerminalWhenDone(): TerminalWhenDone {
   });
   service = created;
   return created;
+}
+
+/**
+ * Arms a recipe step's agent launch (#16172), called by the spawn handler
+ * right after it sent the spawn, whose result then confirms it.
+ */
+export function armWhenDoneLaunch(launch: WhenDoneLaunch): boolean {
+  return getTerminalWhenDone().armLaunch(launch);
 }
 
 /** The service if anything has used it, for readers that must not create it. */

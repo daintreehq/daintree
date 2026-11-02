@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { FolderGit2, FolderOpen, GitBranch, Globe, Plus, Trash2 } from "lucide-react";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
+import { isAgentRecipeType } from "@shared/types/project";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -56,6 +57,21 @@ function normalizeExitBehavior(t: RecipeTerminal): "" | "keep" | "trash" | "remo
   return value === defaultBehavior ? "" : value;
 }
 
+function normalizeWhenDone(t: RecipeTerminal): RecipeWhenDone | "keep" {
+  return isAgentRecipeType(t.type) && (t.whenDone === "background" || t.whenDone === "close")
+    ? t.whenDone
+    : "keep";
+}
+
+type RecipeWhenDone = NonNullable<RecipeTerminal["whenDone"]>;
+
+// The pane menu's own words (#16171), so a recipe's step and the pane it opens agree.
+const WHEN_DONE_OPTIONS: ReadonlyArray<[RecipeWhenDone | "keep", string]> = [
+  ["keep", "Keep open"],
+  ["background", "Move to background"],
+  ["close", "Close, keeping the session"],
+];
+
 function serializeEditorState(
   name: string,
   terminals: RecipeTerminal[],
@@ -74,6 +90,7 @@ function serializeEditorState(
       args: t.args ?? "",
       devCommand: t.devCommand ?? "",
       exitBehavior: normalizeExitBehavior(t),
+      whenDone: normalizeWhenDone(t),
       env: Object.fromEntries(Object.entries(t.env ?? {}).sort(([a], [b]) => a.localeCompare(b))),
     })),
   });
@@ -131,7 +148,7 @@ function isAgentStep(type: RecipeTerminalType): boolean {
  */
 interface TypeStash {
   commands: Partial<Record<RecipeTerminalType, string | undefined>>;
-  agent?: Pick<RecipeTerminal, "initialPrompt" | "args">;
+  agent?: Pick<RecipeTerminal, "initialPrompt" | "args" | "whenDone">;
   devCommand?: string;
 }
 
@@ -384,7 +401,11 @@ export function RecipeEditor({
     const stash = typeStashRef.current.get(cardKey) ?? { commands: {} };
     stash.commands[prevType] = current.command;
     if (isAgentStep(prevType)) {
-      stash.agent = { initialPrompt: current.initialPrompt, args: current.args };
+      stash.agent = {
+        initialPrompt: current.initialPrompt,
+        args: current.args,
+        whenDone: current.whenDone,
+      };
     }
     if (prevType === "dev-preview") stash.devCommand = current.devCommand;
     typeStashRef.current.set(cardKey, stash);
@@ -396,7 +417,7 @@ export function RecipeEditor({
     // The prompt and arguments are shared by every agent, so an agent-to-agent
     // switch carries the live ones across rather than the stashed ones.
     const agentFields = isAgentStep(prevType)
-      ? { initialPrompt: current.initialPrompt, args: current.args }
+      ? { initialPrompt: current.initialPrompt, args: current.args, whenDone: current.whenDone }
       : (stash.agent ?? { initialPrompt: current.initialPrompt, args: current.args });
     const newTerminals = [...terminals];
     newTerminals[index] = {
@@ -406,6 +427,7 @@ export function RecipeEditor({
       command: stash.commands[newType] ?? "",
       initialPrompt: toAgent ? agentFields.initialPrompt : "",
       args: toAgent ? agentFields.args : "",
+      whenDone: toAgent ? agentFields.whenDone : undefined,
       devCommand: newType === "dev-preview" ? (stash.devCommand ?? current.devCommand) : "",
     };
     setTerminals(newTerminals);
@@ -541,6 +563,52 @@ export function RecipeEditor({
             {ordered.map(([value, label]) => (
               <SelectItem key={value} value={value}>
                 {value === defaultValue ? `${label} (default)` : label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </FormRow>
+    );
+  };
+
+  const whenDoneRow = (index: number, terminal: RecipeTerminal) => {
+    const id = `terminal-when-done-${index}`;
+    const helpId = `terminal-when-done-help-${index}`;
+    // The launch arms the pane only through its prompt, the request the agent
+    // answers (#16172); without one the pane is armed from its menu.
+    const hasPrompt = !!terminal.initialPrompt?.trim();
+    return (
+      <FormRow
+        label="When done"
+        htmlFor={id}
+        hint={hint(
+          helpId,
+          hasPrompt
+            ? "What the terminal does once its agent reports the prompt done"
+            : "Add an initial prompt to set this, or choose When done from the terminal menu once it runs"
+        )}
+      >
+        <Select
+          value={hasPrompt ? normalizeWhenDone(terminal) : "keep"}
+          onValueChange={(value) => {
+            const newTerminals = [...terminals];
+            const current = newTerminals[index];
+            if (!current) return;
+            newTerminals[index] = {
+              ...current,
+              whenDone: value === "background" || value === "close" ? value : undefined,
+            };
+            setTerminals(newTerminals);
+          }}
+          disabled={isSaving || !hasPrompt}
+        >
+          <SelectTrigger id={id} aria-describedby={helpId} className={FIELD_CONTROL_SIZE}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {WHEN_DONE_OPTIONS.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {value === "keep" ? `${label} (default)` : label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -850,6 +918,7 @@ export function RecipeEditor({
                               worktreeId={worktreeId ?? recipe?.worktreeId}
                             />
                           </FormRow>
+                          {whenDoneRow(index, terminal)}
                           {exitBehaviorRow(index, terminal, "terminal-agent-exit-behavior", "keep")}
                         </>
                       )}

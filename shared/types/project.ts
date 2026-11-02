@@ -25,6 +25,7 @@ import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "./ipc/api.js";
+import type { TerminalWhenDone } from "./ipc/terminalWhenDone.js";
 
 /**
  * Project lifecycle status:
@@ -562,6 +563,12 @@ export interface RecipeTerminal {
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely (optional, defaults to "keep") */
   exitBehavior?: PanelExitBehavior;
+  /**
+   * What an agent step's terminal does once its agent reports `done` (#16172):
+   * the When done choice of #16171, armed on the terminal this recipe launches
+   * and on no other. Absent means keep, which is never stored. Agent types only.
+   */
+  whenDone?: Exclude<TerminalWhenDone, "keep">;
   /** Per-panel model override captured at launch (agent types only). Transient — stripped before disk persistence. */
   agentModelId?: string;
   /** Process-level launch flags captured at launch (agent types only). Transient — stripped before disk persistence. */

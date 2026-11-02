@@ -177,6 +177,12 @@ export interface AddPanelOptionsBase {
    * spawn and never stored on the panel — a restart does not re-ask.
    */
   handbackCode?: string;
+  /**
+   * A recipe step's When done (#16172), with `handbackCode` naming the request
+   * its launch prompt carries. Handed to the spawn and never stored on the
+   * panel, so only this launch is armed.
+   */
+  whenDone?: "background" | "close";
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /**
