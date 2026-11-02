@@ -74,7 +74,7 @@ Back in Connection, press **Check setup** on the **Setup check** row. It runs th
 | Encrypted attachment round trip | A test question goes out with a test image, which comes back from the relay intact |
 | Test question to your phones | Your answer reaches this computer and is typed into a terminal |
 
-The test question, **Daintree setup check: did this question reach you?**, has one choice, **Received**. Answer it on your phone within five minutes. Your answer is typed into a diagnostic terminal shown in Connection, which runs no agent and no process, so nothing typed into it can run. Keep the Decisions page open until the check ends: leaving it cancels a check it started. Once a kit is verified and this check passes, the **Setup isn't finished** warning goes away. Press **Check again** whenever you want to rerun it; a failed run makes setup unfinished again.
+The test question, **Daintree setup check: did this question reach you?**, has one choice, **Received**. Answer it on your phone within five minutes. Your answer is typed into a diagnostic terminal shown in Connection, which runs no agent and no process, so nothing typed into it can run. Keep Settings open until the check ends: closing it cancels a check it started, though switching to another Settings tab doesn't. Once a kit is verified and this check passes, the **Setup isn't finished** warning goes away. Press **Check again** whenever you want to rerun it; a failed run makes setup unfinished again.
 
 The check proves one round trip at the time it ran. It doesn't prove that every notification will appear on your lock screen.
 
@@ -110,7 +110,7 @@ Screenshots are given as paths relative to the folder the agent's terminal was l
 
 ### What gets typed
 
-Daintree types your answer only into the run that asked, as Daintree observed it: the same terminal, the same launch, and the agent session it recorded. If the terminal was closed or relaunched, Daintree restarted, or a different agent session is seen there, the answer isn't typed there. For Claude and Codex, Daintree can then resume the recorded session, or find it already open in another terminal, and deliver there; otherwise the answer needs attention. Session changes made inside the agent, such as Claude's `/clear` or `/resume`, aren't always observed.
+Daintree types your answer only into the run that asked, as Daintree observed it: the same terminal, the same launch, and the agent session it recorded. If the terminal was closed or relaunched, Daintree restarted, or a different agent session is seen there, the answer isn't typed in directly. For Claude and Codex, Daintree can then resume the recorded session, or find a terminal already running it in the same worktree (the original one after a restart included), and deliver there; otherwise the answer needs attention. Session changes made inside the agent, such as Claude's `/clear` or `/resume`, aren't always observed.
 
 Daintree waits until it sees the agent at its prompt, never while it's seen working, waiting on an approval, or showing a question or an error, and drops the trailing Enter if you type into the terminal meanwhile. When several answers are waiting for one terminal, they go in the order their questions were asked, possibly in one paste under one preface; an answered question doesn't wait for an earlier one that's still unanswered.
 
@@ -152,7 +152,7 @@ An agent's pane header shows a Decisions chip while it has a question out or an 
 | `q-4` with a warning triangle | Answer needs attention, or answer may or may not have been delivered |
 | `3 · 1 delivering` | Several questions, and how many answers or expiry notices are waiting to be typed in on their own |
 
-The tooltip gives the whole breakdown, and the chip's popover lists each question, worst first, with the reason in plain words. Answers that need attention aren't typed in on their own. In Canopy, they put their run in the needs-you tier with **Answer needs attention**, unless you parked, snoozed or archived it there.
+The tooltip gives the whole breakdown, and the chip's popover lists each question, worst first, with the reason in plain words. Answers that need attention aren't typed in on their own. In Canopy, they put their run in the needs-you tier with **Answer needs attention**, unless you parked, snoozed or archived it there, or replied to it there and that reply still stands.
 
 ### Answers that need attention
 
@@ -228,4 +228,4 @@ Questions, answers and their delivery records are stored in Daintree's local dat
 | **Delete relay data** (Data) | Permanently deletes the questions, answers and attachments the relay stores, after you type the relay's host name (such as `decisions.example.workers.dev`). The Worker, its paired devices, this computer's history and anything already on your devices stay. |
 | **Delete local data** (Data) | Deletes this computer's decision history, Decisions keys and record of the relay. Nothing on the relay changes, and paired devices stay paired. |
 
-Deleting local data isn't secure erasure. Deleted rows, sealed under keys that are gone, can remain in the database's free pages, its write-ahead log and the app database's rolling backup until those are rewritten, and filesystem snapshots and exports you made are untouched.
+Deleting local data isn't secure erasure. Deleted rows, including the unencrypted ids, session ids and folder paths stored beside the sealed question and answer text, can remain in the database's free pages, its write-ahead log and the app database's rolling backup until those are rewritten. Filesystem snapshots, exports you made and any other copy of your keys, such as a recovery kit, are untouched.
