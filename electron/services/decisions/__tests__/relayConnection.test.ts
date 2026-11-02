@@ -1113,18 +1113,21 @@ describe("RelayConnection", () => {
   });
 
   it("asks locally while an attempt is still starting, and publishes once it is live", async () => {
-    // The attempt's bridge reconciles what an earlier run left before it runs;
-    // until it has, the question goes to the store alone.
+    // The attempt's bridge seals what an earlier run stored, reading every
+    // question, before it runs; until it has, the question goes to the store
+    // alone. (Its store view shows it no injection intents to reconcile.)
     let startup!: () => void;
     const started = new Promise<void>((resolve) => {
       startup = resolve;
     });
     let recovering = false;
     class StartingStore extends MemoryLocalStore {
-      override async openIntents() {
-        recovering = true;
-        await started;
-        return super.openIntents();
+      override async listQuestions() {
+        if (!recovering) {
+          recovering = true;
+          await started;
+        }
+        return super.listQuestions();
       }
     }
     const store = new StartingStore();
