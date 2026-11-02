@@ -504,3 +504,103 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.title).toBe("Terminal");
   });
 });
+
+describe("accounts (#16040)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+
+  it("sets the account's folder after the preset's env, so the account wins for its own variable", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({
+          accounts: [COMPANY],
+          accountId: "company",
+          presetId: "zai",
+          customPresets: [
+            {
+              id: "zai",
+              name: "Z.ai",
+              env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: "/legacy" },
+            },
+          ],
+        }),
+        options: { env: { DAINTREE_MCP_TOKEN: "t", claude_config_dir: "/caller" } },
+      })
+    );
+
+    expect(plan.account?.id).toBe("company");
+    expect(plan.preset?.id).toBe("zai");
+    expect(plan.env).toEqual({
+      ANTHROPIC_BASE_URL: "https://api.z.ai",
+      DAINTREE_MCP_TOKEN: "t",
+      CLAUDE_CONFIG_DIR: COMPANY.configDir,
+    });
+  });
+
+  it("prefers the worktree's account over the agent's, and the caller's over both", async () => {
+    const settings = settingsWith({
+      accounts: [COMPANY, PERSONAL],
+      accountId: "personal",
+      worktreeAccounts: { "/repo-wt/a": "company" },
+    });
+
+    const scoped = await buildAgentLaunchPlan(input({ settings }));
+    expect(scoped.account?.id).toBe("company");
+
+    const elsewhere = await buildAgentLaunchPlan(input({ settings, worktreeId: "/repo-wt/b" }));
+    expect(elsewhere.account?.id).toBe("personal");
+
+    const requested = await buildAgentLaunchPlan(
+      input({ settings, options: { accountId: "personal" } })
+    );
+    expect(requested.account?.id).toBe("personal");
+    expect(requested.env?.CLAUDE_CONFIG_DIR).toBe(PERSONAL.configDir);
+  });
+
+  it("launches on the default login for an explicit null and for a worktree saved as null", async () => {
+    const settings = settingsWith({
+      accounts: [COMPANY],
+      accountId: "company",
+      worktreeAccounts: { "/repo-wt/a": null },
+    });
+
+    const scoped = await buildAgentLaunchPlan(input({ settings }));
+    expect(scoped.account).toBeUndefined();
+    expect(scoped.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+
+    const explicit = await buildAgentLaunchPlan(
+      input({ settings, worktreeId: "/repo-wt/b", options: { accountId: null } })
+    );
+    expect(explicit.account).toBeUndefined();
+  });
+
+  it("refuses a launch whose account is gone instead of running it on another login", async () => {
+    const getCliDetail = vi.fn(async () => undefined);
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({ accounts: [COMPANY], accountId: "removed" }),
+        getCliDetail,
+      })
+    );
+
+    expect(plan.missingAccountId).toBe("removed");
+    expect(plan.command).toBeUndefined();
+    expect(plan.env).toBeUndefined();
+    expect(getCliDetail).not.toHaveBeenCalled();
+  });
+
+  it("ignores accounts for an agent whose CLI can't hold one per launch", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        agentId: "cursor",
+        agentConfig: getEffectiveAgentConfig("cursor"),
+        settings: {
+          agents: { cursor: { accounts: [COMPANY], accountId: "company" } },
+        } as unknown as AgentSettings,
+      })
+    );
+
+    expect(plan.missingAccountId).toBeUndefined();
+    expect(plan.account).toBeUndefined();
+  });
+});

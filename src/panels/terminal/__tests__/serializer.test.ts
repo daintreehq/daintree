@@ -161,6 +161,26 @@ describe("serializePtyPanel — launch env (#10922)", () => {
   });
 });
 
+describe("serializePtyPanel — account (#16040)", () => {
+  it("writes the account beside the launch env that holds its folder", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({
+        agentAccountId: "company",
+        env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-company" },
+      })
+    );
+    expect(snapshot.agentAccountId).toBe("company");
+    expect(snapshot.env).toEqual({ CLAUDE_CONFIG_DIR: "/Users/me/.claude-company" });
+  });
+
+  it("drops the account when no env survives to carry its folder", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({ agentAccountId: "company", env: { PATH: "/evil" } as Record<string, string> })
+    );
+    expect("agentAccountId" in snapshot).toBe(false);
+  });
+});
+
 // "directing" is a renderer-only ephemeral state owned by
 // TerminalAgentStateController (#5832). Persisting it could resurrect a stuck
 // indicator on the next reload because setAgentState explicitly ignores

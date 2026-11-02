@@ -2517,6 +2517,139 @@ describe("restartTerminalOnPreset", () => {
   });
 });
 
+describe("accounts on restart and switch (#16040)", () => {
+  const presets: Record<string, { id: string; name: string; env?: Record<string, string> }> = {
+    zai: { id: "zai", name: "Z.ai", env: { ANTHROPIC_BASE_URL: "https://api.z.ai" } },
+    legacy: { id: "legacy", name: "Legacy", env: { CLAUDE_CONFIG_DIR: "/home/me/.claude-legacy" } },
+  };
+  const COMPANY = "/home/me/.claude-company";
+  const PERSONAL = "/home/me/.claude-personal";
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    vi.clearAllMocks();
+    getMergedPresetMock.mockImplementation((_agentId: string, presetId: string) =>
+      presetId ? presets[presetId] : undefined
+    );
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      environmentVariables: {},
+    });
+  });
+
+  function seed(overrides: Partial<PtyPanelData> = {}): void {
+    const pane: PtyPanelData = {
+      ...agentPanelBase,
+      agentState: "waiting",
+      agentPresetId: "zai",
+      originalPresetId: "zai",
+      agentSessionId: "sess-1",
+      agentAccountId: "company",
+      env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: COMPANY },
+      ...overrides,
+    };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+  }
+
+  function pane(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  it("keeps the pane's own account on a plain restart, whatever its preset now sets", async () => {
+    seed({ agentPresetId: "legacy", originalPresetId: "legacy" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    expect(pane().agentAccountId).toBe("company");
+  });
+
+  it("keeps the pane's account across a preset switch", async () => {
+    seed();
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "legacy");
+
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    expect(pane().env).toEqual({ CLAUDE_CONFIG_DIR: COMPANY });
+    expect(pane().agentAccountId).toBe("company");
+  });
+
+  it("switches only the account: same preset, a new conversation, the folder saved for restore", async () => {
+    seed({ title: "Claude [Z.ai]", titleMode: "custom" });
+
+    const result = await usePanelStore
+      .getState()
+      .restartTerminalOnAccount("test-1", {
+        id: "personal",
+        envVar: "CLAUDE_CONFIG_DIR",
+        configDir: PERSONAL,
+      });
+
+    expect(result).toEqual({ success: true });
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
+    expect(payload.env.ANTHROPIC_BASE_URL).toBe("https://api.z.ai");
+    expect(payload.agentPresetId).toBe("zai");
+    expect(payload.agentSessionId).toBeUndefined();
+    expect(pane()).toMatchObject({
+      agentAccountId: "personal",
+      agentPresetId: "zai",
+      originalPresetId: "zai",
+      title: "Claude [Z.ai]",
+      env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: PERSONAL },
+    });
+    expect(pane().agentSessionId).toBeUndefined();
+  });
+
+  it("moves a pane back to the default login, leaving the variable to its preset", async () => {
+    seed();
+
+    await usePanelStore.getState().restartTerminalOnAccount("test-1", null);
+
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(pane().agentAccountId).toBeUndefined();
+    expect(pane().env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai" });
+  });
+
+  it("switches the account of a pane with no preset", async () => {
+    seed({ agentPresetId: undefined, originalPresetId: undefined, env: undefined });
+
+    const result = await usePanelStore
+      .getState()
+      .restartTerminalOnAccount("test-1", {
+        id: "personal",
+        envVar: "CLAUDE_CONFIG_DIR",
+        configDir: PERSONAL,
+      });
+
+    expect(result).toEqual({ success: true });
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
+    expect(pane().agentPresetId).toBeUndefined();
+  });
+
+  it("puts the old account back, persisted, when the respawn fails", async () => {
+    seed();
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const result = await usePanelStore
+      .getState()
+      .restartTerminalOnAccount("test-1", {
+        id: "personal",
+        envVar: "CLAUDE_CONFIG_DIR",
+        configDir: PERSONAL,
+      });
+
+    expect(result.success).toBe(false);
+    expect(pane().agentAccountId).toBe("company");
+    expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    expect(pane().restartError?.context?.phase).toBe("account-switch");
+  });
+});
+
 describe("restartTerminal and the run's first prompt (#14592)", () => {
   const firstPrompt = { text: "Fix the login bug", via: "launch" as const, at: 1_000 };
   const launched = {
