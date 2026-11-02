@@ -18,6 +18,8 @@ export const DECISIONS_METHOD_CHANNELS = {
   deleteLocalData: "decisions:delete-local-data",
   getPolicy: "decisions:get-policy",
   setProxyAllowlisted: "decisions:set-proxy-allowlisted",
+  exportRecoveryKit: "decisions:export-recovery-kit",
+  verifyRecoveryKit: "decisions:verify-recovery-kit",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

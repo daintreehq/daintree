@@ -382,3 +382,67 @@ describe("DecisionsConnectionSection connection state", () => {
     expect(statusLine()).toContain("keys couldn't be read");
   });
 });
+
+describe("DecisionsConnectionSection setup unfinished", () => {
+  beforeEach(() => {
+    checkRelay.mockReset();
+    Object.defineProperty(window, "electron", {
+      value: { decisions: { checkRelay } },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  function statusRow(): string {
+    return document.getElementById("decisions-connection-status")?.textContent ?? "";
+  }
+
+  it("warns that setup is unfinished until a recovery kit is verified, keeping the connection's row", () => {
+    const nextAttemptAt = new Date(2026, 10, 2, 14, 5, 9).getTime();
+    renderSection({ state: "reconnecting", relayOrigin: ORIGIN, nextAttemptAt });
+
+    expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+    expect(screen.getByText(/none of it can be recovered/)).toBeTruthy();
+    expect(statusRow()).toContain("Reconnecting to decisions.example.workers.dev");
+    expect(statusRow()).toContain("Next attempt at");
+  });
+
+  it("takes the person to the recovery kit from the warning", () => {
+    const onFinishSetup = vi.fn();
+    render(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "not-connected", relayOrigin: ORIGIN }}
+          onFinishSetup={onFinishSetup}
+        />
+      </TooltipProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save recovery kit" }));
+
+    expect(onFinishSetup).toHaveBeenCalledOnce();
+  });
+
+  it("warns of nothing once a kit is verified, or before any relay is set up", () => {
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderSection({ state: "not-connected" });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+  });
+
+  it("leaves a revoked relay, or one that can't be used, to say so on its own row", () => {
+    renderSection({ state: "revoked", relayOrigin: ORIGIN });
+    expect(statusRow()).toContain("Revoked by decisions.example.workers.dev");
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, problem: "keys" });
+    expect(statusRow()).toContain("keys couldn't be read");
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+  });
+});

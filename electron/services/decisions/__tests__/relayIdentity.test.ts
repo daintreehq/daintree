@@ -256,12 +256,14 @@ describe("claimDecisionsRelay", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
+    // A claim has no kit yet, so setup still needs one saved and verified.
     expect(outcome).toEqual({
       identity: expect.objectContaining({
         relayOrigin: ORIGIN,
         installationId: relay.state.owner!.installationId,
         label: "Daintree",
       }),
+      kitVerified: false,
     });
     expect(memory.stored).not.toBeNull();
     expect(memory.stored!.claimed).toBeUndefined();
@@ -416,6 +418,7 @@ describe("claimDecisionsRelay", () => {
 
     expect(finished).toEqual({
       identity: expect.objectContaining({ relayOrigin: ORIGIN, deviceId: stagedDevice }),
+      kitVerified: false,
     });
     expect(memory.stored?.claimed).toBeUndefined();
   });
@@ -619,7 +622,10 @@ describe("claimDecisionsRelay", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
     expect(memory.keys.confirmWeakStorage).toHaveBeenCalledOnce();
-    expect(accepted).toEqual({ identity: expect.objectContaining({ relayOrigin: ORIGIN }) });
+    expect(accepted).toEqual({
+      identity: expect.objectContaining({ relayOrigin: ORIGIN }),
+      kitVerified: false,
+    });
   });
 
   it("takes up a sealed identity for the same relay without asking the relay", async () => {
@@ -633,7 +639,7 @@ describe("claimDecisionsRelay", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
-    expect(outcome).toEqual({ identity: memory.stored!.config });
+    expect(outcome).toEqual({ identity: memory.stored!.config, kitVerified: false });
     expect(relay.fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -698,7 +704,8 @@ describe("restoreDecisionsIdentity", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
-    expect(outcome).toEqual({ identity: identity.config });
+    // The kit holds exactly what was sealed, so it counts as verified.
+    expect(outcome).toEqual({ identity: identity.config, kitVerified: true });
     expect(memory.stored).toEqual(identity);
     expect(relay.calls.map((call) => call.path)).toEqual([
       "/health",
@@ -889,9 +896,24 @@ describe("restoreDecisionsIdentity", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
-    expect(outcome).toEqual({ identity: identity.config });
+    // The kit lacks the epoch kept here, so it can't count as this computer's kit.
+    expect(outcome).toEqual({ identity: identity.config, kitVerified: false });
     expect(memory.keys.save).not.toHaveBeenCalled();
     expect(memory.stored).toEqual(newer);
+  });
+
+  it("counts the kit as verified when it holds every key already sealed here", async () => {
+    const { relay, identity, kit } = await setup();
+    const memory = memoryKeys();
+    memory.stored = structuredClone(identity);
+
+    const outcome = await restoreDecisionsIdentity(
+      { url: ORIGIN, kit, passphrase: PASSPHRASE },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({ identity: identity.config, kitVerified: true });
+    expect(memory.keys.save).not.toHaveBeenCalled();
   });
 
   it("leaves a sealed copy of the same identity whose keys don't work as it is", async () => {

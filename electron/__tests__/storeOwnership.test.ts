@@ -68,6 +68,12 @@ describe("store ownership derived from the settings catalog", () => {
       proxyAllowlisted: true,
       consentedAt: 1_761_955_200_000,
       revokedAt: 1_761_955_300_000,
+      recoveryKit: {
+        verifiedAt: 1_761_955_300_000,
+        relayOrigin: "https://relay.owner.example",
+        installationId: "owner-installation",
+        deviceId: "owner-desktop-01",
+      },
     };
     const hostCopy: DecisionsSettings = {
       enabled: false,
@@ -78,6 +84,7 @@ describe("store ownership derived from the settings catalog", () => {
       proxyAllowlisted: false,
       consentedAt: null,
       revokedAt: null,
+      recoveryKit: null,
     };
     expect(mergeByOwnership(owners, hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual(owners);
     expect(splitByOwnership(hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual({

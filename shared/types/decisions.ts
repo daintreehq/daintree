@@ -44,6 +44,21 @@ export interface DecisionsSettings {
    * that identity again; disconnecting clears it with the relay's ids.
    */
   revokedAt: number | null;
+  /**
+   * The last time a recovery kit was verified against this computer's keys
+   * (#16007), and the identity it was verified for. Setup counts as finished
+   * only while it names the relay and ids recorded above; null until then.
+   */
+  recoveryKit: DecisionsRecoveryKitRecord | null;
+}
+
+/** A verified recovery kit, recorded by the identity it held. Never the kit or its passphrase. */
+export interface DecisionsRecoveryKitRecord {
+  /** Epoch ms. */
+  verifiedAt: number;
+  relayOrigin: string;
+  installationId: string;
+  deviceId: string;
 }
 
 /**
@@ -101,6 +116,12 @@ export interface DecisionsStatus {
    * answer main gave without Decisions loaded, which only an off switch does.
    */
   revision?: number;
+  /**
+   * When a recovery kit was last verified for the relay set up here (#16007).
+   * Absent while setup is unfinished: no kit has been verified for this
+   * identity, or its key file is known to be gone.
+   */
+  recoveryKitVerifiedAt?: number;
 }
 
 /** How strictly a question needs a person: only a person, or a proxy answer may do. */
@@ -405,6 +426,58 @@ export type DecisionsLocalDeleteResult =
   | { result: "deleted"; status: DecisionsStatus }
   | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" }
   | { result: "incomplete"; erased: boolean | null; status: DecisionsStatus };
+
+/**
+ * Saving a recovery kit for this computer's identity (#16007). The
+ * passphrase locks the file, and is kept nowhere after it does.
+ */
+export interface ExportDecisionsRecoveryKitPayload {
+  passphrase: string;
+}
+
+/** Checking a saved kit file: its text and passphrase, neither kept after the check. */
+export interface VerifyDecisionsRecoveryKitPayload {
+  kit: string;
+  passphrase: string;
+}
+
+/**
+ * Why there was no identity to save a kit of, or check one against.
+ * `not-set-up`: no relay is recorded. `keys-missing`: none are sealed here.
+ * `keys-mismatch`: the sealed keys aren't a working, confirmed owner identity
+ * for the recorded relay.
+ */
+export type DecisionsKitIdentityProblem = "not-set-up" | "keys-missing" | "keys-mismatch";
+
+/** Why a kit didn't verify. Nothing was recorded for any of them. */
+export type DecisionsKitCheckRefusal =
+  /** Not a Decisions recovery kit, or one whose keys don't work. */
+  | "not-a-kit"
+  /** The passphrase didn't open it, or the file is damaged. */
+  | "wrong-passphrase"
+  /** A kit, but of another identity than the one set up here. */
+  | "another-identity"
+  /** This identity's kit, without every key this computer holds now. */
+  | "missing-epochs";
+
+type DecisionsKitStorageFailure = Extract<DecisionsConnectResult, { result: "key-storage" }>;
+
+/**
+ * What saving a recovery kit observed. Saving alone never finishes setup:
+ * the saved file has to be verified.
+ */
+export type DecisionsKitExportResult =
+  | { result: "saved"; fileName: string }
+  | { result: "cancelled" }
+  | { result: "no-identity"; reason: DecisionsKitIdentityProblem }
+  | DecisionsKitStorageFailure;
+
+/** What checking a kit file observed. Only `verified` changed the setting. */
+export type DecisionsKitVerifyResult =
+  | { result: "verified"; status: DecisionsStatus }
+  | { result: "kit-refused"; reason: DecisionsKitCheckRefusal }
+  | { result: "no-identity"; reason: DecisionsKitIdentityProblem }
+  | DecisionsKitStorageFailure;
 
 /**
  * How far an answer has got on its way into the terminal, as the client

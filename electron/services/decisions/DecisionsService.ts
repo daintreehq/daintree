@@ -222,6 +222,11 @@ export class DecisionsService {
     if (this.settings !== null && !this.disposed) this.reconcileConnection();
   }
 
+  /** Where this lifetime's sealed keys live, read or not. */
+  getKeyFilePath(): string {
+    return this.keyFilePath();
+  }
+
   /**
    * Whether the key file exists, from its presence alone: no keychain is
    * asked and nothing is opened. Anything there but a missing file counts.

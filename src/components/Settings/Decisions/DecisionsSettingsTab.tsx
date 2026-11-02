@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useDecisions } from "./useDecisions";
 import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
-import { DecisionsConnectionSection } from "./DecisionsConnectionSection";
+import { DecisionsConnectionSection, setupUnfinished } from "./DecisionsConnectionSection";
 import { DecisionsDevicesSection } from "./DecisionsDevicesSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
@@ -25,6 +26,30 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   useEffect(() => holdRelayUrlRequests(), []);
   const { status, pending, saveFailure } = decisions;
   const [consentOpen, setConsentOpen] = useState(false);
+  // A request for the recovery kit's passphrase field, until Data has focused it.
+  const [kitFocusRequest, setKitFocusRequest] = useState(0);
+  const askForKit = () => setKitFocusRequest((count) => count + 1);
+  const shownBefore = useRef<DecisionsStatus | null>(null);
+
+  // A relay newly set up here and not yet verified asks for its recovery kit
+  // next, whether the setup's own answer or a status push showed it first.
+  // Opening Settings on an unfinished setup, or turning Decisions on with
+  // one, asks nothing by itself.
+  useEffect(() => {
+    const before = shownBefore.current;
+    shownBefore.current = status;
+    // Off unmounts Data, so nothing asked before it carries over to turning on.
+    if (status?.state === "off") setKitFocusRequest(0);
+    else if (
+      before !== null &&
+      before.state !== "off" &&
+      before.relayOrigin === undefined &&
+      status !== null &&
+      setupUnfinished(status)
+    ) {
+      setKitFocusRequest((count) => count + 1);
+    }
+  }, [status]);
 
   const on = status !== null && status.state !== "off";
   // One read for the two sections it feeds, so one Retry recovers both.
@@ -85,6 +110,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             locked={pending !== null}
             onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
             onClose={onClose}
+            onFinishSetup={askForKit}
           />
           <DecisionsDevicesSection status={status} locked={pending !== null} />
           <DecisionsQuestionsSection policy={policy} />
@@ -94,6 +120,9 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             status={status}
             locked={pending !== null}
             onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+            onStatus={decisions.applyStatus}
+            kitFocusRequest={kitFocusRequest}
+            onKitFocused={() => setKitFocusRequest(0)}
           />
         </>
       )}

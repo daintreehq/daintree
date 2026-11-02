@@ -3,6 +3,8 @@ import type {
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
   DecisionsExportResult,
+  DecisionsKitExportResult,
+  DecisionsKitVerifyResult,
   DecisionsLocalDeleteResult,
   DecisionsPolicy,
   DecisionsRelayCheck,
@@ -10,10 +12,13 @@ import type {
   DecisionsStatus,
   DeleteDecisionsRelayDataPayload,
   ExportDecisionsDataPayload,
+  ExportDecisionsRecoveryKitPayload,
   PaneDecisionState,
   RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
+  VerifyDecisionsRecoveryKitPayload,
 } from "../../../../shared/types/decisions.js";
+import type { IpcContext } from "../../types.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -79,6 +84,22 @@ const decisionsEntry = vi.hoisted(() => ({
     maxQuestionExpiryMs: 2,
     revision: 1,
   })),
+  // Asks for a path as the real entry does, and answers with what it was given.
+  exportRecoveryKit: vi.fn(
+    async (
+      _payload: ExportDecisionsRecoveryKitPayload,
+      choosePath: (defaultName: string) => Promise<string | null>
+    ): Promise<DecisionsKitExportResult> => {
+      const path = await choosePath("decisions-recovery-kit-relay.example.com.json");
+      return path === null ? { result: "cancelled" } : { result: "saved", fileName: path };
+    }
+  ),
+  verifyRecoveryKit: vi.fn(
+    async (_payload: VerifyDecisionsRecoveryKitPayload): Promise<DecisionsKitVerifyResult> => ({
+      result: "verified",
+      status: { state: "not-connected", recoveryKitVerifiedAt: 1 },
+    })
+  ),
 }));
 const dialogMock = vi.hoisted(() => ({
   showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
@@ -86,7 +107,8 @@ const dialogMock = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: dialogMock }));
+// The export ops take their asking window from the context, which finds none here.
+vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: dialogMock, BrowserWindow: {} }));
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) => (key === "decisions" ? saved.value : undefined)),
@@ -108,6 +130,8 @@ vi.mock("../../../services/decisions/index.js", () => {
     deleteLocalData: decisionsEntry.deleteLocalData,
     getDecisionsPolicy: decisionsEntry.getDecisionsPolicy,
     setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
+    exportRecoveryKit: decisionsEntry.exportRecoveryKit,
+    verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -174,6 +198,13 @@ const deleteLocalData = decisionsNamespace.ops.deleteLocalData
   .handler as unknown as () => Promise<DecisionsLocalDeleteResult>;
 const EXPORT: ExportDecisionsDataPayload = { passphrase: "a long export passphrase" };
 const RELAY_ORIGIN = "https://relay.example.com";
+const exportRecoveryKit = decisionsNamespace.ops.exportRecoveryKit.handler as unknown as (
+  ctx: Pick<IpcContext, "senderWindow">,
+  payload: ExportDecisionsRecoveryKitPayload
+) => Promise<DecisionsKitExportResult>;
+const verifyRecoveryKit = decisionsNamespace.ops.verifyRecoveryKit.handler as unknown as (
+  payload: VerifyDecisionsRecoveryKitPayload
+) => Promise<DecisionsKitVerifyResult>;
 
 const SECRET = "claim-secret-0123456789abcdef";
 const PASSPHRASE = "correct horse battery staple";
@@ -199,6 +230,8 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
   CHANNELS.DECISIONS_GET_POLICY,
   CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
+  CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
+  CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
 ];
 
 describe("decisions IPC", () => {
@@ -215,6 +248,8 @@ describe("decisions IPC", () => {
     decisionsEntry.exportData.mockClear();
     decisionsEntry.deleteRelayData.mockClear();
     decisionsEntry.deleteLocalData.mockClear();
+    decisionsEntry.exportRecoveryKit.mockClear();
+    decisionsEntry.verifyRecoveryKit.mockClear();
     dialogMock.showSaveDialog.mockClear();
     decisionsEntry.getDecisionsPolicy.mockClear();
     decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
@@ -361,6 +396,35 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.evaluated).toBe(0);
     expect(decisionsEntry.libraries).toBe(0);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("refuses to save or verify a recovery kit while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }]) {
+      saved.value = value;
+
+      await expect(
+        exportRecoveryKit({ senderWindow: null }, { passphrase: PASSPHRASE })
+      ).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(
+        verifyRecoveryKit({ kit: '{"v":1}', passphrase: PASSPHRASE })
+      ).rejects.toMatchObject({ code: "PERMISSION" });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(dialogMock.showSaveDialog).not.toHaveBeenCalled();
+  });
+
+  it("refuses to save or verify a recovery kit once quit has sealed the loader", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(
+      exportRecoveryKit({ senderWindow: null }, { passphrase: PASSPHRASE })
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(
+      verifyRecoveryKit({ kit: '{"v":1}', passphrase: PASSPHRASE })
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(decisionsEntry.evaluated).toBe(0);
   });
 
   it("refuses to claim, restore or disconnect once quit has sealed the loader", async () => {
@@ -681,5 +745,112 @@ describe("decisions IPC", () => {
       consentedAt: 1_761_955_200_000,
     });
     expect(decisionsEntry.setDecisionsEnabled).not.toHaveBeenCalled();
+  });
+
+  it("saves a recovery kit through a save dialog on the window that asked", async () => {
+    saved.value = { enabled: true };
+    const window = { isDestroyed: () => false };
+    dialogMock.showSaveDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePath: "/chosen/kit.json",
+    });
+
+    await expect(
+      exportRecoveryKit({ senderWindow: window as never }, { passphrase: PASSPHRASE })
+    ).resolves.toEqual({ result: "saved", fileName: "/chosen/kit.json" });
+
+    expect(decisionsEntry.exportRecoveryKit).toHaveBeenCalledWith(
+      { passphrase: PASSPHRASE },
+      expect.any(Function)
+    );
+    expect(dialogMock.showSaveDialog).toHaveBeenCalledExactlyOnceWith(
+      window,
+      expect.objectContaining({ defaultPath: "decisions-recovery-kit-relay.example.com.json" })
+    );
+    expect(JSON.stringify(dialogMock.showSaveDialog.mock.calls)).not.toContain(PASSPHRASE);
+  });
+
+  it("opens the dialog on its own when the asking window is gone, and passes on a cancel", async () => {
+    saved.value = { enabled: true };
+    dialogMock.showSaveDialog.mockResolvedValueOnce({ canceled: true });
+
+    await expect(
+      exportRecoveryKit(
+        { senderWindow: { isDestroyed: () => true } as never },
+        { passphrase: PASSPHRASE }
+      )
+    ).resolves.toEqual({ result: "cancelled" });
+    expect(dialogMock.showSaveDialog).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ title: expect.any(String) })
+    );
+  });
+
+  it("verifies a recovery kit through Decisions itself", async () => {
+    saved.value = { enabled: true };
+    const payload = { kit: '{"v":1}', passphrase: PASSPHRASE };
+
+    await expect(verifyRecoveryKit(payload)).resolves.toMatchObject({ result: "verified" });
+    expect(decisionsEntry.verifyRecoveryKit).toHaveBeenCalledExactlyOnceWith(payload);
+  });
+
+  it("takes a kit's passphrase only at the library's floor and within bounds", () => {
+    const exporting = decisionsNamespace.ops.exportRecoveryKit.schema as SafeParse;
+    const verifying = decisionsNamespace.ops.verifyRecoveryKit.schema as SafeParse;
+
+    expect(exporting.safeParse({ passphrase: "x".repeat(12) }).success).toBe(true);
+    for (const value of [
+      { passphrase: "x".repeat(11) },
+      { passphrase: "x".repeat(1025) },
+      { passphrase: PASSPHRASE, extra: true },
+      {},
+    ]) {
+      expect(exporting.safeParse(value).success).toBe(false);
+    }
+    expect(exporting.safeParse({ passphrase: "x".repeat(1024) }).success).toBe(true);
+    expect(verifying.safeParse({ kit: '{"v":1}', passphrase: "x" }).success).toBe(true);
+    expect(verifying.safeParse({ kit: '{"v":1}', passphrase: "x".repeat(1024) }).success).toBe(
+      true
+    );
+    for (const value of [
+      { kit: "", passphrase: PASSPHRASE },
+      { kit: "x".repeat(256 * 1024 + 1), passphrase: PASSPHRASE },
+      { kit: '{"v":1}', passphrase: "" },
+      { kit: '{"v":1}', passphrase: "x".repeat(1025) },
+      { kit: '{"v":1}', passphrase: PASSPHRASE, extra: true },
+    ]) {
+      expect(verifying.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("logs and answers a short kit passphrase without the passphrase itself", async () => {
+    saved.value = { enabled: true };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerDecisionsHandlers();
+    const registered = ipcMainMock.handle.mock.calls.find(
+      ([channel]) => channel === CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT
+    )?.[1] as (event: unknown, payload: unknown) => Promise<unknown>;
+    const short = "elevenchars";
+    try {
+      const failure = await registered(
+        { sender: { id: 1 }, senderFrame: null },
+        {
+          passphrase: short,
+        }
+      ).then(
+        () => null,
+        (error: unknown) => error
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(errors.mock.calls.map(([first]) => String(first))).toContain(
+        `[IPC] Validation failed for ${CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT}:`
+      );
+      expect(String((failure as Error).message)).not.toContain(short);
+      expect(JSON.stringify(errors.mock.calls)).not.toContain(short);
+      expect(decisionsEntry.exportRecoveryKit).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      errors.mockRestore();
+    }
   });
 });

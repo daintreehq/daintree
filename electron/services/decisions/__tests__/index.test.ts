@@ -32,6 +32,8 @@ vi.mock("../dataExport.js", () => ({ buildDecisionsArchive: dataRuns.buildArchiv
 vi.mock("../relayData.js", () => ({ deleteDecisionsRelayData: dataRuns.deleteRelay }));
 // Atomic writes pass through, held while `writeHeld` is set so a test can act mid-write.
 const writes = vi.hoisted(() => ({ held: null as null | Promise<void>, writing: false }));
+// Every kit write, so a test can tell one was never started rather than not yet finished.
+const kitWrites = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock("../../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
   return {
@@ -39,6 +41,7 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
     resilientAtomicWriteFile: async (
       ...args: Parameters<typeof actual.resilientAtomicWriteFile>
     ) => {
+      kitWrites.calls.push(String(args[0]));
       writes.writing = true;
       await writes.held;
       try {
@@ -51,6 +54,13 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
 });
 // The stored rows, in memory: `failErase` makes the next erase fail, once.
 const storedRows = vi.hoisted(() => ({ count: 0, failErase: false }));
+// Making and checking a kit are recoveryKit's; here only how the entry runs them.
+const kitRuns = vi.hoisted(() => ({ make: vi.fn(), check: vi.fn() }));
+vi.mock("../recoveryKit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../recoveryKit.js")>()),
+  makeRecoveryKit: kitRuns.make,
+  checkRecoveryKit: kitRuns.check,
+}));
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
 
@@ -136,6 +146,23 @@ const connections = vi.hoisted(
       keyFileAtStop?: boolean;
     }>
 );
+
+// Holds back the kit's folder check while set, so a test can quit in the middle of it.
+const statGate = vi.hoisted(() => ({
+  hold: null as Promise<void> | null,
+  started: 0,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const stat = async (...args: Parameters<typeof actual.stat>) => {
+    if (statGate.hold) {
+      statGate.started += 1;
+      await statGate.hold;
+    }
+    return actual.stat(...args);
+  };
+  return { ...actual, stat, default: { ...actual, stat } };
+});
 
 vi.mock("../../../store.js", () => ({
   store: {
@@ -234,6 +261,7 @@ import {
   deleteRelayData,
   disconnectRelay,
   exportData,
+  exportRecoveryKit,
   getDecisionsPaneState,
   getDecisionsPolicy,
   getDecisionsService,
@@ -244,6 +272,7 @@ import {
   setDecisionsProxyAllowlisted,
   startDecisionsIfEnabled,
   stopDecisions,
+  verifyRecoveryKit,
 } from "../index.js";
 
 const RELAY = {
@@ -272,6 +301,11 @@ describe("Decisions entry", () => {
     storedRows.failErase = false;
     writes.held = null;
     rmSync(`${keyFile.path}.erasing`, { force: true });
+    kitRuns.make.mockReset();
+    kitRuns.check.mockReset();
+    kitWrites.calls.length = 0;
+    statGate.hold = null;
+    statGate.started = 0;
     saved.value = undefined;
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
@@ -791,9 +825,46 @@ describe("Decisions entry", () => {
       expect(service.getSettings()?.relayOrigin).toBe(CLAIMED.relayOrigin);
     });
 
+    it("records a claimed relay as unverified until a recovery kit is", async () => {
+      saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
+      await disconnectRelay();
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
+
+      const result = await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
+
+      expect(result).toMatchObject({ result: "saved" });
+      expect(result).not.toHaveProperty("status.recoveryKitVerifiedAt");
+      expect(saved.value).toMatchObject({ relayOrigin: CLAIMED.relayOrigin, recoveryKit: null });
+    });
+
+    it("records a restore as verified when its kit holds the identity kept here", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, kitVerified: true });
+
+      const result = await restoreIdentity({
+        url: "https://relay.example.com",
+        kit: "{}",
+        passphrase: "correct horse battery staple",
+      });
+
+      const verifiedAt = (saved.value as { recoveryKit: { verifiedAt: number } }).recoveryKit
+        .verifiedAt;
+      expect(saved.value).toMatchObject({
+        recoveryKit: {
+          verifiedAt: expect.any(Number),
+          relayOrigin: CLAIMED.relayOrigin,
+          installationId: CLAIMED.installationId,
+          deviceId: CLAIMED.deviceId,
+        },
+      });
+      expect(result).toMatchObject({ status: { recoveryKitVerifiedAt: verifiedAt } });
+    });
+
     it("records a restored identity the same way", async () => {
       saved.value = { enabled: true };
-      setupRuns.restore.mockResolvedValue({ identity: CLAIMED });
+      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
 
       const result = await restoreIdentity({
         url: "https://relay.example.com",
@@ -852,7 +923,13 @@ describe("Decisions entry", () => {
     });
 
     it("disconnects by removing the key file and the relay's ids, keeping the switch and consent", async () => {
-      saved.value = { enabled: true, consentedAt: 5, proxyAllowlisted: true, ...RELAY };
+      saved.value = {
+        enabled: true,
+        consentedAt: 5,
+        proxyAllowlisted: true,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY },
+      };
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
 
@@ -1377,6 +1454,276 @@ describe("Decisions entry", () => {
       expect(storedRows.count).toBe(3);
       expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
       expect(saved.value).toMatchObject({ enabled: true, consentedAt: 5, ...RELAY });
+    });
+  });
+
+  describe("recovery kit", () => {
+    const PASSPHRASE = "correct horse battery staple";
+    const RECORDED = {
+      relayOrigin: RELAY.relayOrigin,
+      installationId: RELAY.installationId,
+      deviceId: RELAY.deviceId,
+    };
+    const KIT_TEXT = '{"v":1,"kdf":"PBKDF2-SHA256"}\n';
+    let outDir = "";
+
+    beforeAll(() => {
+      outDir = mkdtempSync(join(tmpdir(), "decisions-kit-out-"));
+    });
+
+    afterAll(() => {
+      rmSync(outDir, { recursive: true, force: true });
+    });
+
+    async function setUp(extra: Record<string, unknown> = {}) {
+      saved.value = { enabled: true, ...RELAY, ...extra };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      kitRuns.make.mockResolvedValue({ recorded: RECORDED, text: KIT_TEXT });
+    }
+
+    function holdDialog() {
+      let answer!: (path: string | null) => void;
+      const choosePath = vi.fn(() => new Promise<string | null>((resolve) => (answer = resolve)));
+      return { choosePath, answer: (path: string | null) => answer(path) };
+    }
+
+    it("reads setup as unfinished until a kit is verified, without asking the keychain", async () => {
+      await setUp();
+      expect(await getDecisionsStatus()).not.toHaveProperty("recoveryKitVerifiedAt");
+
+      saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 42, ...RECORDED } };
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitVerifiedAt: 42 });
+
+      // A verification for keys that are gone protects nothing.
+      rmSync(keyFile.path);
+      expect(await getDecisionsStatus()).not.toHaveProperty("recoveryKitVerifiedAt");
+      expect(kitRuns.make).not.toHaveBeenCalled();
+      expect(kitRuns.check).not.toHaveBeenCalled();
+    });
+
+    it("saves the kit where the person chose, owner-only, without recording a verification", async () => {
+      await setUp();
+      const target = join(outDir, "kit.json");
+      const choosePath = vi.fn(async () => target);
+      vi.mocked(store.set).mockClear();
+
+      const result = await exportRecoveryKit({ passphrase: PASSPHRASE }, choosePath);
+
+      expect(result).toEqual({ result: "saved", fileName: "kit.json" });
+      expect(choosePath).toHaveBeenCalledExactlyOnceWith(
+        "decisions-recovery-kit-relay.example.com.json"
+      );
+      expect(kitRuns.make).toHaveBeenCalledExactlyOnceWith(
+        peekDecisionsService()!.getKeyStore(),
+        expect.objectContaining(RECORDED),
+        PASSPHRASE
+      );
+      expect(readFileSync(target, "utf8")).toBe(KIT_TEXT);
+      if (process.platform !== "win32") expect(statSync(target).mode & 0o777).toBe(0o600);
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when the person cancels the dialog", async () => {
+      await setUp();
+      const target = join(outDir, "cancelled.json");
+
+      await expect(
+        exportRecoveryKit({ passphrase: PASSPHRASE }, async () => null)
+      ).resolves.toEqual({ result: "cancelled" });
+      expect(kitWrites.calls).toEqual([]);
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it("passes on what stopped a kit being made, and opens no dialog", async () => {
+      await setUp();
+      const failure = { result: "no-identity", reason: "keys-mismatch" } as const;
+      kitRuns.make.mockResolvedValue({ failure });
+      const choosePath = vi.fn();
+
+      await expect(exportRecoveryKit({ passphrase: PASSPHRASE }, choosePath)).resolves.toEqual(
+        failure
+      );
+      expect(choosePath).not.toHaveBeenCalled();
+    });
+
+    it("refuses to write the kit beside the sealed keys", async () => {
+      await setUp();
+      const beside = join(keyFile.path, "..", "kit.json");
+
+      await expect(
+        exportRecoveryKit({ passphrase: PASSPHRASE }, async () => beside)
+      ).rejects.toMatchObject({ name: "AppError", code: "INVALID_PATH" });
+      expect(existsSync(beside)).toBe(false);
+    });
+
+    it("never holds the switch's transitions while the dialog is open", async () => {
+      await setUp();
+      const dialog = holdDialog();
+
+      const saving = exportRecoveryKit({ passphrase: PASSPHRASE }, dialog.choosePath);
+      await vi.waitFor(() => expect(dialog.choosePath).toHaveBeenCalled());
+      // A claim, a check or the switch would queue behind anything held here.
+      await expect(getDecisionsStatus()).resolves.toMatchObject({ state: "not-connected" });
+      await setDecisionsEnabled(true);
+
+      dialog.answer(join(outDir, "held.json"));
+      await expect(saving).resolves.toEqual({ result: "saved", fileName: "held.json" });
+    });
+
+    it.each([
+      ["turning off", () => setDecisionsEnabled(false)],
+      ["disconnecting", () => disconnectRelay()],
+      ["deleting local data", () => deleteLocalData()],
+      ["quitting", () => stopDecisions()],
+    ])(
+      "is cancelled by %s while the dialog is open, and writes nothing after",
+      async (_name, act) => {
+        await setUp();
+        const dialog = holdDialog();
+        const target = join(outDir, `after-${_name}.json`);
+
+        const saving = exportRecoveryKit({ passphrase: PASSPHRASE }, dialog.choosePath);
+        const cancelled = expect(saving).rejects.toMatchObject(CANCELLED);
+        await vi.waitFor(() => expect(dialog.choosePath).toHaveBeenCalled());
+        await act();
+
+        await cancelled;
+        dialog.answer(target);
+        // Anything the answer could set off would queue behind the transitions.
+        await startDecisionsIfEnabled();
+        expect(kitWrites.calls).toEqual([]);
+        expect(existsSync(target)).toBe(false);
+      }
+    );
+
+    it.each([
+      ["turning off", () => setDecisionsEnabled(false)],
+      ["disconnecting", () => disconnectRelay()],
+      ["deleting local data", () => deleteLocalData()],
+      ["quitting", () => stopDecisions()],
+    ])("opens no dialog when %s while the kit is being made", async (_name, act) => {
+      await setUp();
+      let made!: (value: unknown) => void;
+      kitRuns.make.mockReturnValue(new Promise((resolve) => (made = resolve)));
+      const choosePath = vi.fn(async () => join(outDir, "never.json"));
+
+      const saving = exportRecoveryKit({ passphrase: PASSPHRASE }, choosePath);
+      const cancelled = expect(saving).rejects.toMatchObject(CANCELLED);
+      await vi.waitFor(() => expect(kitRuns.make).toHaveBeenCalled());
+      const acted = act();
+      made({ recorded: RECORDED, text: KIT_TEXT });
+      await cancelled;
+      await acted;
+
+      expect(choosePath).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when quit lands while the kit's folder is being checked", async () => {
+      await setUp();
+      const target = join(outDir, "during-quit.json");
+      let release!: () => void;
+      statGate.hold = new Promise((resolve) => (release = resolve));
+
+      const saving = exportRecoveryKit({ passphrase: PASSPHRASE }, async () => target);
+      const cancelled = expect(saving).rejects.toMatchObject(CANCELLED);
+      await vi.waitFor(() => expect(statGate.started).toBeGreaterThan(0));
+      await stopDecisions();
+      release();
+      await cancelled;
+
+      expect(kitWrites.calls).toEqual([]);
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it("lets go of the passphrase once the kit is locked, before the dialog opens", async () => {
+      await setUp();
+      const dialog = holdDialog();
+      const payload = { passphrase: PASSPHRASE };
+
+      const saving = exportRecoveryKit(payload, dialog.choosePath);
+      await vi.waitFor(() => expect(dialog.choosePath).toHaveBeenCalled());
+
+      expect(kitRuns.make).toHaveBeenCalledWith(expect.anything(), expect.anything(), PASSPHRASE);
+      expect(payload.passphrase).toBe("");
+      dialog.answer(null);
+      await expect(saving).resolves.toEqual({ result: "cancelled" });
+    });
+
+    it("writes nothing when another identity was set up while the dialog was open", async () => {
+      await setUp();
+      const dialog = holdDialog();
+      const target = join(outDir, "moved.json");
+
+      const saving = exportRecoveryKit({ passphrase: PASSPHRASE }, dialog.choosePath);
+      await vi.waitFor(() => expect(dialog.choosePath).toHaveBeenCalled());
+      saved.value = { ...(saved.value as object), deviceId: "dev_another_one" };
+      dialog.answer(target);
+
+      await expect(saving).rejects.toMatchObject(CANCELLED);
+      expect(kitWrites.calls).toEqual([]);
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it("records a verified kit for the identity it checked, finishing setup", async () => {
+      await setUp({ consentedAt: 5 });
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+
+      const result = await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+
+      expect(kitRuns.check).toHaveBeenCalledExactlyOnceWith(
+        peekDecisionsService()!.getKeyStore(),
+        expect.objectContaining(RECORDED),
+        KIT_TEXT,
+        PASSPHRASE
+      );
+      const record = (saved.value as { recoveryKit: { verifiedAt: number } }).recoveryKit;
+      expect(record).toEqual({ verifiedAt: expect.any(Number), ...RECORDED });
+      expect(result).toEqual({
+        result: "verified",
+        status: {
+          state: "not-connected",
+          relayOrigin: RELAY.relayOrigin,
+          consentedAt: 5,
+          keysStored: true,
+          recoveryKitVerifiedAt: record.verifiedAt,
+          revision: expect.any(Number),
+        },
+      });
+      expect(peekDecisionsService()!.getSettings()?.recoveryKit).toEqual(record);
+      // Every window's Settings learns setup is finished, not just the one that asked.
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitVerifiedAt: record.verifiedAt })
+      );
+      expect(JSON.stringify(saved.value)).not.toContain(PASSPHRASE);
+    });
+
+    it("keeps an earlier verification when a later kit is refused", async () => {
+      const earlier = { verifiedAt: 42, ...RECORDED };
+      await setUp({ recoveryKit: earlier });
+      const refused = { result: "kit-refused", reason: "missing-epochs" } as const;
+      kitRuns.check.mockResolvedValue({ failure: refused });
+      vi.mocked(store.set).mockClear();
+
+      await expect(verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE })).resolves.toEqual(
+        refused
+      );
+      expect(store.set).not.toHaveBeenCalled();
+      expect(saved.value).toMatchObject({ recoveryKit: earlier });
+    });
+
+    it("refuses to save or verify while off, making no service", async () => {
+      saved.value = { enabled: false, ...RELAY };
+
+      await expect(
+        exportRecoveryKit({ passphrase: PASSPHRASE }, async () => join(outDir, "off.json"))
+      ).rejects.toMatchObject(CANCELLED);
+      await expect(
+        verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE })
+      ).rejects.toMatchObject(CANCELLED);
+      expect(peekDecisionsService()).toBeNull();
+      expect(kitRuns.make).not.toHaveBeenCalled();
+      expect(kitRuns.check).not.toHaveBeenCalled();
     });
   });
 });

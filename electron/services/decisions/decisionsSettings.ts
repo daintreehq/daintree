@@ -1,4 +1,7 @@
-import type { DecisionsSettings } from "../../../shared/types/decisions.js";
+import type {
+  DecisionsRecoveryKitRecord,
+  DecisionsSettings,
+} from "../../../shared/types/decisions.js";
 
 /** The relay protocol's id shape: what a relay mints for installations and devices. */
 const RELAY_ID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -21,6 +24,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     proxyAllowlisted: false,
     consentedAt: null,
     revokedAt: null,
+    recoveryKit: null,
   };
 }
 
@@ -55,6 +59,38 @@ export function isRelayId(value: unknown): value is string {
 
 function relayId(value: unknown): string | null {
   return isRelayId(value) ? value : null;
+}
+
+/**
+ * A recovery kit verification that reads whole and names the identity the
+ * setting records; anything else is no verification, which leaves setup
+ * unfinished without turning Decisions off.
+ */
+function recoveryKitRecord(
+  value: unknown,
+  identity: Pick<DecisionsSettings, "relayOrigin" | "installationId" | "deviceId">
+): DecisionsRecoveryKitRecord | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Partial<Record<keyof DecisionsRecoveryKitRecord, unknown>>;
+  const verifiedAt = consentTime(record.verifiedAt);
+  const relayOrigin = normalizeRelayOrigin(record.relayOrigin);
+  if (
+    verifiedAt === null ||
+    relayOrigin === null ||
+    relayOrigin !== identity.relayOrigin ||
+    record.installationId !== identity.installationId ||
+    record.deviceId !== identity.deviceId ||
+    !isRelayId(record.installationId) ||
+    !isRelayId(record.deviceId)
+  ) {
+    return null;
+  }
+  return {
+    verifiedAt,
+    relayOrigin,
+    installationId: record.installationId,
+    deviceId: record.deviceId,
+  };
 }
 
 /** Absent is a relay not set up yet; anything else that didn't read is damage. */
@@ -94,6 +130,7 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     proxyAllowlisted: value.proxyAllowlisted === true,
     consentedAt: consentTime(value.consentedAt),
     revokedAt: identified ? consentTime(value.revokedAt) : null,
+    recoveryKit: recoveryKitRecord(value.recoveryKit, { relayOrigin, installationId, deviceId }),
   };
 }
 
