@@ -97,6 +97,8 @@ const GESTURE_EVENTS = [
   "compositionend",
   "paste",
   "mousedown",
+  // Hover, for a program that asks for every motion (mode 1003).
+  "mousemove",
   "mouseup",
   "wheel",
 ] as const;
@@ -548,14 +550,15 @@ export function CanopyTerminal({
       dragDocument?.removeEventListener("mouseup", followDrag, true);
       dragDocument = null;
     };
-    const followDrag = (event: MouseEvent) => {
+    const followDrag = (event: globalThis.MouseEvent) => {
       // A release the document never saw, as off the window's edge.
       if (event.type === "mousemove" && event.buttons === 0) return endDrag();
       markGesture(event);
       if (event.type === "mouseup" && event.buttons === 0) endDrag();
     };
     const startDrag = () => {
-      if (dragDocument !== null) return;
+      if (dragDocument === frame.ownerDocument) return;
+      endDrag();
       dragDocument = frame.ownerDocument;
       dragDocument.addEventListener("mousemove", followDrag, true);
       dragDocument.addEventListener("mouseup", followDrag, true);

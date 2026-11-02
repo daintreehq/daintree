@@ -340,29 +340,64 @@ describe("CanopyTerminal", () => {
     // SGR reports, as xterm sends them for Claude Code's fullscreen renderer.
     const PRESS = "\x1b[<0;10;5M";
     const MOTION = "\x1b[<32;14;5M";
+    const HOVER = "\x1b[<35;14;5M";
     const RELEASE = "\x1b[<0;14;5m";
     const gestureOver = () =>
       act(() => new Promise((resolve) => setTimeout(resolve, COMPOSITION_SENT_MS)));
 
+    /** Reports from where xterm's own listeners sit: the press on its element, the drag on the document. */
+    function reportLikeXterm(frame: Element) {
+      const inner = frame.firstElementChild!;
+      const onPress = () => xterm.current!.emitData(PRESS);
+      const onHover = (event: MouseEvent) => {
+        if (event.buttons === 0) xterm.current!.emitData(HOVER);
+      };
+      const onDrag = (event: MouseEvent) => {
+        if (event.buttons !== 0) xterm.current!.emitData(MOTION);
+      };
+      const onRelease = () => xterm.current!.emitData(RELEASE);
+      inner.addEventListener("mousedown", onPress);
+      inner.addEventListener("mousemove", onHover as EventListener);
+      document.addEventListener("mousemove", onDrag);
+      document.addEventListener("mouseup", onRelease);
+      return {
+        inner,
+        stop: () => {
+          document.removeEventListener("mousemove", onDrag);
+          document.removeEventListener("mouseup", onRelease);
+        },
+      };
+    }
+
     it("sends the motion and the release, which xterm takes at the document", async () => {
       const { frame } = mount();
       await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
-      fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
-      xterm.current!.emitData(PRESS);
+      const xtermSide = reportLikeXterm(frame);
+      fireEvent.mouseDown(xtermSide.inner, { button: 0, buttons: 1 });
       await gestureOver();
-
-      fireEvent.mouseMove(document, { buttons: 1 });
-      xterm.current!.emitData(MOTION);
+      fireEvent.mouseMove(document.body, { buttons: 1 });
       await gestureOver();
       // Released past the panel's edge.
       fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
-      xterm.current!.emitData(RELEASE);
+      xtermSide.stop();
 
       expect(terminalInput.mock.calls).toEqual([
         [7, PRESS],
         [7, MOTION],
         [7, RELEASE],
       ]);
+    });
+
+    it("keeps following while another button is still held", async () => {
+      const { frame } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      const xtermSide = reportLikeXterm(frame);
+      fireEvent.mouseDown(xtermSide.inner, { button: 0, buttons: 5 });
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 4 });
+      await gestureOver();
+      fireEvent.mouseMove(document.body, { buttons: 4 });
+      xtermSide.stop();
+      expect(terminalInput.mock.calls.at(-1)).toEqual([7, MOTION]);
     });
 
     it("stops following once the button is up", async () => {
@@ -373,7 +408,7 @@ describe("CanopyTerminal", () => {
       await gestureOver();
       terminalInput.mockClear();
 
-      fireEvent.mouseMove(document, { buttons: 1 });
+      fireEvent.mouseMove(document.body, { buttons: 1 });
       xterm.current!.emitData(MOTION);
       expect(terminalInput).not.toHaveBeenCalled();
     });
@@ -384,9 +419,9 @@ describe("CanopyTerminal", () => {
       fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
       await gestureOver();
 
-      fireEvent.mouseMove(document, { buttons: 0 });
+      fireEvent.mouseMove(document.body, { buttons: 0 });
       await gestureOver();
-      fireEvent.mouseMove(document, { buttons: 1 });
+      fireEvent.mouseMove(document.body, { buttons: 1 });
       xterm.current!.emitData(MOTION);
       expect(terminalInput).not.toHaveBeenCalled();
     });
@@ -395,9 +430,31 @@ describe("CanopyTerminal", () => {
       mount();
       await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
       fireEvent.mouseDown(document.body, { button: 0, buttons: 1 });
-      fireEvent.mouseMove(document, { buttons: 1 });
+      fireEvent.mouseMove(document.body, { buttons: 1 });
       fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
       xterm.current!.emitData(MOTION);
+      expect(terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("sends hover over the view, never hover elsewhere", async () => {
+      const { frame } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      const xtermSide = reportLikeXterm(frame);
+      fireEvent.mouseMove(xtermSide.inner, { buttons: 0 });
+      await gestureOver();
+      fireEvent.mouseMove(document.body, { buttons: 0 });
+      xterm.current!.emitData(HOVER);
+      xtermSide.stop();
+      expect(terminalInput.mock.calls).toEqual([[7, HOVER]]);
+    });
+
+    it("never sends the terminal's own replies in the middle of a drag", async () => {
+      const { frame } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      xterm.current!.emitData("\x1b[24;1R");
+      xterm.current!.emitData("\x1b[O");
       expect(terminalInput).not.toHaveBeenCalled();
     });
 
@@ -407,7 +464,7 @@ describe("CanopyTerminal", () => {
       fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
       const removed = vi.spyOn(document, "removeEventListener");
       unmount();
-      expect(removed.mock.calls.map(([type]) => type).sort()).toEqual(
+      expect(removed.mock.calls.map(([type]) => type)).toEqual(
         expect.arrayContaining(["mousemove", "mouseup"])
       );
       removed.mockRestore();
