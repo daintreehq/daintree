@@ -150,6 +150,8 @@ export interface DecisionsServiceOptions {
   model?: Pick<DecisionModelRuntimeOptions, "openHistory" | "createAdapter">;
   /** Something Settings shows of the decision model changed (#16027), or the model came or went. */
   onModelChanged?: () => void;
+  /** Deletes the model's files with none running; the model package's files unless a test says otherwise. */
+  deleteModelFiles?: (files: DecisionModelFiles) => Promise<void>;
 }
 
 /**
@@ -233,6 +235,7 @@ export class DecisionsService {
   private model: DecisionModelRuntime | null = null;
   private readonly modelOptions: DecisionsServiceOptions["model"];
   private readonly onModelChanged: () => void;
+  private readonly deleteModelFiles: (files: DecisionModelFiles) => Promise<void>;
   /** The model's files are being deleted with no model running, so none may open them meanwhile. */
   private clearingModel = false;
   /**
@@ -268,6 +271,7 @@ export class DecisionsService {
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
+    this.deleteModelFiles = options.deleteModelFiles ?? deleteDecisionModelFiles;
   }
 
   getStatus(): DecisionsStatus {
@@ -327,7 +331,7 @@ export class DecisionsService {
       }
       this.clearingModel = true;
       try {
-        await deleteDecisionModelFiles(this.getDecisionModelFiles());
+        await this.deleteModelFiles(this.getDecisionModelFiles());
       } finally {
         this.clearingModel = false;
         this.onModelChanged();

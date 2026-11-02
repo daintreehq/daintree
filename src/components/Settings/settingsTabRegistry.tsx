@@ -2198,7 +2198,7 @@ export const SETTINGS_REGISTRY = [
         section: "Decision model",
         title: "Agent CLI",
         description:
-          "The agent CLI the decision model runs, and where it sends your past answers: Claude Code to Anthropic, Codex CLI to OpenAI, Gemini CLI to Google",
+          "The agent CLI the decision model runs, and where it sends your past answers (by default Claude Code to Anthropic, Codex CLI to OpenAI, Gemini CLI to Google)",
         keywords: [
           "decision model",
           "adapter",

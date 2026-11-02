@@ -27,13 +27,21 @@ export const NO_ADAPTER = "none";
 
 export type AdapterChoice = DecisionsModelAdapter | typeof NO_ADAPTER;
 
+/**
+ * Where a CLI's requests go: its usual provider, though the CLI's own
+ * settings decide, since it runs as installed and signed in here.
+ */
+export function providerText(adapter: DecisionsModelAdapter): string {
+  return `${MODEL_ADAPTERS[adapter].provider}, or wherever that CLI is set up to send`;
+}
+
 /** What each choice sends, and where: the plain statement the person chooses by. */
 export function adapterChoiceDescription(choice: AdapterChoice): string {
   if (choice === NO_ADAPTER) {
     return "Keeps learning from your answers on this computer. Nothing is sent, and the model never answers.";
   }
-  const { provider, command } = MODEL_ADAPTERS[choice];
-  return `Runs the ${command} command installed here, which sends the question and your past answers like it to ${provider}, using that CLI's own sign-in.`;
+  const { command } = MODEL_ADAPTERS[choice];
+  return `Runs the ${command} command installed here with its own sign-in, which sends the question and your past answers like it to ${providerText(choice)}.`;
 }
 
 /** A confidence as the model reports it: its own estimate, to two places. */
@@ -73,14 +81,14 @@ export function historyText(history: DecisionsModelHistory): string {
         ? "Learning is off. What it learned is still stored on this computer."
         : "Nothing is stored.";
     case "unavailable":
-      return "The history isn't open, so nothing new is being kept. It opens again once Decisions' own data is available.";
+      return "The history couldn't be opened, so nothing new is being kept.";
   }
 }
 
 /** How an evaluation running now reads. */
 export function runText(run: DecisionsModelRun, startedAt: string): string {
-  const { label, provider } = MODEL_ADAPTERS[run.adapter];
-  return `Replaying ${pluralize(run.historyCount, "past answer")} through ${label} since ${startedAt}, which sends them to ${provider}. It goes on if you close Settings.`;
+  const { label } = MODEL_ADAPTERS[run.adapter];
+  return `Replaying ${pluralize(run.historyCount, "past answer")} through ${label} since ${startedAt}, which sends them to ${providerText(run.adapter)}. It goes on if you close Settings.`;
 }
 
 /** What answers automatically now, as main observes it. */

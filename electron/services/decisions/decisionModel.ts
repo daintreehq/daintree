@@ -129,6 +129,13 @@ function evaluationCancelled(): Error {
   return error;
 }
 
+/** What a threshold chosen from an older report rejects with, so it reads as stale rather than failed. */
+export function staleEvaluation(): Error {
+  const error = new Error("The decision model was evaluated again since that report was read");
+  error.name = "StaleEvaluationError";
+  return error;
+}
+
 /** Answers nothing: the verifier below never asks it anything. */
 const UNASKED_ADAPTER: DecisionModelAdapter = {
   id: "daintree-threshold-check",
@@ -156,10 +163,13 @@ export function thresholdSupported(calibration: CalibrationData, threshold: numb
  * (which needn't hold for every higher one), with the replay's evidence.
  */
 export function supportedThresholds(
-  report: DecisionModelEvaluation["report"]
+  report: DecisionModelEvaluation["report"],
+  /** The threshold already chosen, offered too so the choice in force is always listed. */
+  chosen: number | null = null
 ): DecisionsModelThreshold[] {
   const calibration = report.calibration;
   const candidates = new Set<number>();
+  if (isThreshold(chosen)) candidates.add(chosen);
   for (const bucket of Array.isArray(report.buckets) ? report.buckets : []) {
     if (isThreshold(bucket?.lo)) candidates.add(bucket.lo);
   }
@@ -223,7 +233,7 @@ export function describeEvaluation(evaluation: DecisionModelEvaluation): Decisio
     evaluatedAt: evaluation.evaluatedAt,
     report: describeReport(evaluation.report),
     autoAnswerThreshold: evaluation.autoAnswerThreshold,
-    thresholds: supportedThresholds(evaluation.report),
+    thresholds: supportedThresholds(evaluation.report, evaluation.autoAnswerThreshold),
   };
 }
 
@@ -483,7 +493,8 @@ export class DecisionModelRuntime {
     };
     this.run = run;
     this.lastRun = null;
-    this.evaluate(run.controller.signal).then(
+    // The run evaluates the model it names: a change queued before its turn cancels it.
+    this.replay(run.controller.signal, model).then(
       () => this.endRun(run, null),
       (error: unknown) => {
         const cancelled = (error as Error | null)?.name === "AbortError";
@@ -549,7 +560,15 @@ export class DecisionModelRuntime {
    * the person chooses one after reading it. Rejects when learning is off, no
    * CLI is chosen, it was cancelled, or either changed while it ran.
    */
-  async evaluate(signal?: AbortSignal): Promise<DecisionModelEvaluation> {
+  evaluate(signal?: AbortSignal): Promise<DecisionModelEvaluation> {
+    return this.replay(signal, null);
+  }
+
+  /** `evaluate`, or, with `expected`, a replay of that model alone: any other at its turn cancels it. */
+  private async replay(
+    signal: AbortSignal | undefined,
+    expected: ModelChoice | null
+  ): Promise<DecisionModelEvaluation> {
     // Held from the first moment, so a close while this waits its turn cancels it too.
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -559,6 +578,9 @@ export class DecisionModelRuntime {
     try {
       const model = await this.enqueue(() => {
         if (controller.signal.aborted) throw evaluationCancelled();
+        if (expected !== null && (this.history === null || this.model !== expected)) {
+          throw evaluationCancelled();
+        }
         if (this.history === null || this.model === null) {
           throw new Error("The decision model needs learning on and a CLI chosen to be evaluated");
         }
@@ -610,7 +632,7 @@ export class DecisionModelRuntime {
         throw new Error("The decision model needs an evaluation of the chosen CLI first");
       }
       if (evaluatedAt !== undefined && evaluatedAt !== evaluation.evaluatedAt) {
-        throw new Error("The decision model was evaluated again since that report was read");
+        throw staleEvaluation();
       }
       if (threshold !== null && !isThreshold(threshold)) {
         throw new Error("A threshold is a confidence from 0 to 1");

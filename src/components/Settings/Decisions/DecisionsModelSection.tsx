@@ -21,6 +21,7 @@ import {
   adapterChoiceDescription,
   answeringText,
   historyText,
+  providerText,
   runText,
   thresholdChoiceText,
   type AdapterChoice,
@@ -82,9 +83,12 @@ export function DecisionsModelSection({
   const running = model?.running ?? null;
   const history = model?.history ?? null;
   const historyCount = history?.state === "open" ? history.count : null;
+  // A history that couldn't be opened may still be stored, and clearing deletes whatever is.
   const stored =
     history !== null &&
-    (history.state === "open" ? history.count > 0 : history.state === "closed" && history.stored);
+    (history.state === "open"
+      ? history.count > 0
+      : history.state === "unavailable" || history.stored);
 
   const toggleLearning = () => {
     if (locked || model === null) return;
@@ -115,7 +119,7 @@ export function DecisionsModelSection({
         void read.startEvaluation();
         return;
       case "cancel":
-        if (running) void read.cancelEvaluation(running.runId);
+        if (failure.runId) void read.cancelEvaluation(failure.runId);
         return;
       case "threshold":
       case "clear":
@@ -127,7 +131,7 @@ export function DecisionsModelSection({
   const evaluateDescription =
     savedAdapter === null
       ? "Replays your past answers through the agent CLI you choose, to show how often it would have matched you"
-      : `Replays ${historyCount === null ? "your past answers" : pluralize(historyCount, "past answer")} through ${MODEL_ADAPTERS[savedAdapter].label}, one request per past question, which sends them to ${MODEL_ADAPTERS[savedAdapter].provider}. It can take many minutes.`;
+      : `Replays ${historyCount === null ? "your past answers" : pluralize(historyCount, "past answer")} through ${MODEL_ADAPTERS[savedAdapter].label}, one past question at a time, which sends them to ${providerText(savedAdapter)}. It can take many minutes.`;
 
   const thresholdValue =
     evaluation?.autoAnswerThreshold === null || evaluation === null
@@ -181,6 +185,8 @@ export function DecisionsModelSection({
           title={FAILURE_TITLE[failure.action]}
           message={failure.message}
           onRetry={retry}
+          // The choice is made again from what main holds now.
+          retryLabel={failure.action === "threshold" ? "Reload" : undefined}
         />
       )}
 
@@ -248,7 +254,7 @@ export function DecisionsModelSection({
               description={
                 evaluation.thresholds.length === 0
                   ? "No confidence in this report matched your answers often enough on enough answers, so the model can't answer automatically yet"
-                  : "Only from a confidence this report supports. Evaluating again stops automatic answers until you choose again."
+                  : "Only from a confidence this report supports. When a new evaluation finishes, its report stops automatic answers until you choose again."
               }
               value={thresholdValue}
               onValueChange={(value) =>

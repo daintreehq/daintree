@@ -1187,6 +1187,13 @@ export function setDecisionsModelThreshold(
     try {
       await model.setAutoAnswerThreshold(payload.threshold, payload.evaluatedAt);
     } catch (error) {
+      // A new report stored while this waited its turn.
+      if (error instanceof Error && error.name === "StaleEvaluationError") {
+        throw new AppError({
+          code: "STALE_GENERATION",
+          message: "The decision model's evaluation changed. Read the new report first.",
+        });
+      }
       console.warn(
         "[Decisions] The decision model's threshold wasn't saved:",
         error instanceof Error ? error.name : typeof error

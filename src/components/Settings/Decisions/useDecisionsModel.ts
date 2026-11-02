@@ -11,6 +11,8 @@ export interface DecisionsModelFailure {
   message: string;
   /** The preferences asked for, so Retry asks for them again. */
   payload?: SetDecisionsModelPayload;
+  /** The run a cancel named, so Retry can't cancel a newer one. */
+  runId?: string;
 }
 
 export interface UseDecisionsModelResult {
@@ -22,6 +24,7 @@ export interface UseDecisionsModelResult {
   /** The preferences being saved, so the switch and the CLI show what was asked. */
   pendingPreferences: SetDecisionsModelPayload | null;
   failure: DecisionsModelFailure | null;
+  /** Reads the model again, and drops a failure shown, whose choice is then made again from what main holds. */
   reload(): Promise<void>;
   setPreferences(payload: SetDecisionsModelPayload, action: "learning" | "adapter"): Promise<void>;
   startEvaluation(): Promise<void>;
@@ -107,8 +110,9 @@ export function useDecisionsModel(active: boolean): UseDecisionsModelResult {
   const act = (
     action: DecisionsModelAction,
     call: () => Promise<DecisionsModelState>,
-    payload?: SetDecisionsModelPayload
+    retry: Pick<DecisionsModelFailure, "payload" | "runId"> = {}
   ): Promise<boolean> => {
+    const payload = retry.payload;
     if (busyRef.current) return Promise.resolve(false);
     busyRef.current = true;
     setPending(action);
@@ -126,7 +130,7 @@ export function useDecisionsModel(active: boolean): UseDecisionsModelResult {
             setFailure({
               action,
               message: formatErrorMessage(error, "Try again in a moment."),
-              ...(payload ? { payload } : {}),
+              ...retry,
             });
             void read();
           }
@@ -143,6 +147,7 @@ export function useDecisionsModel(active: boolean): UseDecisionsModelResult {
 
   const reload = (): Promise<void> => {
     setLoadError(null);
+    setFailure(null);
     return read();
   };
 
@@ -154,13 +159,13 @@ export function useDecisionsModel(active: boolean): UseDecisionsModelResult {
     failure: active ? failure : null,
     reload,
     setPreferences: (payload, action) =>
-      act(action, () => window.electron.decisions.setModel(payload), payload).then(() => {}),
+      act(action, () => window.electron.decisions.setModel(payload), { payload }).then(() => {}),
     startEvaluation: () =>
       act("evaluate", () => window.electron.decisions.startModelEvaluation()).then(() => {}),
     cancelEvaluation: (runId) =>
-      act("cancel", () => window.electron.decisions.cancelModelEvaluation({ runId })).then(
-        () => {}
-      ),
+      act("cancel", () => window.electron.decisions.cancelModelEvaluation({ runId }), {
+        runId,
+      }).then(() => {}),
     setThreshold: (threshold, evaluatedAt) =>
       act("threshold", () =>
         window.electron.decisions.setModelThreshold({ threshold, evaluatedAt })

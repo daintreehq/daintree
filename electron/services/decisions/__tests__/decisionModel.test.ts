@@ -551,19 +551,50 @@ describe("the decision model's settings (#16027)", () => {
     const { runtime } = makeRuntime({ claude: cli });
     await runtime.update({ modelLearning: true, modelAdapter: "claude" });
     await learnPast(runtime);
-    const release = cli.hold();
 
-    const run = runtime.startEvaluation();
+    // A cancel naming another run leaves this one to finish with its report.
+    let release = cli.hold();
+    const first = runtime.startEvaluation();
     await vi.waitFor(() => expect(cli.calls.length).toBeGreaterThan(0));
     runtime.cancelEvaluation("another-run");
-    expect(runtime.snapshot().running).toBe(run);
-    runtime.cancelEvaluation(run.runId);
     release();
+    await vi.waitFor(() => expect(runtime.snapshot().running).toBeNull());
+    expect(runtime.snapshot()).toMatchObject({ lastRun: null, evaluation: { adapter: "claude" } });
+    const reported = runtime.snapshot().evaluation!.evaluatedAt;
+
+    release = cli.hold();
+    const asked = cli.calls.length;
+    const second = runtime.startEvaluation();
+    expect(second.runId).not.toBe(first.runId);
+    await vi.waitFor(() => expect(cli.calls.length).toBe(asked + 1));
+    runtime.cancelEvaluation(second.runId);
+    release();
+
+    await vi.waitFor(() =>
+      expect(runtime.snapshot().lastRun).toEqual({ runId: second.runId, result: "cancelled" })
+    );
+    // The replay stopped at the question it was on, and the report before it stands.
+    expect(cli.calls).toHaveLength(asked + 1);
+    expect(runtime.snapshot().evaluation?.evaluatedAt).toBe(reported);
+  });
+
+  it("ends a run it named as cancelled when another CLI is chosen before its turn", async () => {
+    const claude = rebasingCli();
+    const codex = rebasingCli();
+    const { runtime } = makeRuntime({ claude, codex });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+
+    const switched = runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    const run = runtime.startEvaluation();
+    expect(run.adapter).toBe("claude");
+    await switched;
 
     await vi.waitFor(() =>
       expect(runtime.snapshot().lastRun).toEqual({ runId: run.runId, result: "cancelled" })
     );
-    expect(runtime.snapshot()).toMatchObject({ running: null, evaluation: null });
+    expect(claude.calls).toHaveLength(0);
+    expect(codex.calls).toHaveLength(0);
     expect(existsSync(files.evaluation)).toBe(false);
   });
 
@@ -576,12 +607,15 @@ describe("the decision model's settings (#16027)", () => {
 
     const run = runtime.startEvaluation();
     await vi.waitFor(() => expect(cli.calls.length).toBeGreaterThan(0));
+    const asked = cli.calls.length;
     await runtime.update({ modelLearning: false, modelAdapter: "claude" });
     release();
 
     await vi.waitFor(() =>
       expect(runtime.snapshot().lastRun).toEqual({ runId: run.runId, result: "cancelled" })
     );
+    // Stopped where it was, rather than replaying to the end to be thrown away.
+    expect(cli.calls).toHaveLength(asked);
     expect(existsSync(files.evaluation)).toBe(false);
   });
 
@@ -639,9 +673,11 @@ describe("the decision model's settings (#16027)", () => {
 
     const run = runtime.startEvaluation();
     await vi.waitFor(() => expect(cli.calls.length).toBeGreaterThan(0));
+    const asked = cli.calls.length;
     const clearing = runtime.clearHistory();
     release();
     await clearing;
+    expect(cli.calls).toHaveLength(asked);
 
     await vi.waitFor(() =>
       expect(runtime.snapshot().lastRun).toEqual({ runId: run.runId, result: "cancelled" })
@@ -663,22 +699,28 @@ describe("the decision model's settings (#16027)", () => {
   });
 
   it("offers only the thresholds the library honours, which needn't include every higher one", () => {
-    // Thirty right answers at 0.95, and ten wrong ones at 0.55: from 0.5 the
-    // band matches 75%, from 0.6 up it matches every time.
+    // Thirty right answers at 0.95, five at 0.99 and ten wrong ones at 0.55:
+    // from 0.5 the band matches 78%, from 0.6 to 0.9 every time, and from
+    // 0.97 it holds too few answers to count.
     const points = [
       ...Array.from({ length: 30 }, () => ({ confidence: 0.95, correct: true })),
+      ...Array.from({ length: 5 }, () => ({ confidence: 0.99, correct: true })),
       ...Array.from({ length: 10 }, () => ({ confidence: 0.55, correct: false })),
     ];
-    const edges = [0, 0.5, 0.6, 0.7, 0.8, 0.9];
+    const edges = [0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.97];
     const report = {
       buckets: edges.map((lo, index) => ({ lo, hi: edges[index + 1] ?? 1, n: 0, correct: 0 })),
       recommended_threshold: 0.6,
-      calibration: { samples: 40, recommendedThreshold: 0.6, targetAccuracy: 0.9, points },
+      calibration: { samples: 45, recommendedThreshold: 0.6, targetAccuracy: 0.9, points },
     } as unknown as DecisionModelEvaluation["report"];
 
     expect(supportedThresholds(report)).toEqual(
-      [0.6, 0.7, 0.8, 0.9].map((threshold) => ({ threshold, answered: 30, matched: 30 }))
+      [0.6, 0.7, 0.8, 0.9].map((threshold) => ({ threshold, answered: 35, matched: 35 }))
     );
+    // A threshold already chosen between the band floors is listed too.
+    expect(supportedThresholds(report, 0.85).map((choice) => choice.threshold)).toEqual([
+      0.6, 0.7, 0.8, 0.85, 0.9,
+    ]);
     // Held to a lower accuracy than the library accepts, nothing qualifies.
     expect(
       supportedThresholds({
@@ -692,10 +734,15 @@ describe("the decision model's settings (#16027)", () => {
     const { runtime } = await armedRuntime();
     const view = describeEvaluation(runtime.getEvaluation()!);
     expect(view.report).toMatchObject({ total: PAST, minSamples: 30, targetAccuracy: 0.9 });
-    expect(view.report.matched).toBeLessThanOrEqual(view.report.answered);
-    expect(view.report.buckets.reduce((sum, bucket) => sum + bucket.answered, 0)).toBe(
-      view.report.answered
-    );
+    // The CLI always rebased at 0.95, as every past answer did: each answer it
+    // gave matched, all in the top band.
+    expect(view.report.answered).toBeGreaterThanOrEqual(30);
+    expect(view.report.matched).toBe(view.report.answered);
+    expect(view.report.buckets.at(-1)).toMatchObject({
+      answered: view.report.answered,
+      matched: view.report.answered,
+    });
+    expect(view.report.buckets.slice(0, -1).every((bucket) => bucket.answered === 0)).toBe(true);
     expect(view.thresholds.map((choice) => choice.threshold)).toContain(0.8);
     expect(view.autoAnswerThreshold).toBe(0.8);
 

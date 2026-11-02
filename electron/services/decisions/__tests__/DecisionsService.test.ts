@@ -2007,6 +2007,31 @@ describe("DecisionsService decision model (#16026)", () => {
     }
   });
 
+  it("makes no model while a clear with none running deletes its files, and makes it after", async () => {
+    let finish!: () => void;
+    const deleting = new Promise<void>((resolve) => (finish = resolve));
+    const deleteModelFiles = vi.fn(() => deleting);
+    const t = modelled(undefined, { deleteModelFiles });
+    try {
+      await t.service.start(on(RELAY));
+      const clearing = t.service.clearModelHistory();
+      await vi.waitFor(() => expect(deleteModelFiles).toHaveBeenCalledOnce());
+
+      // Learning turned on meanwhile waits for the files to be gone.
+      t.service.updateSettings(on({ ...RELAY, modelLearning: true }));
+      expect(t.service.getDecisionModel()).toBeNull();
+      expect(t.histories).toHaveLength(0);
+
+      finish();
+      await clearing;
+      expect(t.service.getDecisionModel()).not.toBeNull();
+      await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it("clears through the running model with learning on, which opens an empty history after", async () => {
     const t = modelled((path) => new SqliteHistoryStore(path));
     try {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  MODEL_ADAPTERS,
   NO_ADAPTER,
   abstainReasonText,
   adapterChoiceDescription,
@@ -14,11 +13,13 @@ import {
 import { DECISIONS_MODEL_ADAPTERS } from "@shared/types/decisions";
 
 describe("decision model copy", () => {
-  it("names a destination for every CLI the setting accepts, and none for no CLI", () => {
+  it("names each CLI's usual provider, says the CLI's settings decide, and none for no CLI", () => {
+    const usual = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" } as const;
     for (const adapter of DECISIONS_MODEL_ADAPTERS) {
       const text = adapterChoiceDescription(adapter);
-      expect(text).toContain(MODEL_ADAPTERS[adapter].provider);
-      expect(text).toContain(MODEL_ADAPTERS[adapter].command);
+      expect(text, adapter).toContain(usual[adapter]);
+      expect(text, adapter).toContain(`the ${adapter} command`);
+      expect(text, adapter).toContain("wherever that CLI is set up to send");
     }
     expect(adapterChoiceDescription(NO_ADAPTER)).toContain("Nothing is sent");
   });
@@ -50,7 +51,7 @@ describe("decision model copy", () => {
     expect(historyText({ state: "open", count: 0 })).toContain("Nothing learned yet");
     expect(historyText({ state: "closed", stored: true })).toContain("still stored");
     expect(historyText({ state: "closed", stored: false })).toBe("Nothing is stored.");
-    expect(historyText({ state: "unavailable" })).toContain("isn't open");
+    expect(historyText({ state: "unavailable" })).toContain("couldn't be opened");
   });
 
   it("says nothing answers unless main reports a threshold in force", () => {
@@ -64,7 +65,7 @@ describe("decision model copy", () => {
   });
 
   it("puts the library's reasons in words, and shows one it doesn't know as it is", () => {
-    expect(abstainReasonText("model-error")).not.toBe("model-error");
+    expect(abstainReasonText("model-error")).toBe("the CLI failed or timed out");
     expect(abstainReasonText("a-new-reason")).toBe("a-new-reason");
   });
 

@@ -219,7 +219,7 @@ describe("Decisions → Decision model", () => {
 
     const choices = screen.getByRole("radiogroup");
     for (const radio of within(choices).getAllByRole("radio")) {
-      expect((radio as HTMLButtonElement).disabled).toBe(true);
+      expect(radio.hasAttribute("disabled")).toBe(true);
     }
     expect(document.body.textContent).toContain("Turn on learning to choose an agent CLI");
     expect(screen.queryByRole("button", { name: /^Evaluate/ })).toBeNull();
@@ -253,6 +253,91 @@ describe("Decisions → Decision model", () => {
 
     expect(row("decisions-model-threshold").textContent).toContain("Don't answer automatically");
     expect(row("decisions-model-answering").textContent).toContain("Not answering");
+  });
+
+  it("chooses a threshold from the report's own, for the report it was read from", async () => {
+    const learning = state({
+      learning: true,
+      adapter: "claude",
+      consentedAt: 5,
+      history: { state: "open", count: 60 },
+      evaluation: EVALUATION,
+    });
+    getModel.mockResolvedValue(learning);
+    setModelThreshold.mockResolvedValue({
+      ...learning,
+      revision: 1,
+      evaluation: { ...EVALUATION, autoAnswerThreshold: 0.9 },
+      answeringFrom: 0.9,
+    });
+    await renderSection();
+
+    const trigger = within(row("decisions-model-threshold")).getByRole("combobox");
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    });
+    const options = screen.getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual([
+      "Don't answer automatically",
+      "At confidence 0.90 or higher: matched 32 of 32 (100%)",
+    ]);
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("option", { name: /0\.90 or higher/ }), { key: "Enter" });
+    });
+
+    expect(setModelThreshold).toHaveBeenCalledExactlyOnceWith({
+      threshold: 0.9,
+      evaluatedAt: EVALUATION.evaluatedAt,
+    });
+    expect(within(row("decisions-model-threshold")).getByRole("combobox").textContent).toContain(
+      "0.90 or higher"
+    );
+    expect(row("decisions-model-answering").textContent).toContain("Answering in your place");
+  });
+
+  it("offers Clear history for a history that couldn't be opened", async () => {
+    getModel.mockResolvedValue(
+      state({ learning: true, consentedAt: 5, history: { state: "unavailable" } })
+    );
+    await renderSection();
+    const clear = within(row("decisions-model-history")).getByRole("button", {
+      name: "Clear history",
+    });
+    expect(clear.hasAttribute("disabled")).toBe(false);
+    expect(row("decisions-model-history").textContent).toContain("couldn't be opened");
+  });
+
+  it("retries a failed cancel for the run it named, not a newer one", async () => {
+    const run = (runId: string) => ({
+      runId,
+      adapter: "claude" as const,
+      startedAt: 1,
+      historyCount: 12,
+    });
+    const learning = state({
+      learning: true,
+      adapter: "claude",
+      consentedAt: 5,
+      history: { state: "open", count: 12 },
+    });
+    getModel.mockResolvedValueOnce({ ...learning, running: run("run-a") });
+    // After the failure, main shows another window's newer run.
+    getModel.mockResolvedValue({ ...learning, revision: 5, running: run("run-b") });
+    cancelModelEvaluation.mockRejectedValueOnce(new Error("Decisions has stopped"));
+    cancelModelEvaluation.mockResolvedValue({ ...learning, revision: 6 });
+    await renderSection();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+    expect(screen.getByText("Couldn't cancel the evaluation")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(cancelModelEvaluation.mock.calls.map(([payload]) => payload.runId)).toEqual([
+      "run-a",
+      "run-a",
+    ]);
   });
 
   it("says what answers now, and that questions without a gate still need the person while Policy says so", async () => {
