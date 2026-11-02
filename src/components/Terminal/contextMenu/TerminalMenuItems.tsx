@@ -24,6 +24,10 @@ import {
   RestartOnPresetSubmenu,
   type RestartOnPresetRequest,
 } from "@/components/Terminal/RestartOnPreset";
+import {
+  RestartOnAccountSubmenu,
+  type RestartOnAccountRequest,
+} from "@/components/Terminal/RestartOnAccount";
 import { SelectedFileMenuItems } from "../SelectedFileMenuItems";
 import { TerminalHandOverMenuItems } from "../TerminalHandOver";
 import {
@@ -359,6 +363,7 @@ export function TerminalSessionMenuItems({
   orchestratorCandidateIds,
   onRequestHandOver,
   onRequestRestartOnPreset,
+  onRequestRestartOnAccount,
   onAction,
 }: {
   terminalId: string;
@@ -373,6 +378,7 @@ export function TerminalSessionMenuItems({
   orchestratorCandidateIds: readonly string[];
   onRequestHandOver: (orchestratorPaneId: string) => void;
   onRequestRestartOnPreset: (request: RestartOnPresetRequest) => void;
+  onRequestRestartOnAccount: (request: RestartOnAccountRequest) => void;
   onAction: MenuActionHandler;
 }) {
   return (
@@ -411,6 +417,20 @@ export function TerminalSessionMenuItems({
                   terminalTitle: terminalPty.title,
                   agentWorking: terminalHasRunningAgentSession(terminalPty),
                   preset,
+                })
+              }
+            />
+          )}
+          {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (
+            <RestartOnAccountSubmenu
+              agentId={terminalPty.launchAgentId}
+              currentAccountId={terminalPty.agentAccountId}
+              onPick={(account) =>
+                onRequestRestartOnAccount({
+                  terminalId,
+                  terminalTitle: terminalPty.title,
+                  agentWorking: terminalHasRunningAgentSession(terminalPty),
+                  account,
                 })
               }
             />

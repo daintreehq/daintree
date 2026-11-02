@@ -4,6 +4,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -31,14 +32,20 @@ import {
   RestartOnPresetDropdownItems,
   type RestartOnPresetRequest,
 } from "./RestartOnPreset";
+import {
+  RestartOnAccountConfirmDialog,
+  RestartOnAccountDropdownItems,
+  useRestartAccountChoices,
+  type RestartOnAccountRequest,
+} from "./RestartOnAccount";
 import { useRestartPresetChoices } from "./restartOnPresetChoices";
 
 /**
  * Ambient header chip on a pane whose agent printed a rate-limit banner
  * (#12797). What was seen in this pane's output and when — not the account's
  * quota, which lives in Settings and is never inferred from this. When the
- * agent has other presets, the chip opens a menu to restart on one (#13746) —
- * the user's call, never made for them.
+ * agent has other accounts (#16040) or presets (#13746), the chip opens a menu
+ * to restart on one — the user's call, never made for them.
  */
 export function TerminalRateLimitBadge({ terminalId }: { terminalId: string }) {
   const observedAt = useRateLimitObservationStore((s) => s.observedAtByTerminalId[terminalId]);
@@ -47,14 +54,26 @@ export function TerminalRateLimitBadge({ terminalId }: { terminalId: string }) {
   // still counts.
   const [request, setRequest] = useState<RestartOnPresetRequest | null>(null);
   const closeRequest = useCallback(() => setRequest(null), []);
+  const [accountRequest, setAccountRequest] = useState<RestartOnAccountRequest | null>(null);
+  const closeAccountRequest = useCallback(() => setAccountRequest(null), []);
   return (
     <>
       {observedAt !== undefined && (
-        <RateLimitChip terminalId={terminalId} observedAt={observedAt} onPick={setRequest} />
+        <RateLimitChip
+          terminalId={terminalId}
+          observedAt={observedAt}
+          onPick={setRequest}
+          onPickAccount={setAccountRequest}
+        />
       )}
       <RestartOnPresetConfirmDialog
         request={request}
         onClose={closeRequest}
+        sourceRef={CHIP_SOURCE}
+      />
+      <RestartOnAccountConfirmDialog
+        request={accountRequest}
+        onClose={closeAccountRequest}
         sourceRef={CHIP_SOURCE}
       />
     </>
@@ -68,10 +87,12 @@ function RateLimitChip({
   terminalId,
   observedAt,
   onPick,
+  onPickAccount,
 }: {
   terminalId: string;
   observedAt: number;
   onPick: (request: RestartOnPresetRequest) => void;
+  onPickAccount: (request: RestartOnAccountRequest) => void;
 }) {
   const now = useGlobalMinuteClock();
   const agentId = usePanelStore((s) => {
@@ -82,12 +103,17 @@ function RateLimitChip({
     const panel = s.panelsById[terminalId];
     return panel && isPtyPanel(panel) ? panel.agentPresetId : undefined;
   });
+  const accountId = usePanelStore((s) => {
+    const panel = s.panelsById[terminalId];
+    return panel && isPtyPanel(panel) ? panel.agentAccountId : undefined;
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const live = isRateLimitObservationLive(observedAt, now);
   // An expired chip takes its menu with it, so the quota stops being read too,
   // and a later observation doesn't bring the chip back with the menu open.
   if (!live && menuOpen) setMenuOpen(false);
   const choices = useRestartPresetChoices(agentId, presetId, menuOpen && live);
+  const accountChoices = useRestartAccountChoices(agentId, accountId);
 
   if (!live) return null;
 
@@ -128,7 +154,7 @@ function RateLimitChip({
     </TooltipContent>
   );
 
-  if (agentId && choices.length > 0) {
+  if (agentId && (choices.length > 0 || accountChoices.length > 0)) {
     return (
       <>
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -148,20 +174,44 @@ function RateLimitChip({
             {tooltipBody}
           </Tooltip>
           <DropdownMenuContent align="start" className="min-w-[200px]">
-            <DropdownMenuLabel>Restart on preset</DropdownMenuLabel>
-            <RestartOnPresetDropdownItems
-              agentId={agentId}
-              choices={choices}
-              onPick={(preset) => {
-                const panel = usePanelStore.getState().panelsById[terminalId];
-                onPick({
-                  terminalId,
-                  terminalTitle: panel?.title,
-                  agentWorking: terminalHasRunningAgentSession(panel),
-                  preset,
-                });
-              }}
-            />
+            {/* An account switch keeps the pane's preset (#16040), so it goes
+                first: it's the move that changes only who pays. */}
+            {accountChoices.length > 0 && (
+              <>
+                <DropdownMenuLabel>Switch account</DropdownMenuLabel>
+                <RestartOnAccountDropdownItems
+                  choices={accountChoices}
+                  onPick={(account) => {
+                    const panel = usePanelStore.getState().panelsById[terminalId];
+                    onPickAccount({
+                      terminalId,
+                      terminalTitle: panel?.title,
+                      agentWorking: terminalHasRunningAgentSession(panel),
+                      account,
+                    });
+                  }}
+                />
+              </>
+            )}
+            {accountChoices.length > 0 && choices.length > 0 && <DropdownMenuSeparator />}
+            {choices.length > 0 && (
+              <>
+                <DropdownMenuLabel>Restart on preset</DropdownMenuLabel>
+                <RestartOnPresetDropdownItems
+                  agentId={agentId}
+                  choices={choices}
+                  onPick={(preset) => {
+                    const panel = usePanelStore.getState().panelsById[terminalId];
+                    onPick({
+                      terminalId,
+                      terminalTitle: panel?.title,
+                      agentWorking: terminalHasRunningAgentSession(panel),
+                      preset,
+                    });
+                  }}
+                />
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </>
