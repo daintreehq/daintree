@@ -581,8 +581,14 @@ describe("an account switch that kept the conversation (#16135)", () => {
   });
 
   it.each([
-    ["moved to another account", { agentAccountId: "other" }],
-    ["moved to the default login", { agentAccountId: undefined }],
+    [
+      "moved to another account",
+      { agentAccountId: "other", env: { OPENAI_BASE_URL: "https://zai", CODEX_HOME: "/other" } },
+    ],
+    [
+      "moved to the default login",
+      { agentAccountId: undefined, env: { OPENAI_BASE_URL: "https://zai" } },
+    ],
   ])("acts on neither choice once a pane with a refused offer has %s", async (_label, moved) => {
     store.state.panelsById = { "pane-a": refused(moved) };
 
@@ -703,7 +709,8 @@ describe("an account switch that kept the conversation (#16135)", () => {
         "pane-a": refused({
           presetSwitchResume: {
             ...attempt,
-            prior: { agentPresetId: "zai", env: priorEnv, cwd: "/repo" },
+            // Without the key at all, so only the explicit restore clears the folder.
+            prior: { agentPresetId: "zai", ...(priorEnv ? { env: priorEnv } : {}), cwd: "/repo" },
             refused: true,
           },
         }),
