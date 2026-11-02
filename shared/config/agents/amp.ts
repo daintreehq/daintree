@@ -127,6 +127,13 @@ export const config: AgentConfig = {
     configPathsAll: [".local/share/amp/secrets.json", ".amp/oauth"],
     envVar: "AMP_API_KEY",
   },
+  // No folder holds an Amp login on its own: AMP_HOME is the install
+  // directory, secrets.json sits in ~/.local/share/amp (XDG_DATA_HOME on Linux
+  // only, which every other tool the agent runs would follow), and
+  // `amp account switch` saves its choice in Amp's settings for every later
+  // command. An access token in AMP_API_KEY takes precedence over the saved
+  // login, so a preset carrying one runs on that token's account.
+  account: { kind: "api-key", keyVars: ["AMP_API_KEY"] },
   prerequisites: [
     {
       tool: "amp",
@@ -137,7 +144,10 @@ export const config: AgentConfig = {
     },
   ],
   envSuggestions: [
-    { key: "AMP_API_KEY", hint: "Amp API key for headless / CI authentication" },
+    {
+      key: "AMP_API_KEY",
+      hint: "Amp access token, used instead of the amp login (headless use, or another account)",
+    },
     { key: "AMP_HOME", hint: "Override Amp install directory (default: ~/.amp)" },
   ],
 };

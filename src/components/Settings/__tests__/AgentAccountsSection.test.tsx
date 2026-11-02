@@ -38,10 +38,13 @@ afterEach(() => {
 });
 
 describe("AgentAccountsSection (#16040)", () => {
-  it("renders nothing for an agent whose CLI can't hold an account per launch", () => {
-    const { container } = renderSection({}, { agentId: "cursor" });
-    expect(container.innerHTML).toBe("");
-  });
+  it.each(["cursor", "gemini", "amp"])(
+    "renders nothing for %s, whose CLI can't hold an account per launch",
+    (agentId) => {
+      const { container } = renderSection({}, { agentId });
+      expect(container.innerHTML).toBe("");
+    }
+  );
 
   it("offers the add action in the empty list, and no default to choose yet", () => {
     renderSection({});

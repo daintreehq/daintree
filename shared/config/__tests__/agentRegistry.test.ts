@@ -521,7 +521,15 @@ describe("account declarations (#16040)", () => {
     // A keychain login isn't selectable per launch, and an install directory isn't a login.
     expect(getAgentConfigFolderAccount("copilot")).toBeUndefined();
     expect(getAgentConfigFolderAccount("amp")).toBeUndefined();
+    // GEMINI_CLI_HOME moves the whole home directory, not just the login (#16134).
+    expect(getAgentConfigFolderAccount("gemini")).toBeUndefined();
     expect(getAgentConfigFolderAccount("not-an-agent")).toBeUndefined();
+  });
+
+  it("declares how every built-in agent's CLI holds an account (#16134)", () => {
+    for (const id of getAgentIds()) {
+      expect(getAgentConfig(id)?.account, id).toBeDefined();
+    }
   });
 });
 

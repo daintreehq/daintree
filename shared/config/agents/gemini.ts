@@ -150,6 +150,14 @@ export const config: AgentConfig = {
     configPathsAll: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"],
     envVar: "GEMINI_API_KEY",
   },
+  // One login, in ~/.gemini (or the keychain with
+  // GEMINI_FORCE_ENCRYPTED_FILE_STORAGE). GEMINI_CLI_HOME is the only way to
+  // move it, and it stands in for the whole home directory, not just .gemini:
+  // `.env` lookup, `~/.agents` and `~` in configured paths all follow it, so
+  // a second login would take the user's other files with it. An API key
+  // doesn't stand in either: an interactive start uses the sign-in method
+  // saved in settings.json and only reads GEMINI_API_KEY when that is the key.
+  account: { kind: "fixed" },
   prerequisites: [
     {
       tool: "gemini",
