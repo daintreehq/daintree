@@ -38,7 +38,8 @@ import { usePluginPanelActivity } from "./PluginPanelActivity";
 import { isBuiltInPanelKind, isPtyPanel } from "@shared/types/panel";
 import { useRunUnseenAsk } from "@/hooks/useRunFleetBand";
 import { isUnseenAskPane } from "@/lib/paneSessionPresentation";
-import { describeExitStatus } from "@/components/Terminal/exitStatus";
+import { isFailedExitCode } from "@/store/panelFailureStore";
+import { usePanelFailureEdge } from "./usePanelFailureEdge";
 
 /**
  * Base props for all panel types.
@@ -181,7 +182,8 @@ interface GridChromeInputs {
  * user clicks back into it.
  *
  * The two states that need the user — failed and asking — always draw, because
- * they are rare and they are the reason to look at the grid at all. Working is
+ * they are rare and they are the reason to look at the grid at all; failed
+ * only until the user has had the pane in front of them. Working is
  * the common case, so its edge stays behind the highlights preference: six
  * busy agents must not paint six frames. Both keep their edge while focused,
  * over the selected fill: the focused pane is the one last typed into, and
@@ -468,17 +470,19 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       return {
         waitingReason: pty?.waitingReason,
         isRestarting: pty?.isRestarting === true,
-        hostFailed:
-          pty?.spawnError !== undefined ||
-          pty?.restartError !== undefined ||
-          (pty?.reconnectError !== undefined && pty.reconnectError.type !== "timeout"),
+        spawnFailed: pty?.spawnError !== undefined,
+        restartFailed: pty?.restartError !== undefined,
+        reconnectFailed: pty?.reconnectError !== undefined && pty.reconnectError.type !== "timeout",
       };
     })
   );
   const ownUnseenAsk = useRunUnseenAsk(id);
   const ownBlockedState = useDockBlockedState(ownAgentState);
-  // A restart or an exit is newer than the error wait it ends.
+  // A restart or an exit is newer than the error wait it ends. The raw state
+  // must still be waiting too: an agent exit moves it on without clearing the
+  // reason, while the debounced state still holds the wait for a commit.
   const isBlockedWait =
+    ownAgentState === "waiting" &&
     ownBlockedState === "waiting" &&
     paneSignals.waitingReason === "error" &&
     !paneSignals.isRestarting &&
@@ -502,9 +506,22 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // The group only reports waiting for a hidden tab asking unseen.
   const hiddenTabAsking = ambientAgentState === "waiting";
   const isAskingWait = ownAsking || hiddenTabAsking || pluginActivity?.shown === "waiting";
-  const exitedFailed = isExited === true && describeExitStatus(exitCode).failed && exitCode !== 130;
-  const isFailed =
-    isBlockedWait || exitedFailed || paneSignals.hostFailed || submitStatus === "failed";
+  const exitedFailed = isExited === true && isFailedExitCode(exitCode);
+  // The red edge is for a failure the user hasn't had in front of them yet; the
+  // header glyph and the inline banners keep it for as long as it lasts.
+  const isFailed = usePanelFailureEdge(
+    id,
+    {
+      wait: isBlockedWait,
+      exit: exitedFailed,
+      spawn: paneSignals.spawnFailed,
+      restart: paneSignals.restartFailed,
+      reconnect: paneSignals.reconnectFailed,
+      submit: submitStatus === "failed",
+    },
+    isFocused,
+    location
+  );
 
   // Auto-construct the terminal header for PTY-backed terminals when no custom
   // headerContent is provided. One gate covers both the metadata and the status
@@ -746,9 +763,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             isFailed,
             isAsking: isAskingWait,
             isWorkingState: isWorkingState || pluginActivity?.shown === "working",
-            // A clean exit recedes on the edge: its text keeps full contrast, and a
-            // failed exit takes failed above.
-            isExitedClean: isExited === true && !exitedFailed,
+            // A clean exit recedes on the edge: its text keeps full contrast. A
+            // failed exit takes failed above until it has been seen, then
+            // recedes the same way.
+            isExitedClean: isExited === true && !isFailed,
           }),
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
         // Voice-dictation lock border overrides ambient state colours so the
