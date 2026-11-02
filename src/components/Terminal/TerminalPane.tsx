@@ -401,8 +401,6 @@ export interface TerminalPaneProps {
   attachError?: string;
   isMultiPanelGrid?: boolean;
   detectedProcessId?: string;
-  // Group-level ambient state: highest-urgency state across all tabs, for container border styling
-  ambientAgentState?: AgentState;
   // Fleet scope render-time override: force-locks input without mutating the
   // stored TerminalInstance.isInputLocked flag.
   isInputLocked?: boolean;
@@ -448,7 +446,6 @@ function TerminalPaneComponent({
   attachError,
   isMultiPanelGrid = true,
   detectedProcessId,
-  ambientAgentState,
   isInputLocked: isInputLockedOverride,
   tabs,
   onTabClick,
@@ -1527,7 +1524,6 @@ function TerminalPaneComponent({
       submitStatus={submitStatus ?? undefined}
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
-      ambientAgentState={ambientAgentState}
       isSelected={isSelected}
       isFleetFollower={isFleetFollower}
       isVoiceArming={isVoiceArming}

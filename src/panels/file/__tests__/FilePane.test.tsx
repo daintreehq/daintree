@@ -7,6 +7,11 @@ import type { GitStatus } from "@shared/types/git";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
 import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
+import {
+  GridGroupAttentionContext,
+  useGridGroupAttention,
+  type GridGroupAttention,
+} from "@/components/Panel/gridGroupAttention";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -15,12 +20,20 @@ import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 // wiring — the seam that shipped the bug. The stub also renders `toolbar`, so
 // the toolbar-owned open-in-editor error banner (#11114) is observable.
 const contentPanelProps: Array<Record<string, unknown>> = [];
+// The tab group edge each render's ContentPanel took, read the way the real one reads it.
+const groupEdges: Array<GridGroupAttention | null> = [];
 
 vi.mock("@/components/Panel/ContentPanel", () => ({
   ContentPanel: (
-    props: Record<string, unknown> & { toolbar?: ReactNode; children?: ReactNode }
+    props: Record<string, unknown> & {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      toolbar?: ReactNode;
+      children?: ReactNode;
+    }
   ) => {
     contentPanelProps.push(props);
+    groupEdges.push(useGridGroupAttention(props.id, props.location ?? "grid"));
     // Render children too so the Source/Rendered branch is observable, not just
     // the toolbar (#11191 HTML preview branch).
     return (
@@ -420,6 +433,7 @@ beforeEach(() => {
 
 afterEach(() => {
   contentPanelProps.length = 0;
+  groupEdges.length = 0;
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
@@ -449,6 +463,38 @@ describe("FilePane restore-control wiring", () => {
     const props = lastContentPanelProps();
     expect(props.showRestoreControl).toBe(true);
     expect(props.onRestore).toBeTypeOf("function");
+  });
+});
+
+describe("FilePane tab group edges (#16151)", () => {
+  function inGroup(panelId: string) {
+    return (
+      <GridGroupAttentionContext.Provider
+        value={{ panelId, ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <FilePane
+          id="file-1"
+          title="spec.md"
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </GridGroupAttentionContext.Provider>
+    );
+  }
+
+  it("draws its tab group's edge for a hidden tab's ask and failure", () => {
+    render(inGroup("file-1"));
+    expect(groupEdges.at(-1)).toMatchObject({
+      ambientAgentState: "waiting",
+      hiddenTabFailed: true,
+    });
+  });
+
+  it("takes no edge meant for another tab", () => {
+    render(inGroup("other"));
+    expect(groupEdges.at(-1)).toBeNull();
   });
 });
 

@@ -7,7 +7,8 @@ import { isNeedsYouPane, isUnseenAskPane } from "@/lib/paneSessionPresentation";
 
 type BlockedState = "waiting" | null;
 
-const DEBOUNCE_MS = 800;
+/** How long a pane must stay waiting before its blocked edge draws. */
+export const BLOCKED_DEBOUNCE_MS = 800;
 
 function toBlockedState(agentState: AgentState | undefined): BlockedState {
   if (agentState === "waiting") return "waiting";
@@ -100,7 +101,7 @@ export function useDockBlockedState(agentState: AgentState | undefined): Blocked
         // Entering blocked from non-blocked — delay
         timerRef.current = setTimeout(() => {
           setDebouncedState(rawState);
-        }, DEBOUNCE_MS);
+        }, BLOCKED_DEBOUNCE_MS);
       }
     } else {
       // Leaving blocked state — clear immediately

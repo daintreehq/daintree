@@ -3,6 +3,7 @@ import { act, render } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
+import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -180,21 +181,32 @@ vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
 }));
 
-vi.mock("@/components/Panel", () => ({
-  ContentPanel: (props: {
-    children: React.ReactNode;
-    toolbar?: React.ReactNode;
-    [key: string]: unknown;
-  }) => {
-    contentPanelPropsSpy(props);
-    return (
-      <div data-testid="content-panel">
-        {props.toolbar}
-        {props.children}
-      </div>
-    );
-  },
-}));
+vi.mock("@/components/Panel", async () => {
+  // Reads its tab group's edge the way the real ContentPanel does.
+  const { useGridGroupAttention } = await import("@/components/Panel/gridGroupAttention");
+  return {
+    ContentPanel: (props: {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      children: React.ReactNode;
+      toolbar?: React.ReactNode;
+      [key: string]: unknown;
+    }) => {
+      contentPanelPropsSpy(props);
+      const attention = useGridGroupAttention(props.id, props.location ?? "grid");
+      return (
+        <div
+          data-testid="content-panel"
+          data-group-ambient={attention?.ambientAgentState}
+          data-group-failed={attention?.hiddenTabFailed || undefined}
+        >
+          {props.toolbar}
+          {props.children}
+        </div>
+      );
+    },
+  };
+});
 
 function emitWebviewEvent(
   webview: MockWebviewElement,
@@ -306,6 +318,29 @@ describe("BrowserPane webview lifecycle regression", () => {
     document.createElement = originalCreateElement;
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+  });
+
+  it("draws its tab group's edge for a hidden tab's ask and failure (#16151)", () => {
+    const { getByTestId, rerender } = render(
+      <GridGroupAttentionContext.Provider
+        value={{ panelId: baseProps.id, ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <BrowserPane {...baseProps} />
+      </GridGroupAttentionContext.Provider>
+    );
+    const panel = getByTestId("content-panel");
+    expect(panel.getAttribute("data-group-ambient")).toBe("waiting");
+    expect(panel.getAttribute("data-group-failed")).toBe("true");
+
+    rerender(
+      <GridGroupAttentionContext.Provider
+        value={{ panelId: "other", ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <BrowserPane {...baseProps} />
+      </GridGroupAttentionContext.Provider>
+    );
+    expect(getByTestId("content-panel").hasAttribute("data-group-ambient")).toBe(false);
+    expect(getByTestId("content-panel").hasAttribute("data-group-failed")).toBe(false);
   });
 
   it("renders webview with allowpopups attribute for target=_blank support", () => {

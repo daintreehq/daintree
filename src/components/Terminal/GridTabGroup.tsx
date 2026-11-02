@@ -15,7 +15,11 @@ import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
 import { addTabForPanel } from "./useContentGridContext";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
-import { useGridGroupAmbientState } from "./useGridGroupAmbientState";
+import { useGridGroupAmbientState, useGridGroupHiddenFailure } from "./useGridGroupAmbientState";
+import {
+  GridGroupAttentionContext,
+  type GridGroupAttention,
+} from "@/components/Panel/gridGroupAttention";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -167,8 +171,15 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const isGroupFocused = useMemo(() => panels.some((p) => p.id === focusedId), [panels, focusedId]);
 
   // Highest-urgency agent state across the tabs, so the group container shows
-  // an ask or work even when that tab is not the one in front.
-  const groupAmbientState = useGridGroupAmbientState(panels, activeTabId);
+  // an ask, a failure or work even when that tab is not the one in front. It
+  // reaches the shown pane by context, whatever that pane's kind.
+  const shownPanelId = activePanel?.id ?? "";
+  const groupAmbientState = useGridGroupAmbientState(panels, shownPanelId);
+  const hiddenTabFailed = useGridGroupHiddenFailure(panels, shownPanelId);
+  const groupAttention = useMemo<GridGroupAttention>(
+    () => ({ panelId: shownPanelId, ambientAgentState: groupAmbientState, hiddenTabFailed }),
+    [shownPanelId, groupAmbientState, hiddenTabFailed]
+  );
 
   // Hand focus to the destination tab when switching tabs within a focused
   // group. The registry handler routes it to the tab's home, xterm or the
@@ -297,19 +308,20 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const isFocused = activePanel.id === focusedId;
 
   return (
-    <GridPanel
-      terminalId={activePanel.id}
-      isFocused={isFocused}
-      isMaximized={isMaximized}
-      isMultiPanelGrid={isMultiPanelGrid}
-      ambientAgentState={groupAmbientState}
-      tabs={tabs}
-      groupId={group.id}
-      onTabClick={handleTabClick}
-      onTabClose={handleTabClose}
-      onTabRename={handleTabRename}
-      onAddTab={canAddTab ? handleAddTab : undefined}
-      onTabReorder={handleTabReorder}
-    />
+    <GridGroupAttentionContext.Provider value={groupAttention}>
+      <GridPanel
+        terminalId={activePanel.id}
+        isFocused={isFocused}
+        isMaximized={isMaximized}
+        isMultiPanelGrid={isMultiPanelGrid}
+        tabs={tabs}
+        groupId={group.id}
+        onTabClick={handleTabClick}
+        onTabClose={handleTabClose}
+        onTabRename={handleTabRename}
+        onAddTab={canAddTab ? handleAddTab : undefined}
+        onTabReorder={handleTabReorder}
+      />
+    </GridGroupAttentionContext.Provider>
   );
 });
