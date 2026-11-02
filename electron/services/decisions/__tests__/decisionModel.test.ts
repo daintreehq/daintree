@@ -401,15 +401,20 @@ describe("the decision model's runtime (#16026)", () => {
     ).resolves.toEqual({ action: "abstain", reason: "model-off" });
   });
 
-  it("cancels an evaluation asked for just before a close, before it sends anything", async () => {
+  it("cancels an evaluation closed between taking its turn and starting, before it sends anything", async () => {
     const cli = rebasingCli();
     const { runtime } = makeRuntime({ claude: cli });
     await runtime.update({ modelLearning: true, modelAdapter: "claude" });
     await learnPast(runtime);
 
+    // The idle queue runs the evaluation's turn in the next microtask; this close lands right after it.
     const evaluating = runtime.evaluate();
-    await runtime.close();
+    let closing: Promise<void> | null = null;
+    queueMicrotask(() => {
+      closing = runtime.close();
+    });
     await expect(evaluating).rejects.toThrow(/cancelled/);
+    await closing;
     expect(cli.calls).toHaveLength(0);
   });
 

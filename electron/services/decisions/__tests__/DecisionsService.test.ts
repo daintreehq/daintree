@@ -33,6 +33,7 @@ import {
   type ModelPrompt,
 } from "@daintreehq/decisions-model";
 import { SqliteHistoryStore } from "@daintreehq/decisions-model/sqlite";
+import { DecisionModelRuntime } from "../decisionModel.js";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
@@ -1886,6 +1887,45 @@ describe("DecisionsService decision model (#16026)", () => {
       await t.service.stop();
     } finally {
       t.cleanup();
+    }
+  });
+
+  it("makes no model for a settings change while the lifetime's model is still closing", async () => {
+    for (const ending of ["stop", "erase"] as const) {
+      const t = modelled(undefined, {
+        openRows: async () => ({ erase: () => {}, exist: () => false }),
+        forgetIdentity: () => on({ modelLearning: true }),
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = DecisionModelRuntime.prototype.close;
+      const close = vi
+        .spyOn(DecisionModelRuntime.prototype, "close")
+        .mockImplementation(async function (this: DecisionModelRuntime) {
+          await held;
+          return original.call(this);
+        });
+      try {
+        await t.service.start(on({ ...RELAY, modelLearning: true }));
+        await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+
+        const ended = ending === "stop" ? t.service.stop() : t.service.eraseLocalData();
+        await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+        t.service.updateSettings(on({ ...RELAY, modelLearning: true }));
+        expect(t.service.getDecisionModel(), ending).toBeNull();
+        release();
+        await ended;
+
+        // Only the deletion's own reopen may make one, and it is the one model after it.
+        if (ending === "erase") await vi.waitFor(() => expect(t.histories).toHaveLength(2));
+        else expect(t.service.getDecisionModel()).toBeNull();
+        expect(t.histories.length, ending).toBe(ending === "stop" ? 1 : 2);
+        expect(t.histories[0]!.close, ending).toHaveBeenCalledTimes(1);
+        await t.service.stop();
+      } finally {
+        close.mockRestore();
+        t.cleanup();
+      }
     }
   });
 

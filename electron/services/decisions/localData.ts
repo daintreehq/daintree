@@ -134,31 +134,35 @@ export type EraseRecovery = "none" | "restored" | "finished";
  */
 export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<EraseRecovery> {
   const pending: string[] = [];
-  let superseded = false;
+  // The keys' marker, when new keys were sealed beside it: kept until the rest
+  // is done, since it is the only record that the relay record is the new one's.
+  let superseded: string | null = null;
   for (const file of erasedFiles(deps)) {
     const aside = erasingKeyFilePath(file);
     if (!(await exists(aside))) continue;
-    if (await exists(file)) {
-      if (file === deps.keyFilePath) superseded = true;
-      await durableUnlinkIfPresent(aside);
-    } else {
-      pending.push(file);
-    }
+    if (!(await exists(file))) pending.push(file);
+    else if (file === deps.keyFilePath) superseded = aside;
+    else await durableUnlinkIfPresent(aside);
   }
   if (pending.length === 0) {
-    await syncKeyDirectory(deps.keyFilePath);
+    if (superseded !== null) await durableUnlinkIfPresent(superseded);
+    else await syncKeyDirectory(deps.keyFilePath);
     return "none";
   }
   const rows = await deps.openRows();
   if (rows.exist()) {
     // Not synced: a move back lost to a crash is made again, since the rows are still there.
     for (const file of pending) await resilientRename(erasingKeyFilePath(file), file);
+    if (superseded !== null) await durableUnlinkIfPresent(superseded);
     return "restored";
   }
-  if (!superseded) deps.forgetIdentity();
-  for (const file of pending) await durableUnlinkIfPresent(erasingKeyFilePath(file));
+  if (superseded === null) deps.forgetIdentity();
+  // Before any marker goes: a model file left without one would be opened again.
   for (const file of deps.modelFiles ?? []) await durableUnlinkIfPresent(file);
-  return superseded ? "none" : "finished";
+  // The keys' marker last, so a crash partway still finds this deletion to finish.
+  for (const file of [...pending].reverse()) await durableUnlinkIfPresent(erasingKeyFilePath(file));
+  if (superseded !== null) await durableUnlinkIfPresent(superseded);
+  return superseded === null ? "finished" : "none";
 }
 
 /**
@@ -221,7 +225,10 @@ export async function eraseLocalDecisionsData(deps: LocalEraseDeps): Promise<Loc
   }
   try {
     deps.forgetIdentity();
-    for (const file of setAside) await durableUnlinkIfPresent(erasingKeyFilePath(file));
+    // The keys' marker last, so one left by a failure here still names this deletion.
+    for (const file of [...setAside].reverse()) {
+      await durableUnlinkIfPresent(erasingKeyFilePath(file));
+    }
   } catch {
     return { result: "incomplete", erased: true };
   }
