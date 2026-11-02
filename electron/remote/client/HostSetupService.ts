@@ -94,7 +94,8 @@ const UNSTARTABLE_HOLD_MS = 10 * 60_000;
  * set up to start), it was quit there on purpose, a recent check said so (the
  * hold), or an install or removal of the host is under way here.
  */
-export type HostStartRefusal = "unreached" | "not-installed" | "host-mode-off" | "quit" | "held" | "busy";
+export type HostStartRefusal =
+  "unreached" | "not-installed" | "host-mode-off" | "quit" | "held" | "busy";
 
 function targetKey(connection: HostConnection): string {
   let key: string;

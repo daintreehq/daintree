@@ -454,7 +454,12 @@ describe("HostSetupService", () => {
       const cases: Array<[string, string, boolean, string]> = [
         ["quit, unasked", MAC_QUIT(), false, "quit"],
         ["Host mode off, asked", MAC_STOPPED(false), true, "host-mode-off"],
-        ["never a host, asked", MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, ""), true, "host-mode-off"],
+        [
+          "never a host, asked",
+          MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, ""),
+          true,
+          "host-mode-off",
+        ],
         ["Linux service with Host mode off, asked", LINUX_OFF, true, "host-mode-off"],
         ["not installed, asked", MAC_UNINSTALLED, true, "not-installed"],
         ["probe cut short, asked", CUT_SHORT, true, "unreached"],

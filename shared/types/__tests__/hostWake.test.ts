@@ -37,7 +37,13 @@ describe("the wake's LAN", () => {
   });
 
   it("refuses what has no broadcast address or isn't IPv4", () => {
-    for (const text of ["192.168.1.0/31", "192.168.1.0/32", "10.0.0.0/7", "192.168.1.0", "fe80::/64"]) {
+    for (const text of [
+      "192.168.1.0/31",
+      "192.168.1.0/32",
+      "10.0.0.0/7",
+      "192.168.1.0",
+      "fe80::/64",
+    ]) {
       expect(parseWakeLan(text)).toBeNull();
     }
     expect(parseWakeLan("192.168.256.0/24")).toBeNull();

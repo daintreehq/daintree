@@ -34,7 +34,11 @@ function descriptor(
 }
 
 const WAKE = { mac: "aa:bb:cc:dd:ee:f0", lan: "192.168.1.0/24" };
-const ROUTE: WakeRoute = { kind: "route", localAddress: "192.168.1.20", broadcast: "192.168.1.255" };
+const ROUTE: WakeRoute = {
+  kind: "route",
+  localAddress: "192.168.1.20",
+  broadcast: "192.168.1.255",
+};
 
 function unreachable(
   detail: string | null,
@@ -262,7 +266,10 @@ describe("HostBringBackService", () => {
     await flush();
     w.emitStart({ kind: "checking" });
     w.emitStart({ kind: "start-requested" });
-    w.emitStart({ kind: "failed", reason: "Couldn't start Daintree on studio.local. Log in there" });
+    w.emitStart({
+      kind: "failed",
+      reason: "Couldn't start Daintree on studio.local. Log in there",
+    });
     await expect(answer).resolves.toMatchObject({
       status: "not_startable",
       startRequested: true,
@@ -274,7 +281,9 @@ describe("HostBringBackService", () => {
     const w = world();
     const answer = w.service.bringBack(HOST);
     await flush();
-    w.setLink(unreachable("no Daintree in Host mode", { hostModeOff: true, stoppedRetrying: true }));
+    w.setLink(
+      unreachable("no Daintree in Host mode", { hostModeOff: true, stoppedRetrying: true })
+    );
     await expect(answer).resolves.toMatchObject({ status: "not_startable", reached: true });
   });
 

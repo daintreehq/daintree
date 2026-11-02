@@ -246,9 +246,9 @@ describe("runHostControlTool (#13493)", () => {
     }
     expect(runtime.bringBack).toHaveBeenCalledTimes(1);
     // No assistant session, no attempt.
-    expect(await runHostControlTool("host.bringBack", { hostId: "studio" }, undefined)).toMatchObject(
-      { ok: false, code: "NOT_ELIGIBLE" }
-    );
+    expect(
+      await runHostControlTool("host.bringBack", { hostId: "studio" }, undefined)
+    ).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
     uninstall();
   });
 

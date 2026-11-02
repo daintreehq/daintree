@@ -38,8 +38,14 @@ describe("describeBringBack (#16170)", () => {
 
   it("says which way a wake couldn't happen", () => {
     expect(
-      describeBringBack(answer({ status: "not_wakeable", wake: "not_on_lan" }), "Studio", "10.0.0.0/24")
-    ).toBe("Studio didn't answer over SSH, and this machine isn't on its LAN (10.0.0.0/24) to wake it");
+      describeBringBack(
+        answer({ status: "not_wakeable", wake: "not_on_lan" }),
+        "Studio",
+        "10.0.0.0/24"
+      )
+    ).toBe(
+      "Studio didn't answer over SSH, and this machine isn't on its LAN (10.0.0.0/24) to wake it"
+    );
     expect(
       describeBringBack(
         answer({ status: "not_wakeable", wake: "failed", observed: "EADDRNOTAVAIL" }),

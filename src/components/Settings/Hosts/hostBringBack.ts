@@ -74,9 +74,7 @@ export function describeBringBack(
  */
 export function useHostBringBacks() {
   const [pending, setPending] = useState<ReadonlySet<HostId>>(() => new Set());
-  const [outcomes, setOutcomes] = useState<ReadonlyMap<HostId, BringBackOutcome>>(
-    () => new Map()
-  );
+  const [outcomes, setOutcomes] = useState<ReadonlyMap<HostId, BringBackOutcome>>(() => new Map());
   const settle = (hostId: HostId, outcome: BringBackOutcome) => {
     setPending((current) => {
       const next = new Set(current);
@@ -96,7 +94,9 @@ export function useHostBringBacks() {
     remoteHostsClient.bringBack(hostId).then(
       (answer) => settle(hostId, { answer }),
       (error: unknown) =>
-        settle(hostId, { error: `Couldn't bring it back: ${clientErrorText(error, "unknown error")}` })
+        settle(hostId, {
+          error: `Couldn't bring it back: ${clientErrorText(error, "unknown error")}`,
+        })
     );
   };
   return {

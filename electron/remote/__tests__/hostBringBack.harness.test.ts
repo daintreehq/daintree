@@ -72,14 +72,26 @@ vi.mock("../client/remoteShell.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../client/remoteShell.js")>();
   const run = async (script: string) => {
     remote.scripts.push(script);
-    return { code: 0, stdout: await remote.answer(script), stderr: "", spawnError: null, timedOut: false };
+    return {
+      code: 0,
+      stdout: await remote.answer(script),
+      stderr: "",
+      spawnError: null,
+      timedOut: false,
+    };
   };
   return {
     ...original,
     createSshCommandChannel: () => ({
       exec: (script: string) => run(script),
       execWithInput: (script: string) => run(script),
-      sendFile: async () => ({ code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false }),
+      sendFile: async () => ({
+        code: 0,
+        stdout: "",
+        stderr: "",
+        spawnError: null,
+        timedOut: false,
+      }),
     }),
   };
 });
@@ -133,7 +145,12 @@ function probeOutput(host: HostSide): string {
     "@@dt:download yes",
     `@@dt:hostmodestate ${JSON.stringify(state)}`,
     ...(host.listening
-      ? ["@@dt:running yes", "@@dt:listening yes", `@@dt:hostpid ${process.pid}`, "@@dt:launchagent yes"]
+      ? [
+          "@@dt:running yes",
+          "@@dt:listening yes",
+          `@@dt:hostpid ${process.pid}`,
+          "@@dt:launchagent yes",
+        ]
       : []),
     "@@dt:end",
   ].join("\n");

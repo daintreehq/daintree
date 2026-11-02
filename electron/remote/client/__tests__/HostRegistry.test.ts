@@ -524,7 +524,10 @@ describe("HostRegistry", () => {
     it("refuses a wake for a WSL distro: it is this PC (#16170)", () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const registry = new HostRegistry(memoryStore());
-      const distro = registry.add({ name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } });
+      const distro = registry.add({
+        name: "Ubuntu",
+        connection: { kind: "wsl", distro: "Ubuntu" },
+      });
       expect(() =>
         registry.update({
           hostId: distro.id,

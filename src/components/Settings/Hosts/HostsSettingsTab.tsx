@@ -235,71 +235,71 @@ export default function HostsSettingsTab() {
                   ? null
                   : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor);
                 return (
-                <SettingsRow
-                  key={descriptor.id}
-                  label={descriptor.name}
-                  description={
-                    <>
-                      {formatHostConnection(descriptor.connection)} ·{" "}
-                      {descriptor.platform
-                        ? platformLabel(descriptor.platform, null)
-                        : "Not seen yet"}
-                      <br />
-                      {connectionLabel(connection)}
-                      {wake && <> · {wake}</>}
-                    </>
-                  }
-                  error={said ? <span role="alert">{said}</span> : undefined}
-                  control={
-                    <div className="flex items-center gap-1.5">
-                      {(bringing || canBringBack(connection)) && (
-                        // Wakes it where a wake is set up, then starts Daintree there if it can.
+                  <SettingsRow
+                    key={descriptor.id}
+                    label={descriptor.name}
+                    description={
+                      <>
+                        {formatHostConnection(descriptor.connection)} ·{" "}
+                        {descriptor.platform
+                          ? platformLabel(descriptor.platform, null)
+                          : "Not seen yet"}
+                        <br />
+                        {connectionLabel(connection)}
+                        {wake && <> · {wake}</>}
+                      </>
+                    }
+                    error={said ? <span role="alert">{said}</span> : undefined}
+                    control={
+                      <div className="flex items-center gap-1.5">
+                        {(bringing || canBringBack(connection)) && (
+                          // Wakes it where a wake is set up, then starts Daintree there if it can.
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            data-host-bring-back={descriptor.id}
+                            aria-label={`Bring back ${descriptor.name}`}
+                            loading={bringing}
+                            onClick={() => bringBacks.bringBack(descriptor.id)}
+                          >
+                            Bring back
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
-                          data-host-bring-back={descriptor.id}
-                          aria-label={`Bring back ${descriptor.name}`}
-                          loading={bringing}
-                          onClick={() => bringBacks.bringBack(descriptor.id)}
+                          aria-label={`Details for ${descriptor.name}`}
+                          data-host-details={descriptor.id}
+                          onClick={(event) => {
+                            setFocusBackFor(event.detail === 0 ? descriptor.id : null);
+                            setDetailHostId(descriptor.id);
+                          }}
                         >
-                          Bring back
+                          Details
                         </Button>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        aria-label={`Details for ${descriptor.name}`}
-                        data-host-details={descriptor.id}
-                        onClick={(event) => {
-                          setFocusBackFor(event.detail === 0 ? descriptor.id : null);
-                          setDetailHostId(descriptor.id);
-                        }}
-                      >
-                        Details
-                      </Button>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost-danger"
-                            size="icon-sm"
-                            aria-label={`Remove ${descriptor.name} from this device`}
-                            onClick={() => {
-                              setForgetError(null);
-                              setForgetTarget({
-                                id: descriptor.id,
-                                name: descriptor.name,
-                                connection: descriptor.connection,
-                              });
-                            }}
-                          >
-                            <Trash2 aria-hidden="true" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Remove host</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  }
-                />
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost-danger"
+                              size="icon-sm"
+                              aria-label={`Remove ${descriptor.name} from this device`}
+                              onClick={() => {
+                                setForgetError(null);
+                                setForgetTarget({
+                                  id: descriptor.id,
+                                  name: descriptor.name,
+                                  connection: descriptor.connection,
+                                });
+                              }}
+                            >
+                              <Trash2 aria-hidden="true" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Remove host</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    }
+                  />
                 );
               })
           )}

@@ -175,7 +175,10 @@ export class HostBringBackService {
         finish("connected");
         return;
       }
-      const deadline = setTimeout(() => finish("timed_out"), deps.deadlineMs ?? BRING_BACK_DEADLINE_MS);
+      const deadline = setTimeout(
+        () => finish("timed_out"),
+        deps.deadlineMs ?? BRING_BACK_DEADLINE_MS
+      );
       cleanups.push(() => clearTimeout(deadline));
       cleanups.push(deps.hold(hostId));
       cleanups.push(deps.allowStart(hostId));

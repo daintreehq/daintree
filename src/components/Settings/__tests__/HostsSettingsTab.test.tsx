@@ -239,7 +239,9 @@ describe("HostsSettingsTab", () => {
     expect(await screen.findByText(/Wakes over 192\.168\.1\.0\/24/)).toBeTruthy();
     expect(screen.getByText(/No wake set up/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Bring back studio-03" }));
-    await waitFor(() => expect(remoteHosts.bringBack).toHaveBeenCalledWith({ hostId: "studio-03" }));
+    await waitFor(() =>
+      expect(remoteHosts.bringBack).toHaveBeenCalledWith({ hostId: "studio-03" })
+    );
     expect((await screen.findByRole("alert")).textContent).toBe(
       "Daintree on studio-03 wasn't started: ssh got in; Daintree isn't running there and its Host mode isn't on."
     );

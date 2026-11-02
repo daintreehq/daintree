@@ -25,7 +25,8 @@ export function parseWakeMac(text: string): string | null {
   const trimmed = text.trim().toLowerCase();
   let hex: string;
   if (MAC_SEPARATED.test(trimmed)) hex = trimmed.replace(/[:-]/g, "");
-  else if (/^[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}$/.test(trimmed)) hex = trimmed.replace(/\./g, "");
+  else if (/^[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}$/.test(trimmed))
+    hex = trimmed.replace(/\./g, "");
   else if (/^[0-9a-f]{12}$/.test(trimmed)) hex = trimmed;
   else return null;
   if (hex.length !== 12 || /^0+$/.test(hex)) return null;
@@ -137,7 +138,13 @@ export type HostBringBackStatus = (typeof HOST_BRING_BACK_STATUSES)[number];
  * it; `not_on_lan` when this machine has no address on its LAN; `failed` when
  * sending it failed.
  */
-export const HOST_WAKE_RESULTS = ["sent", "not_needed", "not_set_up", "not_on_lan", "failed"] as const;
+export const HOST_WAKE_RESULTS = [
+  "sent",
+  "not_needed",
+  "not_set_up",
+  "not_on_lan",
+  "failed",
+] as const;
 export type HostWakeResult = (typeof HOST_WAKE_RESULTS)[number];
 
 /** Longest observed text an answer carries. */

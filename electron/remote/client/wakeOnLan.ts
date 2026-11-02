@@ -18,8 +18,7 @@ const SEND_TIMEOUT_MS = 2_000;
  * target, which an overlay network (Tailscale) routes but won't broadcast.
  */
 export type WakeRoute =
-  | { kind: "route"; localAddress: string; broadcast: string }
-  | { kind: "not_on_lan" };
+  { kind: "route"; localAddress: string; broadcast: string } | { kind: "not_on_lan" };
 
 /** This machine's IPv4 addresses with their netmasks, as `os.networkInterfaces()` lists them. */
 export type LocalInterfaces = ReturnType<typeof os.networkInterfaces>;
@@ -53,7 +52,12 @@ export function magicPacket(mac: string): Buffer {
 export interface WakeSocket {
   bind(options: { address: string; port: number }, callback: () => void): void;
   setBroadcast(flag: boolean): void;
-  send(packet: Buffer, port: number, address: string, callback: (error: Error | null) => void): void;
+  send(
+    packet: Buffer,
+    port: number,
+    address: string,
+    callback: (error: Error | null) => void
+  ): void;
   on(event: "error", listener: (error: Error) => void): void;
   close(): void;
 }

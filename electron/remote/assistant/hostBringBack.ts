@@ -59,7 +59,8 @@ export async function runHostBringBack(
     answer = await bringBack(hostId);
   } catch (error) {
     // Removed between the look above and the attempt.
-    if (isAppError(error) && error.code === "NOT_FOUND") return refusal("not_found", NO_HOST_DETAIL);
+    if (isAppError(error) && error.code === "NOT_FOUND")
+      return refusal("not_found", NO_HOST_DETAIL);
     throw error;
   }
   return {

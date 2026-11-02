@@ -162,14 +162,21 @@ describe("HostStarts", () => {
     await transport.open(signal(), { mayStart: false, fresh: true }).catch(() => undefined);
     await starts.ensureRunning("studio-01", studio, signal());
     // Another host is no one's ask.
-    await starts.transport("mini", inner).open(signal(), { mayStart: false }).catch(() => undefined);
+    await starts
+      .transport("mini", inner)
+      .open(signal(), { mayStart: false })
+      .catch(() => undefined);
     release();
     release();
     expect(starts.isExplicit("studio-01")).toBe(true);
     second();
     await starts.ensureRunning("studio-01", studio, signal());
     expect(starts.isExplicit("studio-01")).toBe(false);
-    expect(opened).toEqual([{ mayStart: false }, { mayStart: true, fresh: true }, { mayStart: false }]);
+    expect(opened).toEqual([
+      { mayStart: false },
+      { mayStart: true, fresh: true },
+      { mayStart: false },
+    ]);
     expect(explicit).toEqual([true, false]);
   });
 
