@@ -254,7 +254,9 @@ describe("ScheduleOsJobStatus after a change (#16168)", () => {
       checking: true,
     });
     expect(view.text()).not.toContain("Checking");
-    act(() => vi.advanceTimersByTime(250));
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
     expect(view.text()).toContain("Checking the job that starts Daintree");
 
     view.update({ checking: false });
@@ -280,7 +282,9 @@ describe("ScheduleOsJobStatus after a change (#16168)", () => {
       switchesNow: off,
       checking: true,
     });
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
     expect(text()).not.toContain("Checking");
   });
 });

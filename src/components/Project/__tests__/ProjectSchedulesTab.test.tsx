@@ -320,6 +320,20 @@ describe("ProjectSchedulesTab — the project's switches (#16168)", () => {
     act(() => useSchedulesViewStore.getState().openEditor(OPTED_IN));
     await waitFor(() => expect(option()).not.toBeNull());
     expect(option()?.getAttribute("aria-checked")).toBe("false");
+    act(() => {
+      useSchedulesViewStore.getState().closeEditor();
+      useSchedulesViewStore.getState().clearEditor();
+    });
+
+    // A read that fails keeps the old snapshot, which still never counts.
+    client.list.mockRejectedValue(new Error("main went away"));
+    act(() => useSchedulesViewStore.getState().openEditor(OPTED_IN));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "main went away, so this option keeps its saved setting"
+      )
+    );
+    expect(option()?.getAttribute("aria-checked")).toBe("false");
   });
 
   it("turns the project's schedules on, and their next runs come back with main's answer", async () => {

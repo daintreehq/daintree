@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ProjectScheduleSwitches } from "@shared/types/scheduledRuns";
 import type {
   ScheduleOsJobStatus,
@@ -62,6 +62,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+const pushes = new EventTarget();
+let pushed: ProjectScheduleSwitches | null = null;
+
+/** Hands the harness switches main pushed, as another window's change arrives. */
+function push(switches: ProjectScheduleSwitches) {
+  pushed = switches;
+  pushes.dispatchEvent(new Event("push"));
+}
+
 /** The switches as the tab holds them: main's answers, folded in. */
 function Harness({
   initial,
@@ -71,6 +80,11 @@ function Harness({
   status: ScheduleOsJobStatus | null;
 }) {
   const [switches, setSwitches] = useState(initial);
+  useEffect(() => {
+    const take = () => setSwitches(pushed);
+    pushes.addEventListener("push", take);
+    return () => pushes.removeEventListener("push", take);
+  }, []);
   return (
     <ScheduleSwitches
       switches={switches}
@@ -228,6 +242,8 @@ describe("ScheduleSwitches (#16168)", () => {
       "Couldn't turn off schedules. The disk is full"
     );
     expect(checked(schedulesOn())).toBe(true);
+    // Another window turned them off meanwhile: Retry still asks for off, not a flip.
+    act(() => push(OFF));
 
     const retry = screen.getByRole("button", { name: "Retry" });
     retry.focus();
@@ -240,16 +256,52 @@ describe("ScheduleSwitches (#16168)", () => {
     await act(async () => retried.resolve({ status: "saved", snapshot: snapshot(OFF) }));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(checked(schedulesOn())).toBe(false);
-    expect(document.activeElement).toBe(schedulesOn());
+    await waitFor(() => expect(document.activeElement).toBe(schedulesOn()));
+  });
+
+  it("hands focus to the switch when a retry is refused and Retry goes", async () => {
+    const retried = deferred<ScheduleSetSwitchesOutcome>();
+    client.setSwitches
+      .mockRejectedValueOnce(new Error("main went away"))
+      .mockReturnValueOnce(retried.promise);
+    show(ON);
+    await act(async () => fireEvent.click(startSwitch()));
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    await act(async () =>
+      retried.resolve({
+        status: "invalid",
+        issues: [{ path: "switches.startWhenClosed", cronField: null, message: "Not here" }],
+      })
+    );
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(startSwitch()));
+  });
+
+  it("leaves focus where the keyboard went while a retry was pending", async () => {
+    const retried = deferred<ScheduleSetSwitchesOutcome>();
+    client.setSwitches
+      .mockRejectedValueOnce(new Error("main went away"))
+      .mockReturnValueOnce(retried.promise);
+    show(ON);
+    await act(async () => fireEvent.click(schedulesOn()));
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    startSwitch().focus();
+    await act(async () => retried.resolve({ status: "saved", snapshot: snapshot(OFF) }));
+    await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    expect(document.activeElement).toBe(startSwitch());
   });
 
   it("clears a failure when another change goes through", async () => {
-    client.setSwitches
-      .mockRejectedValueOnce(new Error("The disk is full"))
-      .mockResolvedValueOnce({
-        status: "saved",
-        snapshot: snapshot({ ...ON, startWhenClosed: true }),
-      });
+    client.setSwitches.mockRejectedValueOnce(new Error("The disk is full")).mockResolvedValueOnce({
+      status: "saved",
+      snapshot: snapshot({ ...ON, startWhenClosed: true }),
+    });
     show(ON);
 
     await act(async () => fireEvent.click(schedulesOn()));

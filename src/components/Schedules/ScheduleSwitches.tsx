@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -43,6 +43,8 @@ const INTENT_WORDS: Record<SwitchKey, string> = {
   startWhenClosed: "starting Daintree for due schedules",
 };
 
+const SWITCH_FAILURE_SELECTOR = "[data-switch-failure]";
+
 interface Failure {
   message: string;
   /** Absent when main refused it: asking again would be refused again. */
@@ -75,10 +77,24 @@ export function ScheduleSwitches({
   // Set before the render that disables a second click, which can come first.
   const pendingRef = useRef(false);
   const [failure, setFailure] = useState<Failure | null>(null);
-  const switchIds: Record<SwitchKey, string> = {
-    schedulesOn: useId(),
-    startWhenClosed: useId(),
-  };
+  const schedulesOnId = useId();
+  const startWhenClosedId = useId();
+  // The switch a retry hands focus back to, once the answer has rendered.
+  const [refocus, setRefocus] = useState<SwitchKey | null>(null);
+
+  useEffect(() => {
+    if (refocus === null) return;
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(
+        refocus === "schedulesOn" ? schedulesOnId : startWhenClosedId
+      );
+      // Turned off where the job can't exist, the start switch is disabled now.
+      const usable = target && !target.hasAttribute("disabled") ? target : null;
+      (usable ?? document.getElementById(schedulesOnId))?.focus();
+      setRefocus(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [refocus, schedulesOnId, startWhenClosedId]);
 
   const kind = scheduleOsJobKindHere(osJobStatus?.context ?? null);
   // Before main answers, a platform with a job is taken as able to have it;
@@ -90,7 +106,8 @@ export function ScheduleSwitches({
     );
 
   // A new change clears the last failure; a retry keeps it up, and its focused
-  // Retry with it, until it gets through, then hands focus to the switch.
+  // Retry with it, until main answers. An answer that takes Retry away hands
+  // focus to the switch, unless the keyboard has moved on meanwhile.
   const write = async (intent: Intent, retrying = false) => {
     if (pendingRef.current) return;
     pendingRef.current = true;
@@ -99,13 +116,15 @@ export function ScheduleSwitches({
     const words = `Couldn't turn ${intent.on ? "on" : "off"} ${INTENT_WORDS[intent.key]}.`;
     try {
       const outcome = await schedulesClient.setSwitches({ [intent.key]: intent.on });
+      const retryHasFocus =
+        retrying && document.activeElement?.closest(SWITCH_FAILURE_SELECTOR) != null;
       if (outcome.status === "saved") {
         onSaved(outcome.snapshot);
         setFailure(null);
-        if (retrying) document.getElementById(switchIds[intent.key])?.focus();
       } else {
         setFailure({ message: `${words} ${outcome.issues.map((i) => i.message).join(". ")}` });
       }
+      if (retryHasFocus) setRefocus(intent.key);
     } catch (cause) {
       logError("Failed to change the project's schedule switches", cause);
       setFailure({ message: `${words} ${formatErrorMessage(cause, "")}`.trim(), retry: intent });
@@ -124,6 +143,7 @@ export function ScheduleSwitches({
         <Callout
           severity="error"
           role="alert"
+          data-switch-failure=""
           action={
             failure.retry && (
               // `loading` keeps the button focusable while it blocks a second try.
@@ -146,7 +166,7 @@ export function ScheduleSwitches({
       )}
       <SettingsGroup>
         <SwitchRow
-          id={switchIds.schedulesOn}
+          id={schedulesOnId}
           label={SCHEDULES_ON_LABEL}
           description="Lets agents in this project run unattended on their schedules"
           checked={schedulesOn}
@@ -159,7 +179,7 @@ export function ScheduleSwitches({
           reason={unavailable ? undefined : "Turn schedules on to use this"}
         >
           <SwitchRow
-            id={switchIds.startWhenClosed}
+            id={startWhenClosedId}
             label={START_WHEN_CLOSED_LABEL}
             description={kind ? START_DESCRIPTION[kind] : START_FALLBACK_DESCRIPTION}
             checked={startWhenClosed}
