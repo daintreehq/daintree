@@ -24,9 +24,18 @@ import { cleanupProjectSettingsStore, useProjectSettingsStore } from "@/store/pr
 import { invalidateProjectSettingsCache, projectClient } from "@/clients/projectClient";
 import type { Project, ProjectSettings } from "@shared/types/project";
 
-const { getConfigMock, setConfigMock, discoverMock, openInEditorMock } = vi.hoisted(() => ({
+const {
+  getConfigMock,
+  setConfigMock,
+  setDefaultMock,
+  clearProjectPreferenceMock,
+  discoverMock,
+  openInEditorMock,
+} = vi.hoisted(() => ({
   getConfigMock: vi.fn(),
   setConfigMock: vi.fn(),
+  setDefaultMock: vi.fn(),
+  clearProjectPreferenceMock: vi.fn(),
   discoverMock: vi.fn(),
   openInEditorMock: vi.fn(),
 }));
@@ -35,6 +44,8 @@ vi.mock("@/clients/editorClient", () => ({
   editorClient: {
     getConfig: getConfigMock,
     setConfig: setConfigMock,
+    setDefault: setDefaultMock,
+    clearProjectPreference: clearProjectPreferenceMock,
     discover: discoverMock,
   },
 }));
@@ -104,6 +115,8 @@ beforeEach(() => {
     ],
   });
   setConfigMock.mockResolvedValue(undefined);
+  setDefaultMock.mockResolvedValue(undefined);
+  clearProjectPreferenceMock.mockResolvedValue(undefined);
   discoverMock.mockResolvedValue([]);
   openInEditorMock.mockResolvedValue(undefined);
   ipcGetSettings.mockClear();
@@ -436,6 +449,137 @@ describe("EditorIntegrationTab", () => {
       } finally {
         nowSpy.mockRestore();
       }
+    });
+  });
+
+  // A project with no editor of its own follows this machine's default; Set
+  // default changes that fallback without touching any project's choice (#16162).
+  describe("default editor", () => {
+    const DISCOVERED = [
+      { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+      { id: "antigravity-ide", available: true, executablePath: "/usr/bin/antigravity" },
+      { id: "sublime", available: true, executablePath: "/usr/bin/subl" },
+    ];
+
+    async function renderWith(config: Record<string, unknown>, statusText: RegExp) {
+      getConfigMock.mockResolvedValue({ discoveredEditors: DISCOVERED, ...config });
+      useProjectStore.setState({ currentProject: TEST_PROJECT });
+      render(
+        <TooltipProvider>
+          <EditorIntegrationTab />
+        </TooltipProvider>
+      );
+      await screen.findByText(statusText);
+    }
+
+    const button = (name: string | RegExp) =>
+      screen.getByRole("button", { name }) as HTMLButtonElement;
+    const isOff = (el: HTMLButtonElement) => el.getAttribute("aria-disabled") === "true";
+
+    it("starts a project on the default at the default, and says that's what it uses", async () => {
+      await renderWith(
+        { preferredEditor: null, defaultEditor: { id: "antigravity-ide" } },
+        /Using default:/
+      );
+
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("antigravity-ide");
+      expect(screen.getByText("Using the default on this machine: Antigravity IDE")).toBeTruthy();
+      // The default is what a launch tries, so it can be tested; it is already the
+      // default, so Set default has nothing to do; Save still pins it to the project.
+      expect(isOff(button("Test saved editor"))).toBe(false);
+      expect(isOff(button("Set default"))).toBe(true);
+      expect(isOff(button(/^save$/i))).toBe(false);
+      // Nothing saved for the project, so there is nothing to reset.
+      expect(screen.queryByRole("button", { name: /Reset editor/ })).toBeNull();
+    });
+
+    it("sets the default without saving the project's editor or touching its cached settings", async () => {
+      useProjectSettingsStore.setState({ settings: SEEDED_SETTINGS, projectId: "proj-1" });
+      await renderWith({ preferredEditor: { id: "vscode" }, defaultEditor: null }, /Saved:/);
+      expect(
+        screen.getByText("Saved for this project. No default set on this machine")
+      ).toBeTruthy();
+
+      selectEditor("antigravity-ide");
+      fireEvent.click(button("Set default"));
+
+      await waitFor(() =>
+        expect(setDefaultMock).toHaveBeenCalledWith({
+          editor: { id: "antigravity-ide", customCommand: undefined, customTemplate: undefined },
+        })
+      );
+      expect(
+        await screen.findByText("Saved for this project. Default on this machine: Antigravity IDE")
+      ).toBeTruthy();
+      expect(setConfigMock).not.toHaveBeenCalled();
+      // The project keeps its own choice, and the draft is still unsaved against it.
+      expect(screen.getByText(/Unsaved changes/)).toBeTruthy();
+      expect(useProjectSettingsStore.getState().settings).toEqual(SEEDED_SETTINGS);
+    });
+
+    it("resets a saved project to the default by clearing its choice, not copying the default", async () => {
+      useProjectSettingsStore.setState({
+        settings: { ...SEEDED_SETTINGS, preferredEditor: { id: "vscode" } },
+        projectId: "proj-1",
+      });
+      await renderWith(
+        { preferredEditor: { id: "vscode" }, defaultEditor: { id: "antigravity-ide" } },
+        /Saved:/
+      );
+
+      fireEvent.click(button("Reset editor to default"));
+
+      await waitFor(() =>
+        expect(clearProjectPreferenceMock).toHaveBeenCalledWith({ projectId: "proj-1" })
+      );
+      expect(await screen.findByText(/Using default:/)).toBeTruthy();
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("antigravity-ide");
+      expect(setConfigMock).not.toHaveBeenCalled();
+      expect(setDefaultMock).not.toHaveBeenCalled();
+      expect(useProjectSettingsStore.getState().settings?.preferredEditor).toBeUndefined();
+      expect(useProjectSettingsStore.getState().settings?.devServerCommand).toBe("npm run dev");
+    });
+
+    it("names automatic selection as where a reset goes when no default is set", async () => {
+      await renderWith({ preferredEditor: { id: "vscode" }, defaultEditor: null }, /Saved:/);
+
+      fireEvent.click(button("Reset editor to automatic selection"));
+
+      expect(await screen.findByText(/Not saved yet/)).toBeTruthy();
+      expect(clearProjectPreferenceMock).toHaveBeenCalledWith({ projectId: "proj-1" });
+    });
+
+    it("keeps the project's saved choice when the reset fails, and says so", async () => {
+      clearProjectPreferenceMock.mockRejectedValue(new Error("disk full"));
+      await renderWith(
+        { preferredEditor: { id: "vscode" }, defaultEditor: { id: "antigravity-ide" } },
+        /Saved:/
+      );
+
+      fireEvent.click(button("Reset editor to default"));
+
+      expect(await screen.findByText(/disk full|Failed to reset the editor/)).toBeTruthy();
+      expect(screen.getByText(/Saved for this project/)).toBeTruthy();
+    });
+
+    it("asks for a command before setting a custom default", async () => {
+      await renderWith({ preferredEditor: { id: "vscode" }, defaultEditor: null }, /Saved:/);
+      selectEditor("custom");
+
+      fireEvent.click(button("Set default"));
+
+      expect(await screen.findByText("Enter the command that opens your editor")).toBeTruthy();
+      expect(setDefaultMock).not.toHaveBeenCalled();
+    });
+
+    it("tests the default only while the draft is the default", async () => {
+      await renderWith(
+        { preferredEditor: null, defaultEditor: { id: "antigravity-ide" } },
+        /Using default:/
+      );
+      selectEditor("sublime");
+      expect(isOff(button("Test saved editor"))).toBe(true);
+      expect(screen.getByText(/Unsaved changes/)).toBeTruthy();
     });
   });
 });
