@@ -75,7 +75,7 @@ export async function continueFromPane(ctx: PluginContext, args: unknown): Promi
     title: `Continue in ${target}?`,
     message:
       `Daintree reads this ${source} session once and turns it into a searchable index on this machine. ${target} starts in the same worktree with a short hand-off: your last few requests and ${source}'s last message. ` +
-      `It doesn't get the conversation as history. It searches it with a tool when it needs something, and what it finds goes to its model like any other context. ` +
+      `It doesn't get the conversation as history: it searches it with a tool when it needs something. The hand-off and what it finds go to its model like any other context. ` +
       `The session file isn't changed. The index stays until you delete it from the project's Converted sessions menu.`,
     confirmLabel: `Continue in ${target}`,
   });
