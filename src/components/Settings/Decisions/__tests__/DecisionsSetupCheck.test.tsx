@@ -301,6 +301,23 @@ describe("DecisionsSetupCheck", () => {
     expect(screen.getByRole("button", { name: "Check setup" })).toBeTruthy();
   });
 
+  it("keeps a run a push showed when a read sent before it answers that there is none", async () => {
+    let answer!: (value: DecisionsSetupCheckRun | null) => void;
+    bridge.getSetupCheck.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    renderCheck();
+
+    push(run({ revision: 2 }));
+    await act(async () => {
+      answer(null);
+    });
+
+    expect(screen.getByRole("button", { name: "Cancel check" })).toBeTruthy();
+  });
+
   it("clears a run main no longer has when cancelling it", async () => {
     bridge.getSetupCheck.mockResolvedValue(run());
     bridge.cancelSetupCheck.mockResolvedValue(null);
