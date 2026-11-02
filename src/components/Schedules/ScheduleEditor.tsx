@@ -232,6 +232,8 @@ interface ScheduleEditorProps {
   osJobContext: ScheduleOsJobContext | null;
   /** The project's switches (#16166), kept current while editing; null until read. */
   projectSwitches: ProjectScheduleSwitches | null;
+  /** Why the project's switches couldn't be read, or null. */
+  projectSwitchesError?: string | null;
   /** Kept current every render, so the dialog can guard Cancel and dismissal. */
   leaveStateRef: RefObject<EditorLeaveState | null>;
   onSaved: (snapshot: SchedulesSnapshot, scheduleId: string) => void;
@@ -265,6 +267,7 @@ export function ScheduleEditor({
   now,
   osJobContext,
   projectSwitches,
+  projectSwitchesError = null,
   leaveStateRef,
   onSaved,
   onDeleting,
@@ -304,7 +307,9 @@ export function ScheduleEditor({
   // schedules, so it reads as on only then (#16168). The draft keeps what's
   // stored, so turning the project's switches back on brings it back.
   const projectStarts = projectSwitches !== null && projectStartsDaintree(projectSwitches);
-  const projectGateReason = runWhenClosedGateReason(projectSwitches);
+  const projectGateReason = projectSwitchesError
+    ? `${projectSwitchesError}, so this option keeps its saved setting`
+    : runWhenClosedGateReason(projectSwitches);
   const issues = localIssues(draft, projectStarts ? runWhenClosedRefusal : null);
 
   useEffect(() => {
@@ -418,9 +423,13 @@ export function ScheduleEditor({
       overlap: draft.overlap,
       precondition: draft.checkFirst ? { command: draft.checkCommand } : null,
       onDone: draft.onDone,
-      // A stored opt-in main would refuse is dropped while the project hides the
-      // option: it reads as off, and there'd be no way left to turn it off.
-      runWhenClosed: draft.runWhenClosed && (projectStarts || runWhenClosedRefusal === null),
+      // A stored opt-in main would refuse, or just did, is dropped while the
+      // project hides the option: it reads as off, and there'd be no way left to
+      // turn it off.
+      runWhenClosed:
+        draft.runWhenClosed &&
+        (projectStarts ||
+          (runWhenClosedRefusal === null && serverError("runWhenClosed") === undefined)),
     };
     const launch = {
       agentId: draft.agentId,
@@ -683,8 +692,9 @@ export function ScheduleEditor({
                   }
                   // Said at once: the box was just ticked, or the cadence just moved under it.
                   error={
-                    projectStarts && draft.runWhenClosed
-                      ? (serverError("runWhenClosed") ?? issues.runWhenClosed)
+                    draft.runWhenClosed
+                      ? (serverError("runWhenClosed") ??
+                        (projectStarts ? issues.runWhenClosed : undefined))
                       : undefined
                   }
                 />

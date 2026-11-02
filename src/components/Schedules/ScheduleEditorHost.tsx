@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useWallClock } from "@/hooks/useWallClock";
 import { isVisibleTabbableElement } from "@/lib/accessibility";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
@@ -63,13 +63,18 @@ export function ScheduleEditorHost() {
   // counts. Read here, not handed over by the tab, which Settings can unmount
   // under an open editor, and kept current if another window turns them.
   const { state: project } = useProjectSchedules(editor !== null);
+  // What the hook held from an earlier opening is no longer watched, so each
+  // opening waits for its own read or push before trusting the switches.
+  const openingKey = editor?.key ?? null;
+  const [opening, setOpening] = useState({ key: openingKey, stale: project });
+  if (opening.key !== openingKey) setOpening({ key: openingKey, stale: project });
+  const fresh = project !== opening.stale;
   const now = useWallClock(editor?.key ?? 0, untilNextMinute);
   // Where focus goes once the editor closes, when its opener is the wrong place.
   const focusAfterRef = useRef<(() => HTMLElement | null) | null>(null);
   const successorRef = useRef<string | null>(null);
   // What had focus as this opening began, which the editor hands focus back to.
   const openerRef = useRef<HTMLElement | null>(null);
-  const openingKey = editor?.key ?? null;
   useLayoutEffect(() => {
     if (openingKey === null) return;
     const active = document.activeElement;
@@ -120,7 +125,10 @@ export function ScheduleEditorHost() {
       worktrees={choices}
       now={now}
       osJobContext={osJob.status?.context ?? null}
-      projectSwitches={project.snapshot?.switches ?? null}
+      projectSwitches={fresh ? (project.snapshot?.switches ?? null) : null}
+      projectSwitchesError={
+        fresh && project.status === "error" && project.snapshot === null ? project.message : null
+      }
       restoreFocusTo={restoreTarget}
       onSaved={handleSaved}
       // Read while the row is still on screen: main's push can remove it before the delete answers.

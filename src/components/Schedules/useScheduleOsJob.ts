@@ -98,9 +98,12 @@ export function useScheduleOsJob<B = null>(
       .catch((error: unknown) => {
         logError("Failed to repair the schedules' OS job", error);
         if (ask !== latest.current) return;
+        // It overtook any read in flight, so its failure is the answer that ends
+        // checking; the last status stays with what it was read against.
         setState((prev) => ({
           ...prev,
           error: formatErrorMessage(error, "Couldn't repair the job that starts Daintree"),
+          answeredRevision: revision,
         }));
       })
       // Even when a newer read took over the answer, the repair itself is over.

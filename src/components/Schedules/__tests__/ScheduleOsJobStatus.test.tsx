@@ -197,14 +197,24 @@ describe("ScheduleOsJobStatus (#15990)", () => {
           { scheduleId: "b", reason: "Runs on Asia/Tokyo time" },
           { scheduleId: "c", reason: "Needs 600 start times" },
           { scheduleId: "gone", reason: "Not in this list" },
+          { scheduleId: "paused", reason: "Switched off since" },
+          { scheduleId: "plain", reason: "Not opted in since" },
         ],
       },
-      [schedule("a"), schedule("b"), schedule("c")]
+      [
+        schedule("a"),
+        schedule("b"),
+        schedule("c"),
+        schedule("paused", { enabled: false }),
+        schedule("plain", { runWhenClosed: false }),
+      ]
     );
     expect(text()).toContain("2 schedules can't start Daintree when it isn't running");
     expect(text()).toContain("Schedule b: Runs on Asia/Tokyo time");
     expect(text()).toContain("Schedule c: Needs 600 start times");
     expect(text()).not.toContain("Not in this list");
+    expect(text()).not.toContain("Switched off since");
+    expect(text()).not.toContain("Not opted in since");
     expect(text()).toContain("for 1 schedule here");
   });
 
@@ -250,6 +260,16 @@ describe("ScheduleOsJobStatus after a change (#16168)", () => {
     view.update({ checking: false });
     expect(view.text()).not.toContain("Checking");
     expect(view.text()).toContain("Installed and loaded");
+  });
+
+  it("says a read failed with Repair after switching off, since the removal wasn't confirmed", () => {
+    const { text } = show(CURRENT, [schedule("a")], {
+      switches: { ...STARTS, startWhenClosed: false },
+      error: "Couldn't check the job",
+    });
+    expect(text()).toContain("Couldn't check the job");
+    expect(text()).not.toContain("Installed and loaded");
+    expect(screen.getByRole("button", { name: "Repair" })).not.toBeNull();
   });
 
   it("never says it's checking for a project that doesn't ask for the job", () => {

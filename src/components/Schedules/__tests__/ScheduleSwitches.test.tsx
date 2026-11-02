@@ -149,9 +149,14 @@ describe("ScheduleSwitches (#16168)", () => {
     expect(text()).toContain("isn't available on this platform");
   });
 
-  it("can always be turned off, even where the job can't exist", () => {
+  it("can always be turned off, even where the job can't exist", async () => {
+    client.setSwitches.mockResolvedValueOnce({ status: "saved", snapshot: snapshot(ON) });
     show({ ...ON, startWhenClosed: true }, osStatus(null));
     expect(startSwitch().hasAttribute("disabled")).toBe(false);
+
+    await act(async () => fireEvent.click(startSwitch()));
+    expect(client.setSwitches).toHaveBeenCalledWith({ startWhenClosed: false });
+    expect(checked(startSwitch())).toBe(false);
   });
 
   it("changes only the switch pressed, showing main's answer rather than the click", async () => {
@@ -159,10 +164,14 @@ describe("ScheduleSwitches (#16168)", () => {
     client.setSwitches.mockReturnValueOnce(answer.promise);
     show(ON);
 
+    startSwitch().focus();
     fireEvent.click(startSwitch());
     expect(client.setSwitches).toHaveBeenCalledWith({ startWhenClosed: true });
     expect(checked(startSwitch())).toBe(false);
     expect(startSwitch().getAttribute("aria-busy")).toBe("true");
+    // Held, not disabled, so the keyboard keeps its place.
+    expect(startSwitch().hasAttribute("disabled")).toBe(false);
+    expect(document.activeElement).toBe(startSwitch());
 
     await act(async () =>
       answer.resolve({ status: "saved", snapshot: snapshot({ ...ON, startWhenClosed: true }) })
@@ -186,7 +195,7 @@ describe("ScheduleSwitches (#16168)", () => {
     expect(checked(schedulesOn())).toBe(false);
   });
 
-  it("says why main refused a switch, and leaves it as it was", async () => {
+  it("says why main refused a switch, offering no Retry, and leaves it as it was", async () => {
     client.setSwitches.mockResolvedValueOnce({
       status: "invalid",
       issues: [
@@ -204,12 +213,14 @@ describe("ScheduleSwitches (#16168)", () => {
       "Couldn't turn on starting Daintree for due schedules. A Microsoft Store build can't register the task"
     );
     expect(checked(startSwitch())).toBe(false);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("says a switch couldn't be saved, and clears that once one is", async () => {
+  it("says a switch couldn't be saved, and Retry asks for the same change again", async () => {
+    const retried = deferred<ScheduleSetSwitchesOutcome>();
     client.setSwitches
       .mockRejectedValueOnce(new Error("The disk is full"))
-      .mockResolvedValueOnce({ status: "saved", snapshot: snapshot(OFF) });
+      .mockReturnValueOnce(retried.promise);
     show(ON);
 
     await act(async () => fireEvent.click(schedulesOn()));
@@ -218,8 +229,32 @@ describe("ScheduleSwitches (#16168)", () => {
     );
     expect(checked(schedulesOn())).toBe(true);
 
-    await act(async () => fireEvent.click(schedulesOn()));
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    expect(client.setSwitches).toHaveBeenLastCalledWith({ schedulesOn: false });
+    // The failure, and its focused Retry, stay up while the retry is pending.
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(document.activeElement).toBe(retry);
+
+    await act(async () => retried.resolve({ status: "saved", snapshot: snapshot(OFF) }));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(checked(schedulesOn())).toBe(false);
+    expect(document.activeElement).toBe(schedulesOn());
+  });
+
+  it("clears a failure when another change goes through", async () => {
+    client.setSwitches
+      .mockRejectedValueOnce(new Error("The disk is full"))
+      .mockResolvedValueOnce({
+        status: "saved",
+        snapshot: snapshot({ ...ON, startWhenClosed: true }),
+      });
+    show(ON);
+
+    await act(async () => fireEvent.click(schedulesOn()));
+    expect(screen.getByRole("alert")).toBeTruthy();
+    await act(async () => fireEvent.click(startSwitch()));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

@@ -129,6 +129,42 @@ describe("useScheduleOsJob (#15990)", () => {
     expect(hook.result.current).toMatchObject({ checking: false, error: "main went away" });
   });
 
+  it("takes a repair's answer as the read for the change it was asked about", async () => {
+    clientMock.osJobStatus.mockResolvedValueOnce(status("stale"));
+    clientMock.repairOsJob.mockResolvedValueOnce(status("current"));
+    const hook = renderHook(
+      (props: { revision: number; basis: string }) =>
+        useScheduleOsJob(true, props.revision, props.basis),
+      { initialProps: { revision: 1, basis: "first" } }
+    );
+    await act(async () => {});
+
+    await act(async () => hook.result.current.repair());
+    expect(hook.result.current).toMatchObject({
+      checking: false,
+      basis: "first",
+      status: { state: "current" },
+    });
+  });
+
+  it("stops checking when a repair that overtook a read fails", async () => {
+    clientMock.osJobStatus
+      .mockResolvedValueOnce(status("stale"))
+      .mockReturnValueOnce(new Promise(() => {}));
+    clientMock.repairOsJob.mockRejectedValueOnce(new Error("launchctl hung"));
+    const hook = mount({ enabled: true, revision: 1 });
+    await act(async () => {});
+    hook.rerender({ enabled: true, revision: 2 });
+    expect(hook.result.current.checking).toBe(true);
+
+    await act(async () => hook.result.current.repair());
+    expect(hook.result.current).toMatchObject({
+      checking: false,
+      error: "launchctl hung",
+      status: { state: "stale" },
+    });
+  });
+
   it("says a repair failed and keeps the status it had", async () => {
     clientMock.osJobStatus.mockResolvedValueOnce(status("stale"));
     clientMock.repairOsJob.mockRejectedValueOnce(new Error("launchctl hung"));

@@ -37,7 +37,7 @@ interface ScheduleOsJobStatusProps {
  * Whether the OS job that starts Daintree for this project's schedules, set
  * to run when it isn't running, is installed and loaded (#15990, #15991,
  * #15993), shown under the project's switch for it (#16168). While the
- * project's switches leave the job out, it speaks only of a job that needs
+ * project's switches leave the job out, it speaks only of a job that may need
  * repairing: one left behind starts Daintree for nothing.
  */
 export function ScheduleOsJobStatus({
@@ -65,7 +65,8 @@ export function ScheduleOsJobStatus({
   }
   if (!basis || (!status && !error)) return null;
   const stale = status?.state === "stale";
-  if (!starts && !stale) return null;
+  // Switched off, a removal not yet confirmed (stale, or not read) still needs saying.
+  if (!starts && !stale && !error) return null;
 
   const schedules = basis.schedules;
   const optedIn = runWhenClosedSchedules(basis);

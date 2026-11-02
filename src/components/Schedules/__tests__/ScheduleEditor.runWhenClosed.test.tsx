@@ -397,6 +397,63 @@ describe("ScheduleEditor: Run when Daintree isn't running under the project's sw
   });
 });
 
+describe("ScheduleEditor: main's refusal under the project's switches (#16168)", () => {
+  it("says main refused a hidden opt-in, and saves it off on the next try", async () => {
+    const schedule = existing({ runWhenClosed: true });
+    clientMock.update
+      .mockResolvedValueOnce({
+        status: "invalid",
+        issues: [{ path: "policies.runWhenClosed", cronField: null, message: "Not on this Mac" }],
+      })
+      .mockResolvedValueOnce({
+        status: "saved",
+        schedule,
+        snapshot: { projectId: "p1", schedules: [], revision: 2 },
+      });
+    // No context from main, so nothing is refused before Save.
+    renderEditor(schedule, null, { ...STARTS, startWhenClosed: false });
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+    await act(async () => fireEvent.click(button("Save changes")));
+    expect(clientMock.update).toHaveBeenLastCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({ policies: expect.objectContaining({ runWhenClosed: true }) })
+    );
+    expect(optionRow().textContent).toContain("Not on this Mac");
+
+    await act(async () => fireEvent.click(button("Save changes")));
+    expect(clientMock.update).toHaveBeenLastCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({ policies: expect.objectContaining({ runWhenClosed: false }) })
+    );
+  });
+
+  it("says when the project's switches couldn't be read", () => {
+    render(
+      <ScheduleEditor
+        schedule={existing({ runWhenClosed: true })}
+        defaultAgentId="claude"
+        worktrees={[{ id: null, label: "Main checkout" }]}
+        now={NOW}
+        osJobContext={LONDON}
+        projectSwitches={null}
+        projectSwitchesError="Couldn't load this project's schedules"
+        leaveStateRef={createRef<EditorLeaveState | null>()}
+        onSaved={vi.fn()}
+        onDeleted={vi.fn()}
+        onCancel={vi.fn()}
+        onOpenAgentSettings={vi.fn()}
+      />
+    );
+    expect(option()?.getAttribute("aria-checked")).toBe("false");
+    expect(optionRow().textContent).toContain(
+      "Couldn't load this project's schedules, so this option keeps its saved setting"
+    );
+  });
+});
+
 describe("ScheduleEditor: Run when Daintree isn't running on Windows (#15993)", () => {
   const PC: ScheduleOsJobContext = {
     kind: "task-scheduler",
