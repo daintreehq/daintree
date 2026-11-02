@@ -683,12 +683,13 @@ describe("RelayConnection", () => {
     let armed: ProxyEngine | null = null;
     const bridges: DecisionsBridge[] = [];
     const original = DecisionsBridge.prototype.start;
-    const start = vi
-      .spyOn(DecisionsBridge.prototype, "start")
-      .mockImplementation(function (this: DecisionsBridge, ...args) {
-        bridges.push(this);
-        return original.apply(this, args);
-      });
+    const start = vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
+      this: DecisionsBridge,
+      ...args
+    ) {
+      bridges.push(this);
+      return original.apply(this, args);
+    });
     const proxyOf = (bridge: DecisionsBridge) =>
       (bridge as unknown as { o: { proxy?: ProxyEngine } }).o.proxy ?? null;
     const h = await harness({ overrides: { model: { learner, proxy: () => armed } } });

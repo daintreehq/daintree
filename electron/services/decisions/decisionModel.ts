@@ -438,7 +438,10 @@ export class DecisionModelRuntime {
     try {
       history?.close?.();
     } catch (error) {
-      console.warn("[Decisions] The decision model's history didn't close:", (error as Error)?.name);
+      console.warn(
+        "[Decisions] The decision model's history didn't close:",
+        (error as Error)?.name
+      );
     }
   }
 

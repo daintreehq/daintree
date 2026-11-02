@@ -518,7 +518,12 @@ async function bridgeLoop(runtime: DecisionModelRuntime) {
             expires_at: question.record.expires_at,
           },
         });
-        return reply({ question_id: questionId, revision: 0, status: "open", event_seq: ledger.length });
+        return reply({
+          question_id: questionId,
+          revision: 0,
+          status: "open",
+          event_seq: ledger.length,
+        });
       }
       if (/^\/api\/v1\/questions\/[^/]+\/proxy-(answer|abstain)$/.test(pathname)) {
         return reply({ ok: true });
@@ -710,7 +715,11 @@ describe("the decision model through the bridge (#16026)", () => {
     expect(typed).toContain("choice: rebase");
     const audit = await loop.store.listAudit(100);
     expect(audit).toContainEqual(
-      expect.objectContaining({ event: "proxy.answer", question_id: questionId, provenance: "proxy" })
+      expect.objectContaining({
+        event: "proxy.answer",
+        question_id: questionId,
+        provenance: "proxy",
+      })
     );
     expect(audit).toContainEqual(
       expect.objectContaining({
@@ -766,7 +775,11 @@ describe("the decision model through the bridge (#16026)", () => {
       `/api/v1/questions/${questionId}/proxy-abstain`,
     ]);
     expect(await loop.store.listAudit(100)).toContainEqual(
-      expect.objectContaining({ event: "proxy.abstain", question_id: questionId, result: "blocked-gate" })
+      expect.objectContaining({
+        event: "proxy.abstain",
+        question_id: questionId,
+        result: "blocked-gate",
+      })
     );
   });
 
@@ -785,9 +798,7 @@ describe("the decision model through the bridge (#16026)", () => {
 
     await loop.phoneAnswer(questionId, "merge");
     await loop.bridge.pump();
-    expect(renderDecisionSection(parseAnswerNotice(loop.injected[0]!)!)).toContain(
-      "source: human"
-    );
+    expect(renderDecisionSection(parseAnswerNotice(loop.injected[0]!)!)).toContain("source: human");
     await runtime.close();
     expect(storedExamples()).toEqual([
       expect.objectContaining({ question_id: questionId, selected_option_ids: ["merge"] }),

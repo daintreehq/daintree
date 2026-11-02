@@ -1896,7 +1896,10 @@ describe("DecisionsService decision model (#16026)", () => {
       forgetIdentity: () => on({ modelLearning: true }),
     });
     try {
-      writeFileSync(join(t.dir, "keys.bin"), '{"v":1,"protection":"keychain","ciphertext":"sealed"}');
+      writeFileSync(
+        join(t.dir, "keys.bin"),
+        '{"v":1,"protection":"keychain","ciphertext":"sealed"}'
+      );
       await t.service.start(on({ ...RELAY, modelLearning: true }));
       const history = join(t.dir, "model-history.sqlite");
       await vi.waitFor(() => expect(existsSync(history)).toBe(true));
