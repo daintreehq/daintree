@@ -94,6 +94,41 @@ describe("useScheduleOsJob (#15990)", () => {
     });
   });
 
+  it("checks from a change until the read made after it answers, with what it was asked about (#16168)", async () => {
+    const first = deferred<ScheduleOsJobStatus>();
+    const second = deferred<ScheduleOsJobStatus>();
+    clientMock.osJobStatus.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const hook = renderHook(
+      (props: { revision: number; basis: string }) =>
+        useScheduleOsJob(true, props.revision, props.basis),
+      { initialProps: { revision: 1, basis: "off" } }
+    );
+    expect(hook.result.current.checking).toBe(true);
+    await act(async () => first.resolve(status("none")));
+    expect(hook.result.current).toMatchObject({ checking: false, basis: "off" });
+
+    hook.rerender({ revision: 2, basis: "on" });
+    // The last answer stays up, still about what it was read against.
+    expect(hook.result.current).toMatchObject({
+      checking: true,
+      basis: "off",
+      status: { state: "none" },
+    });
+    await act(async () => second.resolve(status("current")));
+    expect(hook.result.current).toMatchObject({
+      checking: false,
+      basis: "on",
+      status: { state: "current" },
+    });
+  });
+
+  it("stops checking when the read fails, saying why", async () => {
+    clientMock.osJobStatus.mockRejectedValueOnce(new Error("main went away"));
+    const hook = mount({ enabled: true, revision: 1 });
+    await act(async () => {});
+    expect(hook.result.current).toMatchObject({ checking: false, error: "main went away" });
+  });
+
   it("says a repair failed and keeps the status it had", async () => {
     clientMock.osJobStatus.mockResolvedValueOnce(status("stale"));
     clientMock.repairOsJob.mockRejectedValueOnce(new Error("launchctl hung"));

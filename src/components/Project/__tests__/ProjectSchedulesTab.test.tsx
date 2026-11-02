@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
-import type { Schedule } from "@shared/types/scheduledRuns";
+import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 
 // No jest-dom in this repo — plain DOM reads only.
@@ -11,6 +11,7 @@ const client = vi.hoisted(() => ({
   list: vi.fn(),
   onChanged: vi.fn(() => () => {}),
   setEnabled: vi.fn(),
+  setSwitches: vi.fn(),
   remove: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -32,7 +33,14 @@ vi.mock("@/components/Schedules/useScheduleLaunchOptions", () => ({
   useScheduleLaunchOptions: () => ({ presets: [], preset: undefined, stopsAtPrompts: false }),
 }));
 vi.mock("@/components/Schedules/useScheduleOsJob", () => ({
-  useScheduleOsJob: () => ({ status: null, repairing: false, error: null, repair: vi.fn() }),
+  useScheduleOsJob: () => ({
+    status: null,
+    basis: null,
+    checking: false,
+    repairing: false,
+    error: null,
+    repair: vi.fn(),
+  }),
 }));
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -60,8 +68,19 @@ function schedule(id: string, name: string): Schedule {
   );
 }
 
-function snapshot(schedules: Schedule[], revision = 1): SchedulesSnapshot {
-  return { projectId: "p1", revision, schedules } as SchedulesSnapshot;
+const SCHEDULES_ON: ProjectScheduleSwitches = {
+  schedulesOn: true,
+  startWhenClosed: false,
+  schedulesOnSince: 1,
+};
+const SCHEDULES_OFF: ProjectScheduleSwitches = { ...SCHEDULES_ON, schedulesOn: false };
+
+function snapshot(
+  schedules: Schedule[],
+  revision = 1,
+  switches: ProjectScheduleSwitches = SCHEDULES_ON
+): SchedulesSnapshot {
+  return { projectId: "p1", revision, switches, schedules };
 }
 
 const NIGHTLY = schedule("s1", "Nightly audit");
@@ -192,6 +211,48 @@ describe("ProjectSchedulesTab — the list", () => {
         screen.getByRole("button", { name: "Run Nightly audit now" })
       )
     );
+  });
+});
+
+describe("ProjectSchedulesTab — the project's switches (#16168)", () => {
+  const nextRuns = () => screen.queryAllByText(/^Next run/);
+
+  it("heads the list with the switches, listing every schedule while they're off", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY, WEEKLY], 1, SCHEDULES_OFF));
+    renderTab();
+    await screen.findByText("Nightly audit");
+
+    const schedulesOn = screen.getByRole("switch", { name: "Schedules on" });
+    expect(schedulesOn.getAttribute("aria-checked")).toBe("false");
+    const firstRow = screen.getByRole("switch", { name: "Enable Nightly audit" });
+    expect(
+      schedulesOn.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(screen.getByText("Weekly triage")).toBeTruthy();
+    // No time is promised for a schedule the project holds.
+    expect(screen.getAllByText("Schedules off")).toHaveLength(2);
+    expect(nextRuns()).toHaveLength(0);
+  });
+
+  it("turns the project's schedules on, and their next runs come back with main's answer", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY], 1, SCHEDULES_OFF));
+    client.setSwitches.mockResolvedValue({ status: "saved", snapshot: snapshot([NIGHTLY], 2) });
+    renderTab();
+
+    fireEvent.click(await screen.findByRole("switch", { name: "Schedules on" }));
+
+    expect(client.setSwitches).toHaveBeenCalledWith({ schedulesOn: true });
+    await waitFor(() => expect(nextRuns()).toHaveLength(1));
+    expect(screen.queryByText("Schedules off")).toBeNull();
+  });
+
+  it("says a schedule's history waits on the project's switch", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY], 1, SCHEDULES_OFF));
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText("Schedules off")).toBeTruthy();
+    expect(await screen.findByText(/Schedules are off for this project/)).toBeTruthy();
   });
 });
 
