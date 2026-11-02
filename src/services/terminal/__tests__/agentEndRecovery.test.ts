@@ -536,7 +536,9 @@ describe("an account switch that kept the conversation (#16135)", () => {
   }
 
   it("turns the CLI's refusal on the new account into the pane's offer, starting nothing", () => {
-    store.state.panelsById = { "pane-a": switched() };
+    store.state.panelsById = {
+      "pane-a": switched({ agentResumeOffer: { agentId: "codex", sessionId: LAUNCH_ID } }),
+    };
 
     handleAgentEnd(exited({ resumeRefused: true, resumeHintSeen: true }), 3);
 
@@ -544,6 +546,7 @@ describe("an account switch that kept the conversation (#16135)", () => {
     expect(current().agentResumeOffer).toBeUndefined();
     expect(store.state.restartTerminal).not.toHaveBeenCalled();
     expect(store.state.restartTerminalOnAccount).not.toHaveBeenCalled();
+    expect(store.state.restartTerminalOnPreset).not.toHaveBeenCalled();
   });
 
   it("takes a refusal on the default login, which the pane records as no account", () => {
@@ -552,7 +555,11 @@ describe("an account switch that kept the conversation (#16135)", () => {
       target: { kind: "account", accountId: null },
     };
     store.state.panelsById = {
-      "pane-a": switched({ agentAccountId: undefined, presetSwitchResume: toDefault }),
+      "pane-a": switched({
+        agentAccountId: undefined,
+        env: { OPENAI_BASE_URL: "https://zai" },
+        presetSwitchResume: toDefault,
+      }),
     };
 
     handleAgentEnd(exited({ resumeRefused: true }, { exitKind: "terminal" }), 3);
@@ -569,14 +576,36 @@ describe("an account switch that kept the conversation (#16135)", () => {
 
     handleAgentEnd(exited({ resumeRefused: true }), restartKey);
 
-    expect(current().presetSwitchResume?.refused).toBeUndefined();
+    // Left as it was, still watching, not dropped.
+    expect(current().presetSwitchResume).toBe(attempt);
+  });
+
+  it.each([
+    ["moved to another account", { agentAccountId: "other" }],
+    ["moved to the default login", { agentAccountId: undefined }],
+  ])("acts on neither choice once a pane with a refused offer has %s", async (_label, moved) => {
+    store.state.panelsById = { "pane-a": refused(moved) };
+
+    await expect(startNewAfterRefusedSwitch("pane-a")).resolves.toEqual({
+      success: false,
+      error: "unavailable",
+    });
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
+
+    expect(current().agentAccountId).toBe(moved.agentAccountId);
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+    expect(store.state.restartTerminalOnAccount).not.toHaveBeenCalled();
+    expect(agentSettingsGet).not.toHaveBeenCalled();
   });
 
   it("starts a new conversation on the account's folder as saved now", async () => {
     agentSettingsGet.mockResolvedValue({
       agents: {
         codex: {
-          accounts: [{ id: "company", name: "Company", configDir: "/home/me/.codex-moved" }],
+          accounts: [
+            { id: "personal", name: "Personal", configDir: PERSONAL },
+            { id: "company", name: "Company", configDir: "/home/me/.codex-moved" },
+          ],
         },
       },
     });
@@ -596,6 +625,7 @@ describe("an account switch that kept the conversation (#16135)", () => {
     store.state.panelsById = {
       "pane-a": refused({
         agentAccountId: undefined,
+        env: { OPENAI_BASE_URL: "https://zai" },
         presetSwitchResume: {
           ...attempt,
           target: { kind: "account", accountId: null },
@@ -604,13 +634,16 @@ describe("an account switch that kept the conversation (#16135)", () => {
       }),
     };
 
-    await startNewAfterRefusedSwitch("pane-a");
+    await expect(startNewAfterRefusedSwitch("pane-a")).resolves.toEqual({ success: true });
 
     expect(store.state.restartTerminalOnAccount).toHaveBeenCalledWith("pane-a", null);
     expect(agentSettingsGet).not.toHaveBeenCalled();
   });
 
   it("starts nothing on an account removed since the switch, and keeps the offer", async () => {
+    agentSettingsGet.mockResolvedValue({
+      agents: { codex: { accounts: [{ id: "personal", name: "Personal", configDir: PERSONAL }] } },
+    });
     store.state.panelsById = { "pane-a": refused() };
 
     const result = await startNewAfterRefusedSwitch("pane-a");
@@ -620,15 +653,21 @@ describe("an account switch that kept the conversation (#16135)", () => {
     expect(current().presetSwitchResume?.refused).toBe(true);
   });
 
-  it("starts nothing when the pane moved on while the account was read", async () => {
+  it.each([
+    ["was answered meanwhile", () => switched({ presetSwitchResume: undefined })],
+    [
+      "refused another switch meanwhile",
+      () => refused({ presetSwitchResume: { ...attempt, refused: true } }),
+    ],
+    ["moved account, offer and all", () => ({ ...current(), agentAccountId: "other" })],
+  ])("starts nothing when the pane %s while the account was read", async (_label, next) => {
     let answer: (value: unknown) => void = () => {};
     agentSettingsGet.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
     store.state.panelsById = { "pane-a": refused() };
 
     const startNew = startNewAfterRefusedSwitch("pane-a");
     await Promise.resolve();
-    // "Back" was picked meanwhile.
-    store.state.panelsById = { "pane-a": switched({ presetSwitchResume: undefined }) };
+    store.state.panelsById = { "pane-a": next() };
     answer({
       agents: { codex: { accounts: [{ id: "company", name: "Company", configDir: COMPANY }] } },
     });
@@ -654,33 +693,47 @@ describe("an account switch that kept the conversation (#16135)", () => {
     expect(agentSettingsGet).not.toHaveBeenCalled();
   });
 
-  it("goes back to the default login, leaving no account on the pane", async () => {
-    store.state.panelsById = {
-      "pane-a": refused({
-        presetSwitchResume: {
-          ...attempt,
-          prior: { agentPresetId: "zai", env: { OPENAI_BASE_URL: "https://zai" }, cwd: "/repo" },
-          refused: true,
-        },
-      }),
-    };
-    let seenAtRestart: PtyPanelData | undefined;
-    store.state.restartTerminal.mockImplementation(async () => {
-      seenAtRestart = current();
-      store.state.panelsById = { "pane-a": { ...current(), restartKey: 4 } };
-    });
+  it.each([
+    ["its own launch layer", { OPENAI_BASE_URL: "https://zai" }],
+    ["no launch layer", undefined],
+  ])(
+    "goes back to the default login with %s, leaving neither the account nor its folder",
+    async (_label, priorEnv) => {
+      store.state.panelsById = {
+        "pane-a": refused({
+          presetSwitchResume: {
+            ...attempt,
+            prior: { agentPresetId: "zai", env: priorEnv, cwd: "/repo" },
+            refused: true,
+          },
+        }),
+      };
+      let seenAtRestart: PtyPanelData | undefined;
+      store.state.restartTerminal.mockImplementation(async () => {
+        seenAtRestart = current();
+        store.state.panelsById = { "pane-a": { ...current(), restartKey: 4 } };
+      });
 
-    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("launched");
+      await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("launched");
 
-    expect(seenAtRestart?.agentAccountId).toBeUndefined();
-    expect(seenAtRestart?.env).toEqual({ OPENAI_BASE_URL: "https://zai" });
-  });
+      expect(seenAtRestart?.agentAccountId).toBeUndefined();
+      expect(seenAtRestart?.env).toEqual(priorEnv);
+    }
+  );
 
   it("puts the pane back on the refusing account, offer and all, when the restart started nothing", async () => {
     store.state.panelsById = { "pane-a": refused() };
+    let seenAtRestart: PtyPanelData | undefined;
+    store.state.restartTerminal.mockImplementation(async () => {
+      seenAtRestart = current();
+    });
 
     await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
 
+    // It did go back first: the restart was asked on the account the pane left.
+    expect(store.state.restartTerminal).toHaveBeenCalledTimes(1);
+    expect(seenAtRestart?.agentAccountId).toBe("personal");
+    expect(seenAtRestart?.env?.CODEX_HOME).toBe(PERSONAL);
     expect(current().agentAccountId).toBe("company");
     expect(current().env).toEqual({ OPENAI_BASE_URL: "https://zai", CODEX_HOME: COMPANY });
     expect(current().presetSwitchResume).toEqual({ ...attempt, refused: true });

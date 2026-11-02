@@ -2719,11 +2719,43 @@ describe("accounts on restart and switch (#16040)", () => {
         .restartTerminalOnAccount("test-1", null, { keepConversation: true });
 
       expect(result.resumedSessionId).toBe("sess-1");
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("claude --resume sess-1");
+      // No folder override is left behind: the default login is the CLI's own.
+      expect(payload.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+      expect(pane().env?.CLAUDE_CONFIG_DIR).toBeUndefined();
       expect(pane().agentAccountId).toBeUndefined();
       expect(pane().presetSwitchResume).toMatchObject({
         target: { kind: "account", accountId: null },
         prior: { agentAccountId: "company" },
       });
+    });
+
+    it.each([
+      ["a saved account by its name", toPersonal, "on Personal."],
+      ["the default login", null, "on the default login."],
+      ["an account the settings no longer name", { ...toPersonal, id: "gone" }, "on that account."],
+    ])("names %s when no id turns up", async (_label, target, named) => {
+      seed({ agentSessionId: undefined });
+      await resumeBuilds();
+      const { agentSettingsClient } = await import("@/clients");
+      vi.mocked(agentSettingsClient.get).mockResolvedValue({
+        agents: {
+          claude: {
+            accounts: [
+              { id: "company", name: "Company", configDir: COMPANY },
+              { id: "personal", name: "Personal", configDir: PERSONAL },
+            ],
+          },
+        },
+      });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", target, { keepConversation: true });
+
+      expect(result.error?.endsWith(named)).toBe(true);
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
 
     it("starts nothing when no id turns up, and says which account it was for", async () => {
@@ -2776,7 +2808,8 @@ describe("accounts on restart and switch (#16040)", () => {
         .getState()
         .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
 
-      expect(result.success).toBe(false);
+      expect(result).toEqual({ success: false, error: "spawn failed" });
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
       expect(pane().agentAccountId).toBe("company");
       expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
       expect(pane().agentSessionId).toBe("sess-captured");

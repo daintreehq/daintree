@@ -988,7 +988,10 @@ describe("terminal.restartOnAccount (#16040)", () => {
     expect(result).toMatchObject({ terminalId: "p1", agentSessionIdCleared: false });
   });
 
-  it("says the conversation was cleared when a new one started", async () => {
+  it.each([
+    ["a new one started", undefined],
+    ["the store started one although asked to keep it", true],
+  ])("says the conversation was cleared when %s", async (_label, keepConversation) => {
     setRichPanelState({
       focusedId: "p1",
       panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
@@ -999,9 +1002,41 @@ describe("terminal.restartOnAccount (#16040)", () => {
       terminalId: "p1",
       accountId: null,
       confirmed: true,
+      ...(keepConversation ? { keepConversation } : {}),
     });
 
     expect(result).toMatchObject({ terminalId: "p1", agentSessionIdCleared: true });
+  });
+
+  it("restarts on the account named, never the first one saved", async () => {
+    agentSettingsClientMock.get.mockResolvedValue({
+      agents: {
+        codex: {
+          accounts: [{ id: "decoy", name: "Decoy", configDir: "/Users/me/.codex-decoy" }, COMPANY],
+        },
+      },
+    });
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnAccount", {
+      terminalId: "p1",
+      accountId: "company",
+      confirmed: true,
+    });
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p1", accountId: "gone", confirmed: true })
+    ).rejects.toThrow(/no account 'gone'/);
+
+    expect(restartTerminalOnAccount).toHaveBeenCalledTimes(1);
+    expect(restartTerminalOnAccount).toHaveBeenCalledWith(
+      "p1",
+      { id: "company", envVar: "CODEX_HOME", configDir: COMPANY.configDir },
+      { keepConversation: false }
+    );
   });
 
   it("advertises a result both answers satisfy", () => {
@@ -1011,8 +1046,12 @@ describe("terminal.restartOnAccount (#16040)", () => {
     for (const agentSessionIdCleared of [true, false]) {
       expect(
         schema.safeParse({ terminalId: "p1", agentAccountId: "company", agentSessionIdCleared })
-          .success
-      ).toBe(true);
+      ).toMatchObject({ success: true, data: { agentSessionIdCleared } });
+    }
+    for (const agentSessionIdCleared of [undefined, "true"]) {
+      expect(
+        schema.safeParse({ terminalId: "p1", agentAccountId: null, agentSessionIdCleared }).success
+      ).toBe(false);
     }
   });
 

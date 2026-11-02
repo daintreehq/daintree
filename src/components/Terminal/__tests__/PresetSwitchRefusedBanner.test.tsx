@@ -162,6 +162,8 @@ describe("PresetSwitchRefusedBanner on an account switch (#16135)", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start new on Work login" }));
     });
     expect(recovery.startNewAfterRefusedSwitch).toHaveBeenCalledWith("t1");
+    // Only a refusal takes the choice away.
+    expect(screen.getByRole("button", { name: "Start new on Work login" })).toBeTruthy();
   });
 
   it("names the default login on either side", () => {
