@@ -134,7 +134,9 @@ function fakeCliProgram(
     (Object.values(config.scripts)[0] as { key: string; script: FakeCliScript });
   const s = entry.script;
   const argv = process.argv.slice(2);
-  const done = (text: string) => process.stdout.write(text, () => process.exit(0));
+  const done = (text: string): void => {
+    process.stdout.write(text, () => process.exit(0));
+  };
   if (argv.includes("--version") || argv.includes("-v")) return done(s.versionText + "\n");
   if (argv[0] === "app-server" || argv[0] === "mcp") return done("");
   if (argv[0] === "debug") return done('{"models":[]}\n');
@@ -354,7 +356,6 @@ function installFakeCli(
 const E = "\u001b[";
 const R = `${E}0m`;
 const B = `${E}1m`;
-const D = `${E}2m`;
 const RED = `${E}31m`;
 const GREEN = `${E}32m`;
 const YELLOW = `${E}33m`;
