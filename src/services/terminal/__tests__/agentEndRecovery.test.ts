@@ -352,6 +352,52 @@ describe("a preset switch that kept the conversation (#16045)", () => {
     expect(store.state.restartTerminal).not.toHaveBeenCalled();
   });
 
+  it("keeps the offer, and the pane as it is, while another reopen holds the conversation", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+    const { reserveResumeSession } = await import("../restoreRecoveryLaunch");
+    const release = reserveResumeSession("codex", LAUNCH_ID);
+    try {
+      await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("held-elsewhere");
+    } finally {
+      release?.();
+    }
+
+    expect(current().agentPresetId).toBe("company");
+    expect(current().presetSwitchResume?.refused).toBe(true);
+    expect(saveNormalized).not.toHaveBeenCalled();
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+  });
+
+  it("holds the conversation while going back, and lets it go after", async () => {
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+    const { isResumeSessionReserved } = await import("../restoreRecoveryLaunch");
+    let heldDuring = false;
+    store.state.restartTerminal.mockImplementation(async () => {
+      heldDuring = isResumeSessionReserved("codex", LAUNCH_ID);
+    });
+
+    await returnAfterRefusedSwitch("pane-a");
+
+    expect(heldDuring).toBe(true);
+    expect(isResumeSessionReserved("codex", LAUNCH_ID)).toBe(false);
+  });
+
+  it("reads a pane that never restarted as a restart count of zero", () => {
+    store.state.panelsById = { "pane-a": switched({ restartKey: undefined }) };
+
+    // An event read before a switch that has since bumped the count to one.
+    handleAgentEnd(exited({ resumeRefused: true }), 0);
+    expect(current().presetSwitchResume?.refused).toBe(true);
+
+    store.state.panelsById = { "pane-a": switched({ restartKey: 1 }) };
+    handleAgentEnd(exited({ resumeRefused: true }), 0);
+    expect(current().presetSwitchResume?.refused).toBeUndefined();
+  });
+
   it("acts on neither choice once the shell has moved on", async () => {
     store.state.panelsById = {
       "pane-a": switched({

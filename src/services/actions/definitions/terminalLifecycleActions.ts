@@ -441,7 +441,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartOnPresetOwned",
     title: "Move owned agent to another preset",
     description:
-      "Respawn an agent panel this session launched (not one it was handed) on another preset of its agent once the user confirms. Scrollback is lost, and the conversation unless kept.",
+      "Move a panel this session launched (not a handed one) to another preset once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

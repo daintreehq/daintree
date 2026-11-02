@@ -77,9 +77,23 @@ describe("FallbackChainEditor — keeping the conversation on a usage limit (#16
     expect(onUpdatePreset).toHaveBeenCalledWith("home", { keepConversationOnRateLimit: true });
   });
 
+  it("clears it rather than storing false", () => {
+    const onUpdatePreset = renderEditor({ ...optedIn, keepConversationOnRateLimit: true }, "codex");
+    const toggle = screen.getByRole("switch", { name: "Keep the conversation" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+    expect(onUpdatePreset).toHaveBeenCalledWith("home", { keepConversationOnRateLimit: undefined });
+  });
+
   it.each([
     ["the usage-limit opt-in is off", { ...optedIn, fallbackOnRateLimit: undefined }, "codex"],
     ["the agent's refusal isn't recognised", optedIn, "gemini"],
+    [
+      "there is no fallback to move to",
+      { ...optedIn, fallbacks: undefined, keepConversationOnRateLimit: true },
+      "codex",
+    ],
   ])("offers nothing while %s", (_label, preset, agentId) => {
     renderEditor(preset, agentId);
     expect(screen.queryByRole("switch", { name: "Keep the conversation" })).toBeNull();

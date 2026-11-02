@@ -430,7 +430,7 @@ export function setupIdentityListeners(): DisposableStore {
           // Read now: a restart while the module loads starts a run this end
           // isn't about.
           const ended = usePanelStore.getState().panelsById[terminalId];
-          const restartKey = ended && isPtyPanel(ended) ? ended.restartKey : undefined;
+          const restartKey = ended && isPtyPanel(ended) ? (ended.restartKey ?? 0) : undefined;
           void import("@/services/terminal/agentEndRecovery")
             .then(({ handleAgentEnd }) => handleAgentEnd(data, restartKey))
             .catch((error: unknown) => {

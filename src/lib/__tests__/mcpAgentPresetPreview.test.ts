@@ -50,6 +50,7 @@ describe("formatAgentPresetPreviewLines", () => {
           color: "#3b82f6",
           fallbacks: ["user-fast"],
           fallbackOnRateLimit: true,
+          keepConversationOnRateLimit: true,
         },
         { "user-fast": "Fast" }
       )
@@ -68,6 +69,7 @@ describe("formatAgentPresetPreviewLines", () => {
       'Colour: "#3b82f6"',
       'Fallback presets: "Fast" (user-fast)',
       "Fall back on usage limits: On",
+      "Keep the conversation on usage limits: On",
       "Codex's default preset stays as it is.",
     ]);
   });

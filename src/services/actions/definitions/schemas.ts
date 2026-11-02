@@ -401,6 +401,8 @@ export const AgentPresetSchema = z.object({
   color: z.string().optional(),
   displayTitle: z.string().optional(),
   fallbacks: z.array(z.string()).optional(),
+  fallbackOnRateLimit: z.boolean().optional(),
+  keepConversationOnRateLimit: z.boolean().optional(),
 });
 
 export const AgentSettingsEntrySchema = z

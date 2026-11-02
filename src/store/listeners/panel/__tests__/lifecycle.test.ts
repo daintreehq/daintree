@@ -569,8 +569,11 @@ describe("handleFallbackTriggered — keeping the conversation on a usage limit 
     expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
   });
 
-  it("ignores a keep that came from a team-shared project preset", async () => {
-    const activate = setupCodexChain({ fallbackOnRateLimit: true }, { success: true });
+  it("takes no consent from a team-shared project preset", async () => {
+    const activate = setupCodexChain({}, { success: true });
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { customPresets: [{ id: "preset-2", name: "Company" }] } } },
+    });
     useProjectPresetsStore.setState({
       presetsByAgent: {
         codex: [
@@ -584,11 +587,46 @@ describe("handleFallbackTriggered — keeping the conversation on a usage limit 
         ],
       },
     });
+    try {
+      await trigger();
+    } finally {
+      useProjectPresetsStore.setState({ presetsByAgent: {} });
+    }
 
-    await trigger();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("starts a new conversation for an agent whose refusal isn't recognised", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              {
+                id: "preset-1",
+                name: "Primary",
+                fallbacks: ["preset-2"],
+                fallbackOnRateLimit: true,
+                keepConversationOnRateLimit: true,
+              },
+              { id: "preset-2", name: "Second account" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel();
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
 
     expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
-    useProjectPresetsStore.setState({ presetsByAgent: {} });
   });
 });
 

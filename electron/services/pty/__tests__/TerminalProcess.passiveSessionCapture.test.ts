@@ -960,14 +960,18 @@ describe("passive agent session capture", () => {
       }
     });
 
-    it("leaves a refusal the run printed long before it ended unreported", async () => {
+    it.each([
+      // Short lines: only the line bound keeps the refusal out of the window.
+      ["more lines than the window", Array.from({ length: 12 }, (_, i) => `ok ${i}`).join("\n")],
+      // One long line: only the character bound does.
+      ["more characters than the window", "x".repeat(500)],
+    ])("leaves a refusal followed by %s unreported", async (_label, after) => {
       const { exited, off } = captureExited();
       try {
         const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
         promoteCodex(terminal);
-        const later = Array.from({ length: 30 }, (_, i) => `working on step ${i}`);
         mockPty(terminal).__emitData(
-          [`ERROR: No saved session found with ID ${LAUNCH_ID}.`, ...later, "$ "].join("\n")
+          [`ERROR: No saved session found with ID ${LAUNCH_ID}.`, after, "$ "].join("\n")
         );
         demote(terminal);
 

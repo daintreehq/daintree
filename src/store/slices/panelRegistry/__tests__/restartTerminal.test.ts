@@ -2412,6 +2412,49 @@ describe("restartTerminalOnPreset", () => {
       expect(pane().presetSwitchResume).toBeUndefined();
     });
 
+    it("never lets a resume selector in the new preset's flags pick the conversation", async () => {
+      buildAgentLaunchFlagsMock.mockReturnValue(["--verbose", "--continue"]);
+      seed();
+      await resumeBuilds();
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      const { buildResumeCommand } = await import("@shared/types");
+      const flags = vi.mocked(buildResumeCommand).mock.calls[0]![2];
+      expect(flags).toContain("--verbose");
+      expect(flags).not.toContain("--continue");
+    });
+
+    it("puts the folder back with the conversation when the spawn fails", async () => {
+      // Codex reopens anywhere, so the launch moves to the filed folder and the
+      // origin is recorded; a failure must undo both or the id is misfiled.
+      const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-a", "/repo/.worktrees/a"],
+            ["wt-b", "/repo/.worktrees/b"],
+          ])
+      );
+      try {
+        seed({ launchAgentId: "codex", cwd: "/repo/.worktrees/a", worktreeId: "wt-b" });
+        await resumeBuilds();
+        mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+        expect(mockSpawn.mock.calls[0]![0].cwd).toBe("/repo/.worktrees/b");
+        expect(pane().cwd).toBe("/repo/.worktrees/a");
+        expect(pane().conversationCwd).toBeUndefined();
+      } finally {
+        setWorktreePathIndexAccessor(() => null);
+      }
+    });
+
     it("drops the switch's watch on the next restart", async () => {
       seed();
       await resumeBuilds();

@@ -1001,6 +1001,19 @@ describe("terminal.restartOnPreset (#13746)", () => {
     expect(result).toMatchObject({ terminalId: "p1", agentSessionIdCleared: false });
   });
 
+  it("advertises a result both answers satisfy, on the tool and its owned twin", () => {
+    const actions = registerActions();
+    for (const id of ["terminal.restartOnPreset", "terminal.restartOnPresetOwned"]) {
+      const schema = (actions.get(id as ActionId)!() as AnyActionDefinition).resultSchema!;
+      for (const agentSessionIdCleared of [true, false]) {
+        expect(
+          schema.safeParse({ terminalId: "p1", agentPresetId: "work", agentSessionIdCleared })
+            .success
+        ).toBe(true);
+      }
+    }
+  });
+
   it("refuses the owned twin outside the MCP main-process path", async () => {
     const run = setupActions();
 

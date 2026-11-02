@@ -2323,7 +2323,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     dangerRationale:
       "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
     description:
-      "Respawn an agent panel this session launched (not one it was handed) on another preset of its agent once the user confirms. Scrollback is lost, and the conversation unless kept.",
+      "Move a panel this session launched (not a handed one) to another preset once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
     enabled: true,
     id: "terminal.restartOnPresetOwned",
     inputSchema: {

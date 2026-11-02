@@ -73,6 +73,29 @@ describe("RestartOnPresetConfirmDialog — keeping the conversation (#16045)", (
     );
   });
 
+  it("starts every opening unchecked, and an unchecked confirm asks for no conversation", () => {
+    seedPane("codex");
+    const props = { onClose: () => {}, sourceRef: { current: "user" as const } };
+    const view = render(<RestartOnPresetConfirmDialog request={request} {...props} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Keep this conversation" }));
+    });
+
+    view.rerender(<RestartOnPresetConfirmDialog request={null} {...props} />);
+    view.rerender(<RestartOnPresetConfirmDialog request={request} {...props} />);
+
+    const keep = screen.getByRole("checkbox", { name: "Keep this conversation" });
+    expect(keep.getAttribute("aria-checked")).toBe("false");
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart on preset" }));
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "terminal.restartOnPreset",
+      { terminalId: "t1", presetId: "company", confirmed: true },
+      { source: "user" }
+    );
+  });
+
   it("offers nothing for an agent whose refusal isn't recognised", () => {
     seedPane("gemini");
     renderDialog();

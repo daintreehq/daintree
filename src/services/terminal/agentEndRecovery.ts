@@ -83,7 +83,9 @@ function takeRefusedPresetSwitch(
   const attempt = panel.presetSwitchResume;
   if (!attempt || attempt.refused || attempt.agentId !== agentId) return false;
   if (panel.agentPresetId !== attempt.presetId) return false;
-  if (observedRestartKey !== undefined && panel.restartKey !== observedRestartKey) return false;
+  if (observedRestartKey !== undefined && (panel.restartKey ?? 0) !== observedRestartKey) {
+    return false;
+  }
 
   logInfo("[agentEndRecovery] Conversation refused on the preset a switch moved it to", {
     terminalId: panel.id,
@@ -223,17 +225,29 @@ export async function returnAfterRefusedSwitch(
   if (siblingHeldSessionIds(state.panelsById, panelId, attempt.agentId).has(attempt.sessionId)) {
     return "held-elsewhere";
   }
-  let restored: PtyPanelData | undefined;
-  usePanelStore.setState((current) => {
-    const latest = current.panelsById[panelId];
-    if (!latest || !isPtyPanel(latest) || latest.presetSwitchResume !== attempt) return current;
-    restored = { ...latest, ...attempt.prior, presetSwitchResume: undefined };
-    const panelsById = { ...current.panelsById, [panelId]: restored };
-    saveNormalized(panelsById, current.panelIds);
-    return { panelsById };
-  });
-  if (!restored) return "unavailable";
-  return reopenInPlace(restored, attempt.agentId, attempt.sessionId);
+  // Held before the pane changes: a reopen elsewhere that hasn't published its
+  // id yet must leave the offer standing, not a pane relabelled for nothing.
+  const release = reserveResumeSession(attempt.agentId, attempt.sessionId);
+  if (!release) return "held-elsewhere";
+  try {
+    let restored = false;
+    usePanelStore.setState((current) => {
+      const latest = current.panelsById[panelId];
+      if (!latest || !isPtyPanel(latest) || latest.presetSwitchResume !== attempt) return current;
+      restored = true;
+      const panelsById = {
+        ...current.panelsById,
+        [panelId]: { ...latest, ...attempt.prior, presetSwitchResume: undefined },
+      };
+      saveNormalized(panelsById, current.panelIds);
+      return { panelsById };
+    });
+    if (!restored) return "unavailable";
+    await usePanelStore.getState().restartTerminal(panelId, { resumeSessionId: attempt.sessionId });
+    return "launched";
+  } finally {
+    release();
+  }
 }
 
 export function dismissRefusedPresetSwitch(panelId: string): void {

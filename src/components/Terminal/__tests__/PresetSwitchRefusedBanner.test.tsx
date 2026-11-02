@@ -81,6 +81,31 @@ describe("PresetSwitchRefusedBanner (#16045)", () => {
     expect(recovery.startNewAfterRefusedSwitch).toHaveBeenCalledWith("t1");
   });
 
+  it("takes one choice at a time", async () => {
+    let finish: (value: string) => void = () => {};
+    recovery.returnAfterRefusedSwitch.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (finish = resolve))
+    );
+    seed({ ...attempt, refused: true });
+    render(<PresetSwitchRefusedBanner panelId="t1" />);
+
+    const back = screen.getByRole("button", { name: "Back to Personal" });
+    const startNew = screen.getByRole("button", { name: "Start new on Company" });
+    act(() => {
+      fireEvent.click(back);
+    });
+    act(() => {
+      fireEvent.click(back);
+      fireEvent.click(startNew);
+    });
+
+    expect(recovery.returnAfterRefusedSwitch).toHaveBeenCalledTimes(1);
+    expect(recovery.startNewAfterRefusedSwitch).not.toHaveBeenCalled();
+    await act(async () => {
+      finish("launched");
+    });
+  });
+
   it("drops the way back when another pane holds the conversation", async () => {
     recovery.returnAfterRefusedSwitch.mockResolvedValueOnce("held-elsewhere");
     seed({ ...attempt, refused: true });

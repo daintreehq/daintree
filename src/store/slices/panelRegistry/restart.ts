@@ -2171,6 +2171,10 @@ async function respawnAgentOnPreset(
         // rollback, any subsequent fallback trigger would jump past this
         // preset even though the PTY never started.
         ...priorSnapshot,
+        // The folder goes back with `conversationCwd`, or a kept id would be
+        // filed under the one the failed launch moved to. A move that landed
+        // since owns the folder now.
+        ...(isPtyPanel(t) && t.cwd === launchCwd ? { cwd: terminal.cwd } : {}),
         // Nothing runs to watch, and the conversation stays reachable.
         presetSwitchResume: undefined,
         ...(resumedSessionId ? { agentSessionId: resumedSessionId } : {}),
