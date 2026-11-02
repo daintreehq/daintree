@@ -1006,9 +1006,8 @@ describe("terminal.restartOnAccount (#16040)", () => {
 
   it("advertises a result both answers satisfy", () => {
     const actions = registerActions();
-    const schema = (
-      actions.get("terminal.restartOnAccount" as ActionId)!() as AnyActionDefinition
-    ).resultSchema!;
+    const schema = (actions.get("terminal.restartOnAccount" as ActionId)!() as AnyActionDefinition)
+      .resultSchema!;
     for (const agentSessionIdCleared of [true, false]) {
       expect(
         schema.safeParse({ terminalId: "p1", agentAccountId: "company", agentSessionIdCleared })

@@ -9,10 +9,7 @@ import { getAgentConfig } from "@/config/agents";
 import { resolveAccountSwitchTarget } from "@/services/terminal/accountSwitchTarget";
 import { usePanelStore } from "@/store/panelStore";
 import { saveNormalized } from "@/store/slices/panelRegistry/persistence";
-import type {
-  AccountSwitchTarget,
-  PresetRespawnResult,
-} from "@/store/slices/panelRegistry/types";
+import type { AccountSwitchTarget, PresetRespawnResult } from "@/store/slices/panelRegistry/types";
 import {
   isResumeSessionReserved,
   reserveResumeSession,

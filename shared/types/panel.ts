@@ -445,8 +445,7 @@ export function presetSwitchLaunchOf(panel: PtyPanelData): PresetSwitchPriorLaun
  * account is the CLI's default login.
  */
 export type ConversationSwitchTarget =
-  | { kind: "preset"; presetId: string }
-  | { kind: "account"; accountId: string | null };
+  { kind: "preset"; presetId: string } | { kind: "account"; accountId: string | null };
 
 /**
  * A preset or account switch that asked the CLI to reopen the pane's
