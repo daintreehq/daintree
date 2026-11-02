@@ -48,8 +48,11 @@ function keyed() {
 }
 
 let dir: string;
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
 beforeEach(async () => {
+  // The fake keychain is a macOS one, on every machine the tests run on.
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
   dir = await mkdtemp(join(tmpdir(), "decisions-host-"));
   made.requests = 0;
   _resetSecretStorageSessionForTests();
@@ -57,6 +60,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
   await rm(dir, { recursive: true, force: true });
 });
 
