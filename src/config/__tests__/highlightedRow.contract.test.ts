@@ -292,9 +292,10 @@ describe("highlighted-row language", () => {
     const row = files.find((f) => f.rel === "src/components/Worktree/WorktreeOverviewRow.tsx");
     const cells = elementsCarrying(row!.source, "data-worktree-overview-cell");
     expect(cells).toHaveLength(1);
-    for (const attribute of ["role", "aria-selected", "data-overview-cursor"]) {
-      expect(cells[0], `the overview cell carries ${attribute}`).toContain(attribute);
-    }
+    expect(cells[0]!.get("role"), "the overview cell is a gridcell").toEqual(["gridcell"]);
+    expect(cells[0]!.has("aria-selected"), "the overview cell carries aria-selected").toBe(true);
+    // The selectors match the value "true", so the marker has to be able to say it.
+    expect(cells[0]!.get("data-overview-cursor"), "the cursor cell says so").toContain("true");
   });
 
   it("accepts the recipe cursor only with its whole forced-colours outline", () => {
@@ -325,12 +326,25 @@ describe("highlighted-row language", () => {
         `with ${offChain}`
       ).toBe(false);
     }
+    for (const [from, to] of [
+      ["outline-[color:Highlight]", "outline-[color:#fff]"],
+      [":outline-2", ":outline-[3]"],
+      [":-outline-offset-2", ":outline-offset-[-2]"],
+    ]) {
+      expect(
+        recipeCursorTreatment(
+          full.map((token) => token.replace(from!, to!)),
+          [state]
+        ),
+        `with ${to}`
+      ).toBe(false);
+    }
     expect(
       recipeCursorTreatment(
-        full.map((token) => token.replace("outline-[color:Highlight]", "outline-[color:#fff]")),
+        full.map((token) => token.replace(":-outline-offset-2", ":outline-offset-[-2px]")),
         [state]
       )
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("puts an outline hook on every element that paints the highlight", () => {
@@ -536,9 +550,10 @@ function recipeCursorTreatment(classes: string[], states: string[][]): boolean {
   });
 }
 
-const OUTLINE_WIDTH = /^outline-([1-9]\d*|\[(length:)?(\d*\.)?\d*[1-9]\d*[a-z]*\])$/;
+// An arbitrary length needs its unit: `outline-offset-[-2]` emits a value CSS drops.
+const OUTLINE_WIDTH = /^outline-([1-9]\d*|\[(length:)?(\d*\.)?\d*[1-9]\d*[a-z]+\])$/;
 const INSET_OUTLINE_OFFSET =
-  /^(-outline-offset-[1-9]\d*|outline-offset-\[-(\d*\.)?\d*[1-9]\d*[a-z]*\])$/;
+  /^(-outline-offset-[1-9]\d*|outline-offset-\[-(\d*\.)?\d*[1-9]\d*[a-z]+\])$/;
 
 /** An outline utility that draws one: a width or a style, not an offset or a colour. */
 const VISIBLE_OUTLINE =
@@ -723,8 +738,11 @@ function literalText(initializer: ts.JsxAttributeValue | undefined): string | nu
     : null;
 }
 
-/** The attribute names of every JSX element in `source` that carries `marker`. */
-function elementsCarrying(source: string, marker: string): Set<string>[] {
+/**
+ * Every JSX element in `source` that carries `marker`, as its attribute names
+ * mapped to the string literals each attribute's value can produce.
+ */
+function elementsCarrying(source: string, marker: string): Map<string, string[]>[] {
   const file = ts.createSourceFile(
     "row.tsx",
     source,
@@ -732,15 +750,22 @@ function elementsCarrying(source: string, marker: string): Set<string>[] {
     true,
     ts.ScriptKind.TSX
   );
-  const out: Set<string>[] = [];
+  const out: Map<string, string[]>[] = [];
+  const literals = (node: ts.Node | undefined, into: string[] = []): string[] => {
+    if (node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) {
+      into.push(node.text);
+    }
+    if (node) ts.forEachChild(node, (child) => void literals(child, into));
+    return into;
+  };
   const visit = (node: ts.Node) => {
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-      const names = new Set(
+      const attributes = new Map(
         node.attributes.properties
           .filter(ts.isJsxAttribute)
-          .map((attribute) => attribute.name.getText(file))
+          .map((attribute) => [attribute.name.getText(file), literals(attribute.initializer)])
       );
-      if (names.has(marker)) out.push(names);
+      if (attributes.has(marker)) out.push(attributes);
     }
     ts.forEachChild(node, visit);
   };
