@@ -630,6 +630,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:enroll-host": {
+    args: [payload: import("../decisionsHosts.js").EnrollDecisionsHostPayload];
+    result: import("../decisionsHosts.js").DecisionsHostEnrollResult;
+  };
   "decisions:export-data": {
     args: [payload: import("../decisions.js").ExportDecisionsDataPayload];
     result: import("../decisions.js").DecisionsExportResult;
@@ -658,6 +662,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsDevicesResult;
   };
+  "decisions:list-hosts": {
+    args: [];
+    result: import("../decisionsHosts.js").DecisionsHostsResult;
+  };
   "decisions:restore-identity": {
     args: [payload: import("../decisions.js").RestoreDecisionsIdentityPayload];
     result: import("../decisions.js").DecisionsConnectResult;
@@ -669,6 +677,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:rotate-keys": {
     args: [];
     result: import("../decisions.js").DecisionsRotateKeysResult;
+  };
+  "decisions:set-auto-enroll-hosts": {
+    args: [enabled: boolean];
+    result: import("../decisionsHosts.js").DecisionsHostsResult;
   };
   "decisions:set-enabled": {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];

@@ -43,6 +43,11 @@ import type {
   SetDecisionsEnabledPayload,
   VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
+import type {
+  DecisionsHostEnrollResult,
+  DecisionsHostsResult,
+  EnrollDecisionsHostPayload,
+} from "../../../shared/types/decisionsHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -187,6 +192,9 @@ const verifyRecoveryKitSchema = z
     passphrase: z.string().min(1).max(1024),
   })
   .strict();
+
+// A host id as the host list keeps it.
+const enrollHostSchema = z.object({ hostId: z.string().min(1).max(256) }).strict();
 
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
@@ -470,6 +478,35 @@ export const decisionsNamespace = defineIpcNamespace({
       if (!decisions) throw setupCancelled();
       return decisions.rotateKeys();
     }),
+    // Remote Hosts as Decisions devices (#16021). Only while on: enrolling
+    // signs with the running lifetime's owner identity. Listing asks no Host
+    // and no relay; it shows what was last observed.
+    listHosts: op(CHANNELS.DECISIONS_LIST_HOSTS, async (): Promise<DecisionsHostsResult> => {
+      refuseWhileOff("list Remote Hosts");
+      const decisions = await loadDecisions();
+      if (!decisions) throw setupCancelled();
+      return decisions.listHosts();
+    }),
+    enrollHost: opValidated(
+      CHANNELS.DECISIONS_ENROLL_HOST,
+      enrollHostSchema,
+      async (payload: EnrollDecisionsHostPayload): Promise<DecisionsHostEnrollResult> => {
+        refuseWhileOff("enroll a Remote Host");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.enrollDecisionsHost(payload.hostId);
+      }
+    ),
+    setAutoEnrollHosts: opValidated(
+      CHANNELS.DECISIONS_SET_AUTO_ENROLL_HOSTS,
+      z.boolean(),
+      async (enabled: boolean): Promise<DecisionsHostsResult> => {
+        refuseWhileOff("change how Remote Hosts are enrolled");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setAutoEnrollHosts(enabled);
+      }
+    ),
   },
 });
 

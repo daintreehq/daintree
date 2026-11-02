@@ -1539,6 +1539,11 @@ export const CHANNELS = {
   // anyone (#16010).
   DECISIONS_REVOKE_DEVICE: "decisions:revoke-device",
   DECISIONS_ROTATE_KEYS: "decisions:rotate-keys",
+  // Remote Hosts enrolled as Decisions devices (#16021): what each shows,
+  // Enroll on one, and automatic enrollment's switch.
+  DECISIONS_LIST_HOSTS: "decisions:list-hosts",
+  DECISIONS_ENROLL_HOST: "decisions:enroll-host",
+  DECISIONS_SET_AUTO_ENROLL_HOSTS: "decisions:set-auto-enroll-hosts",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

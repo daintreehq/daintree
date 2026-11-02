@@ -313,6 +313,9 @@ export interface GeneratedElectronAPI {
     disconnectRelay(
       ...args: IpcInvokeMap["decisions:disconnect-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:disconnect-relay"]["result"]>;
+    enrollHost(
+      ...args: IpcInvokeMap["decisions:enroll-host"]["args"]
+    ): Promise<IpcInvokeMap["decisions:enroll-host"]["result"]>;
     exportData(
       ...args: IpcInvokeMap["decisions:export-data"]["args"]
     ): Promise<IpcInvokeMap["decisions:export-data"]["result"]>;
@@ -334,6 +337,9 @@ export interface GeneratedElectronAPI {
     listDevices(
       ...args: IpcInvokeMap["decisions:list-devices"]["args"]
     ): Promise<IpcInvokeMap["decisions:list-devices"]["result"]>;
+    listHosts(
+      ...args: IpcInvokeMap["decisions:list-hosts"]["args"]
+    ): Promise<IpcInvokeMap["decisions:list-hosts"]["result"]>;
     restoreIdentity(
       ...args: IpcInvokeMap["decisions:restore-identity"]["args"]
     ): Promise<IpcInvokeMap["decisions:restore-identity"]["result"]>;
@@ -343,6 +349,9 @@ export interface GeneratedElectronAPI {
     rotateKeys(
       ...args: IpcInvokeMap["decisions:rotate-keys"]["args"]
     ): Promise<IpcInvokeMap["decisions:rotate-keys"]["result"]>;
+    setAutoEnrollHosts(
+      ...args: IpcInvokeMap["decisions:set-auto-enroll-hosts"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-auto-enroll-hosts"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;

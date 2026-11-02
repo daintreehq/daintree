@@ -7,7 +7,7 @@ import {
   RelayError,
   verifiedDevices,
 } from "@daintreehq/decisions-client";
-import type { PendingPairing } from "@daintreehq/decisions-protocol";
+import type { DeviceInfo, PendingPairing } from "@daintreehq/decisions-protocol";
 import type {
   ApproveDecisionsPairingPayload,
   DecisionsDevice,
@@ -48,6 +48,8 @@ export interface OwnerDevicesOptions extends OwnerRecord {
   fetchImpl?: RelayFetch;
   timeoutMs?: number;
   now?: () => number;
+  /** Told of every verified device a list read, revoked ones included, before they are filtered. */
+  onListed?: (devices: DeviceInfo[]) => void | Promise<void>;
 }
 
 interface OwnerSession {
@@ -123,6 +125,8 @@ export class OwnerDevices {
     } catch (error) {
       return this.failure(error, session);
     }
+    // Revocations are read from here (#16021) before the list drops them.
+    await this.options.onListed?.(listed);
     const self = this.options.deviceId;
     const devices: DecisionsDevice[] = listed
       .filter((device) => device.device_id !== self && device.revoked_at === null)
@@ -136,6 +140,23 @@ export class OwnerDevices {
         pushEnabled: device.push_enabled,
       }));
     return { result: "listed", devices };
+  }
+
+  /**
+   * Runs signed requests of another owner operation (enrolling a Host,
+   * #16021) with this identity's client. What stopped them is an observation,
+   * as for the requests here; anything else is thrown.
+   */
+  async withClient<T>(
+    call: (client: RelayClient) => Promise<T>
+  ): Promise<T | DecisionsRelayRequestFailure> {
+    const session = await this.open();
+    if (isFailure(session)) return session;
+    try {
+      return await call(session.client);
+    } catch (error) {
+      return this.failure(error, session);
+    }
   }
 
   /** A one-time invitation for a phone, held here until it is approved, declined or lapses. */

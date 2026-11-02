@@ -22,6 +22,9 @@ export const DECISIONS_METHOD_CHANNELS = {
   verifyRecoveryKit: "decisions:verify-recovery-kit",
   revokeDevice: "decisions:revoke-device",
   rotateKeys: "decisions:rotate-keys",
+  listHosts: "decisions:list-hosts",
+  enrollHost: "decisions:enroll-host",
+  setAutoEnrollHosts: "decisions:set-auto-enroll-hosts",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;
