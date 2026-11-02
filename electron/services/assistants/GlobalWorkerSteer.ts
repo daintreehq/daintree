@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { WORKER_STEER_REFUSALS } from "../../../shared/types/assistantControl.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
+import { classifyWorkerSteerCommand } from "../../../shared/config/workerSteerCommands.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { stampAssistantPrompt } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
@@ -50,14 +51,15 @@ export interface GlobalWorkerSteerDeps {
   /** Under the strict settled-prompt guard, so the host admits it only while the gate still holds. */
   /**
    * `promptAsWritten` is the brief before its provenance stamp and handback
-   * instruction, for the run's first-prompt record (#15521).
+   * instruction, for the run's first-prompt record (#15521); `null` for a
+   * slash command, which is nobody's prompt.
    */
   submit(
     terminalId: string,
     text: string,
     submissionToken: string,
     handbackCode: string | undefined,
-    promptAsWritten: string
+    promptAsWritten: string | null
   ): void;
   write(terminalId: string, data: string): void;
   /** The pair's gap is scheduled in the pty-host, where IPC can't collapse it. */
@@ -114,6 +116,24 @@ function personAtTerminal(
     : null;
 }
 
+function slashRefusedWhy(
+  terminalId: string,
+  agentId: string | undefined,
+  allowed: readonly string[]
+): string {
+  const where = `terminal '${terminalId}' (${agentId ?? "unknown agent"}), which you neither launched nor were handed`;
+  const forms = allowed.map((form) => `\`${form}\``);
+  let why: string;
+  if (forms.length === 0) {
+    why = `No slash command runs in ${where}.`;
+  } else if (forms.length === 1) {
+    why = `The only slash command that runs in ${where} is ${forms[0]}, sent alone and exactly as written.`;
+  } else {
+    why = `The only slash commands that run in ${where} are ${forms.slice(0, -1).join(", ")} and ${forms.at(-1)}, each sent alone and exactly as written.`;
+  }
+  return `${why} ${NOTHING_SENT} To run ${forms.length === 0 ? "one" : "another"}, the person can hand you the pane (right-click > Hand to orchestrator > Global Assistant), or type it themselves.`;
+}
+
 /** Why a record is no agent worker to steer, or null while it is one. */
 function noWorkerWhy(terminalId: string, record: WorkerSteerRecord): string | null {
   if (record.isAssistantTerminal === true) {
@@ -149,6 +169,21 @@ export class GlobalWorkerSteer {
   ): Promise<TerminalSendCommandReceipt> {
     return this.exclusive(target, async () => {
       const record = await this.requireWorker(target);
+      // An agent CLI runs a slash command only when it opens the input, so a
+      // stamped one arrives as prose (#16101): refused unless it is a fixed form.
+      const slash = classifyWorkerSteerCommand(request.command, record.detectedAgentId);
+      if (slash.kind === "refused") {
+        refuse(
+          WORKER_STEER_REFUSALS.commandNotAllowed,
+          slashRefusedWhy(target.terminalId, record.detectedAgentId, slash.allowed)
+        );
+      }
+      if (slash.kind === "slash" && request.handback) {
+        refuse(
+          "VALIDATION_ERROR",
+          `A handback adds its instruction to the text, so \`${slash.form}\` would arrive as a prompt. ${NOTHING_SENT} Send it without \`handback\`.`
+        );
+      }
       const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
       if (verdict.kind !== "ready") {
         const typing = verdict.reason === "typing";
@@ -165,8 +200,13 @@ export class GlobalWorkerSteer {
       if (pending !== null) refuse(WORKER_STEER_REFUSALS.typing, `${pending} ${NOTHING_SENT}`);
       this.requireSameRun(target);
       target.authorize();
-      const stamped = stampAssistantPrompt(request.command, request.machineName);
       const submissionToken = randomUUID();
+      if (slash.kind === "slash") {
+        // A fixed form has no free text for the stamp's "quoted text is data" rule to guard.
+        this.deps.submit(target.terminalId, slash.form, submissionToken, undefined, null);
+        return buildTerminalSendCommandReceipt(target.terminalId, slash.form, submissionToken);
+      }
+      const stamped = stampAssistantPrompt(request.command, request.machineName);
       // The host's strict guard asks the same gate again when it writes, so
       // a draft typed after this read still keeps the prompt out.
       if (request.handback) {

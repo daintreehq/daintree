@@ -24,7 +24,12 @@ interface Fake {
 describe("GlobalWorkerSteer (#14551)", () => {
   let fake: Fake;
   let writes: string[];
-  let submits: Array<{ text: string; token: string; handback?: string; promptAsWritten: string }>;
+  let submits: Array<{
+    text: string;
+    token: string;
+    handback?: string;
+    promptAsWritten: string | null;
+  }>;
   let escapes: number;
   /** Runs before each pause between keys, standing in for whatever happens meanwhile. */
   let duringGap: () => void;
@@ -154,6 +159,104 @@ describe("GlobalWorkerSteer (#14551)", () => {
         agentId: "claude",
         agentStateAtDispatch: "working",
       });
+    });
+  });
+
+  describe("a slash command (#16101)", () => {
+    const send = (command: string, handback = false) =>
+      steer.prompt(target(), { command, handback, machineName: "studio-01" });
+
+    it("runs one of its agent's fixed forms as the whole input, unstamped and nobody's prompt", async () => {
+      fake.record = atPrompt({ detectedAgentId: "codex" });
+
+      const receipt = await send(" /goal resume\n");
+
+      expect(submits).toEqual([
+        { text: "/goal resume", token: receipt.submissionToken, promptAsWritten: null },
+      ]);
+      expect(receipt).toMatchObject({ sent: true, terminalId: WORKER, command: "/goal resume" });
+    });
+
+    it("refuses any other, naming the forms that run and the hand-over, with nothing sent", async () => {
+      fake.record = atPrompt({ detectedAgentId: "codex" });
+
+      for (const command of ["/clear", "/quit", "/goal", "/goal resume now", "/compact\nthen go"]) {
+        const error = await refusal(send(command));
+        expect(error.code, command).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+        expect(error.message).toContain(
+          "`/goal resume`, `/goal pause`, `/compact` and `/status`, each sent alone"
+        );
+        expect(error.message).toContain("Hand to orchestrator");
+        expect(error.message).toContain("Nothing was sent.");
+      }
+      expect(submits).toEqual([]);
+    });
+
+    it("holds each agent to its own forms", async () => {
+      // Claude takes `/compact` alone: Codex's `/goal resume` is refused there.
+      const claude = await refusal(send("/goal resume"));
+      expect(claude.code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+      expect(claude.message).toContain("The only slash command that runs in");
+      expect(claude.message).toContain("is `/compact`, sent alone");
+
+      fake.record = atPrompt({ detectedAgentId: "aider" });
+      const aider = await refusal(send("/compact"));
+      expect(aider.code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+      expect(aider.message).toContain("No slash command runs in terminal 'term-worker' (aider)");
+
+      fake.record = atPrompt();
+      await send("/compact");
+      expect(submits.map(({ text }) => text)).toEqual(["/compact"]);
+    });
+
+    it("keeps a prompt that opens with a path a stamped prompt", async () => {
+      fake.record = atPrompt({ detectedAgentId: "codex" });
+
+      await send("/Users/me/app/src/index.ts throws on start, fix it");
+
+      expect(submits[0]!.text).toContain("From the Daintree Assistant on studio-01");
+      expect(submits[0]!.promptAsWritten).toBe(
+        "/Users/me/app/src/index.ts throws on start, fix it"
+      );
+    });
+
+    it("refuses a fixed form with a handback, whose instruction would make it prose", async () => {
+      fake.record = atPrompt({ detectedAgentId: "codex" });
+
+      const error = await refusal(send("/goal resume", true));
+
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(error.message).toContain("without `handback`");
+      expect(submits).toEqual([]);
+    });
+
+    it("holds a fixed form to every gate a prompt answers to", async () => {
+      for (const record of [
+        atPrompt({ detectedAgentId: "codex", agentState: "working", waitingReason: undefined }),
+        atPrompt({ detectedAgentId: "codex", lastTypedInputAt: 1_500 }),
+        atPrompt({ detectedAgentId: "codex", hasPendingSubmission: true }),
+      ]) {
+        fake.record = record;
+        expect([WORKER_STEER_REFUSALS.busy, WORKER_STEER_REFUSALS.typing]).toContain(
+          (await refusal(send("/goal resume"))).code
+        );
+      }
+      fake.record = atPrompt({ detectedAgentId: "codex" });
+      fake.generation = 5;
+      expect((await refusal(send("/goal resume"))).code).toBe(WORKER_STEER_REFUSALS.restarted);
+      fake.generation = 4;
+      const revoked = await refusal(
+        steer.prompt(
+          target({
+            authorize: () => {
+              throw new AssistantTargetError("DRIVEN_ELSEWHERE", "Another machine drives it.");
+            },
+          }),
+          { command: "/goal resume", handback: false, machineName: "m" }
+        )
+      );
+      expect(revoked.code).toBe("DRIVEN_ELSEWHERE");
+      expect(submits).toEqual([]);
     });
   });
 
@@ -402,6 +505,42 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
       "settled-prompt-strict",
       undefined,
       "go"
+    );
+  });
+
+  it("submits a fixed slash form as written, as nobody's prompt (#16101)", async () => {
+    const pty = {
+      getTerminalProjectId: () => PROJECT,
+      getLiveGeneration: () => 4,
+      isAssistantTerminal: () => false,
+      getTerminalAsync: async () => ({
+        projectId: PROJECT,
+        detectedAgentId: "codex",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: 1_000,
+        hasPty: true,
+      }),
+      submit: vi.fn(),
+    };
+    const steer = liveGlobalWorkerSteer({
+      pty: () => pty as never,
+      isAssistantTerminal: () => false,
+    });
+
+    await steer.prompt(
+      { projectId: PROJECT, terminalId: WORKER, generation: 4, authorize: () => {} },
+      { command: "/goal resume", handback: false, machineName: "m" }
+    );
+
+    expect(pty.submit).toHaveBeenCalledWith(
+      WORKER,
+      "/goal resume",
+      expect.any(String),
+      undefined,
+      "settled-prompt-strict",
+      undefined,
+      null
     );
   });
 });

@@ -148,4 +148,6 @@ export const WORKER_STEER_REFUSALS = {
   busy: "WORKER_BUSY",
   /** Some keys went in before a check stopped the rest. */
   partial: "WORKER_KEYS_PARTIAL",
+  /** A slash command that isn't one of the fixed forms its agent takes from a steer (#16101). */
+  commandNotAllowed: "WORKER_COMMAND_NOT_ALLOWED",
 } as const;
