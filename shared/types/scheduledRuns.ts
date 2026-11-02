@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "./handback.js";
 import { parseCron, validateTimeZone } from "../utils/cron.js";
-import { occurrenceKeyFor, outcomeForEvidence } from "../utils/scheduledRuns.js";
+import {
+  occurrenceKeyFor,
+  outcomeForEvidence,
+  SCHEDULED_RUN_WORKERS_MAX,
+} from "../utils/scheduledRuns.js";
 import { isScheduleAssistantAgentId } from "../config/scheduleAssistant.js";
 
 // The contract for scheduled agent runs (#15973). docs/architecture/scheduled-runs.md
@@ -286,9 +290,6 @@ export const ScheduledRunResumeSchema = z.strictObject({
   agentModelId: IdSchema.nullable(),
   agentPresetId: IdSchema.nullable(),
 });
-
-/** Most workers one run's history lists; later ones aren't recorded. */
-export const SCHEDULED_RUN_WORKERS_MAX = 50;
 
 /**
  * A worker an Assistant run launched (#16169), as its launch was answered:

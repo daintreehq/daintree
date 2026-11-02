@@ -30,7 +30,7 @@ import type {
   ScheduledRunSkipReason,
   ScheduledRunWorker,
 } from "../../../../shared/types/scheduledRuns.js";
-import { SCHEDULED_RUN_WORKERS_MAX } from "../../../../shared/types/scheduledRuns.js";
+import { SCHEDULED_RUN_WORKERS_MAX } from "../../../../shared/utils/scheduledRuns.js";
 import { occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

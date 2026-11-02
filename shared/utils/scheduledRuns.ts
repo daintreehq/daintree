@@ -15,6 +15,9 @@ import {
 
 export const DEFAULT_SCHEDULE_CRON = "0 9 * * *";
 
+/** Most workers one Assistant run's history lists (#16169); later ones aren't recorded. */
+export const SCHEDULED_RUN_WORKERS_MAX = 50;
+
 export interface NewScheduleInput {
   readonly id: string;
   readonly projectId: string;

@@ -1,14 +1,18 @@
-import {
-  SCHEDULED_RUN_WORKERS_MAX,
-  type ScheduledRun,
-  type ScheduledRunEvidence,
-  type ScheduledRunOrigin,
-  type ScheduledRunProcess,
-  type ScheduledRunResume,
-  type ScheduledRunSkipReason,
-  type ScheduledRunWorker,
+// Types only from the schema module: a value import would pull zod into
+// this lazily loaded module's split point and regroup the shared chunks.
+import type {
+  ScheduledRun,
+  ScheduledRunEvidence,
+  ScheduledRunOrigin,
+  ScheduledRunProcess,
+  ScheduledRunResume,
+  ScheduledRunSkipReason,
+  ScheduledRunWorker,
 } from "../../../shared/types/scheduledRuns.js";
-import { outcomeForEvidence } from "../../../shared/utils/scheduledRuns.js";
+import {
+  outcomeForEvidence,
+  SCHEDULED_RUN_WORKERS_MAX,
+} from "../../../shared/utils/scheduledRuns.js";
 import type { DaintreeEventMap } from "../events.js";
 import type { ScheduledRunStore } from "./ScheduledRunStore.js";
 
