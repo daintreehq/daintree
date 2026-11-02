@@ -602,12 +602,22 @@ describe("ContentPanel red edge after a host resync (#16153)", () => {
     const firstWait = waitToken();
 
     // The same session's wait, read again, is still the one the user saw.
-    resync({ agentState: "waiting", waitingReason: "error", lastStateChange: 3_000, agentIncarnation: 1 });
+    resync({
+      agentState: "waiting",
+      waitingReason: "error",
+      lastStateChange: 3_000,
+      agentIncarnation: 1,
+    });
     expect(view.edge()).toBe(false);
 
     // Relaunched while this view was away, and failed again: the resync is the
     // first this view hears of the new session.
-    resync({ agentState: "waiting", waitingReason: "error", lastStateChange: 9_000, agentIncarnation: 2 });
+    resync({
+      agentState: "waiting",
+      waitingReason: "error",
+      lastStateChange: 9_000,
+      agentIncarnation: 2,
+    });
     expect(waitToken()).not.toBe(firstWait);
     expect(view.edge()).toBe(true);
   });
