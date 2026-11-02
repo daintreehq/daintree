@@ -158,7 +158,7 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
 import { RECIPE_DISPATCH_EXPIRED_REASON, useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
 import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReservations";
-import type { RecipeTerminal } from "@shared/types/project";
+import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
 import { buildLaunchCommandFromFlags } from "@shared/types/agentSettings";
@@ -1087,6 +1087,85 @@ describe("recipeStore", () => {
       expect(results.failed).toHaveLength(0);
       expect(results.spawned[0]).toEqual({ index: 0, terminalId: "terminal-1" });
       expect(results.spawned[1]).toEqual({ index: 1, terminalId: "terminal-2" });
+    });
+
+    describe("When done (#16172)", () => {
+      const runSteps = async (terminals: RecipeTerminal[]) => {
+        let callIndex = 0;
+        addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+        useRecipeStore.setState({
+          recipes: [
+            {
+              id: "recipe-when-done",
+              name: "Review",
+              projectId: "project-1",
+              terminals,
+              createdAt: Date.now(),
+            },
+          ],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+        return useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-when-done", "/tmp/worktree", "worktree-1", {
+            branchName: "feature/x",
+          });
+      };
+      const spawnOptions = () =>
+        addTerminalMock.mock.calls.map((call) => call[0] as Record<string, unknown>);
+
+      it("hands each armed step a fresh code, its instruction appended to the launch prompt", async () => {
+        await runSteps([
+          { type: "claude", initialPrompt: "Review {{branch_name}}", whenDone: "close" },
+          { type: "claude", initialPrompt: "Review again", whenDone: "background" },
+        ]);
+
+        const [first, second] = spawnOptions();
+        expect(first).toMatchObject({ whenDone: "close", handbackCode: expect.any(String) });
+        expect(second).toMatchObject({ whenDone: "background", handbackCode: expect.any(String) });
+        expect(first!.handbackCode).not.toBe(second!.handbackCode);
+        const code = first!.handbackCode as string;
+        expect(first!.command).toContain("Review feature/x");
+        expect(first!.command).toContain(`DAINTREE-DONE-${code}`);
+        expect(first!.command).toContain(`DAINTREE-NEEDS-YOU-${code}`);
+        // The pane's first-prompt record is what the recipe wrote, not the instruction.
+        expect(first!.launchPrompt).toMatchObject({ text: "Review feature/x" });
+      });
+
+      it("mints a new code on every run", async () => {
+        const terminals: RecipeTerminal[] = [
+          { type: "claude", initialPrompt: "Review", whenDone: "close" },
+        ];
+        await runSteps(terminals);
+        await runSteps(terminals);
+
+        const [first, second] = spawnOptions();
+        expect(first!.handbackCode).not.toBe(second!.handbackCode);
+      });
+
+      it("arms nothing for keep, for a step with no prompt, or one its variables leave empty", async () => {
+        await runSteps([
+          { type: "claude", initialPrompt: "Review" },
+          { type: "claude", whenDone: "close" },
+          { type: "claude", initialPrompt: "{{issue_number}}", whenDone: "close" },
+        ]);
+
+        expect(spawnOptions()).toHaveLength(3);
+        for (const options of spawnOptions()) {
+          expect(options).not.toHaveProperty("whenDone");
+          expect(options).not.toHaveProperty("handbackCode");
+          expect(String(options.command)).not.toContain("DAINTREE-DONE-");
+        }
+      });
+
+      it("never arms a step that launches no agent", async () => {
+        await runSteps([
+          { type: "terminal", command: "npm test", whenDone: "close" } as RecipeTerminal,
+        ]);
+
+        expect(spawnOptions()[0]).not.toHaveProperty("whenDone");
+      });
     });
 
     // A hand-edited recipe can still name the retired assistant CLI. That
@@ -4259,6 +4338,27 @@ describe("recipeStore", () => {
       expect(exportRecipeToFileMock).toHaveBeenCalledWith("My Recipe", expect.any(String));
       const json = JSON.parse(exportRecipeToFileMock.mock.calls[0]![1]);
       expect(json).not.toHaveProperty("projectId");
+    });
+
+    it("round-trips an agent step's When done through export and import (#16172)", async () => {
+      const recipe = {
+        id: "r-2",
+        name: "Reviewer",
+        projectId: "proj-1",
+        terminals: [
+          { type: "claude" as const, initialPrompt: "Review", whenDone: "close" as const },
+          { type: "terminal" as const, command: "ls" },
+        ],
+        createdAt: 100,
+      };
+      useRecipeStore.setState({ recipes: [recipe], projectRecipes: [recipe], globalRecipes: [] });
+
+      const json = useRecipeStore.getState().exportRecipe("r-2")!;
+      await useRecipeStore.getState().importRecipe("proj-1", json);
+
+      const imported = updateInRepoRecipeMock.mock.calls.at(-1)?.[1] as TerminalRecipe;
+      expect(imported.terminals[0]?.whenDone).toBe("close");
+      expect("whenDone" in imported.terminals[1]!).toBe(false);
     });
 
     it("importRecipeFromFile reports a cancelled pick", async () => {

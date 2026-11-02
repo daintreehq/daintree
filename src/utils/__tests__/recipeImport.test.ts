@@ -98,6 +98,7 @@ describe("describeRejectedTerminal", () => {
         { type: "terminal", command: 1 },
         { type: "terminal", env: [] },
         { type: "terminal", exitBehavior: "explode" },
+        { type: "claude", whenDone: "archive" },
         {},
         null,
       ]).map((d) => d.reason)
@@ -105,6 +106,7 @@ describe("describeRejectedTerminal", () => {
       '"command" must be text',
       '"env" must map names to text values',
       '"exitBehavior" must be keep, trash or remove',
+      '"whenDone" must be keep, background or close',
       'has no "type"',
       "isn't a JSON object",
     ]);

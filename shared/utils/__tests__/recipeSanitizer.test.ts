@@ -118,6 +118,47 @@ describe("sanitizeRecipeTerminals", () => {
     expect(result[1]?.exitBehavior).toBeUndefined();
   });
 
+  describe("whenDone (#16172)", () => {
+    it("keeps background and close on an agent step", () => {
+      const result = sanitizeRecipeTerminals([
+        { type: "claude", initialPrompt: "review", whenDone: "background" },
+        { type: "codex", initialPrompt: "review", whenDone: "close" },
+      ]);
+      expect(result.map((t) => t.whenDone)).toEqual(["background", "close"]);
+    });
+
+    it("reads keep, blank and absent as no setting, adding no key", () => {
+      const result = sanitizeRecipeTerminals([
+        { type: "claude", whenDone: "keep" },
+        { type: "claude", whenDone: "" },
+        { type: "claude" },
+      ]);
+      expect(result).toHaveLength(3);
+      for (const terminal of result) expect("whenDone" in terminal).toBe(false);
+    });
+
+    it("drops the setting from steps that launch no agent", () => {
+      const result = sanitizeRecipeTerminals([
+        { type: "terminal", command: "ls", whenDone: "close" },
+        { type: "dev-preview", whenDone: "background" },
+      ]);
+      expect(result).toHaveLength(2);
+      for (const terminal of result) expect("whenDone" in terminal).toBe(false);
+    });
+
+    it("drops a step with a value this build doesn't know, and ignores a non-text one", () => {
+      const { accepted, rejected } = inspectRecipeTerminals([
+        { type: "claude", whenDone: "archive" },
+        { type: "claude", whenDone: 1 },
+      ]);
+      expect(rejected).toEqual([
+        { index: 0, rejection: { kind: "unsupported-value", field: "whenDone" } },
+      ]);
+      expect(accepted).toHaveLength(1);
+      expect("whenDone" in accepted[0]!).toBe(false);
+    });
+  });
+
   describe("additionalAllowedTypes (#11860)", () => {
     it("admits an extra agent id only when it is passed in", () => {
       const terminals = [{ type: "acme-agent", initialPrompt: "go" }];
