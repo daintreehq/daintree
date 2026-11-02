@@ -318,15 +318,35 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     });
     const { host, client } = await pair();
     const keys = memoryKeys();
-    serve(host, new HostEnrollments({ openKeys: keys.open }));
+    // The library reads the file twice while it accepts, the second time right
+    // before it writes. The person's own setup lands just after that read, so
+    // only the write's own check can see it.
+    let accepting = false;
+    let loads = 0;
+    serve(
+      host,
+      new HostEnrollments({
+        openKeys: () => {
+          const opened = keys.open();
+          return {
+            ...opened,
+            load: async () => {
+              const value = await opened.load();
+              if (accepting && ++loads === 2) keys.replace(ownSetup.stored);
+              return value;
+            },
+          };
+        },
+      })
+    );
     const link = linkOver(client);
     const requested = await link.request({ attempt: "attempt_0000000001", label: HOST });
     if (!requested.ok || requested.value.step !== "requested") throw new Error("not requested");
     const { response } = await enrollHost(owner.client, requested.value.request);
 
-    // The person set Decisions up on the Host itself meanwhile.
-    keys.replace(ownSetup.stored);
+    accepting = true;
     const accepted = await link.accept({ attempt: "attempt_0000000001", response });
+    expect(loads).toBe(2);
     expect(accepted).toMatchObject({ ok: true, value: { step: "refused" } });
     expect(keys.current()).toEqual(ownSetup.stored);
   });

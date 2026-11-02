@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { DecisionsHost } from "@shared/types/decisionsHosts";
 import { hostsUnlistedText } from "./hostsCopy";
 
@@ -75,27 +76,30 @@ export function useDecisionsHosts(enabled: boolean, revision: number): UseDecisi
     if (savingAuto) return;
     setSavingAuto(true);
     setActionFailure(null);
-    void window.electron.decisions
-      .setAutoEnrollHosts(next)
-      .then(
-        (read) => {
-          if (read.result === "listed") {
-            setHosts(read.hosts);
-            setAutoEnrollShown(read.autoEnroll);
-          }
-        },
-        (error: unknown) =>
-          setActionFailure({
-            message: formatErrorMessage(
-              error,
-              next
-                ? "Automatic enrollment couldn't be turned on."
-                : "Automatic enrollment couldn't be turned off."
-            ),
-            retry: () => setAutoEnroll(next),
-          })
-      )
-      .then(() => setSavingAuto(false));
+    safeFireAndForget(
+      window.electron.decisions
+        .setAutoEnrollHosts(next)
+        .then(
+          (read) => {
+            if (read.result === "listed") {
+              setHosts(read.hosts);
+              setAutoEnrollShown(read.autoEnroll);
+            }
+          },
+          (error: unknown) =>
+            setActionFailure({
+              message: formatErrorMessage(
+                error,
+                next
+                  ? "Automatic enrollment couldn't be turned on."
+                  : "Automatic enrollment couldn't be turned off."
+              ),
+              retry: () => setAutoEnroll(next),
+            })
+        )
+        .then(() => setSavingAuto(false)),
+      { context: "Changing automatic Remote Host enrollment" }
+    );
   };
 
   const enroll = (hostId: string) => {
@@ -103,36 +107,39 @@ export function useDecisionsHosts(enabled: boolean, revision: number): UseDecisi
     setEnrolling((held) => new Set(held).add(hostId));
     setActionFailure(null);
     const retry = () => enroll(hostId);
-    void window.electron.decisions
-      .enrollHost({ hostId })
-      .then(
-        (outcome) => {
-          if (outcome.result === "not-connected") {
+    safeFireAndForget(
+      window.electron.decisions
+        .enrollHost({ hostId })
+        .then(
+          (outcome) => {
+            if (outcome.result === "not-connected") {
+              setActionFailure({
+                message: "That Host isn't connected now. Connect to it, then enroll it.",
+                retry,
+              });
+            } else if (outcome.result === "not-set-up") {
+              setActionFailure({
+                message: "No relay is set up on this computer. Connect one above first.",
+                retry,
+              });
+            }
+          },
+          (error: unknown) =>
             setActionFailure({
-              message: "That Host isn't connected now. Connect to it, then enroll it.",
+              message: formatErrorMessage(error, "The Host couldn't be enrolled."),
               retry,
-            });
-          } else if (outcome.result === "not-set-up") {
-            setActionFailure({
-              message: "No relay is set up on this computer. Connect one above first.",
-              retry,
-            });
-          }
-        },
-        (error: unknown) =>
-          setActionFailure({
-            message: formatErrorMessage(error, "The Host couldn't be enrolled."),
-            retry,
-          })
-      )
-      .then(() => {
-        setEnrolling((held) => {
-          const next = new Set(held);
-          next.delete(hostId);
-          return next;
-        });
-        reread();
-      });
+            })
+        )
+        .then(() => {
+          setEnrolling((held) => {
+            const next = new Set(held);
+            next.delete(hostId);
+            return next;
+          });
+          reread();
+        }),
+      { context: "Enrolling a Remote Host" }
+    );
   };
 
   return {

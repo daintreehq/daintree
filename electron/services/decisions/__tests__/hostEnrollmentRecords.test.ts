@@ -46,6 +46,13 @@ describe("HostRecords", () => {
       enrolledAt: 100,
       revokedAt: null,
     });
+    // Unless the caller read the record naming the device it still names: its
+    // sighting of the Host's newer device stands, though recording that one failed.
+    expect(await records.markRevoked("studio", "dev_host_3", 250, "dev_host_2")).toEqual({
+      deviceId: "dev_host_3",
+      enrolledAt: 100,
+      revokedAt: 250,
+    });
     // A Host never recorded takes the sighting as it is.
     expect(await records.markRevoked("lab", "dev_lab_1", 300)).toEqual({
       deviceId: "dev_lab_1",

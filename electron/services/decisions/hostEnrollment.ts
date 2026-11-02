@@ -349,7 +349,13 @@ export class HostEnroller {
             : null;
       if (seenRevoked !== null && record?.revokedAt == null) {
         try {
-          record = (await records.markRevoked(hostId, seenRevoked, this.now())) ?? record;
+          record =
+            (await records.markRevoked(
+              hostId,
+              seenRevoked,
+              this.now(),
+              record?.deviceId ?? null
+            )) ?? record;
         } catch (error) {
           return show(failure("records-unavailable", this.now(), formatErrorMessage(error, "")));
         }

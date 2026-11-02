@@ -72,13 +72,20 @@ export class HostRecords {
   }
 
   /**
-   * `deviceId` was seen revoked. Recorded only while the Host's record names
-   * that device (or none): a sighting read before another device replaced it
+   * `deviceId` was seen revoked, by a caller that read the record naming
+   * `observed`. Recorded only while the record names that device, the one the
+   * caller read, or none: a sighting made before another device replaced it
    * changes nothing, and answers null. The first sighting's time stands.
    */
-  markRevoked(hostId: string, deviceId: string, now: number): Promise<HostRecord | null> {
+  markRevoked(
+    hostId: string,
+    deviceId: string,
+    now: number,
+    observed: string | null = deviceId
+  ): Promise<HostRecord | null> {
     return this.update(hostId, (current) => {
-      if (current?.deviceId != null && current.deviceId !== deviceId) return null;
+      const named = current?.deviceId ?? null;
+      if (named !== null && named !== deviceId && named !== observed) return null;
       return {
         deviceId,
         enrolledAt: current?.enrolledAt ?? null,
