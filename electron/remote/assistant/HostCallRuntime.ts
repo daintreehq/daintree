@@ -914,7 +914,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly seenNotices = new Map<string, true>();
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
   private readonly prompted = new Map<string, PromptMark[]>();
-  /** When each call was first sent, so its answer, got by a resend, still dates from then. */
+  /** When each call was first sent, by host, session and call, so its answer got later still dates from then. */
   private readonly callTimes = new Map<string, number>();
   /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
   private readonly throwawaySessions = new Map<string, ThrowawaySession>();
@@ -1552,8 +1552,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         };
       }
       const runMs = relayRunMs(args.tool, toolArgs);
-      const askedAt = (resend ? this.callTimes.get(callId) : undefined) ?? this.now();
-      if (!resend) remember(this.callTimes, callId, askedAt, MAX_CALL_TIMES);
+      // The same call sent again (a resend, or a retry under its own `newCallId`)
+      // dates from its first send.
+      const callKey = `${args.hostId}\u0000${helpSessionId}\u0000${callId}`;
+      const askedAt = this.callTimes.get(callKey) ?? this.now();
+      if (!this.callTimes.has(callKey)) remember(this.callTimes, callKey, askedAt, MAX_CALL_TIMES);
       const payload: RelayCallRequest = {
         helpSessionId,
         projectId,

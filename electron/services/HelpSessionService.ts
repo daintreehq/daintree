@@ -1441,6 +1441,12 @@ export class HelpSessionService {
    * Says nothing about whether the session may still act: ask its lane.
    */
   getScheduledRunOf(sessionId: string): { scheduleId: string; runId: string } | null {
+    // A live session answers from its own record, so the bounded memory of
+    // ended ones never costs a running one its run.
+    const startedBy = this.sessionsById.get(sessionId)?.startedBy;
+    if (startedBy?.kind === "schedule") {
+      return { scheduleId: startedBy.scheduleId, runId: startedBy.runId };
+    }
     const run = this.scheduledRunBySession.get(sessionId);
     return run ? { ...run } : null;
   }

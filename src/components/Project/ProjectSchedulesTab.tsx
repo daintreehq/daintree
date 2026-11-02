@@ -33,7 +33,6 @@ import { useProjectSchedules } from "@/components/Schedules/useProjectSchedules"
 import { useScheduleOsJob } from "@/components/Schedules/useScheduleOsJob";
 import { useLastRuns } from "@/components/Schedules/useLastRuns";
 import { useScheduleRuns } from "@/components/Schedules/useScheduleRuns";
-import { ASSISTANT_RESUMABLE_AGENTS } from "@/components/Schedules/runWords";
 import { useScheduleLaunchOptions } from "@/components/Schedules/useScheduleLaunchOptions";
 import { useWorktreeChoices } from "@/components/Schedules/useWorktreeChoices";
 
@@ -325,9 +324,8 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
       if (closed) then();
     });
   };
-  // An Assistant's run lives in an Assistant tab (#16169). Open brings its tab
-  // forward and never starts anything; Resume, offered once its terminal has
-  // ended, reopens its conversation in a tab by its exact id.
+  // An Assistant's run lives in an Assistant tab (#16169): Open brings it
+  // forward and never starts anything, and it never resumes as an agent pane.
   const openRun = (run: ScheduledRun) => {
     const terminalId = run.terminalId;
     if (run.assistant === true) return closeThen(() => revealAssistantRun(terminalId));
@@ -335,15 +333,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
     closeThen(() => revealRunTerminal(terminalId));
   };
   const resumeRun = (run: ScheduledRun, schedule: Schedule) => {
-    const resume = run.resume;
-    if (run.assistant === true) {
-      if (!resume?.agentSessionId || !ASSISTANT_RESUMABLE_AGENTS.has(resume.agentId)) return;
-      const args = { agentId: resume.agentId, sessionId: resume.agentSessionId };
-      closeThen(
-        () => void actionService.dispatch("help.resumePastSession", args, { source: "user" })
-      );
-      return;
-    }
+    if (run.assistant === true) return;
     const record = sessionRecordFor(run, schedule);
     if (!record) return;
     closeThen(() => void resumeSession(record));

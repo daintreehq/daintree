@@ -96,9 +96,6 @@ export function runDetail(run: ScheduledRun): RunDetail | null {
   }
 }
 
-/** The Assistant CLIs whose past conversations an Assistant tab reopens (`help.resumePastSession`). */
-export const ASSISTANT_RESUMABLE_AGENTS: ReadonlySet<string> = new Set(["claude", "codex"]);
-
 /** A worker an Assistant run launched, in words: the agent, the machine and the project. */
 export function workerWords(worker: ScheduledRunWorker): string {
   const agent = worker.agentId
@@ -133,6 +130,15 @@ export function runAction(
   // by this view or not yet (#16169): reopening its conversation beside it
   // would start a second one, or end the first.
   if (run.assistant === true && run.process.pty.state === "running") return { kind: "open" };
+  // Reopened here, it could land in a tab whose Assistant this view hasn't
+  // taken over and end it; the Assistant's own past sessions are where it's chosen.
+  if (run.assistant === true && run.resume !== null) {
+    return {
+      kind: "none",
+      label: "In past sessions",
+      explanation: "Reopen this conversation from the Daintree Assistant's past sessions",
+    };
+  }
   const neverStarted =
     run.process.pty.state === "not-started" &&
     run.settlement.state === "settled" &&
@@ -167,13 +173,9 @@ export function runAction(
         "The worktree this run worked in has been removed, so its conversation can't be reopened there",
     };
   }
-  // An Assistant's conversation reopens in an Assistant tab, by its exact id (#16169).
   const resumable =
-    run.assistant === true
-      ? ASSISTANT_RESUMABLE_AGENTS.has(resume.agentId) &&
-        buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags)
-      : (buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags) ??
-        buildResumeLatestCommand(resume.agentId, resume.agentLaunchFlags));
+    buildResumeCommand(resume.agentId, resume.agentSessionId, resume.agentLaunchFlags) ??
+    buildResumeLatestCommand(resume.agentId, resume.agentLaunchFlags);
   if (!resumable) {
     return {
       kind: "none",

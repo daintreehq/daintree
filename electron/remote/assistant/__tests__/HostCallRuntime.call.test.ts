@@ -367,9 +367,22 @@ describe("HostCallRuntime host.call (#13493)", () => {
 
     // A resend that gets the answer back still dates from the first send.
     if (!settled.ok || settled.value.callId === null) throw new Error("not sent");
+    noteAnswered.mockClear();
     clock = 20_000;
     await runtime.call("a", { ...launch, callId: settled.value.callId }, { tier: "full" });
-    expect(noteAnswered).toHaveBeenLastCalledWith(expect.objectContaining({ askedAt: 5_000 }));
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+    expect(noteAnswered).toHaveBeenCalledWith(expect.objectContaining({ askedAt: 5_000 }));
+
+    // So does a retry under the caller's own id, once nothing here holds the call.
+    const ownId = "00000000-0000-4000-8000-0000000000aa";
+    relayCall.mockResolvedValueOnce(launched).mockResolvedValueOnce(launched);
+    clock = 30_000;
+    await runtime.call("a", { ...launch, newCallId: ownId }, { tier: "full" });
+    noteAnswered.mockClear();
+    clock = 40_000;
+    await runtime.call("a", { ...launch, newCallId: ownId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+    expect(noteAnswered).toHaveBeenCalledWith(expect.objectContaining({ askedAt: 30_000 }));
   });
 });
 

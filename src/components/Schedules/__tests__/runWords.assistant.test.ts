@@ -41,28 +41,12 @@ function assistantRun(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
 const context = { terminalExists: false, worktreeIds: new Set<string>() };
 
 describe("an Assistant's run in the history (#16169)", () => {
-  it("offers its conversation back by its exact id once its terminal is gone", () => {
-    expect(runAction(assistantRun(), context)).toEqual({
-      kind: "resume",
-      sessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
-    });
-  });
-
-  it("only opens a run whose Assistant still runs, taken over by this view or not", () => {
-    const running = assistantRun({
-      settlement: { state: "open" },
-      process: { agent: { state: "not-started" }, pty: { state: "running", startedAt: 2 } },
-    });
-    // Reopening its conversation beside the running one would start a second, or end it.
-    expect(runAction(running, context)).toEqual({ kind: "open" });
-    expect(runAction(running, { ...context, terminalExists: true })).toEqual({ kind: "open" });
-  });
-
-  it("says why when the Assistant's CLI can't be reopened in an Assistant tab", () => {
-    const run = assistantRun({
-      resume: { ...assistantRun().resume!, agentId: "copilot", agentSessionId: "s-1" },
-    });
-    expect(runAction(run, context)).toMatchObject({ kind: "none", label: "Can't resume" });
+  it("points an ended run to the Assistant's past sessions rather than reopening it here", () => {
+    // Reopened from here, it could land in a tab whose Assistant this view hasn't taken over.
+    for (const agentId of ["claude", "copilot"]) {
+      const run = assistantRun({ resume: { ...assistantRun().resume!, agentId } });
+      expect(runAction(run, context)).toMatchObject({ kind: "none", label: "In past sessions" });
+    }
   });
 
   it("says a run skipped for full sessions was the sessions, not the schedule", () => {
