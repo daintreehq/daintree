@@ -142,6 +142,14 @@ describe("scanClaudeUsageMessages", () => {
       "a code comment reaching the edge",
       footer("  //", "You've used 87% of your weekly limit · resets 3pm (Australia/Sydney)"),
     ],
+    [
+      "a code comment with a hint-like word",
+      footer("  // for example", "You've used 87% of your weekly limit · resets 3pm (UTC)"),
+    ],
+    ["a removed diff line", "-  You've used 87% of your weekly limit · resets 3pm (UTC)"],
+    ["a list item", "* You've hit your weekly limit · resets 3pm (UTC)"],
+    ["a blockquote", "> You've hit your weekly limit · resets 3pm (UTC)"],
+    ["typed input", "❯ You've hit your weekly limit · resets 3pm (UTC)"],
     ["a quoted banner", `  ⎿  You've hit your weekly limit · resets 3pm (UTC)",`],
     [
       "a gap followed by something other than the message",

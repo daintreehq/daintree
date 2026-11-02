@@ -25,9 +25,11 @@ const SCAN_LINES = 12;
  */
 const RIGHT_EDGE_SLACK = 4;
 
-// The gutter, box and pointer glyphs banners sit behind, as RATE_LIMIT_PATTERNS
-// knows them.
-const CHROME = String.raw`[\s•●■▪*>❯›⟩│┃╎╭╰─⚠⎿-]*`;
+// What Claude draws a usage message behind: the tool-result gutter, a box or
+// border, a warning sign. The diff, list, quote and prompt markers the
+// rate-limit patterns also accept ("-", "*", ">", "❯") stay out: a message
+// behind one is someone's text.
+const CHROME = String.raw`[\s│┃╎╭╰─⎿⚠]*`;
 // Border glyphs Claude may draw after a notification ("… ▔").
 const TRAILING_BORDER = String.raw`[\s▔▁─━╮╯╗╝│┃]*`;
 const WINDOW = String.raw`(5[ -]?hour|session|weekly|opus|sonnet|fable)`;
@@ -40,9 +42,11 @@ const BORDER_GLYPHS = new Set("▔▁─━╮╯╗╝│┃");
 // Claude's own segments never quote; code holding a message as a string does.
 const CODE_DELIMITER = /["`]/;
 const MESSAGE_START = /^(?:you|over|approaching)\b/i;
-// What Claude's footer shows left of a warning: "? for shortcuts", "esc to
-// clear", "shift+tab to cycle", "Press Ctrl-C again to exit".
-const FOOTER_HINT = /\b(?:for|to)\s+[a-z]/i;
+// What Claude's footer shows left of a warning: a key or mode glyph, then what
+// it does: "? for shortcuts", "esc to clear", "⏵⏵ accept edits on (shift+tab
+// to cycle)", "Press Ctrl-C again to exit".
+const FOOTER_HINT =
+  /^\s*(?:[?!]|⏵|⏸|esc\b|enter\b|tab\b|space\b|shift\+|ctrl[+-]|press\b|hold\b|paste\b)[\s\S]*?\b(?:for|to)\s+[a-z]/i;
 
 interface Form {
   pattern: RegExp;
