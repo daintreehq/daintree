@@ -492,7 +492,8 @@ describe("getThemeContrastWarnings", () => {
       // lifts to within 2.70:1 of the outline.
       const scheme = makeFlatDarkScheme({
         ...({ [panel]: "#2A2A2A" } as Partial<AppColorSchemeTokens>),
-        "overlay-highlight": "rgba(255, 255, 255, 0.06)" as AppColorSchemeTokens["overlay-highlight"],
+        "overlay-highlight":
+          "rgba(255, 255, 255, 0.06)" as AppColorSchemeTokens["overlay-highlight"],
         "selection-outline": "#787878" as AppColorSchemeTokens["selection-outline"],
       });
       const messages = outlineMessages(scheme);
@@ -537,7 +538,8 @@ describe("getThemeContrastWarnings", () => {
 
   it("reports a panel surface it cannot composite as unevaluable", () => {
     const scheme = makeScheme({
-      "surface-panel": "color-mix(in oklab, #000 50%, #fff)" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel":
+        "color-mix(in oklab, #000 50%, #fff)" as AppColorSchemeTokens["surface-panel"],
     });
     expect(
       getThemeContrastWarnings(scheme).some(

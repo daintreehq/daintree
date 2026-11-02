@@ -478,7 +478,8 @@ function recipeCursorTreatment(classes: string[], states: string[][]): boolean {
       hasClass(
         classes,
         (variants, utility) =>
-          utility === "outline-[color:Highlight]" && sameChain(variants, ["forced-colors", ...state])
+          utility === "outline-[color:Highlight]" &&
+          sameChain(variants, ["forced-colors", ...state])
       )
   );
 }
@@ -564,10 +565,7 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
     text.split(/\s+/).filter((token) => {
       const parts = splitVariants(token);
       const variants = parts.slice(0, -1);
-      return (
-        HIGHLIGHT_PAINT.test(parts[parts.length - 1]!) &&
-        !variants.includes("hover")
-      );
+      return HIGHLIGHT_PAINT.test(parts[parts.length - 1]!) && !variants.includes("hover");
     });
   const isText = (n: ts.Node): n is ts.StringLiteralLike | ts.TemplateLiteralLikeNode =>
     ts.isStringLiteral(n) ||
@@ -620,7 +618,8 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
         // An open submenu's parent row is outlined by its role and `data-state`.
         const radixOnly = states.every(
           (state) =>
-            state.includes("data-[highlighted]") || (menuItem && state.includes("data-[state=open]"))
+            state.includes("data-[highlighted]") ||
+            (menuItem && state.includes("data-[state=open]"))
         );
         const overviewCell =
           role !== undefined &&
