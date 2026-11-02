@@ -279,6 +279,48 @@ export function loadDecisionsModule(
   return decisionsModule;
 }
 
+function fieldOf(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
+}
+
+/**
+ * This machine is a Remote Host enrolled in its owner's Decisions (#16022)
+ * and serves its own panes now: its saved record (`decisionsHost`) names a
+ * device, and neither the owner turned it off nor the relay revoked it. Read
+ * from the saved value alone, before anything of Decisions is imported.
+ */
+export function decisionsHostServes(record: unknown): boolean {
+  return (
+    typeof fieldOf(record, "deviceId") === "string" &&
+    fieldOf(record, "ownerOffAt") == null &&
+    fieldOf(record, "revokedAt") == null
+  );
+}
+
+/**
+ * Agents launched here get `ask_human` (#16012, #16022): the owner's switch
+ * (`decisions`) is on, or this machine is an enrolled Host that serves its
+ * panes. Read before anything of Decisions is imported.
+ */
+export function decisionsServesPanes(settings: unknown, hostRecord: unknown): boolean {
+  return fieldOf(settings, "enabled") === true || decisionsHostServes(hostRecord);
+}
+
+/**
+ * Decisions has something to do at startup: it serves panes, or a revoked
+ * Host's keys are still to be removed.
+ */
+export function decisionsWantedAtStartup(settings: unknown, hostRecord: unknown): boolean {
+  return (
+    decisionsServesPanes(settings, hostRecord) ||
+    (typeof fieldOf(hostRecord, "deviceId") === "string" &&
+      fieldOf(hostRecord, "revokedAt") != null &&
+      fieldOf(hostRecord, "credentialsRemovedAt") == null)
+  );
+}
+
 /** Quit: no Decisions load starts after this. Returns the one already under way, if any. */
 export function sealDecisionsModule(): Promise<typeof DecisionsModule> | null {
   decisionsModuleSealed = true;
@@ -319,6 +361,11 @@ export function setDecisionsHostsPort(port: DecisionsHostsPort): () => void {
     decisionsHostsPort = null;
     tellDecisionsHostsPortWatchers();
   };
+}
+
+/** The Remote Hosts client's port now; null while it isn't up. */
+export function getDecisionsHostsPort(): DecisionsHostsPort | null {
+  return decisionsHostsPort;
 }
 
 /** Calls `watcher` with the port now, and again whenever it is published or withdrawn. */

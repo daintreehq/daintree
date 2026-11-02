@@ -136,6 +136,7 @@ import {
   setGlobalServicesInitialized,
   getCliAvailabilityServiceRef,
   getGlobalServicesInitialized,
+  decisionsWantedAtStartup,
   loadDecisionsModule,
 } from "./serviceRefs.js";
 
@@ -1501,12 +1502,13 @@ export async function initGlobalServices(
       },
     });
 
-    // Decisions: the saved switch is read before anything of Decisions is
-    // imported, so with it off this task loads nothing at all.
+    // Decisions: the saved switch, and an enrolled Host's record (#16022),
+    // are read before anything of Decisions is imported, so with neither this
+    // task loads nothing at all.
     registerDeferredTask({
       name: "decisions",
       run: async () => {
-        if (store.get("decisions")?.enabled !== true) return;
+        if (!decisionsWantedAtStartup(store.get("decisions"), store.get("decisionsHost"))) return;
         try {
           const decisions = await loadDecisionsModule(
             () => import("../services/decisions/index.js")

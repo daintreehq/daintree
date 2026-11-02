@@ -1,4 +1,8 @@
 import type { z } from "zod";
+import type {
+  DecisionsHostRuntime,
+  DecisionsHostRuntimeObservation,
+} from "../../../shared/types/decisionsHosts.js";
 import {
   boundedDetail,
   type DecisionsHostEntry,
@@ -8,13 +12,16 @@ import {
   type HostCallOutcome,
   type HostIdentityReport,
   type HostRequestResult,
+  type OwnerStateAnnouncement,
 } from "../../types/decisionsHosts.js";
 import {
   DecisionsLinkMethod,
   EnrollHostPayloadSchema,
   HostAcceptResultSchema,
   HostRequestResultSchema,
+  HostRuntimePayloadSchema,
   HostStatusResultSchema,
+  OwnerStatePayloadSchema,
   type EnrollHostPayload,
 } from "./linkMethods.js";
 
@@ -24,11 +31,17 @@ export const HOST_STATUS_TIMEOUT_MS = 75_000;
 export const HOST_REQUEST_TIMEOUT_MS = 75_000;
 /** Sealing the identity waits on the same keychain. */
 export const HOST_ACCEPT_TIMEOUT_MS = 75_000;
+export const OWNER_STATE_TIMEOUT_MS = 75_000;
 
 export interface DecisionsHostSession {
   readonly isOpen: boolean;
   call(method: string, payload: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
   onClose(listener: () => void): () => void;
+  registerCallHandler<S extends z.ZodType>(
+    method: string,
+    schema: S,
+    handler: (payload: z.infer<S>) => unknown
+  ): () => void;
 }
 
 export interface DecisionsHostsClientDeps {
@@ -39,6 +52,19 @@ export interface DecisionsHostsClientDeps {
   onSessionOpened(listener: (hostId: string, session: DecisionsHostSession) => void): () => void;
   onHostsChanged(listener: () => void): () => void;
   hold(hostId: string): () => void;
+  /**
+   * Whether Decisions is on here, and as which owner (#16022), as the setting
+   * reads now; null while this computer holds no owner identity, so nothing
+   * is announced.
+   */
+  ownerState(): OwnerStateAnnouncement | null;
+  now?: () => number;
+}
+
+interface HostReport {
+  session: DecisionsHostSession;
+  runtime: DecisionsHostRuntime;
+  at: number;
 }
 
 function codeOf(error: unknown): unknown {
@@ -150,11 +176,49 @@ class HostLink implements DecisionsHostLink {
  */
 export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly links = new WeakMap<DecisionsHostSession, HostLink>();
+  private readonly wired = new WeakSet<DecisionsHostSession>();
+  private readonly reports = new Map<string, HostReport>();
+  /** Counts each Host's announcements, so an answer to an older one can't replace a newer one's. */
+  private readonly announced = new Map<string, number>();
+  private readonly listeners = new Set<() => void>();
+  private readonly now: () => number;
 
-  constructor(private readonly deps: DecisionsHostsClientDeps) {}
+  constructor(private readonly deps: DecisionsHostsClientDeps) {
+    this.now = deps.now ?? Date.now;
+  }
+
+  /**
+   * Begins announcing this computer's Decisions to every Host as its link
+   * comes up (#16022), and hearing what each reports back. Returns the stop.
+   */
+  start(): () => void {
+    const offOpened = this.deps.onSessionOpened((hostId, session) => this.wire(hostId, session));
+    for (const { hostId } of this.deps.hosts()) {
+      const session = this.deps.sessionFor(hostId);
+      if (session?.isOpen) this.wire(hostId, session);
+    }
+    return () => {
+      offOpened();
+      this.listeners.clear();
+    };
+  }
 
   hosts(): DecisionsHostEntry[] {
     return this.deps.hosts();
+  }
+
+  runtimeOf(hostId: string): DecisionsHostRuntimeObservation | null {
+    const report = this.reports.get(hostId);
+    if (!report) return null;
+    const live = report.session.isOpen && this.deps.sessionFor(hostId) === report.session;
+    return { runtime: report.runtime, at: report.at, live };
+  }
+
+  announceOwnerState(): void {
+    for (const { hostId } of this.deps.hosts()) {
+      const session = this.deps.sessionFor(hostId);
+      if (session?.isOpen) void this.announce(hostId, session);
+    }
   }
 
   linkFor(hostId: string): DecisionsHostLink | null {
@@ -169,7 +233,68 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   }
 
   onHostsChanged(listener: () => void): () => void {
-    return this.deps.onHostsChanged(listener);
+    const offHosts = this.deps.onHostsChanged(listener);
+    this.listeners.add(listener);
+    return () => {
+      offHosts();
+      this.listeners.delete(listener);
+    };
+  }
+
+  private wire(hostId: string, session: DecisionsHostSession): void {
+    if (this.wired.has(session)) return;
+    this.wired.add(session);
+    const offReport = session.registerCallHandler(
+      DecisionsLinkMethod.HOST_RUNTIME,
+      HostRuntimePayloadSchema,
+      ({ runtime }) => {
+        this.observe(hostId, session, runtime);
+        return null;
+      }
+    );
+    const offClose = session.onClose(() => {
+      offReport();
+      offClose();
+      // What it said last stands, now as what it said before its link closed.
+      if (this.reports.get(hostId)?.session === session) this.changed();
+    });
+    void this.announce(hostId, session);
+  }
+
+  /** Tells one Host whether Decisions is on here, and keeps what it answers it reports. */
+  private async announce(hostId: string, session: DecisionsHostSession): Promise<void> {
+    const state = this.deps.ownerState();
+    if (state === null) return;
+    const turn = (this.announced.get(hostId) ?? 0) + 1;
+    this.announced.set(hostId, turn);
+    let raw: unknown;
+    try {
+      raw = await session.call(DecisionsLinkMethod.OWNER_STATE, OwnerStatePayloadSchema.parse(state), {
+        timeoutMs: OWNER_STATE_TIMEOUT_MS,
+      });
+    } catch {
+      // A Host from before Hosts ran Decisions, or a link that went: nothing to keep.
+      return;
+    }
+    if (this.announced.get(hostId) !== turn) return;
+    const parsed = HostRuntimePayloadSchema.safeParse(raw);
+    if (parsed.success) this.observe(hostId, session, parsed.data.runtime);
+  }
+
+  private observe(hostId: string, session: DecisionsHostSession, runtime: DecisionsHostRuntime): void {
+    if (!session.isOpen) return;
+    this.reports.set(hostId, { session, runtime, at: this.now() });
+    this.changed();
+  }
+
+  private changed(): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch (err) {
+        console.warn("[Decisions] A Hosts listener threw:", err);
+      }
+    }
   }
 
   private linkOf(hostId: string, session: DecisionsHostSession): HostLink {

@@ -486,12 +486,15 @@ export class HostEnroller {
     if (enrollment === null) return null;
     const busy =
       this.runs.has(hostId) || enrollment.state === "checking" || enrollment.state === "enrolling";
+    // What the Host itself last said of its Decisions (#16022), as it said it.
+    const runtime = this.port?.runtimeOf(hostId) ?? null;
     return {
       hostId,
       name: name || hostId,
       connected,
       enrollment,
       canEnroll: connected && !busy && ENROLLABLE.has(enrollment.state),
+      ...(runtime ? { runtime } : {}),
     };
   }
 

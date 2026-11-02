@@ -4,7 +4,7 @@ import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { store } from "../../store.js";
-import { loadDecisionsModule } from "../../window/serviceRefs.js";
+import { decisionsServesPanes, loadDecisionsModule } from "../../window/serviceRefs.js";
 import {
   getDeviceAnswerService,
   peekDeviceAnswerService,
@@ -242,7 +242,8 @@ export const decisionsNamespace = defineIpcNamespace({
       CHANNELS.DECISIONS_GET_PANE_STATE,
       z.string().min(1).max(256),
       async (terminalId: string): Promise<PaneDecisionState | null> => {
-        if (!decisionsOn()) return null;
+        // An enrolled Host's panes have state of their own (#16022), whatever its switch says.
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) return null;
         const decisions = await loadDecisions();
         return decisions ? decisions.getDecisionsPaneState(terminalId) : null;
       }

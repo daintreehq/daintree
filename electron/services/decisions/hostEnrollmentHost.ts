@@ -19,9 +19,22 @@ import { DecisionsKeyStoreError, decisionsKeyFilePath, SealedKeyStore } from "./
 /** What enrollment needs of this machine's sealed key store. */
 export type HostKeys = Pick<SealedKeyStore, "load" | "saveIf" | "check" | "close">;
 
+/** A Host identity this machine holds, public parts only. */
+export interface HeldHost {
+  relayOrigin: string;
+  installationId: string;
+  deviceId: string;
+  ownerDeviceId: string;
+}
+
 export interface HostEnrollmentsOptions {
   /** A key store for one step, closed after it: this machine's sealed one unless a test says otherwise. */
   openKeys?: () => HostKeys;
+  /**
+   * The key file holds this Host identity, read by a status step or saved by
+   * an accepted one: what this Host's own Decisions runs as (#16022).
+   */
+  onHeld?: (held: HeldHost) => void;
 }
 
 /** Keys made for one link and not yet accepted. Memory only: they never touch the disk unsealed. */
@@ -74,6 +87,7 @@ function reportOf(stored: StoredIdentity | null): HostIdentityReport {
  */
 export class HostEnrollments {
   private readonly openKeys: () => HostKeys;
+  private readonly onHeld: (held: HeldHost) => void;
   private readonly attempts = new Map<string, PendingAttempt>();
   /** Links that closed: keys a request of theirs finishes making afterwards are dropped. */
   private readonly closedLinks = new WeakSet<object>();
@@ -82,12 +96,15 @@ export class HostEnrollments {
 
   constructor(options: HostEnrollmentsOptions = {}) {
     this.openKeys = options.openKeys ?? (() => new SealedKeyStore(decisionsKeyFilePath()));
+    this.onHeld = options.onHeld ?? (() => {});
   }
 
   status(): Promise<HostIdentityReport> {
     return this.step(async (keys) => {
       try {
-        return reportOf(await keys.load());
+        const report = reportOf(await keys.load());
+        if (report.kind === "host") this.held(report);
+        return report;
       } catch (error) {
         return {
           kind: "unreadable",
@@ -190,8 +207,22 @@ export class HostEnrollments {
       } finally {
         await held.pending.clear();
       }
+      this.held({
+        relayOrigin: identity.config.relayOrigin,
+        installationId: identity.config.installationId,
+        deviceId: identity.config.deviceId,
+        ownerDeviceId: identity.owner.deviceId,
+      });
       return { step: "accepted", deviceId: identity.config.deviceId };
     });
+  }
+
+  private held(held: HeldHost): void {
+    try {
+      this.onHeld(held);
+    } catch (error) {
+      console.warn("[Decisions] Taking up this Host's identity failed:", error);
+    }
   }
 
   forget(link: object): void {
