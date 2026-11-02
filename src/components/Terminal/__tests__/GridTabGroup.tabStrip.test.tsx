@@ -50,6 +50,18 @@ vi.mock("@/store", async () => {
   };
 });
 
+// The real duplication gate unless a test forces it, so the add-tab button can
+// be checked in both states on both panes.
+const duplication = vi.hoisted(() => ({ forced: null as boolean | null }));
+vi.mock("@/services/terminal/panelDuplicationService", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/services/terminal/panelDuplicationService")>();
+  return {
+    ...actual,
+    canDuplicatePanelKind: (kind: Parameters<typeof actual.canDuplicatePanelKind>[0]) =>
+      duplication.forced ?? actual.canDuplicatePanelKind(kind),
+  };
+});
 vi.mock("@/services/terminal/optimisticPanelClose", () => ({ requestPanelClose: vi.fn() }));
 vi.mock("@/services/layout/reorderGroupTabs", () => ({ reorderGroupTabsWithUndo: vi.fn() }));
 vi.mock("../useContentGridContext", () => ({ addTabForPanel: vi.fn() }));
@@ -198,13 +210,15 @@ const PANELS: Record<string, PanelInstance> = {
 };
 
 const updateTitle = vi.fn();
+const realUpdateTitle = usePanelStore.getState().updateTitle;
 
 function seed(activeTabId: string) {
   const group: TabGroup = { id: GROUP, location: "grid", activeTabId, panelIds: ORDER };
   act(() => {
     usePanelStore.setState({
       panelsById: { ...PANELS },
-      panelIds: [...ORDER],
+      // Unlike the group's order, so a strip drawn in store order shows.
+      panelIds: [...ORDER].reverse(),
       tabGroups: new Map([[GROUP, group]]),
       focusedId: null,
       updateTitle,
@@ -222,7 +236,10 @@ function mount(activeTabId: string) {
   const strip = () => within(view.container).getByRole("tablist", { name: "Panel tabs" });
   const tabs = () => within(strip()).getAllByRole("tab", { hidden: true });
   const tab = (id: string) => tabs().find((t) => t.dataset.tabId === id)!;
-  return { ...view, frame, strip, tabs, tab };
+  /** The strip sits in this pane's own header, not elsewhere in its frame. */
+  const stripInHeaderOf = (id: string) =>
+    frame(id)?.querySelector("[data-pane-chrome]")?.contains(strip()) ?? false;
+  return { ...view, frame, strip, tabs, tab, stripInHeaderOf };
 }
 
 /** What a strip shows, independent of which tab it was drawn for. */
@@ -268,21 +285,30 @@ afterEach(() => {
     panelIds: [],
     tabGroups: new Map(),
     focusedId: null,
+    updateTitle: realUpdateTitle,
   });
+  duplication.forced = null;
   vi.clearAllMocks();
 });
 
+// Each shown kind with something only its real pane draws, so a placeholder
+// ContentPanel (an unregistered kind, say) can't stand in for it.
 const SHOWN = [
-  ["dev-preview", PREVIEW],
-  ["file-browser", FILES],
+  ["dev-preview", PREVIEW, "browser-toolbar"],
+  ["file-browser", FILES, "file-browser-tree-column"],
 ] as const;
 
+/** Every other tab of the group, from each shown kind. */
+const TARGETS = SHOWN.flatMap(([kind, shownId]) =>
+  ORDER.filter((id) => id !== shownId).map((target) => [kind, shownId, target] as const)
+);
+
 describe("GridTabGroup tab strip on every shown kind", () => {
-  it.each(SHOWN)("draws every tab, in group order, on a shown %s pane", (_kind, shownId) => {
+  it.each(SHOWN)("draws every tab, in group order, on a shown %s pane", (_kind, shownId, body) => {
     const view = mount(shownId);
 
-    // The strip is the shown pane's own header, not a stray one.
-    expect(view.frame(shownId)?.contains(view.strip())).toBe(true);
+    expect(view.frame(shownId)?.querySelector(`[data-testid="${body}"]`)).not.toBeNull();
+    expect(view.stripInHeaderOf(shownId)).toBe(true);
     expect(view.tabs().map((t) => t.dataset.tabId)).toEqual(ORDER);
     for (const t of view.tabs()) {
       expect(t.textContent).toContain(PANELS[t.dataset.tabId!]!.title);
@@ -290,7 +316,7 @@ describe("GridTabGroup tab strip on every shown kind", () => {
     }
   });
 
-  it("draws the same strip on a shown dev preview or file browser as on a shown terminal", () => {
+  it("draws the same strip on a shown dev preview or file browser as the terminal stand-in", () => {
     const terminal = mount(TERMINAL);
     const expected = readStrip(terminal.tabs());
     terminal.unmount();
@@ -302,20 +328,18 @@ describe("GridTabGroup tab strip on every shown kind", () => {
     }
   });
 
-  it.each(SHOWN)("switches to another tab from a shown %s pane", (_kind, shownId) => {
+  it.each(TARGETS)("switches from a shown %s pane (%s) to %s", (_kind, shownId, target) => {
     const view = mount(shownId);
-    const target = ORDER.find((id) => id !== shownId)!;
 
     fireEvent.click(view.tab(target));
 
     expect(usePanelStore.getState().tabGroups.get(GROUP)?.activeTabId).toBe(target);
-    expect(view.frame(target)?.contains(view.strip())).toBe(true);
+    expect(view.stripInHeaderOf(target)).toBe(true);
     expect(view.frame(shownId)).toBeNull();
   });
 
-  it.each(SHOWN)("closes the tab it was asked to from a shown %s pane", (_kind, shownId) => {
+  it.each(TARGETS)("closes from a shown %s pane (%s) the tab %s", (_kind, shownId, target) => {
     const view = mount(shownId);
-    const target = ORDER.find((id) => id !== shownId)!;
 
     const tab = view.tab(target);
     tab.focus();
@@ -325,34 +349,49 @@ describe("GridTabGroup tab strip on every shown kind", () => {
     expect(vi.mocked(requestPanelClose).mock.calls[0]![0].hideIds).toEqual([target]);
   });
 
-  it.each(SHOWN)("renames the tab it was asked to from a shown %s pane", (_kind, shownId) => {
+  it.each(TARGETS)("renames from a shown %s pane (%s) the tab %s", (_kind, shownId, target) => {
     const view = mount(shownId);
-    const target = ORDER.find((id) => id !== shownId)!;
+    const newTitle = `Renamed ${target}`;
 
     fireEvent.keyDown(view.tab(target), { key: "F2" });
     const input = within(view.container).getByRole("textbox", {
       name: `Rename tab ${PANELS[target]!.title}`,
     });
-    fireEvent.change(input, { target: { value: "Renamed" } });
+    fireEvent.change(input, { target: { value: newTitle } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(updateTitle).toHaveBeenCalledWith(target, "Renamed");
+    expect(updateTitle.mock.calls).toEqual([[target, newTitle]]);
   });
 
   it.each(SHOWN)(
     "offers to duplicate a shown %s pane exactly when its kind can be duplicated",
     (kind, shownId) => {
       const view = mount(shownId);
-      expect(view.frame(shownId)?.contains(view.strip())).toBe(true);
+      expect(view.stripInHeaderOf(shownId)).toBe(true);
       const addTab = within(view.container).queryByRole("button", {
         name: "Duplicate panel as new tab",
       });
 
       expect(addTab !== null).toBe(canDuplicatePanelKind(kind));
+    }
+  );
+
+  it.each(
+    SHOWN.flatMap(([kind, shownId]) => [true, false].map((on) => [kind, shownId, on] as const))
+  )(
+    "draws the group's add-tab on a shown %s pane (%s) only when it hands one: %s",
+    (_kind, shownId, duplicable) => {
+      duplication.forced = duplicable;
+      const view = mount(shownId);
+      expect(view.stripInHeaderOf(shownId)).toBe(true);
+      const addTab = within(view.container).queryByRole("button", {
+        name: "Duplicate panel as new tab",
+      });
+
+      expect(addTab !== null).toBe(duplicable);
       if (!addTab) return;
       fireEvent.click(addTab);
-      expect(vi.mocked(addTabForPanel)).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(addTabForPanel).mock.calls[0]![0].id).toBe(shownId);
+      expect(vi.mocked(addTabForPanel).mock.calls.map(([panel]) => panel.id)).toEqual([shownId]);
     }
   );
 });
