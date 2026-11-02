@@ -118,6 +118,7 @@ import { HostLinkStatus } from "./Hosts/HostLinkStatus";
 import { requestHostSettings } from "./Hosts/hostSettingsRequests";
 import { hostEnvDrafts } from "./Hosts/hostEnvDrafts";
 import type { SettingsTabClose } from "./settingsTabClose";
+import { isSettingsTabAvailable } from "./settingsTabAvailability";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -585,7 +586,13 @@ function SettingsDialogInner({
   // Filtered in the keystroke's own render, not behind useDeferredValue: the
   // index is ~150 entries and a pass costs about a millisecond, so deferring
   // it only painted the search mode a frame before its results.
-  const searchIndex = usePluginSettingsSearchIndex(isOpen);
+  const fullSearchIndex = usePluginSettingsSearchIndex(isOpen);
+  // A page this window never shows is gone from search before ranking, so its
+  // literal hits can't push the fuzzy rows that can be opened out of the results.
+  const searchIndex = useMemo(
+    () => fullSearchIndex.filter((entry) => isSettingsTabAvailable(entry.tab)),
+    [fullSearchIndex]
+  );
   const searchResults = useMemo(
     () =>
       filterSettings(searchIndex, searchQuery, {
@@ -1423,7 +1430,9 @@ function SettingsDialogInner({
                   {/* Project settings panels */}
                   {activeScope === "project" && projectId && (
                     <>
-                      {SETTINGS_REGISTRY.filter((e) => e.scope === "project").map((entry) => {
+                      {SETTINGS_REGISTRY.filter(
+                        (e) => e.scope === "project" && isSettingsTabAvailable(e.id)
+                      ).map((entry) => {
                         const tabId = entry.id as SettingsTab;
                         const isActive = activeTab === tabId;
                         return (
@@ -1449,6 +1458,11 @@ function SettingsDialogInner({
                                   isActive={isActive && !panelsHidden}
                                   scrollToSectionId={scrollToSection}
                                   onScrollToSectionHandled={handleScrollToSectionHandled}
+                                  onClose={
+                                    (entry as LazySettingsTabEntry).needsOnClose
+                                      ? handleClose
+                                      : undefined
+                                  }
                                 />
                               </Suspense>
                             )}
@@ -1532,6 +1546,7 @@ function ProjectFormTabContent({
   isActive,
   scrollToSectionId,
   onScrollToSectionHandled,
+  onClose,
 }: {
   entry: LazySettingsTabEntry;
   projectForm: ProjectSettingsFormContext;
@@ -1543,6 +1558,7 @@ function ProjectFormTabContent({
   isActive: boolean;
   scrollToSectionId: string | null;
   onScrollToSectionHandled: (id: string, landed: boolean) => void;
+  onClose: SettingsTabClose | undefined;
 }) {
   useSettingsScrollToSection(
     isActive,
@@ -1654,6 +1670,11 @@ function ProjectFormTabContent({
           worktreeMap={projectForm.worktreeMap}
           isOpen={isOpen}
         />
+      );
+
+    case "project:schedules":
+      return (
+        <LazyComp projectId={projectId} isOpen={isOpen} isActive={isActive} onClose={onClose} />
       );
 
     case "project:notifications":

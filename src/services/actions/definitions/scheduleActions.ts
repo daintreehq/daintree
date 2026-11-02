@@ -86,7 +86,7 @@ export function registerScheduleActions(actions: ActionRegistry): void {
         }
         const scheduleId = args?.scheduleId ?? null;
         if (args?.projectId && args.projectId !== ctx.projectId) {
-          // This view can't open another project's dialog: the schedule rides
+          // This view can't open another project's settings: the schedule rides
           // the switch, and the incoming view opens it once its state has
           // loaded. A switch that fails reports itself.
           await useProjectStore.getState().switchProject(args.projectId, {
@@ -94,7 +94,12 @@ export function registerScheduleActions(actions: ActionRegistry): void {
           });
           return;
         }
+        // The tab lands on the request once it has mounted, so a cold lazy
+        // load still arrives where it was asked to.
         useSchedulesViewStore.getState().open(scheduleId);
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-settings-tab", { detail: { tab: "project:schedules" } })
+        );
       },
     })
   );

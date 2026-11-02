@@ -1,8 +1,10 @@
 import { useEffect, useSyncExternalStore } from "react";
 import {
   SETTING_CATALOG,
+  projectStateFileOwner,
   rendererStorageOwner,
   settingOwner,
+  type ProjectStateFile,
   type SettingOwner,
   type SettingPath,
 } from "@shared/config/settingOwnership";
@@ -111,21 +113,28 @@ export function useOwnerContext(): OwnerContext {
 type LocalStorageKey = keyof (typeof SETTING_CATALOG)["renderer-local-storage"]["entries"] & string;
 
 /**
- * A setting a surface edits: a path in the main settings file, or a key this
- * machine's renderer keeps in local storage, written `storage:<key>`.
+ * A setting a surface edits: a path in the main settings file, a key this
+ * machine's renderer keeps in local storage, written `storage:<key>`, or a file
+ * main keeps in each project's local state directory, written `file:<name>`.
  */
-export type SettingRef = SettingPath | `storage:${LocalStorageKey}`;
+export type SettingRef = SettingPath | `storage:${LocalStorageKey}` | `file:${ProjectStateFile}`;
 
 const STORAGE_PREFIX = "storage:";
+const FILE_PREFIX = "file:";
 
 function isStorageRef(ref: SettingRef): ref is `storage:${LocalStorageKey}` {
   return ref.startsWith(STORAGE_PREFIX);
 }
 
+function isFileRef(ref: SettingRef): ref is `file:${ProjectStateFile}` {
+  return ref.startsWith(FILE_PREFIX);
+}
+
 export function ownerOfSetting(ref: SettingRef): SettingOwner {
-  return isStorageRef(ref)
-    ? rendererStorageOwner(ref.slice(STORAGE_PREFIX.length))
-    : settingOwner(ref);
+  if (isStorageRef(ref)) return rendererStorageOwner(ref.slice(STORAGE_PREFIX.length));
+  if (isFileRef(ref))
+    return projectStateFileOwner(ref.slice(FILE_PREFIX.length) as ProjectStateFile);
+  return settingOwner(ref);
 }
 
 /** The one owner a set of settings shares; null when they differ. */

@@ -50,17 +50,18 @@ export interface ScheduledRunLandingTarget {
  * Where a click on a scheduled run's banner lands in this view (#15988): the
  * run's pane, trashed or backgrounded panes included, whatever its terminal
  * did since, since its output is what the user came for. With no pane left,
- * the schedule's history opens, where the run's outcome and its Resume are;
- * a schedule deleted since opens the list. A Schedules view already open is
- * left as it is: moving it to another page would drop an edit in progress
- * without asking, and focusing a pane would put it under the dialog.
+ * the schedule's history opens in Project settings, where the run's outcome
+ * and its Resume are; a schedule deleted since opens the list. A Schedules
+ * tab already showing is left as it is: moving it to another page would drop
+ * an edit in progress without asking, and focusing a pane would put it under
+ * Project settings.
  * `isSuperseded` says a newer landing took over while the schedules were read.
  */
 export async function landOnScheduledRun(
   target: ScheduledRunLandingTarget,
   isSuperseded: () => boolean
 ): Promise<void> {
-  if (useSchedulesViewStore.getState().isOpen) return;
+  if (useSchedulesViewStore.getState().showing) return;
   if (holdsRunPane(target.panelId, target.runId)) {
     revealRunTerminal(target.panelId);
     await actionService.dispatch("panel.focus", { panelId: target.panelId });
@@ -71,7 +72,7 @@ export async function landOnScheduledRun(
     return null;
   });
   // Opened while the schedules were read, it holds an edit just as surely.
-  if (isSuperseded() || useSchedulesViewStore.getState().isOpen) return;
+  if (isSuperseded() || useSchedulesViewStore.getState().showing) return;
   // Unreadable, the schedule is asked for anyway: its page says what it can.
   const scheduleExists =
     snapshot === null || snapshot.schedules.some((schedule) => schedule.id === target.scheduleId);

@@ -38,12 +38,13 @@ interface SplitSetting {
 export type SettingEntry = SettingDeclaration | SplitSetting;
 
 /**
- * One place settings are kept: an electron-store file by its `name`, or the
- * renderer's web storage by key. A renderer key ending in `*` declares every
- * key that starts with what precedes it.
+ * One place settings are kept: an electron-store file by its `name`, the
+ * renderer's web storage by key, or a file in each project's local state
+ * directory by its name. A renderer key ending in `*` declares every key that
+ * starts with what precedes it.
  */
 interface SettingStore {
-  readonly kind: "electron-store" | "localStorage" | "sessionStorage";
+  readonly kind: "electron-store" | "localStorage" | "sessionStorage" | "project-state-file";
   readonly entries: Readonly<Record<string, SettingEntry>>;
 }
 
@@ -316,6 +317,15 @@ export const SETTING_CATALOG = {
       "daintree:host-open-claim:*": devicePerProject,
     },
   },
+  // Files main keeps per project in the machine-local state directory, never in
+  // the repository, so they stay with the machine that holds the project.
+  "project-state-files": {
+    kind: "project-state-file",
+    entries: {
+      // Agents run on a schedule by this machine (#15975).
+      schedules: hostPerProject,
+    },
+  },
 } as const satisfies Readonly<Record<string, SettingStore>>;
 
 type ConfigEntries = typeof SETTING_CATALOG.config.entries;
@@ -377,6 +387,14 @@ export function rendererStorageDeclaration(key: string): SettingDeclaration | un
     }
   }
   return undefined;
+}
+
+/** A file main keeps in each project's local state directory, by its name. */
+export type ProjectStateFile = keyof (typeof SETTING_CATALOG)["project-state-files"]["entries"] &
+  string;
+
+export function projectStateFileOwner(file: ProjectStateFile): SettingOwner {
+  return SETTING_CATALOG["project-state-files"].entries[file].owner;
 }
 
 export function rendererStorageOwner(key: string): SettingOwner {
