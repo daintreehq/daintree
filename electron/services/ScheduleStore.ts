@@ -6,15 +6,25 @@ import { resilientAtomicWriteFile, resilientRename, resilientUnlink } from "../u
 import { AppError } from "../utils/errorTypes.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { schedulesFilePath } from "./projectStorePaths.js";
-import { decodeSchedulesFile, encodeSchedulesFile } from "./schedulesCodec.js";
+import {
+  decodeSchedulesFile,
+  encodeSchedulesFile,
+  type SchedulesFile,
+} from "./schedulesCodec.js";
 import { createSchedule, normalizeCadence } from "../../shared/utils/scheduledRuns.js";
 import { scheduleIssues, type ScheduleIssue } from "../../shared/utils/scheduleValidation.js";
-import type { Schedule } from "../../shared/types/scheduledRuns.js";
+import {
+  SCHEDULE_SWITCHES_OFF,
+  type ProjectScheduleSwitches,
+  type Schedule,
+} from "../../shared/types/scheduledRuns.js";
 import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
   ScheduleRemoveOutcome,
   ScheduleSetEnabledOutcome,
+  ScheduleSetSwitchesOutcome,
+  ScheduleSwitchesPatch,
   ScheduleUpdateOutcome,
   ScheduleUpdatePatch,
   SchedulesSnapshot,
@@ -23,9 +33,13 @@ import type {
 /** Called after every committed change, in commit order for each project. */
 export type SchedulesListener = (snapshot: SchedulesSnapshot) => void;
 
+export const START_WHEN_CLOSED_PATH = "switches.startWhenClosed";
+
+const EMPTY: SchedulesFile = { switches: SCHEDULE_SWITCHES_OFF, schedules: [] };
+
 /**
- * A project's schedules (#15975), in `schedules.json` in the project's local
- * state directory. It is given that directory's root and project ids, never a
+ * A project's schedules (#15975) and its switches for them (#16166), in
+ * `schedules.json` in the project's local state directory. It is given that directory's root and project ids, never a
  * repository path, so nothing in a project's `.daintree/` can reach it.
  *
  * Every read and write takes a turn in a per-project queue: a read can
@@ -58,7 +72,13 @@ export class ScheduleStore {
      * hold (#15990). Asked only of a write, never of a read, so a stored
      * schedule never stops loading because the machine changed.
      */
-    private readonly writeIssues: (schedule: Schedule) => ScheduleIssue[] = () => []
+    private readonly writeIssues: (schedule: Schedule) => ScheduleIssue[] = () => [],
+    /**
+     * Why this machine can never start Daintree for schedules (no OS job on
+     * the platform, a Microsoft Store build), or null. Asked only when the
+     * project's switch for it is turned on.
+     */
+    private readonly startWhenClosedIssue: () => string | null = () => null
   ) {}
 
   /** Hears every committed change. Returns its unsubscribe. */
@@ -86,8 +106,11 @@ export class ScheduleStore {
       const schedule = createSchedule({ ...input, id: randomUUID(), projectId }, this.now());
       const issues = this.issuesFor(schedule);
       if (issues.length > 0) return { status: "invalid", issues };
-      const schedules = [...(await this.read(projectId)), schedule];
-      const snapshot = await this.commit(projectId, schedules);
+      const current = await this.read(projectId);
+      const snapshot = await this.commit(projectId, {
+        ...current,
+        schedules: [...current.schedules, schedule],
+      });
       return { status: "saved", schedule, snapshot };
     });
   }
@@ -106,8 +129,8 @@ export class ScheduleStore {
     return this.enqueue(projectId, async () => {
       this.requireProject(projectId);
       const current = await this.read(projectId);
-      const index = current.findIndex((schedule) => schedule.id === scheduleId);
-      const existing = current[index];
+      const index = current.schedules.findIndex((schedule) => schedule.id === scheduleId);
+      const existing = current.schedules[index];
       if (!existing) return { status: "not-found", snapshot: this.snapshot(projectId, current) };
       if (existing.updatedAt !== expectedUpdatedAt) {
         return {
@@ -139,8 +162,8 @@ export class ScheduleStore {
     return this.enqueue(projectId, async () => {
       this.requireProject(projectId);
       const current = await this.read(projectId);
-      const index = current.findIndex((schedule) => schedule.id === scheduleId);
-      const existing = current[index];
+      const index = current.schedules.findIndex((schedule) => schedule.id === scheduleId);
+      const existing = current.schedules[index];
       if (!existing) return { status: "not-found", snapshot: this.snapshot(projectId, current) };
       if (existing.enabled === enabled) {
         return { status: "saved", schedule: existing, snapshot: this.snapshot(projectId, current) };
@@ -151,15 +174,55 @@ export class ScheduleStore {
     });
   }
 
+  /**
+   * Turns the project's schedules on or off, or Daintree starting for them
+   * (#16166). An intent, so it takes no version; one already as asked
+   * changes nothing. Turning schedules on stamps `schedulesOnSince`, so
+   * what came due while they were off is never caught up, even after a
+   * restart. Neither switch touches a schedule, its history or open runs.
+   */
+  setSwitches(
+    projectId: string,
+    patch: ScheduleSwitchesPatch
+  ): Promise<ScheduleSetSwitchesOutcome> {
+    return this.enqueue(projectId, async () => {
+      this.requireProject(projectId);
+      const current = await this.read(projectId);
+      const before = current.switches;
+      const schedulesOn = patch.schedulesOn ?? before.schedulesOn;
+      const startWhenClosed = patch.startWhenClosed ?? before.startWhenClosed;
+      if (schedulesOn === before.schedulesOn && startWhenClosed === before.startWhenClosed) {
+        return { status: "saved", snapshot: this.snapshot(projectId, current) };
+      }
+      if (startWhenClosed && !before.startWhenClosed) {
+        const message = this.startWhenClosedIssue();
+        if (message !== null) {
+          return {
+            status: "invalid",
+            issues: [{ path: START_WHEN_CLOSED_PATH, cronField: null, message }],
+          };
+        }
+      }
+      const switches: ProjectScheduleSwitches = {
+        schedulesOn,
+        startWhenClosed,
+        schedulesOnSince:
+          schedulesOn && !before.schedulesOn ? this.now() : before.schedulesOnSince,
+      };
+      const snapshot = await this.commit(projectId, { ...current, switches });
+      return { status: "saved", snapshot };
+    });
+  }
+
   remove(projectId: string, scheduleId: string): Promise<ScheduleRemoveOutcome> {
     return this.enqueue(projectId, async () => {
       this.requireProject(projectId);
       const current = await this.read(projectId);
-      const schedules = current.filter((schedule) => schedule.id !== scheduleId);
-      if (schedules.length === current.length) {
+      const schedules = current.schedules.filter((schedule) => schedule.id !== scheduleId);
+      if (schedules.length === current.schedules.length) {
         return { status: "removed", snapshot: this.snapshot(projectId, current) };
       }
-      const snapshot = await this.commit(projectId, schedules);
+      const snapshot = await this.commit(projectId, { ...current, schedules });
       try {
         await this.forgetSchedule(projectId, scheduleId);
       } catch (error) {
@@ -188,7 +251,7 @@ export class ScheduleStore {
         await removeFiles();
       } finally {
         this.revision += 1;
-        this.notify(this.snapshot(projectId, []));
+        this.notify(this.snapshot(projectId, EMPTY));
       }
     });
   }
@@ -222,14 +285,19 @@ export class ScheduleStore {
     });
   }
 
-  private snapshot(projectId: string, schedules: Schedule[]): SchedulesSnapshot {
-    return { projectId, schedules, revision: this.revision };
+  private snapshot(projectId: string, file: SchedulesFile): SchedulesSnapshot {
+    return {
+      projectId,
+      switches: file.switches,
+      schedules: file.schedules,
+      revision: this.revision,
+    };
   }
 
-  private async commit(projectId: string, schedules: Schedule[]): Promise<SchedulesSnapshot> {
-    await this.write(projectId, schedules);
+  private async commit(projectId: string, file: SchedulesFile): Promise<SchedulesSnapshot> {
+    await this.write(projectId, file);
     this.revision += 1;
-    const snapshot = this.snapshot(projectId, schedules);
+    const snapshot = this.snapshot(projectId, file);
     this.notify(snapshot);
     return snapshot;
   }
@@ -247,25 +315,25 @@ export class ScheduleStore {
   }
 
   /**
-   * Unqueued: only ever called inside a turn. A missing file is no schedules.
-   * An unreadable one is moved aside and read as none, but if it can't be
-   * moved this throws: reporting none would let the next write replace bytes
-   * that were never preserved.
+   * Unqueued: only ever called inside a turn. A missing file is no schedules,
+   * with both switches off. An unreadable one is moved aside and read the
+   * same, but if it can't be moved this throws: reporting none would let the
+   * next write replace bytes that were never preserved.
    */
-  private async read(projectId: string): Promise<Schedule[]> {
+  private async read(projectId: string): Promise<SchedulesFile> {
     const filePath = schedulesFilePath(this.projectsConfigDir, projectId);
-    if (!filePath) return [];
+    if (!filePath) return EMPTY;
 
     let raw: string;
     try {
       raw = await fs.readFile(filePath, "utf-8");
     } catch (error) {
-      if (isEnoent(error)) return [];
+      if (isEnoent(error)) return EMPTY;
       throw error;
     }
 
     const decoded = decodeSchedulesFile(raw, projectId);
-    if (decoded.ok) return decoded.schedules;
+    if (decoded.ok) return { switches: decoded.switches, schedules: decoded.schedules };
 
     const quarantinePath =
       decoded.reason === "future-version"
@@ -285,10 +353,10 @@ export class ScheduleStore {
     console.warn(
       `[ScheduleStore] Schedules for project ${projectId} were unreadable (${decoded.reason}); moved to ${path.basename(target)}`
     );
-    return [];
+    return EMPTY;
   }
 
-  private async write(projectId: string, schedules: Schedule[]): Promise<void> {
+  private async write(projectId: string, file: SchedulesFile): Promise<void> {
     const filePath = schedulesFilePath(this.projectsConfigDir, projectId);
     if (!filePath) {
       throw new AppError({
@@ -296,7 +364,7 @@ export class ScheduleStore {
         message: `schedules: ${projectId} is not a project id`,
       });
     }
-    const content = encodeSchedulesFile(schedules);
+    const content = encodeSchedulesFile(file);
     try {
       await resilientAtomicWriteFile(filePath, content, "utf-8");
     } catch (error) {
@@ -320,8 +388,11 @@ export class ScheduleStore {
   }
 }
 
-function replaceAt(schedules: Schedule[], index: number, schedule: Schedule): Schedule[] {
-  return schedules.map((existing, at) => (at === index ? schedule : existing));
+function replaceAt(file: SchedulesFile, index: number, schedule: Schedule): SchedulesFile {
+  return {
+    ...file,
+    schedules: file.schedules.map((existing, at) => (at === index ? schedule : existing)),
+  };
 }
 
 function isEnoent(error: unknown): boolean {

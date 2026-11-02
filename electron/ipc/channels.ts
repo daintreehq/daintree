@@ -1503,6 +1503,7 @@ export const CHANNELS = {
   SCHEDULES_CREATE: "schedules:create",
   SCHEDULES_UPDATE: "schedules:update",
   SCHEDULES_SET_ENABLED: "schedules:set-enabled",
+  SCHEDULES_SET_SWITCHES: "schedules:set-switches",
   SCHEDULES_REMOVE: "schedules:remove",
   SCHEDULES_CHANGED: "schedules:changed",
   SCHEDULES_RUN_NOW: "schedules:run-now",

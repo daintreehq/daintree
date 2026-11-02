@@ -75,6 +75,32 @@ export const ScheduleSchema = z.strictObject({
   updatedAt: EpochMsSchema,
 });
 
+/**
+ * A project's own say over its schedules (#16166), kept on this machine beside
+ * them. `schedulesOn` decides whether any of them fires; `startWhenClosed`
+ * whether the OS job starts Daintree for them, and counts only while
+ * `schedulesOn` holds. Each is kept as set while the other changes.
+ */
+export const ProjectScheduleSwitchesSchema = z.strictObject({
+  schedulesOn: z.boolean(),
+  startWhenClosed: z.boolean(),
+  /**
+   * When `schedulesOn` was last turned on. Nothing due before it counts as
+   * missed, across a restart too. Null for a project whose schedules were on
+   * before the switches existed.
+   */
+  schedulesOnSince: EpochMsSchema.nullable(),
+});
+
+export type ProjectScheduleSwitches = z.infer<typeof ProjectScheduleSwitchesSchema>;
+
+/** A project that has never turned its schedules on. */
+export const SCHEDULE_SWITCHES_OFF: ProjectScheduleSwitches = Object.freeze({
+  schedulesOn: false,
+  startWhenClosed: false,
+  schedulesOnSince: null,
+});
+
 export type ScheduleMissedRunPolicy = (typeof SCHEDULE_MISSED_RUN_POLICIES)[number];
 export type ScheduleOverlapPolicy = (typeof SCHEDULE_OVERLAP_POLICIES)[number];
 export type ScheduleDonePolicy = (typeof SCHEDULE_DONE_POLICIES)[number];

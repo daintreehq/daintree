@@ -2,6 +2,7 @@ import { readlinkSync } from "node:fs";
 import { validateTimeZone } from "../../../shared/utils/cron.js";
 import {
   runWhenClosedIssues,
+  scheduleOsJobUnavailable,
   type ScheduleOsJobContext,
 } from "../../../shared/utils/scheduleOsJob.js";
 import type { Schedule } from "../../../shared/types/scheduledRuns.js";
@@ -87,4 +88,9 @@ export function scheduleOsJobContext(
 export function runWhenClosedWriteIssues(schedule: Schedule): ScheduleIssue[] {
   if (!schedule.policies.runWhenClosed) return [];
   return runWhenClosedIssues(schedule, scheduleOsJobContext());
+}
+
+/** The store's check on a project turning on Daintree starting for its schedules. */
+export function startWhenClosedWriteIssue(): string | null {
+  return scheduleOsJobUnavailable(scheduleOsJobContext());
 }

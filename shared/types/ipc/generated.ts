@@ -4039,6 +4039,10 @@ export interface GeneratedIpcInvokeMap {
     args: [scheduleId: string, enabled: boolean];
     result: import("./schedules.js").ScheduleSetEnabledOutcome;
   };
+  "schedules:set-switches": {
+    args: [patch: import("./schedules.js").ScheduleSwitchesPatch];
+    result: import("./schedules.js").ScheduleSetSwitchesOutcome;
+  };
   "schedules:update": {
     args: [
       scheduleId: string,

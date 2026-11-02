@@ -5,6 +5,7 @@ export const SCHEDULES_METHOD_CHANNELS = {
   create: "schedules:create",
   update: "schedules:update",
   setEnabled: "schedules:set-enabled",
+  setSwitches: "schedules:set-switches",
   remove: "schedules:remove",
   runNow: "schedules:run-now",
   osJobStatus: "schedules:os-job-status",

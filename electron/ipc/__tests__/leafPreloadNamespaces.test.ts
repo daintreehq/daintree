@@ -162,6 +162,7 @@ describe("leaf preload namespace bindings", () => {
       await bindings.create(input);
       await bindings.update("s1", 42, patch);
       await bindings.setEnabled("s1", false);
+      await bindings.setSwitches({ schedulesOn: true });
       await bindings.remove("s1");
       await bindings.runNow("s1");
       await bindings.osJobStatus();
@@ -172,6 +173,7 @@ describe("leaf preload namespace bindings", () => {
         ["schedules:create", input],
         ["schedules:update", "s1", 42, patch],
         ["schedules:set-enabled", "s1", false],
+        ["schedules:set-switches", { schedulesOn: true }],
         ["schedules:remove", "s1"],
         ["schedules:run-now", "s1"],
         ["schedules:os-job-status"],

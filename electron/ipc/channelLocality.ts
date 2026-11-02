@@ -1060,6 +1060,7 @@ export const CHANNEL_LOCALITY = {
   "schedules:repair-os-job": "shell",
   "schedules:run-now": "shell",
   "schedules:set-enabled": "shell",
+  "schedules:set-switches": "shell",
   "schedules:update": "shell",
   "scratch:create": "host",
   "scratch:get-all": "host",

@@ -27,6 +27,8 @@ export interface ScheduleOsJobContext {
 
 export const RUN_WHEN_CLOSED_PATH = "policies.runWhenClosed";
 
+const NO_OS_JOB = "Starting Daintree for a schedule isn't available on this platform yet";
+
 const PLATFORM: Record<ScheduleOsJobKind, { starter: string; machine: string }> = {
   "launch-agent": { starter: "macOS", machine: "Mac" },
   "systemd-timer": { starter: "systemd", machine: "computer" },
@@ -49,6 +51,14 @@ export function isRunWhenClosedOptedIn(schedule: Schedule): boolean {
 }
 
 /**
+ * Why this machine can never start Daintree for schedules (no OS job on the
+ * platform, a Microsoft Store build), or null when it can.
+ */
+export function scheduleOsJobUnavailable(context: ScheduleOsJobContext): string | null {
+  return context.kind === null ? NO_OS_JOB : context.unavailable;
+}
+
+/**
  * Why a cadence can't start Daintree when it isn't running, or null when it
  * can. Main refuses to store the option on with a reason; a stored schedule
  * that stops qualifying (the machine's zone changed) is left out of the job.
@@ -57,9 +67,7 @@ export function runWhenClosedIssue(
   cadence: Pick<ScheduleCadence, "cron" | "timeZone">,
   context: ScheduleOsJobContext
 ): string | null {
-  if (context.kind === null) {
-    return "Starting Daintree for a schedule isn't available on this platform yet";
-  }
+  if (context.kind === null) return NO_OS_JOB;
   if (context.unavailable !== null) return context.unavailable;
   if (context.systemTimeZone === null) {
     return `Couldn't read this ${scheduleOsJobMachine(context.kind)}'s time zone`;

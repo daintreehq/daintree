@@ -22,6 +22,8 @@ import type {
   ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
+  ScheduleSetSwitchesOutcome,
+  ScheduleSwitchesPatch,
   ScheduleUpdateOutcome,
   ScheduleUpdatePatch,
   SchedulesSnapshot,
@@ -87,6 +89,11 @@ const UpdatePatchShape = z.strictObject({
     })
     .optional(),
   policies: PoliciesShape.optional(),
+});
+
+const SwitchesPatchShape = z.strictObject({
+  schedulesOn: z.boolean().optional(),
+  startWhenClosed: z.boolean().optional(),
 });
 
 function parsed<T>(shape: z.ZodType<T>, value: unknown, what: string): T {
@@ -177,6 +184,22 @@ async function handleSetEnabled(
 }
 
 /**
+ * The project's own switches (#16166): whether its schedules fire at all, and
+ * whether Daintree starts for them when it isn't running. Every view of the
+ * project hears the new state through `schedules:changed`, as for any edit.
+ */
+async function handleSetSwitches(
+  ctx: IpcContext,
+  patch: ScheduleSwitchesPatch
+): Promise<ScheduleSetSwitchesOutcome> {
+  const projectId = requireSenderProjectId(ctx);
+  return projectStore.schedules.setSwitches(
+    projectId,
+    parsed(SwitchesPatchShape, patch, "not a change to the project's schedule switches")
+  );
+}
+
+/**
  * Launches the schedule's agent now, as a tracked run (#15978), enabled or
  * not: asking is the opt-in. In the asking view when it shows the project.
  * Its overlap policy and precondition apply (#15980); with earlier runs still
@@ -257,6 +280,9 @@ export const schedulesNamespace = defineIpcNamespace({
     create: op(SCHEDULES_METHOD_CHANNELS.create, handleCreate, { withContext: true }),
     update: op(SCHEDULES_METHOD_CHANNELS.update, handleUpdate, { withContext: true }),
     setEnabled: op(SCHEDULES_METHOD_CHANNELS.setEnabled, handleSetEnabled, { withContext: true }),
+    setSwitches: op(SCHEDULES_METHOD_CHANNELS.setSwitches, handleSetSwitches, {
+      withContext: true,
+    }),
     remove: op(SCHEDULES_METHOD_CHANNELS.remove, handleRemove, { withContext: true }),
     runNow: op(SCHEDULES_METHOD_CHANNELS.runNow, handleRunNow, { withContext: true }),
     osJobStatus: op(SCHEDULES_METHOD_CHANNELS.osJobStatus, handleOsJobStatus, {

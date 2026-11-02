@@ -1,4 +1,5 @@
 import type {
+  ProjectScheduleSwitches,
   Schedule,
   ScheduleCadence,
   ScheduleLaunch,
@@ -12,6 +13,8 @@ import type { ScheduledRunRef } from "../scheduledRunRef.js";
 /** The sender project's schedules (#15975), as this machine stores them. */
 export interface SchedulesSnapshot {
   projectId: string;
+  /** Whether the project's schedules fire, and whether Daintree starts for them (#16166). */
+  switches: ProjectScheduleSwitches;
   /** In the order they were created. */
   schedules: Schedule[];
   /**
@@ -63,6 +66,21 @@ export type ScheduleUpdateOutcome =
 export type ScheduleSetEnabledOutcome =
   | { status: "saved"; schedule: Schedule; snapshot: SchedulesSnapshot }
   | { status: "not-found"; snapshot: SchedulesSnapshot };
+
+/** The project switches to change (#16166); one left out is kept as it is. */
+export interface ScheduleSwitchesPatch {
+  schedulesOn?: boolean;
+  startWhenClosed?: boolean;
+}
+
+export type ScheduleSetSwitchesOutcome =
+  | { status: "saved"; snapshot: SchedulesSnapshot }
+  /**
+   * Nothing saved: Daintree can't be started for schedules on this machine (a
+   * platform with no OS job, a Microsoft Store build), so starting it for
+   * them can't be turned on. Turning it off is never refused.
+   */
+  | { status: "invalid"; issues: ScheduleIssue[] };
 
 /**
  * The OS job that starts Daintree for schedules set to run when it isn't
