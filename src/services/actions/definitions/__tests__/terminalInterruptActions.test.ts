@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
-import type { z } from "zod";
+import { z } from "zod";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -78,6 +78,12 @@ function definition(id: string) {
   const factory = buildRegistry().get(id);
   if (!factory) throw new Error(`action ${id} not registered`);
   return factory();
+}
+
+function resultObjectOf(id: string): z.ZodObject {
+  const schema = definition(id).resultSchema;
+  if (!(schema instanceof z.ZodObject)) throw new Error(`action ${id} has no object result`);
+  return schema;
 }
 
 async function run(id: string, args: unknown): Promise<unknown> {
@@ -218,8 +224,8 @@ describe("terminal.interruptOwned (#12338)", () => {
   it("advertises the delegate's result contract, plus only the steer's own-keys note (#16094)", () => {
     const owned = definition("terminal.interruptOwned");
     const delegate = definition("terminal.interrupt");
-    const ownedShape = (owned.resultSchema as z.ZodObject).shape;
-    const delegateShape = (delegate.resultSchema as z.ZodObject).shape;
+    const ownedShape = resultObjectOf("terminal.interruptOwned").shape;
+    const delegateShape = resultObjectOf("terminal.interrupt").shape;
     for (const [key, field] of Object.entries(delegateShape)) {
       expect(ownedShape[key], key).toBe(field);
     }
@@ -236,7 +242,7 @@ describe("terminal.interruptOwned (#12338)", () => {
       status: "requested",
     };
     for (const id of ["terminal.interruptOwned", "terminal.sendKeysOwned"]) {
-      const schema = definition(id).resultSchema as z.ZodType;
+      const schema = resultObjectOf(id);
       const base =
         id === "terminal.sendKeysOwned" ? { terminalId: "a", keys: ["Escape"] } : receipt;
       expect(schema.safeParse(base).success, id).toBe(true);
