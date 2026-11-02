@@ -353,14 +353,21 @@ describe("scheduleOsJobUnavailable", () => {
     expect(scheduleOsJobUnavailable(MAC)).toBeNull();
     expect(scheduleOsJobUnavailable({ ...MAC, systemTimeZone: null })).toBeNull();
     expect(scheduleOsJobUnavailable({ kind: null, systemTimeZone: null, unavailable: null })).toBe(
-      runWhenClosedIssue({ cron: "0 9 * * *", timeZone: "UTC" }, {
-        kind: null,
-        systemTimeZone: null,
-        unavailable: null,
-      })
+      runWhenClosedIssue(
+        { cron: "0 9 * * *", timeZone: "UTC" },
+        {
+          kind: null,
+          systemTimeZone: null,
+          unavailable: null,
+        }
+      )
     );
     expect(
-      scheduleOsJobUnavailable({ kind: "task-scheduler", systemTimeZone: "UTC", unavailable: "Store" })
+      scheduleOsJobUnavailable({
+        kind: "task-scheduler",
+        systemTimeZone: "UTC",
+        unavailable: "Store",
+      })
     ).toBe("Store");
   });
 });

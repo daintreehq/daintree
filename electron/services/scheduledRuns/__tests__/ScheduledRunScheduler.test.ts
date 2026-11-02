@@ -1343,7 +1343,9 @@ describe("ScheduledRunScheduler", () => {
     it("leaves another project's schedules firing", async () => {
       projects.add("project-2");
       commit("project-1", [schedule({ updatedAt: at(8) })], off());
-      commit("project-2", [schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) })]);
+      commit("project-2", [
+        schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) }),
+      ]);
       await start();
 
       await elapse(30 * MINUTE);
@@ -1423,9 +1425,7 @@ describe("ScheduledRunScheduler", () => {
       await scheduler!.idle();
 
       expect(cancelled).toEqual([]);
-      expect(origins()).toEqual([
-        expect.objectContaining({ trigger: "catch-up", dueAt: at(10) }),
-      ]);
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(10) })]);
     });
   });
 });

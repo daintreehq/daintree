@@ -1,8 +1,4 @@
-import type {
-  ProjectScheduleSwitches,
-  Schedule,
-  ScheduleCadence,
-} from "../types/scheduledRuns.js";
+import type { ProjectScheduleSwitches, Schedule, ScheduleCadence } from "../types/scheduledRuns.js";
 import { launchdCalendarFor } from "./launchdCalendar.js";
 import { systemdCalendarFor } from "./systemdCalendar.js";
 import { fitTaskTriggers, taskSchedulerTriggersFor } from "./taskSchedulerTriggers.js";

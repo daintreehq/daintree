@@ -611,7 +611,11 @@ describe("the LaunchAgent behind ScheduleOsJobService", () => {
       hours: () =>
         [
           ...new Set(
-            [...(files.files.get(FILE) ?? "").matchAll(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/g)].map((match) => Number(match[1]))
+            [
+              ...(files.files.get(FILE) ?? "").matchAll(
+                /<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/g
+              ),
+            ].map((match) => Number(match[1]))
           ),
         ].sort((a, b) => a - b),
     };

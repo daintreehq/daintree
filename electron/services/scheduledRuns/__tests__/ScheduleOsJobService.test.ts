@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSchedule } from "../../../../shared/utils/scheduledRuns.js";
-import type {
-  ProjectScheduleSwitches,
-  Schedule,
-} from "../../../../shared/types/scheduledRuns.js";
+import type { ProjectScheduleSwitches, Schedule } from "../../../../shared/types/scheduledRuns.js";
 import type { SchedulesSnapshot } from "../../../../shared/types/ipc/schedules.js";
 import type { ScheduleOsJobContext } from "../../../../shared/utils/scheduleOsJob.js";
 import {

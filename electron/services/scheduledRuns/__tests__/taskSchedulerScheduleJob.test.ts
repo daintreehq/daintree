@@ -676,7 +676,11 @@ describe("the Task Scheduler task behind ScheduleOsJobService", () => {
       hours: () =>
         [
           ...new Set(
-            [...(schtasks.task() ?? "").matchAll(/<StartBoundary>[^<]*T(\d\d):00:00<\/StartBoundary>/g)].map((match) => Number(match[1]))
+            [
+              ...(schtasks.task() ?? "").matchAll(
+                /<StartBoundary>[^<]*T(\d\d):00:00<\/StartBoundary>/g
+              ),
+            ].map((match) => Number(match[1]))
           ),
         ].sort((a, b) => a - b),
     };

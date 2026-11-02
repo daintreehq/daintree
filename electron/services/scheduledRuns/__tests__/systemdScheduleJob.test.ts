@@ -908,7 +908,11 @@ describe("the systemd timer behind ScheduleOsJobService", () => {
       hours: () =>
         [
           ...new Set(
-            [...(files.files.get(TIMER_FILE) ?? "").matchAll(/^OnCalendar=\*-\*-\* (\d\d):00:00/gm)].map((match) => Number(match[1]))
+            [
+              ...(files.files.get(TIMER_FILE) ?? "").matchAll(
+                /^OnCalendar=\*-\*-\* (\d\d):00:00/gm
+              ),
+            ].map((match) => Number(match[1]))
           ),
         ].sort((a, b) => a - b),
     };

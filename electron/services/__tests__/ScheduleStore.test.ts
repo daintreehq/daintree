@@ -448,10 +448,7 @@ describe("ScheduleStore", () => {
       };
       expect(on.snapshot.switches).toEqual({ ...expected, startWhenClosed: false });
       expect(start.snapshot.switches).toEqual(expected);
-      expect(heard.map((snapshot) => snapshot.switches)).toEqual([
-        on.snapshot.switches,
-        expected,
-      ]);
+      expect(heard.map((snapshot) => snapshot.switches)).toEqual([on.snapshot.switches, expected]);
       expect(start.snapshot.revision).toBeGreaterThan(on.snapshot.revision);
       expect((await newStore().list(PROJECT)).switches).toEqual(expected);
       expect(JSON.parse(fs.readFileSync(schedulesFile(), "utf-8"))._schemaVersion).toBe(

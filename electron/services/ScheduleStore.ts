@@ -6,11 +6,7 @@ import { resilientAtomicWriteFile, resilientRename, resilientUnlink } from "../u
 import { AppError } from "../utils/errorTypes.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { schedulesFilePath } from "./projectStorePaths.js";
-import {
-  decodeSchedulesFile,
-  encodeSchedulesFile,
-  type SchedulesFile,
-} from "./schedulesCodec.js";
+import { decodeSchedulesFile, encodeSchedulesFile, type SchedulesFile } from "./schedulesCodec.js";
 import { createSchedule, normalizeCadence } from "../../shared/utils/scheduledRuns.js";
 import { scheduleIssues, type ScheduleIssue } from "../../shared/utils/scheduleValidation.js";
 import {
@@ -206,8 +202,7 @@ export class ScheduleStore {
       const switches: ProjectScheduleSwitches = {
         schedulesOn,
         startWhenClosed,
-        schedulesOnSince:
-          schedulesOn && !before.schedulesOn ? this.now() : before.schedulesOnSince,
+        schedulesOnSince: schedulesOn && !before.schedulesOn ? this.now() : before.schedulesOnSince,
       };
       const snapshot = await this.commit(projectId, { ...current, switches });
       return { status: "saved", snapshot };

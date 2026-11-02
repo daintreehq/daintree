@@ -102,7 +102,10 @@ describe("schedules codec", () => {
         reason: "corrupt",
       });
       expect(
-        decodeSchedulesFile(JSON.stringify({ _schemaVersion: 1, switches: ON, schedules: [] }), PROJECT)
+        decodeSchedulesFile(
+          JSON.stringify({ _schemaVersion: 1, switches: ON, schedules: [] }),
+          PROJECT
+        )
       ).toEqual({ ok: false, reason: "corrupt" });
     });
   });
