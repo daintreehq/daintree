@@ -384,7 +384,11 @@ describe("a preset switch that kept the conversation (#16045)", () => {
   it("puts the pane back on the refusing preset, offer and all, when the restart started nothing", async () => {
     // The restart refused before its spawn: the count never moved.
     store.state.panelsById = {
-      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+      "pane-a": switched({
+        cwd: "/repo/company",
+        conversationCwd: "/repo/origin",
+        presetSwitchResume: { ...attempt, refused: true },
+      }),
     };
 
     await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
@@ -393,6 +397,8 @@ describe("a preset switch that kept the conversation (#16045)", () => {
     expect(current().agentPresetId).toBe("company");
     expect(current().env).toEqual({ CODEX_HOME: "/home/me/.codex-company" });
     expect(current().presetSwitchResume).toEqual({ ...attempt, refused: true });
+    expect(current().cwd).toBe("/repo/company");
+    expect(current().conversationCwd).toBe("/repo/origin");
     expect(saveNormalized).toHaveBeenCalledTimes(2);
   });
 
