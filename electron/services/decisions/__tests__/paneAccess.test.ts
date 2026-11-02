@@ -85,6 +85,31 @@ describe("createPaneAccess", () => {
     });
   });
 
+  it("heads the question with the project's name and this computer's, when it can read them", async () => {
+    const access = createPaneAccess({
+      ...sources(world()),
+      projectName: async (id) => (id === "p1" ? "acme-api" : null),
+      machineName: () => "studio-mac",
+    });
+    const result = await access.authenticator.authenticate(TOKEN);
+    expect(result?.origin).toMatchObject({
+      project_label: "acme-api",
+      machine_label: "studio-mac",
+    });
+  });
+
+  it("leaves the labels out when the project's name can't be read", async () => {
+    const access = createPaneAccess({
+      ...sources(world()),
+      projectName: async () => {
+        throw new Error("store closed");
+      },
+    });
+    const result = await access.authenticator.authenticate(TOKEN);
+    expect(result?.origin).not.toHaveProperty("project_label");
+    expect(result?.origin).not.toHaveProperty("machine_label");
+  });
+
   it("names the launched agent while none has been detected, and no session while none is known", async () => {
     const result = await createPaneAccess(sources(world())).authenticator.authenticate(TOKEN);
     expect(result?.origin).toMatchObject({ agent_kind: "codex", agent_session_id: null });

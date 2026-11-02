@@ -110,6 +110,8 @@ export interface ViewlessTerminalRecord {
   waitingReason?: WaitingReason;
   everDetectedAgent?: boolean;
   isTrashed?: boolean;
+  /** Its agent is being quit by a graceful shutdown. */
+  isClosing?: boolean;
   isExited?: boolean;
   hasPty?: boolean;
   isAssistantTerminal?: boolean;

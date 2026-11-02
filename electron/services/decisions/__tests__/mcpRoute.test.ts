@@ -358,9 +358,8 @@ describe("/mcp/decisions (#16011)", () => {
     });
     const alias = (await store.listQuestions())[0].alias;
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toBe(
-      `Asked as q-${alias}. End your turn now (or continue with unrelated work); the answer will arrive as a message in this terminal.`
-    );
+    // The guidance after the alias is the library's own wording, pinned in its tests.
+    expect(result.content[0].text.startsWith(`Asked as q-${alias}. `)).toBe(true);
     expect(result.structuredContent).toMatchObject({
       status: "queued",
       enforced_requirement: "human-required",

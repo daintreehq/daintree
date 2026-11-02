@@ -84,6 +84,8 @@ export function mapTerminalInfo(
       t.trashExpiresAt ?? (isTrashed ? ctx.ptyManager.getTrashExpiresAt(t.id) : undefined),
     activityTier: ctx.ptyManager.getActivityTier(t.id),
     hasPty,
+    // Still has a PTY, but its agent is being quit: nothing new should land in it.
+    isClosing: ctx.ptyManager.isClosing(t.id),
     // The raw flag is only written by the exit handler, so a terminal that is
     // killed but still on its way down reads `undefined`. Report a boolean so
     // callers can tell "not exited yet" from a host that never said.

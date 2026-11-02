@@ -67,6 +67,8 @@ export const EnrollHostPayloadSchema = z.discriminatedUnion("step", [
     label: z.string().min(1).max(MAX_HOST_LABEL_LENGTH),
     /** The Host identity to replace, by device id: a revoked or stale one, on Enroll. */
     replace: RelayId.optional(),
+    /** The owner accepted the fixed-key storage for this Host, which has no keychain, on Enroll. */
+    allowWeakStorage: z.literal(true).optional(),
   }),
   z.object({
     step: z.literal("accept"),
@@ -97,6 +99,7 @@ const RefusalSchema = z.object({
     "own-setup",
     "enrolled",
     "no-keychain",
+    "weak-storage-only",
     "unreadable",
     "stale-attempt",
     "rejected",

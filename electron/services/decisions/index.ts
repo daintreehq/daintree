@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { hostname } from "node:os";
 import { basename, dirname } from "node:path";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -370,6 +371,11 @@ function mcpRouteSources(running: () => DecisionsService | null): DecisionsMcpRo
     principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
     hostId: () => running()?.getSettings()?.hostId ?? null,
     getPtyClient,
+    projectName: async (projectId) => {
+      const { projectStore } = await import("../ProjectStore.js");
+      return projectStore.getProjectById(projectId)?.name ?? null;
+    },
+    machineName: () => hostname(),
     holdListener: async (id, route) => {
       // With the MCP server off nothing else loads its module, and the route
       // still needs the listener.
@@ -387,6 +393,7 @@ function watchPanes(onPane: (signal: PaneSignal) => void): () => void {
       if (terminalId && state === "waiting") onPane("settled");
     }),
     events.on("agent:detected", () => onPane("appeared")),
+    events.on("agent-session:attributed", () => onPane("session")),
     events.on("agent:spawned", () => onPane("appeared")),
     events.on("terminal:restored", () => onPane("appeared")),
   ];
@@ -950,9 +957,12 @@ export async function listHosts(): Promise<DecisionsHostsResult> {
 }
 
 /** Enroll, from Settings: enrolls one connected Host now, whatever automatic enrollment says. */
-export async function enrollDecisionsHost(hostId: string): Promise<DecisionsHostEnrollResult> {
+export async function enrollDecisionsHost(
+  hostId: string,
+  allowWeakStorage = false
+): Promise<DecisionsHostEnrollResult> {
   await runningService();
-  return hostEnroller.enroll(hostId);
+  return hostEnroller.enroll(hostId, { allowWeakStorage });
 }
 
 /**

@@ -45,6 +45,8 @@ export type HostIdentityReport =
  * - `own-setup`: it holds an owner identity of its own.
  * - `enrolled`: it holds a Host identity other than the one named to replace.
  * - `no-keychain`: its keychain can't seal keys now (`detail` says why).
+ * - `weak-storage-only`: it has no keychain, only the fixed-key storage, which
+ *   the request didn't say the owner accepted for it.
  * - `unreadable`: its key file couldn't be read.
  * - `stale-attempt`: the attempt isn't one it holds for this link.
  * - `rejected`: the enrollment didn't verify against its request.
@@ -54,6 +56,7 @@ export type HostEnrollRefusalReason =
   | "own-setup"
   | "enrolled"
   | "no-keychain"
+  | "weak-storage-only"
   | "unreadable"
   | "stale-attempt"
   | "rejected"
@@ -98,6 +101,7 @@ export interface DecisionsHostLink {
     attempt: string;
     label: string;
     replace?: string;
+    allowWeakStorage?: boolean;
   }): Promise<HostCallOutcome<HostRequestResult>>;
   accept(input: { attempt: string; response: string }): Promise<HostCallOutcome<HostAcceptResult>>;
 }

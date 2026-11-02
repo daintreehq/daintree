@@ -82,6 +82,8 @@ describe("relayOriginFromInput", () => {
     ["HTTPS://Decisions.Example.Workers.Dev", ORIGIN],
     ["https://decisions.example.workers.dev:8443/x", "https://decisions.example.workers.dev:8443"],
     ["localhost:8787", "https://localhost:8787"],
+    ["http://localhost:8787", "http://localhost:8787"],
+    ["http://127.0.0.1:8787/pair", "http://127.0.0.1:8787"],
     ["decisions.example.workers.dev:8443/x", "https://decisions.example.workers.dev:8443"],
   ])("reads %j as the origin %s", (input, origin) => {
     expect(relayOriginFromInput(input)).toEqual({ origin });
@@ -98,8 +100,8 @@ describe("relayOriginFromInput", () => {
     ["https:decisions.example.workers.dev", "unparsable"],
     ["http:/decisions.example.workers.dev", "not-https"],
     ["http://decisions.example.workers.dev", "not-https"],
-    ["http://localhost:8787", "not-https"],
-    ["http://127.0.0.1:8787", "not-https"],
+    ["http://192.168.1.20:8787", "not-https"],
+    ["http://localhost.example.com:8787", "not-https"],
     ["ftp://decisions.example.workers.dev", "not-https"],
     ["wss://decisions.example.workers.dev", "not-https"],
     ["com.example.app://decisions.example.workers.dev", "not-https"],

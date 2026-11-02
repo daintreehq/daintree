@@ -25,6 +25,8 @@ export function hostFailureText(failure: DecisionsHostFailure): string {
   switch (failure.reason) {
     case "no-keychain":
       return `It has no keychain that could keep its keys, so nothing was enrolled.${sentence(failure.detail)}`;
+    case "weak-storage-only":
+      return "It has no keychain, as Linux and WSL machines without a keyring don't, so nothing was enrolled. Its keys can be kept under a fixed key instead, which protects them only from someone who can't read its files.";
     case "host-keys-unreadable":
       return `Its Decisions key file couldn't be read.${sentence(failure.detail)}`;
     case "host-refused":
@@ -141,7 +143,9 @@ function enrollmentText(host: DecisionsHost, autoEnroll: boolean): string {
       return "It needs a newer Daintree to be enrolled.";
     case "failed":
       return `${hostFailureText(enrollment.failure)}${
-        autoEnroll && enrollment.failure.reason !== "relay-full"
+        autoEnroll &&
+        enrollment.failure.reason !== "relay-full" &&
+        enrollment.failure.reason !== "weak-storage-only"
           ? " Tried again when it next connects."
           : ""
       }${offline}`;

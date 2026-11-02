@@ -295,6 +295,10 @@ function setup(
       launchGate?: Promise<void>;
     };
     diagnostics?: DiagnosticTerminals;
+    /** Lists the pty host's panes, as main's labels do, so delivery can read their sessions. */
+    listTerminals?: boolean;
+    /** Runs while the panes are being listed, before the list comes back. */
+    whileListing?: () => Promise<void>;
   } = {}
 ) {
   const store = options.store ?? new DaintreeLocalStore(sqlite);
@@ -413,6 +417,18 @@ function setup(
       },
       ...(resume ? { resume } : {}),
       ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}),
+      ...(options.listTerminals
+        ? {
+            labels: {
+              projectName: async () => null,
+              listTerminals: async () => {
+                const list = [...client.terminals].map(([id, info]) => ({ ...info, id }));
+                await options.whileListing?.();
+                return list;
+              },
+            },
+          }
+        : {}),
     },
     identity,
     store,
@@ -834,10 +850,12 @@ describe("AnswerDelivery", () => {
     h.delivery.start();
     await advance(1_000);
     const before = pending.mock.calls.length;
+    // Start looks once for sessions learned while delivery was off; the minutes after it never list.
+    expect(lists).toHaveBeenCalledTimes(1);
 
     await advance(3 * DELIVERY_CHECK_INTERVAL_MS, 10_000);
     expect(pending.mock.calls.length - before).toBe(3);
-    expect(lists).not.toHaveBeenCalled();
+    expect(lists).toHaveBeenCalledTimes(1);
 
     // Found by the next minute's read, with nothing else asking.
     await answered(h.store, Q1, 1, "approve");
@@ -1095,6 +1113,160 @@ describe("AnswerDelivery", () => {
         await stopped(h.delivery);
       }
     );
+
+    it("records a session learned after the run asked, so its answer can still resume it once the pane is gone", async () => {
+      const h = setup({ resume: {}, listTerminals: true });
+      const origin = { ...ORIGIN, agent_kind: "codex", agent_session_id: null };
+      await answered(h.store, Q1, 1, "approve", { origin });
+      // Codex's conversation is learned only once its turn is under way, after it asked.
+      h.client.terminals.set(PANE, {
+        ...atPrompt(),
+        detectedAgentId: "codex",
+        agentSessionId: "codex-learned-1",
+        agentState: "working",
+        lastStateChange: Date.now(),
+      });
+
+      h.delivery.start();
+      h.signal("settled");
+      await until(
+        async () => (await h.question(Q1))?.origin.agent_session_id === "codex-learned-1"
+      );
+      expect(h.client.submitted).toHaveLength(0);
+
+      h.client.terminals.delete(PANE);
+      h.signal("appeared");
+      await until(() => h.client.submitted.length === 1);
+      expect(h.launches[0]).toMatchObject({ agentId: "codex", sessionId: "codex-learned-1" });
+      await stopped(h.delivery);
+    });
+
+    it.each([
+      [
+        "a later launch",
+        (h: ReturnType<typeof setup>) => h.client.generations.set(PANE, 8),
+        { launchGeneration: 8 },
+      ],
+      ["a new agent incarnation", () => {}, { agentIncarnation: 1 }],
+      ["another agent", () => {}, { detectedAgentId: "claude" }],
+      [
+        "another principal",
+        (h: ReturnType<typeof setup>) => h.principals.set(PANE, "principal-2"),
+        {},
+      ],
+    ] as const)("never takes a session from %s in the same pane", async (_name, arrange, info) => {
+      const h = setup({ resume: {}, listTerminals: true });
+      const origin = { ...ORIGIN, agent_kind: "codex", agent_session_id: null };
+      await answered(h.store, Q1, 1, "approve", { origin });
+      h.client.terminals.set(PANE, {
+        ...atPrompt(),
+        detectedAgentId: "codex",
+        agentSessionId: "codex-other-run",
+        agentState: "working",
+        lastStateChange: Date.now(),
+        ...info,
+      });
+      arrange(h);
+
+      h.delivery.start();
+      h.signal("settled");
+      await advance(5_000);
+      expect((await h.question(Q1))?.origin.agent_session_id).toBeNull();
+      await stopped(h.delivery);
+    });
+
+    it("learns the session while the question is still open, so it resumes after the pane closes before the answer", async () => {
+      const h = setup({ resume: {}, listTerminals: true });
+      const origin = { ...ORIGIN, agent_kind: "codex", agent_session_id: null };
+      await answered(h.store, Q1, 1, "approve", {
+        origin,
+        local_status: "open",
+        delivery_status: "not-sent",
+        answers_json: serializeAnswers([]),
+      });
+      h.client.terminals.set(PANE, {
+        ...atPrompt(),
+        detectedAgentId: "codex",
+        agentSessionId: "codex-learned-2",
+      });
+
+      h.delivery.start();
+      h.signal("session");
+      await until(
+        async () => (await h.question(Q1))?.origin.agent_session_id === "codex-learned-2"
+      );
+      expect(h.client.submitted).toHaveLength(0);
+      await stopped(h.delivery);
+    });
+
+    it("learns at start a session Daintree found while delivery was off", async () => {
+      const h = setup({ resume: {}, listTerminals: true });
+      const origin = { ...ORIGIN, agent_kind: "codex", agent_session_id: null };
+      await answered(h.store, Q1, 1, "approve", {
+        origin,
+        local_status: "open",
+        delivery_status: "not-sent",
+        answers_json: serializeAnswers([]),
+      });
+      h.client.terminals.set(PANE, {
+        ...atPrompt(),
+        detectedAgentId: "codex",
+        agentSessionId: "codex-learned-3",
+      });
+
+      // No pane signal at all: start alone has to look.
+      h.delivery.start();
+      await until(
+        async () => (await h.question(Q1))?.origin.agent_session_id === "codex-learned-3"
+      );
+      await stopped(h.delivery);
+    });
+
+    it("learns the session of a question already delivered, which a correction can reopen", async () => {
+      const h = setup({ resume: {}, listTerminals: true });
+      const origin = { ...ORIGIN, agent_kind: "codex", agent_session_id: null };
+      await answered(h.store, Q1, 1, "approve", {
+        origin,
+        delivery_status: "terminal-delivered",
+        delivered_revision: 1,
+      });
+      h.client.terminals.set(PANE, {
+        ...atPrompt(),
+        detectedAgentId: "codex",
+        agentSessionId: "codex-learned-4",
+      });
+
+      h.delivery.start();
+      h.signal("session");
+      await until(
+        async () => (await h.question(Q1))?.origin.agent_session_id === "codex-learned-4"
+      );
+      await stopped(h.delivery);
+    });
+
+    it("never writes a session onto a question reassigned while the panes were being read", async () => {
+      let reassign: () => Promise<void> = async () => {};
+      const h = setup({ resume: {}, listTerminals: true, whileListing: () => reassign() });
+      const origin = { ...ORIGIN, agent_kind: "codex", agent_session_id: null };
+      await answered(h.store, Q1, 1, "approve", { origin });
+      h.client.terminals.set(PANE, {
+        ...atPrompt(),
+        detectedAgentId: "codex",
+        agentSessionId: "codex-pane-1",
+      });
+      reassign = async () => {
+        reassign = async () => {};
+        await h.store.updateQuestion(Q1, { origin: { ...origin, pane_id: "pane-2" } });
+      };
+
+      h.delivery.start();
+      h.signal("session");
+      await advance(5_000);
+      const row = await h.question(Q1);
+      expect(row?.origin.pane_id).toBe("pane-2");
+      expect(row?.origin.agent_session_id).toBeNull();
+      await stopped(h.delivery);
+    });
 
     it("resumes once for every question the gone run asked, and types them all there", async () => {
       const h = setup({ resume: {} });

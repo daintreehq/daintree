@@ -57,6 +57,7 @@ function makeCtx(
     ptyManager: {
       getAll: () => terminals,
       isInTrash: (id: string) => id in trashed,
+      isClosing: vi.fn(() => false),
       getTerminal: (id: string) => ({ trashExpiresAt: trashed[id] }),
     },
     processTreeCache: {

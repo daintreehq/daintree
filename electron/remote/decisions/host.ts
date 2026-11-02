@@ -39,7 +39,7 @@ export interface DecisionsHostEnrollment {
   status(): Promise<HostIdentityReport>;
   request(
     link: object,
-    input: { attempt: string; label: string; replace?: string }
+    input: { attempt: string; label: string; replace?: string; allowWeakStorage?: boolean }
   ): Promise<HostRequestResult>;
   accept(link: object, input: { attempt: string; response: string }): Promise<HostAcceptResult>;
   /** The session closed: the keys it was given and never accepted are dropped. */
@@ -219,6 +219,7 @@ export function installDecisionsHostWith(
             attempt: payload.attempt,
             label: payload.label,
             ...(payload.replace !== undefined ? { replace: payload.replace } : {}),
+            ...(payload.allowWeakStorage === true ? { allowWeakStorage: true } : {}),
           })
         );
       case "accept":

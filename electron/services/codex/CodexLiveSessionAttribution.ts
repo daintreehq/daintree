@@ -620,6 +620,10 @@ export class CodexLiveSessionAttribution {
           if (!HOLDS_ID.has(outcome)) continue;
           claimed.add(sessionId);
           ptyClient.noteLiveAgentSessionId(pane.terminalId, sessionId, pane.generation);
+          events.emit("agent-session:attributed", {
+            terminalId: pane.terminalId,
+            launchGeneration: pane.generation,
+          });
           finished.add(pane.terminalId);
           // A pane matched before its own first turn was seen needs no attempts of its own.
           if (!due.has(pane.terminalId)) this.settle(pane.terminalId, pane.generation);

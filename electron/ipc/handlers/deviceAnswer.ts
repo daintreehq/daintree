@@ -210,7 +210,9 @@ const verifyRecoveryKitSchema = z
   .strict();
 
 // A host id as the host list keeps it.
-const enrollHostSchema = z.object({ hostId: z.string().min(1).max(256) }).strict();
+const enrollHostSchema = z
+  .object({ hostId: z.string().min(1).max(256), allowWeakStorage: z.boolean().optional() })
+  .strict();
 
 // A run id main minted (a UUID); a cancel names the run it means to end.
 const cancelSetupCheckSchema = z.object({ runId: z.string().min(1).max(64) }).strict();
@@ -554,7 +556,7 @@ export const decisionsNamespace = defineIpcNamespace({
         refuseWhileOff("enroll a Remote Host");
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
-        return decisions.enrollDecisionsHost(payload.hostId);
+        return decisions.enrollDecisionsHost(payload.hostId, payload.allowWeakStorage === true);
       }
     ),
     setAutoEnrollHosts: opValidated(

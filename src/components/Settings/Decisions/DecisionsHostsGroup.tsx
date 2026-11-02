@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -39,6 +40,9 @@ export function DecisionsHostsGroup({
     enroll,
     reload,
   } = useDecisionsHosts(enabled, revision);
+
+  // A Host with no keychain, offered the fixed-key storage: asked once more, by name, before it's used.
+  const [weakHost, setWeakHost] = useState<{ hostId: string; name: string } | null>(null);
 
   const enrolledKey =
     hosts === null
@@ -92,6 +96,9 @@ export function DecisionsHostsGroup({
         />
         {(hosts ?? []).map((host) => {
           const busy = enrolling.has(host.hostId);
+          const weakOnly =
+            host.enrollment.state === "failed" &&
+            host.enrollment.failure.reason === "weak-storage-only";
           return (
             <SettingsRow
               key={host.hostId}
@@ -100,7 +107,17 @@ export function DecisionsHostsGroup({
               labelText={host.name}
               description={busy ? "Enrolling…" : hostEnrollmentText(host, autoEnroll)}
               control={
-                host.canEnroll || busy ? (
+                weakOnly && host.canEnroll && !busy ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={locked}
+                    onClick={() => setWeakHost({ hostId: host.hostId, name: host.name })}
+                  >
+                    Enroll with weaker storage…
+                  </Button>
+                ) : host.canEnroll || busy ? (
                   <Button
                     type="button"
                     variant="outline"
@@ -116,6 +133,18 @@ export function DecisionsHostsGroup({
           );
         })}
       </SettingsGroup>
+      <ConfirmDialog
+        isOpen={weakHost !== null}
+        onClose={() => setWeakHost(null)}
+        variant="default"
+        title={`Use the weaker key storage on ${weakHost?.name ?? "this Host"}?`}
+        description={`${weakHost?.name ?? "This Host"} has no keychain, so its Decisions keys would be kept under a fixed key. That keeps them only from someone who can't read its files: anyone who can could read your agents' questions and answers. It applies to this Host alone.`}
+        confirmLabel="Use weaker storage"
+        onConfirm={() => {
+          if (weakHost) enroll(weakHost.hostId, true);
+          setWeakHost(null);
+        }}
+      />
     </>
   );
 }

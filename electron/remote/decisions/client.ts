@@ -127,6 +127,7 @@ class HostLink implements DecisionsHostLink {
     attempt: string;
     label: string;
     replace?: string;
+    allowWeakStorage?: boolean;
   }): Promise<HostCallOutcome<HostRequestResult>> {
     return this.call(
       {
@@ -134,6 +135,7 @@ class HostLink implements DecisionsHostLink {
         attempt: input.attempt,
         label: input.label,
         ...(input.replace !== undefined ? { replace: input.replace } : {}),
+        ...(input.allowWeakStorage === true ? { allowWeakStorage: true as const } : {}),
       },
       HostRequestResultSchema,
       HOST_REQUEST_TIMEOUT_MS

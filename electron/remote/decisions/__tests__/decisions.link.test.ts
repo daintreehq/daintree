@@ -177,6 +177,31 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
     });
   });
 
+  it("enrolls a Host with no keychain under the fixed key, over the link, only when the owner accepted it", async () => {
+    const { host, client } = await pair();
+    const keys = memoryKeys();
+    keys.state.keychain = { kind: "weak", reason: "No keyring is available" };
+    serve(host, new HostEnrollments({ openKeys: keys.open }));
+    const link = linkOver(client);
+    const owner = await makeOwner();
+
+    const requested = await link.request({
+      attempt: "attempt_0000000001",
+      label: HOST,
+      allowWeakStorage: true,
+    });
+    if (!requested.ok || requested.value.step !== "requested") {
+      throw new Error(JSON.stringify(requested));
+    }
+    const { response } = await enrollHost(owner.client, requested.value.request);
+    expect(await link.accept({ attempt: "attempt_0000000001", response })).toMatchObject({
+      ok: true,
+      value: { step: "accepted" },
+    });
+    expect(keys.state.weakSaves).toBe(1);
+    expect(keys.current()?.role).toBe("desktop-host");
+  });
+
   it.each([
     ["weak", "No keyring is available"],
     ["locked", "The keychain is locked"],
@@ -193,7 +218,12 @@ describe("enrolling a Remote Host as a Decisions device over its link", () => {
 
       expect(await link.request({ attempt: "attempt_0000000001", label: HOST })).toEqual({
         ok: true,
-        value: { step: "refused", reason: "no-keychain", detail: reason },
+        value: {
+          step: "refused",
+          // With no keychain at all, the fixed-key storage is offered, only on the owner's say-so.
+          reason: kind === "weak" ? "weak-storage-only" : "no-keychain",
+          detail: reason,
+        },
       });
       // Nothing was kept for that attempt: an enrollment for it is refused.
       const owner = await makeOwner();

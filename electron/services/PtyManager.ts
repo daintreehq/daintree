@@ -1090,6 +1090,11 @@ export class PtyManager extends EventEmitter {
     return this.registry.expireTrashNow(id) ? "started" : "not-trashed";
   }
 
+  /** A graceful shutdown is quitting this terminal's agent now. */
+  isClosing(id: string): boolean {
+    return this.registry.get(id)?.isGracefullyClosing() ?? false;
+  }
+
   /**
    * Check if a terminal is in the trash.
    */

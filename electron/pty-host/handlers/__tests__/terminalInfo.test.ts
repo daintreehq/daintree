@@ -6,6 +6,7 @@ import type { PtyHostTerminalInfo } from "../../../../shared/types/pty-host.js";
 function createCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
     isInTrash: vi.fn(() => false),
+    isClosing: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
     getSubmission: vi.fn(() => undefined),
     hasPendingSubmission: vi.fn(() => false),
@@ -105,6 +106,18 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).scheduledRun).toBeUndefined();
   });
 
+  it("reports a terminal whose agent a graceful shutdown is quitting as closing, though it still has a PTY", () => {
+    const ctx = createCtx();
+    (ctx.ptyManager.isClosing as ReturnType<typeof vi.fn>).mockImplementation(
+      (id: string) => id === "term-1"
+    );
+    const result = mapTerminalInfo(makeTerminal({ id: "term-1" }), ctx);
+    expect(result.isClosing).toBe(true);
+    expect(result.hasPty).toBe(true);
+    expect(mapTerminalInfo(makeTerminal({ id: "term-2" }), ctx).isClosing).toBe(false);
+    expect(ctx.ptyManager.isClosing).toHaveBeenCalledWith("term-2");
+  });
+
   it("derives isTrashed from ptyManager.isInTrash, not the raw record", () => {
     // Lesson #4753: the in-memory TerminalInfo object never carries a
     // populated `isTrashed` field; trash status lives in PtyManager's
@@ -114,6 +127,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash,
+        isClosing: vi.fn(() => false),
         getTrashExpiresAt: vi.fn(() => undefined),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
@@ -134,6 +148,7 @@ describe("mapTerminalInfo", () => {
     const getTrashExpiresAt = vi.fn((id: string) => (id === "term-1" ? 42_000 : undefined));
     const ptyManager = {
       isInTrash: vi.fn((id: string) => id === "term-1"),
+      isClosing: vi.fn(() => false),
       getTrashExpiresAt,
       getActivityTier: vi.fn(() => "active" as const),
       hasPendingSubmission: vi.fn(() => false),
@@ -157,6 +172,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
         analysisObservedSince: vi.fn(() => 1_000),
@@ -246,6 +262,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission,
         analysisObservedSince: vi.fn(() => 1_000),
@@ -262,6 +279,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
         analysisObservedSince: vi.fn((id: string) => (id === "detached" ? null : 4_200)),
@@ -353,6 +371,7 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
     return createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         getSubmission,
         hasPendingSubmission: vi.fn(() => false),

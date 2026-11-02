@@ -59,6 +59,7 @@ describe("evaluateWakeGate (#12491)", () => {
     ["an exited process", { isExited: true }],
     ["no pty", { hasPty: false }],
     ["a pane closed to the trash", { isTrashed: true }],
+    ["a pane whose agent is being quit", { isClosing: true }],
   ])("blocks with %s", (_label, patch) => {
     expect(evaluateWakeGate({ ...AT_PROMPT, ...patch })).toEqual({
       kind: "blocked",

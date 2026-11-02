@@ -17,6 +17,11 @@ const RELAY_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 
+/** Plain http to this computer, the one http relay the client library accepts: one under development. */
+export function isLoopbackHttp(url: URL): boolean {
+  return url.protocol === "http:" && LOOPBACK_HOSTNAMES.has(url.hostname);
+}
+
 /** The slice of the settings store these touch; the app's `store` is one. */
 export interface DecisionsStore {
   get(key: "decisions"): unknown;
@@ -57,8 +62,7 @@ export function normalizeRelayOrigin(value: unknown): string | null {
     return null;
   }
   const secure = url.protocol === "https:";
-  const loopback = url.protocol === "http:" && LOOPBACK_HOSTNAMES.has(url.hostname);
-  if (!secure && !loopback) return null;
+  if (!secure && !isLoopbackHttp(url)) return null;
   return url.origin;
 }
 

@@ -28,7 +28,10 @@ function listed(hosts: DecisionsHost[], autoEnroll = true): DecisionsHostsResult
 }
 
 const listHosts = vi.fn<() => Promise<DecisionsHostsResult>>();
-const enrollHost = vi.fn<(payload: { hostId: string }) => Promise<DecisionsHostEnrollResult>>();
+const enrollHost =
+  vi.fn<
+    (payload: { hostId: string; allowWeakStorage?: boolean }) => Promise<DecisionsHostEnrollResult>
+  >();
 const setAutoEnrollHosts = vi.fn<(enabled: boolean) => Promise<DecisionsHostsResult>>();
 const listDevices = vi.fn();
 
@@ -78,6 +81,30 @@ function enrollButtons(): HTMLButtonElement[] {
 }
 
 describe("Remote Hosts under Devices", () => {
+  it("offers a Host with no keychain the weaker storage behind a confirmation that names it", async () => {
+    const wsl = host({
+      hostId: "wsl",
+      name: "Ubuntu (WSL)",
+      enrollment: {
+        state: "failed",
+        failure: { reason: "weak-storage-only", detail: "No keyring", at: 1 },
+      },
+    });
+    listHosts.mockResolvedValue(listed([wsl]));
+    enrollHost.mockResolvedValue({ result: "done", host: wsl });
+    await renderGroup();
+
+    expect(screen.getByText(/It has no keychain, as Linux and WSL machines/)).toBeTruthy();
+    expect(enrollButtons()).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Enroll with weaker storage…" }));
+    expect(enrollHost).not.toHaveBeenCalled();
+    expect(screen.getByText("Use the weaker key storage on Ubuntu (WSL)?")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use weaker storage" }));
+    });
+    expect(enrollHost).toHaveBeenCalledExactlyOnceWith({ hostId: "wsl", allowWeakStorage: true });
+  });
+
   it("reads nothing with no relay set up", async () => {
     await renderGroup({ enabled: false });
     expect(listHosts).not.toHaveBeenCalled();
