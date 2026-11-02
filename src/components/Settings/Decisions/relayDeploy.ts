@@ -14,7 +14,7 @@ export const DEPLOY_TO_CLOUDFLARE_URL =
  * libraries are released together, so it matches the protocol package this
  * build pins and the relay check expects.
  */
-export const DECISIONS_CLI_VERSION = "0.1.0";
+export const DECISIONS_CLI_VERSION = "0.2.0";
 
 export const RELAY_DEPLOY_TERMINAL_TITLE = "Deploy Decisions relay";
 
