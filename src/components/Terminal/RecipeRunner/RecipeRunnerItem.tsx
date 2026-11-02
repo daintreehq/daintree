@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { Play, Pin, PinOff, CopyPlus, Pencil, Trash2 } from "lucide-react";
 import {
   ContextMenu,
@@ -18,6 +19,8 @@ interface RecipeRunnerItemProps {
   recipe: TerminalRecipe;
   isFocused: boolean;
   mode: "grid" | "list";
+  /** False when every recipe on the surface shares one scope, so the label tells none apart. */
+  showScope?: boolean;
   disabled?: boolean;
   id: string;
   tabIndex?: number;
@@ -36,6 +39,7 @@ export function RecipeRunnerItem({
   recipe,
   isFocused,
   mode,
+  showScope = true,
   disabled,
   id,
   tabIndex,
@@ -49,7 +53,15 @@ export function RecipeRunnerItem({
   onUnpin,
   onDelete,
 }: RecipeRunnerItemProps) {
-  const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
+  // What the recipe launches, always. A terminal titled after its recipe (the
+  // common one-terminal case) summarised to the recipe's own name and was
+  // dropped, leaving the card's second line to say only where it is stored;
+  // naming the agents and terminal kinds instead says what pressing it does.
+  const titledSummary = getRecipeTerminalSummary(recipe.terminals);
+  const recipeSummary =
+    titledSummary && titledSummary !== recipe.name
+      ? titledSummary
+      : getRecipeTerminalSummary(recipe.terminals.map((terminal) => ({ ...terminal, title: "" })));
   // Radix wires `aria-describedby` to this content while it is open. The
   // button's own text is already the accessible NAME, so a description that
   // repeats the name gets announced twice; when there is a summary, describe
@@ -112,7 +124,7 @@ export function RecipeRunnerItem({
                   // `contrast-more:` inks the resting frame the way every other
                   // control on the canvas home is framed in that mode; the
                   // keyboard cursor's selection-outline still differs from it.
-                  "group flex-col items-start gap-1.5 contrast-more:border-text-secondary group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
+                  "group flex-col items-start gap-1.5 contrast-more:border-text-secondary group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] contrast-more:group-focus-within/recipes:aria-selected:border-text-primary forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
                 )}
               >
                 <div className="flex items-center gap-2 w-full">
@@ -148,7 +160,11 @@ export function RecipeRunnerItem({
                   )}
                 </div>
                 <span className="flex items-center gap-1.5 w-full min-w-0 pl-5.5 text-xs text-text-secondary">
-                  <RecipeMeta recipe={recipe} scopeLabel={scopeLabel} summary={recipeSummary} />
+                  <RecipeMeta
+                    recipe={recipe}
+                    scopeLabel={showScope ? scopeLabel : null}
+                    summary={recipeSummary}
+                  />
                 </span>
               </button>
             </TooltipTrigger>
@@ -213,11 +229,14 @@ export function RecipeRunnerItem({
                 choiceCardVariants({ padding: "sm" }),
                 // Single-line rows take the palette and search field's radius;
                 // the card family's larger one is for the multi-line grid cards.
-                "rounded-[var(--radius-md)] contrast-more:border-text-secondary group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
+                "rounded-[var(--radius-md)] contrast-more:border-text-secondary group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] contrast-more:group-focus-within/recipes:aria-selected:border-text-primary forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
               )}
             >
               <Play
-                className="h-3.5 w-3.5 text-text-secondary transition-colors shrink-0"
+                className={cn(
+                  "h-3.5 w-3.5 text-text-secondary transition-colors shrink-0",
+                  !disabled && "group-hover:text-text-primary"
+                )}
                 aria-hidden
               />
               <span
@@ -244,7 +263,11 @@ export function RecipeRunnerItem({
                 )}
               </span>
               <span className="flex min-w-0 max-w-[55%] items-center gap-1.5 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-5.5">
-                <RecipeMeta recipe={recipe} scopeLabel={scopeLabel} summary={recipeSummary} />
+                <RecipeMeta
+                  recipe={recipe}
+                  scopeLabel={showScope ? scopeLabel : null}
+                  summary={recipeSummary}
+                />
               </span>
             </button>
           </TooltipTrigger>
@@ -276,25 +299,39 @@ function RecipeMeta({
   summary,
 }: {
   recipe: TerminalRecipe;
-  scopeLabel: string;
+  scopeLabel: string | null;
   summary: string;
 }) {
-  const hasSummary = summary !== "" && summary !== recipe.name;
+  const parts: React.ReactNode[] = [];
+  if (scopeLabel) {
+    parts.push(
+      <span key="scope" className="shrink-0">
+        {scopeLabel}
+      </span>
+    );
+  }
+  if (recipe.shadowedBy) {
+    parts.push(
+      <span key="shadow" className="shrink-0">
+        Runs team recipe
+      </span>
+    );
+  }
+  if (summary !== "" && summary !== recipe.name) {
+    parts.push(
+      <span key="summary" className="min-w-0 truncate">
+        {summary}
+      </span>
+    );
+  }
   return (
     <>
-      <span className="shrink-0">{scopeLabel}</span>
-      {recipe.shadowedBy && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="shrink-0">Runs team recipe</span>
-        </>
-      )}
-      {hasSummary && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="min-w-0 truncate">{summary}</span>
-        </>
-      )}
+      {parts.map((part, index) => (
+        <Fragment key={index}>
+          {index > 0 && <span aria-hidden>·</span>}
+          {part}
+        </Fragment>
+      ))}
     </>
   );
 }

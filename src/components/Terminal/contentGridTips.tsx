@@ -45,11 +45,11 @@ export const TIPS: TipEntry[] = [
     message: <>Open the quick switcher to jump between open panels</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to jump between open panels
+        Press <KbdChord shortcut={shortcut} density="bare" /> to jump between open panels
       </>
     ),
     actionId: "nav.quickSwitcher",
-    actionLabel: "Open quick switcher",
+    actionLabel: "Open quick switcher…",
     requiresShortcut: true,
   },
   {
@@ -57,7 +57,7 @@ export const TIPS: TipEntry[] = [
     message: <>Open a new terminal in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to open a new terminal in this
+        Press <KbdChord shortcut={shortcut} density="bare" /> to open a new terminal in this
         worktree
       </>
     ),
@@ -72,12 +72,12 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to open the panel palette — add
+        Press <KbdChord shortcut={shortcut} density="bare" /> to open the panel palette — add
         terminals, file browsers, web browsers, or dev previews
       </>
     ),
     actionId: "panel.palette",
-    actionLabel: "Open panel palette",
+    actionLabel: "Open panel palette…",
     requiresShortcut: true,
   },
   {
@@ -85,7 +85,7 @@ export const TIPS: TipEntry[] = [
     message: <>Launch a Claude agent in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to launch a Claude agent in this
+        Press <KbdChord shortcut={shortcut} density="bare" /> to launch a Claude agent in this
         worktree
       </>
     ),
@@ -110,7 +110,7 @@ export const TIPS: TipEntry[] = [
     message: <>Launch a Gemini agent in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to launch a Gemini agent in this
+        Press <KbdChord shortcut={shortcut} density="bare" /> to launch a Gemini agent in this
         worktree
       </>
     ),
@@ -125,8 +125,8 @@ export const TIPS: TipEntry[] = [
     message: <>Inject the project file tree into the focused terminal</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to inject the project file tree
-        into the focused terminal
+        Press <KbdChord shortcut={shortcut} density="bare" /> to inject the project file tree into
+        the focused terminal
       </>
     ),
     actionId: "terminal.inject",
@@ -138,12 +138,11 @@ export const TIPS: TipEntry[] = [
     message: <>Open the command palette to search all available commands</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to open the command palette and
-        search all available commands
+        Press <KbdChord shortcut={shortcut} density="bare" /> to search every command
       </>
     ),
     actionId: "action.palette.open",
-    actionLabel: "Open command palette",
+    actionLabel: "Open command palette…",
     requiresShortcut: true,
   },
   {
@@ -151,12 +150,11 @@ export const TIPS: TipEntry[] = [
     message: <>Open the worktree palette to switch branches</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to open the worktree palette and
-        switch branches
+        Press <KbdChord shortcut={shortcut} density="bare" /> to switch branches
       </>
     ),
     actionId: "worktree.openPalette",
-    actionLabel: "Open worktree palette",
+    actionLabel: "Open worktree palette…",
     requiresShortcut: true,
   },
   {
@@ -164,13 +162,12 @@ export const TIPS: TipEntry[] = [
     message: <>Open the worktrees overview to manage all your branches</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to open the worktrees overview and
-        manage all your branches
+        Press <KbdChord shortcut={shortcut} density="bare" /> to see every worktree
       </>
     ),
     actionId: "worktree.overview.open",
     shortcutActionId: "worktree.overview",
-    actionLabel: "Open worktrees overview",
+    actionLabel: "Open worktrees overview…",
     requiresShortcut: true,
   },
   {
@@ -178,26 +175,25 @@ export const TIPS: TipEntry[] = [
     message: <>Switch between available AI agents from the agent switcher</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to quickly switch between available
-        AI agents
+        Press <KbdChord shortcut={shortcut} density="bare" /> to switch agents
       </>
     ),
     actionId: "agent.palette",
-    actionLabel: "Open agent switcher",
+    actionLabel: "Open agent switcher…",
     requiresShortcut: true,
   },
   {
     id: "recipes",
     message: <>Create a recipe to run multi-terminal workflows with a single click</>,
     actionId: "recipe.manager.open",
-    actionLabel: "Open recipes",
+    actionLabel: "Open recipes…",
   },
   {
     id: "new-worktree",
     message: <>Create a new worktree to isolate each task on its own branch</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} density="compact" /> to create a new worktree
+        Press <KbdChord shortcut={shortcut} density="bare" /> to create a new worktree
       </>
     ),
     actionId: "worktree.createDialog.open",
@@ -275,34 +271,35 @@ export function RotatingTip() {
       // it entirely. Exactly the trap `.lessons/11180.md` documents for the
       // sections above. The marker class snaps it to rest with the sections
       // around it under reduced motion, so the stagger stays one piece.
-      <div className="launcher-section-enter flex flex-col items-center gap-2 motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
-        <p className="text-xs text-balance text-text-secondary text-center">
-          Tip: <LiveTipMessage tip={tip} />
-        </p>
+      <p className="launcher-section-enter px-3 text-xs text-pretty text-text-secondary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
+        Tip: <LiveTipMessage tip={tip} />
         {tip.actionId && tip.actionLabel && (
-          <Button
-            variant="link"
-            onClick={() =>
-              void actionService.dispatch(tip.actionId!, undefined, { source: "user" })
-            }
-            // `tip-action` opts this control out of the button-border rules
-            // that BOTH accessibility media modes apply. Without it the tip's
-            // link grows a pill in `forced-colors: active` and in
-            // `prefers-contrast: more` and reads as another action on the
-            // surface — the one thing teaching content must never do. The
-            // standing underline is the affordance in every mode, so nothing
-            // is lost by dropping the frame.
-            //
-            // A standing underline, not a hover-only one. Rendered as bare
-            // centred text at the same size and colour as the sentence above
-            // it, the only control that names the user's actual goal read as a
-            // second sentence — an affordance nobody could see was there.
-            className="tip-action text-xs"
-          >
-            {tip.actionLabel}
-          </Button>
+          <>
+            <span aria-hidden="true" className="mx-1.5">
+              ·
+            </span>
+            <Button
+              variant="link"
+              onClick={() =>
+                void actionService.dispatch(tip.actionId!, undefined, { source: "user" })
+              }
+              // `tip-action` opts this control out of the button-border rules
+              // that BOTH accessibility media modes apply. Without it the tip's
+              // link grows a pill in `forced-colors: active` and in
+              // `prefers-contrast: more` and reads as another action on the
+              // surface — the one thing teaching content must never do. The
+              // standing underline is the affordance in every mode.
+              //
+              // Inline after the sentence, on the column's left rail like every
+              // band above it. Centred on a second line it was the one band
+              // with its own axis, and the link read as a second sentence.
+              className="tip-action text-xs"
+            >
+              {tip.actionLabel}
+            </Button>
+          </>
         )}
-      </div>
+      </p>
     );
   }
 
@@ -314,9 +311,8 @@ export function RotatingTip() {
   // first paint (#7671). `invisible` keeps the box in layout flow without
   // showing skeleton noise — the tip is sub-Doherty so a flash isn't needed.
   return (
-    <div className="flex flex-col items-center gap-2 invisible" aria-hidden="true">
-      <p className="text-xs">&nbsp;</p>
-      <span className="text-xs px-1">&nbsp;</span>
-    </div>
+    <p className="invisible text-xs" aria-hidden="true">
+      &nbsp;
+    </p>
   );
 }
