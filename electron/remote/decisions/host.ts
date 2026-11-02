@@ -179,8 +179,9 @@ export function installDecisionsHostWith(
       .then(async (lifetimeOf) => {
         if (disposed) return;
         await lifetimeOf.adopt(held, latestByOwner.get(key));
+        // Once taken up, the owner's latest word follows, even if this installer stopped meanwhile.
         const enabled = latestByOwner.get(key);
-        if (disposed || enabled === undefined) return;
+        if (enabled === undefined) return;
         await lifetimeOf.apply({
           installationId: held.installationId,
           ownerDeviceId: held.ownerDeviceId,

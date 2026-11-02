@@ -758,4 +758,41 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
 
     expect(lifetime.adopted).toEqual([]);
   });
+
+  it("still says the owner's latest word to an adoption under way when its installer stops", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    const held = await heldHost(host, lifetime);
+    let adopting!: () => void;
+    const adopted = new Promise<void>((resolve) => {
+      adopting = resolve;
+    });
+    // No record until the adoption finishes: an announcement meanwhile is only remembered.
+    let enrolled = false;
+    lifetime.source.enrolledBy = () => enrolled;
+    const made = await lifetime.source.load.getMockImplementation()!;
+    lifetime.source.load = vi.fn(async () => {
+      const real = await made();
+      return {
+        ...real,
+        adopt: async () => {
+          await adopted;
+          enrolled = true;
+        },
+      };
+    });
+    let state: OwnerStateAnnouncement = OWNER;
+    const { client: shell } = shellOver(client, () => state);
+    await enrollOver(linkOver(client), held.owner);
+    held.release();
+    state = { ...OWNER, enabled: false };
+    shell.announceOwnerState();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const stopping = held.uninstall();
+    adopting();
+    await stopping;
+
+    expect(lifetime.applied.at(-1)).toEqual(state);
+  });
 });
