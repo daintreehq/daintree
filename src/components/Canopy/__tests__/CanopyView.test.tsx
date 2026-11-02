@@ -905,7 +905,16 @@ describe("CanopyView", () => {
     // In the pane it trashes the agent's terminal; off the Mac only from a
     // reply, since the terminal keeps Ctrl+W for the shell.
     expect(document.body.textContent).toMatch(/in a reply: trash the agent's terminal/i);
-    expect(document.body.textContent).toContain("In a reply: go to terminal");
+    // Named with its keys in the reply's group, not the list's.
+    const goTo = [...document.querySelectorAll("dd")].find(
+      (dd) => dd.textContent === "In a reply: go to terminal"
+    )!;
+    expect(goTo.closest("section")?.querySelector("h3")?.textContent).toBe(
+      "In a reply or the terminal"
+    );
+    expect(
+      [...goTo.previousElementSibling!.querySelectorAll("kbd")].map((kbd) => kbd.textContent)
+    ).toEqual(["Ctrl", "Alt", "Enter"]);
   });
 
   it("steps to the next agent with ⌘↓ from inside its terminal, keeping the keyboard in the pane", async () => {

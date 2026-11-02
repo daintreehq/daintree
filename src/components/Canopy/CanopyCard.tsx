@@ -1028,8 +1028,11 @@ export function CanopyCard({
         className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas"
         // Escape belongs to the agent here — it interrupts or backs out of a
         // menu — so it must not also close the dialog around it.
-        onKeyDown={(event) => {
-          // From the reply only: the terminal's modified keys are the agent's.
+        // Go to terminal from the reply, compact or expanded (portalled, so
+        // only React's tree leads here). Taken before the editor sees it: a
+        // dictated send still waiting locks the editor against every key.
+        // Not from the terminal, whose modified keys are the agent's.
+        onKeyDownCapture={(event) => {
           if (
             isReplyGoToTerminal(event) &&
             !event.defaultPrevented &&
@@ -1041,8 +1044,9 @@ export function CanopyCard({
             event.preventDefault();
             event.stopPropagation();
             if (!event.repeat) onOpen(item);
-            return;
           }
+        }}
+        onKeyDown={(event) => {
           if (event.key === "Escape") {
             // A reply hands Escape to the list through `onSendKey`; one that is
             // disabled (its terminal gone) never handles the key at all, so a

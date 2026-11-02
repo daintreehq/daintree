@@ -40,12 +40,7 @@ import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { isWorkerEntry } from "./canopyInboxProjection";
-import {
-  CanopyCard,
-  REPLY_GO_TO_TERMINAL,
-  canopyCardDomId,
-  type CanopyCardKeys,
-} from "./CanopyCard";
+import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
@@ -70,7 +65,7 @@ import { useCanopyInboxFocus } from "./useCanopyInboxFocus";
 import { useCanopyInboxUndo } from "./useCanopyInboxUndo";
 import { useCanopyInboxActions } from "./useCanopyInboxActions";
 import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
-import { useCanopyKeyboardPlace } from "./useCanopyKeyboardPlace";
+import { canopyCardKeys, useCanopyKeyboardPlace } from "./useCanopyKeyboardPlace";
 import {
   NO_CANOPY_REPLY,
   isCanopyReplyTarget,
@@ -1105,16 +1100,6 @@ function CanopyInbox({
   });
   // The keys the open card names are the ones that act from where the keyboard is.
   const keyboardAt = useCanopyKeyboardPlace(isOpen);
-  const cardKeys: CanopyCardKeys =
-    focusedItem === null
-      ? null
-      : keyboardAt === "reply"
-        ? "reply"
-        : keyboardAt === `row:${canopyCardDomId(focusedItem.runId)}`
-          ? "list"
-          : keyboardAt === "search" && searchOpens?.runId === focusedItem.runId
-            ? "search"
-            : null;
 
   // What the panel can say about another host before it has its agents.
   const hostSummary =
@@ -2175,7 +2160,11 @@ function CanopyInbox({
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}
-                      keysFrom={cardKeys}
+                      keysFrom={canopyCardKeys(
+                        keyboardAt,
+                        focusedItem.runId,
+                        searchOpens?.runId ?? null
+                      )}
                       reading={!readerOff}
                       reconnecting={
                         everyHost

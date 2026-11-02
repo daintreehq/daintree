@@ -514,6 +514,10 @@ describe("CanopyCard", () => {
 
       view.rerender(<CanopyCard item={item} {...PROPS} {...h} keysFrom="reply" moveOnTo={to} />);
       expect(line()!.textContent).toContain("Send and go to");
+      expect([...line()!.querySelectorAll("kbd")].map((kbd) => kbd.textContent)).toEqual([
+        "Ctrl",
+        "Enter",
+      ]);
 
       view.rerender(<CanopyCard item={item} {...PROPS} {...h} keysFrom={null} moveOnTo={to} />);
       expect(line()!.textContent).toBe("");
@@ -542,14 +546,16 @@ describe("CanopyCard", () => {
       await streamOpens({ watchId: 7 });
       return {
         yes: () => hint(rowButton(view.container, "Yes")),
+        no: () => hint(rowButton(view.container, "No")),
         reply: () => hint(rowButton(view.container, "Reply")),
         goTo: () => hint(rowButton(view.container, "Go to terminal")),
       };
     }
 
     it("names the list's keys while its row has the keyboard", async () => {
-      const { yes, reply, goTo } = await cardWith("list");
+      const { yes, no, reply, goTo } = await cardWith("list");
       expect(yes()).toEqual({ shown: "1", announced: "1" });
+      expect(no()).toEqual({ shown: "2", announced: "2" });
       expect(reply()).toEqual({ shown: "R", announced: "R" });
       expect(goTo()).toEqual({ shown: "↵", announced: "Enter" });
     });
@@ -567,9 +573,17 @@ describe("CanopyCard", () => {
         const { yes, reply, goTo } = await cardWith("reply");
         expect(yes()).toEqual({ shown: "", announced: null });
         expect(reply()).toEqual({ shown: "", announced: null });
-        expect(goTo().shown).not.toContain("↵");
-        expect(goTo().shown).toContain("⌘");
-        expect(goTo().announced).toBe("Meta+Alt+Enter");
+        expect(goTo()).toEqual({ shown: "⌘⌥⏎", announced: "Meta+Alt+Enter" });
+      } finally {
+        platform.mockRestore();
+      }
+    });
+
+    it("spells the reply's way to the terminal with Ctrl off the Mac", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+      try {
+        const { goTo } = await cardWith("reply");
+        expect(goTo()).toEqual({ shown: "CtrlAltEnter", announced: "Control+Alt+Enter" });
       } finally {
         platform.mockRestore();
       }
@@ -589,11 +603,16 @@ describe("CanopyCard", () => {
         await composer();
         await streamOpens({ watchId: 7 });
         const editor = container.querySelector<HTMLElement>("[data-editor-content]")!;
+        // What the editor's own handlers would see: its keymap, and the lock a
+        // dictated send still waiting puts on every key.
+        const editorSaw = vi.fn();
+        editor.addEventListener("keydown", editorSaw);
 
-        // Taken whole, so nothing of it lands in the draft.
+        // Taken whole before the editor, so nothing of it lands in the draft.
         expect(fireEvent.keyDown(editor, { key: "Enter", metaKey: true, altKey: true })).toBe(
           false
         );
+        expect(editorSaw).not.toHaveBeenCalled();
         expect(h.onOpen).toHaveBeenCalledTimes(1);
         expect(h.onOpen).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
         // Held, it is one press.
@@ -611,6 +630,33 @@ describe("CanopyCard", () => {
         expect(submit).not.toHaveBeenCalled();
         expect(sendKey).not.toHaveBeenCalled();
       } finally {
+        platform.mockRestore();
+      }
+    });
+
+    it("leaves the chord to an input method, and other keys and chords to the reply", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      const claim = (event: globalThis.KeyboardEvent) => event.preventDefault();
+      try {
+        const { container, h } = renderCard(itemFor("question"));
+        await composer();
+        await streamOpens({ watchId: 7 });
+        const editor = container.querySelector<HTMLElement>("[data-editor-content]")!;
+        const chord = { key: "Enter", metaKey: true, altKey: true };
+        fireEvent.keyDown(editor, { ...chord, isComposing: true });
+        fireEvent.keyDown(editor, { ...chord, keyCode: 229 });
+        fireEvent.keyDown(editor, { ...chord, key: "a" });
+        fireEvent.keyDown(editor, { ...chord, ctrlKey: true });
+        // Claimed by the window first (an app-wide key): it isn't the reply's to take.
+        window.addEventListener("keydown", claim, true);
+        fireEvent.keyDown(editor, chord);
+        window.removeEventListener("keydown", claim, true);
+        expect(h.onOpen).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(editor, chord);
+        expect(h.onOpen).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener("keydown", claim, true);
         platform.mockRestore();
       }
     });

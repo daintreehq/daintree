@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { canopyCardDomId, type CanopyCardKeys } from "./CanopyCard";
 import { paneFocusOf } from "./useCanopyInboxKeyboard";
 
 /**
@@ -16,6 +17,22 @@ export function canopyKeyboardPlaceOf(element: Element | null): CanopyKeyboardPl
   if (pane === "terminal") return "terminal";
   const row = element.closest("[data-canopy-card]");
   return row !== null && row.id !== "" ? `row:${row.id}` : null;
+}
+
+/**
+ * The keys the open card names for its run from that place: its own row's, Enter
+ * alone from a search whose Enter opens it, or its reply's. A row of another run,
+ * or a search whose Enter opens another run or an assistant, names none.
+ */
+export function canopyCardKeys(
+  place: CanopyKeyboardPlace,
+  runId: string,
+  searchOpensRunId: string | null
+): CanopyCardKeys {
+  if (place === "reply") return "reply";
+  if (place === `row:${canopyCardDomId(runId)}`) return "list";
+  if (place === "search" && searchOpensRunId === runId) return "search";
+  return null;
 }
 
 /** The keyboard's place in the panel while it is open, followed as focus moves. */
