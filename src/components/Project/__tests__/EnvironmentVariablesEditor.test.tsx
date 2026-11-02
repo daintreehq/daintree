@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
-import { useContext, type ReactElement, type ReactNode } from "react";
+import { StrictMode, useContext, useState, type ReactElement, type ReactNode } from "react";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 import {
   SettingsFlushContext,
@@ -354,6 +354,54 @@ describe("EnvironmentVariablesEditor save controls", () => {
     fireEvent.click(discard);
     expect(save.disabled).toBe(true);
   });
+
+  it("drops an unsaved edit when Settings closes and opens again", () => {
+    const props = {
+      ...defaultProps,
+      environmentVariables: [makeEnvVar("MY_VAR", "a")],
+      onFlush: vi.fn().mockResolvedValue(undefined),
+    };
+    const { rerender } = render(<EnvironmentVariablesEditor {...props} />);
+    fireEvent.change(screen.getByLabelText(/^Value of /), { target: { value: "b" } });
+
+    rerender(<EnvironmentVariablesEditor {...props} isOpen={false} />);
+    rerender(<EnvironmentVariablesEditor {...props} isOpen />);
+
+    expect(screen.getByLabelText<HTMLInputElement>(/^Value of /).value).toBe("a");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // Save hands the trimmed rows to the form, which passes them back as new rows.
+  it("keeps the edit and the error of a failed Save once the form takes its rows", async () => {
+    function Form() {
+      const [rows, setRows] = useState([makeEnvVar("MY_VAR", "a")]);
+      return (
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={rows}
+          onEnvironmentVariablesChange={setRows}
+          onFlush={async () => ({ message: "Read-only checkout" })}
+        />
+      );
+    }
+    render(
+      <StrictMode>
+        <Form />
+      </StrictMode>
+    );
+    fireEvent.change(screen.getByLabelText(/^Name of variable 1$/), {
+      target: { value: " MY_VAR " },
+    });
+    fireEvent.change(screen.getByLabelText(/^Value of /), { target: { value: "b" } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe("Read-only checkout");
+    expect(screen.getByLabelText<HTMLInputElement>(/^Name of variable 1$/).value).toBe("MY_VAR");
+    expect(screen.getByLabelText<HTMLInputElement>(/^Value of /).value).toBe("b");
+  });
 });
 
 describe("EnvironmentVariablesEditor close-time flush", () => {
@@ -456,5 +504,30 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     renderEditor(onChange, vi.fn<() => Promise<void>>().mockResolvedValue(undefined));
     await flushAll!();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // The page mounts on empty rows before the project form seeds them, and a close
+  // that caught a registration made then wrote the untouched values (#16150).
+  it("asks for no close-time save when the form seeds its rows, only for an edit", () => {
+    const register = vi.fn(() => () => {});
+    const registry = { register, flushAll: async () => [] };
+    const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const page = (environmentVariables: EnvVar[]) => (
+      <SettingsValidationProvider>
+        <SettingsFlushContext.Provider value={registry}>
+          <EnvironmentVariablesEditor
+            {...defaultProps}
+            environmentVariables={environmentVariables}
+            onFlush={onFlush}
+          />
+        </SettingsFlushContext.Provider>
+      </SettingsValidationProvider>
+    );
+    const { rerender } = rtlRender(page([]));
+    rerender(page([makeEnvVar("MY_VAR", "a")]));
+    expect(register).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/^Value of /), { target: { value: "b" } });
+    expect(register).toHaveBeenCalledWith("project:variables", expect.any(Function));
   });
 });
