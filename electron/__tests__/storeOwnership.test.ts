@@ -85,6 +85,7 @@ describe("store ownership derived from the settings catalog", () => {
       },
       modelLearning: true,
       modelAdapter: "claude",
+      modelConsentedAt: 1_761_955_500_000,
     };
     const hostCopy: DecisionsSettings = {
       enabled: false,
@@ -101,6 +102,7 @@ describe("store ownership derived from the settings catalog", () => {
       setupCheck: null,
       modelLearning: false,
       modelAdapter: null,
+      modelConsentedAt: null,
     };
     expect(mergeByOwnership(owners, hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual(owners);
     expect(splitByOwnership(hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual({

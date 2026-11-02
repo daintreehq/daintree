@@ -226,6 +226,7 @@ export const SETTING_CATALOG = {
           setupCheck: device,
           modelLearning: device,
           modelAdapter: device,
+          modelConsentedAt: device,
         },
       },
       // An enrolled Host's own record of its enrollment, kept on the Host itself.

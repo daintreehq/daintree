@@ -84,6 +84,13 @@ export interface DecisionsSettings {
    * provider. Null until the person chooses one; no proxy answers without it.
    */
   modelAdapter: DecisionsModelAdapter | null;
+  /**
+   * When the person agreed to what the decision model keeps and sends
+   * (#16027), the first time they turned learning on (epoch ms); null until
+   * then. It is its own agreement, apart from Decisions' `consentedAt`, and
+   * learning reads as off without it.
+   */
+  modelConsentedAt: number | null;
 }
 
 /** The agent CLIs the decision model can run (#16026), each one only when the person chooses it. */

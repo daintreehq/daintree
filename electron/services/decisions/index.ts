@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { store } from "../../store.js";
@@ -48,6 +49,13 @@ import {
   type VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
 import type {
+  CancelDecisionsModelEvaluationPayload,
+  DecisionsModelHistory,
+  DecisionsModelState,
+  SetDecisionsModelPayload,
+  SetDecisionsModelThresholdPayload,
+} from "../../../shared/types/decisionsModel.js";
+import type {
   DecisionsHostEnrollResult,
   DecisionsHostRecord,
   DecisionsHostRuntime,
@@ -73,6 +81,13 @@ import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
 import type { DecisionsDeliveryDeps, DecisionsService } from "./DecisionsService.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
+import {
+  decisionModelFiles,
+  describeEvaluation,
+  thresholdSupported,
+  type DecisionModelRuntime,
+} from "./decisionModel.js";
+import { decisionsKeyFilePath } from "./keyStore.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
 import {
@@ -233,6 +248,8 @@ function hostEnrollerFollows(state: DecisionsStatus["state"]): void {
 }
 /** Counts policy changes, so a policy read that lands after a newer change can't roll it back. */
 let policyRevision = 0;
+/** Counts decision model changes (#16027), for the same reason. */
+let modelRevision = 0;
 /**
  * Recovery kit exports between making the kit and writing it. The save
  * dialog is a person's to close, so it is never awaited behind the
@@ -439,6 +456,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         delivery: deliveryDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
+        onModelChanged: publishModelChanged,
       });
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.
@@ -1024,6 +1042,190 @@ export function setDecisionsDefaultQuestionExpiry(ms: number | null): Promise<De
     );
   }
   return savePolicy({ defaultQuestionExpiryMs: ms });
+}
+
+/**
+ * The decision model changed (#16027). Like the policy it has no push of its
+ * own: Settings reads it again on a status change.
+ */
+function publishModelChanged(): void {
+  modelRevision += 1;
+  publishStatus();
+}
+
+/** The owner lifetime's model, which only exists while learning is on and the store is open. */
+function ownerModel(action: string): DecisionModelRuntime {
+  const settings = readDecisionsSettings(store);
+  if (shutDown || !settings.enabled) throw setupRefused();
+  const model = service?.getRole() === "owner" ? service.getDecisionModel() : null;
+  if (model === null || !settings.modelLearning) {
+    throw new AppError({ code: "PERMISSION", message: `Turn on learning to ${action}` });
+  }
+  return model;
+}
+
+/**
+ * The decision model as Settings shows it (#16027): the preferences as
+ * saved, and what the owner lifetime's model observes. Learning off reads
+ * whether a history is still stored, and opens nothing.
+ */
+export function getDecisionsModel(): DecisionsModelState {
+  const settings = readDecisionsSettings(store);
+  const owner = service !== null && service.getRole() === "owner" ? service : null;
+  const snapshot = owner?.getDecisionModel()?.snapshot() ?? null;
+  let history: DecisionsModelHistory;
+  if (!settings.modelLearning) {
+    const files = owner?.getDecisionModelFiles() ?? decisionModelFiles(decisionsKeyFilePath());
+    history = { state: "closed", stored: existsSync(files.history) };
+  } else if (snapshot !== null && snapshot.historyCount !== null) {
+    history = { state: "open", count: snapshot.historyCount };
+  } else {
+    history = { state: "unavailable" };
+  }
+  const evaluation = settings.modelLearning ? (snapshot?.evaluation ?? null) : null;
+  return {
+    revision: modelRevision,
+    learning: settings.modelLearning,
+    adapter: settings.modelAdapter,
+    ...(settings.modelConsentedAt === null ? {} : { consentedAt: settings.modelConsentedAt }),
+    history,
+    evaluation: evaluation === null ? null : describeEvaluation(evaluation),
+    running: snapshot?.running ?? null,
+    lastRun: snapshot?.lastRun ?? null,
+    answeringFrom: snapshot?.answeringFrom ?? null,
+  };
+}
+
+/**
+ * Saves the decision model's preferences (#16027) and waits for the model to
+ * take them. Learning turns on only once the person has agreed to what it
+ * keeps and sends: `consent` records that the first time, and a later turn
+ * on keeps the original time. Only while on.
+ */
+export function setDecisionsModel(payload: SetDecisionsModelPayload): Promise<DecisionsModelState> {
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (shutDown || !current.enabled) throw setupRefused();
+    const consent = payload.consent === true;
+    if (payload.learning && !consent && current.modelConsentedAt === null) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: "Learning turns on only after you agree to what it keeps and sends",
+      });
+    }
+    const modelConsentedAt = current.modelConsentedAt ?? (consent ? Date.now() : null);
+    const saved = writeDecisionsSettings(store, {
+      ...current,
+      modelLearning: payload.learning,
+      modelAdapter: payload.adapter,
+      modelConsentedAt,
+    });
+    service?.updateSettings(saved);
+    await service?.getDecisionModel()?.settled();
+    publishModelChanged();
+    return getDecisionsModel();
+  });
+}
+
+/**
+ * Starts evaluating the chosen CLI against the person's own history, or
+ * answers the evaluation already running. It runs outside the transitions,
+ * since it can take many minutes, and goes on when Settings closes.
+ */
+export function startDecisionsModelEvaluation(): Promise<DecisionsModelState> {
+  return serialize(async () => {
+    const model = ownerModel("evaluate the decision model");
+    try {
+      model.startEvaluation();
+    } catch {
+      throw new AppError({
+        code: "PERMISSION",
+        message:
+          readDecisionsSettings(store).modelAdapter === null
+            ? "Choose an agent CLI to evaluate the decision model"
+            : "The decision model's history isn't open, so it can't be evaluated",
+      });
+    }
+    return getDecisionsModel();
+  });
+}
+
+/** Cancels the evaluation running, if it is the one named. */
+export function cancelDecisionsModelEvaluation(
+  payload: CancelDecisionsModelEvaluationPayload
+): DecisionsModelState {
+  const model = service?.getRole() === "owner" ? service.getDecisionModel() : null;
+  model?.cancelEvaluation(payload.runId);
+  return getDecisionsModel();
+}
+
+/**
+ * Chooses the confidence the model answers automatically from, for the
+ * evaluation it was chosen from, or stops automatic answers with null.
+ */
+export function setDecisionsModelThreshold(
+  payload: SetDecisionsModelThresholdPayload
+): Promise<DecisionsModelState> {
+  return serialize(async () => {
+    const model = ownerModel("choose when the decision model answers");
+    const evaluation = model.getEvaluation();
+    if (evaluation === null || evaluation.evaluatedAt !== payload.evaluatedAt) {
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: "The decision model's evaluation changed. Read the new report first.",
+      });
+    }
+    if (
+      payload.threshold !== null &&
+      !thresholdSupported(evaluation.report.calibration, payload.threshold)
+    ) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "That confidence isn't one the evaluation supports answering from",
+      });
+    }
+    try {
+      await model.setAutoAnswerThreshold(payload.threshold, payload.evaluatedAt);
+    } catch (error) {
+      console.warn(
+        "[Decisions] The decision model's threshold wasn't saved:",
+        error instanceof Error ? error.name : typeof error
+      );
+      throw new AppError({
+        code: "INTERNAL",
+        message: "The choice couldn't be saved. Try again.",
+      });
+    }
+    return getDecisionsModel();
+  });
+}
+
+/**
+ * Deletes what the decision model learned (#16027): its history and
+ * evaluation, with learning on or off. Behind the transitions, so learning
+ * can't turn on while its files go. Only while on.
+ */
+export function clearDecisionsModelHistory(): Promise<DecisionsModelState> {
+  return serialize(async () => {
+    const settings = readDecisionsSettings(store);
+    if (shutDown || !settings.enabled) throw setupRefused();
+    const running = await runningService();
+    try {
+      await running.clearModelHistory();
+    } catch (error) {
+      console.warn(
+        "[Decisions] The decision model's history wasn't cleared:",
+        error instanceof Error ? error.name : typeof error
+      );
+      throw new AppError({
+        code: "INTERNAL",
+        message: "The decision model's history couldn't be deleted. Try again.",
+      });
+    } finally {
+      publishModelChanged();
+    }
+    return getDecisionsModel();
+  });
 }
 
 function cancelKitExports(): void {

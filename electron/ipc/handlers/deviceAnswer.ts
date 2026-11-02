@@ -58,6 +58,12 @@ import type {
   MarkDecisionsAnswerHandledPayload,
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
+import type {
+  CancelDecisionsModelEvaluationPayload,
+  DecisionsModelState,
+  SetDecisionsModelPayload,
+  SetDecisionsModelThresholdPayload,
+} from "../../../shared/types/decisionsModel.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -217,6 +223,25 @@ const reassignAnswerSchema = z
   .strict();
 
 const markAnswerHandledSchema = z.object({ questionId: questionIdSchema }).strict();
+
+// The decision model's CLIs, named here rather than imported from the
+// setting's module, which would make it eager; the sanitiser drops any other.
+const modelAdapterSchema = z.enum(["claude", "codex", "gemini"]).nullable();
+
+const setModelSchema = z
+  .object({ learning: z.boolean(), adapter: modelAdapterSchema, consent: z.boolean().optional() })
+  .strict();
+
+// A confidence from 0 to 1, for the evaluation it was chosen from.
+const setModelThresholdSchema = z
+  .object({
+    threshold: z.number().min(0).max(1).nullable(),
+    evaluatedAt: z.number().int().positive(),
+  })
+  .strict();
+
+// A run id main minted (a UUID).
+const cancelModelEvaluationSchema = z.object({ runId: z.string().min(1).max(64) }).strict();
 
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
@@ -631,6 +656,65 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.markDecisionsAnswerHandled(payload);
+      }
+    ),
+    // The decision model (#16027): its preferences, evaluation and history.
+    // Only while on, like the rest; with learning off the model's history can
+    // still be cleared. Learning turns on only with the person's agreement,
+    // which main checks again.
+    getModel: op(CHANNELS.DECISIONS_GET_MODEL, async (): Promise<DecisionsModelState> => {
+      refuseWhileOff("read its decision model");
+      const decisions = await loadDecisions();
+      if (!decisions) throw setupCancelled();
+      return decisions.getDecisionsModel();
+    }),
+    setModel: opValidated(
+      CHANNELS.DECISIONS_SET_MODEL,
+      setModelSchema,
+      async (payload: SetDecisionsModelPayload): Promise<DecisionsModelState> => {
+        refuseWhileOff("change its decision model");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsModel(payload);
+      }
+    ),
+    startModelEvaluation: op(
+      CHANNELS.DECISIONS_START_MODEL_EVALUATION,
+      async (): Promise<DecisionsModelState> => {
+        refuseWhileOff("evaluate its decision model");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.startDecisionsModelEvaluation();
+      }
+    ),
+    cancelModelEvaluation: opValidated(
+      CHANNELS.DECISIONS_CANCEL_MODEL_EVALUATION,
+      cancelModelEvaluationSchema,
+      async (payload: CancelDecisionsModelEvaluationPayload): Promise<DecisionsModelState> => {
+        refuseWhileOff("cancel an evaluation");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.cancelDecisionsModelEvaluation(payload);
+      }
+    ),
+    setModelThreshold: opValidated(
+      CHANNELS.DECISIONS_SET_MODEL_THRESHOLD,
+      setModelThresholdSchema,
+      async (payload: SetDecisionsModelThresholdPayload): Promise<DecisionsModelState> => {
+        refuseWhileOff("choose when its decision model answers");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsModelThreshold(payload);
+      }
+    ),
+    // Settings confirms this before it is sent.
+    clearModelHistory: op(
+      CHANNELS.DECISIONS_CLEAR_MODEL_HISTORY,
+      async (): Promise<DecisionsModelState> => {
+        refuseWhileOff("clear its decision model's history");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.clearDecisionsModelHistory();
       }
     ),
   },

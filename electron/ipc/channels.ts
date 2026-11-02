@@ -1568,6 +1568,13 @@ export const CHANNELS = {
   DECISIONS_LIST_ANSWER_DESTINATIONS: "decisions:list-answer-destinations",
   DECISIONS_REASSIGN_ANSWER: "decisions:reassign-answer",
   DECISIONS_MARK_ANSWER_HANDLED: "decisions:mark-answer-handled",
+  // The decision model's settings, evaluation and history (#16027).
+  DECISIONS_GET_MODEL: "decisions:get-model",
+  DECISIONS_SET_MODEL: "decisions:set-model",
+  DECISIONS_START_MODEL_EVALUATION: "decisions:start-model-evaluation",
+  DECISIONS_CANCEL_MODEL_EVALUATION: "decisions:cancel-model-evaluation",
+  DECISIONS_SET_MODEL_THRESHOLD: "decisions:set-model-threshold",
+  DECISIONS_CLEAR_MODEL_HISTORY: "decisions:clear-model-history",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

@@ -15,6 +15,8 @@ import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import {
   DecisionModelRuntime,
   decisionModelFiles,
+  deleteDecisionModelFiles,
+  type DecisionModelFiles,
   type DecisionModelRuntimeOptions,
 } from "./decisionModel.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
@@ -146,6 +148,8 @@ export interface DecisionsServiceOptions {
   diagnostics?: SetupDiagnostics;
   /** The decision model's history and CLIs (#16026): the library's unless a test says otherwise. */
   model?: Pick<DecisionModelRuntimeOptions, "openHistory" | "createAdapter">;
+  /** Something Settings shows of the decision model changed (#16027), or the model came or went. */
+  onModelChanged?: () => void;
 }
 
 /**
@@ -228,6 +232,9 @@ export class DecisionsService {
   /** The owner lifetime's decision model (#16026), while its store is open; a Host's never has one. */
   private model: DecisionModelRuntime | null = null;
   private readonly modelOptions: DecisionsServiceOptions["model"];
+  private readonly onModelChanged: () => void;
+  /** The model's files are being deleted with no model running, so none may open them meanwhile. */
+  private clearingModel = false;
   /**
    * What every owner attempt's bridge offers the person's answers to: the
    * model of the moment, so a model made after the connection (or none) is
@@ -260,6 +267,7 @@ export class DecisionsService {
     this.delivery = options.delivery ?? null;
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
+    this.onModelChanged = options.onModelChanged ?? (() => {});
   }
 
   getStatus(): DecisionsStatus {
@@ -293,6 +301,39 @@ export class DecisionsService {
   /** The owner lifetime's decision model (#16026); null while stopped, for a Host, or with no store. */
   getDecisionModel(): DecisionModelRuntime | null {
     return this.model;
+  }
+
+  /** Where the decision model keeps what it learned, whether or not one runs. */
+  getDecisionModelFiles(): DecisionModelFiles {
+    return decisionModelFiles(this.keyFilePath());
+  }
+
+  /**
+   * Deletes what the decision model learned (#16027), with learning on or
+   * off: the running model clears its own history and reopens an empty one,
+   * and with none running the files are deleted with nothing able to open
+   * them meanwhile. In the service's queue, so a deletion of local data
+   * can't run beside it. Only in the owner's lifetime.
+   */
+  clearModelHistory(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.disposed || this.settings === null || this.role !== "owner") {
+        throw new Error("Decisions isn't running here as the owner, so there is no model to clear");
+      }
+      const model = this.model;
+      if (model !== null) {
+        await model.clearHistory();
+        return;
+      }
+      this.clearingModel = true;
+      try {
+        await deleteDecisionModelFiles(this.getDecisionModelFiles());
+      } finally {
+        this.clearingModel = false;
+        this.onModelChanged();
+        this.applyModel();
+      }
+    });
   }
 
   /**
@@ -780,9 +821,12 @@ export class DecisionsService {
     if (this.disposed || settings === null || this.role !== "owner" || this.store === null) return;
     // With learning off there is nothing to run: no history, no proxy.
     if (this.model === null && !settings.modelLearning) return;
+    // The clear that set this calls again once its files are gone.
+    if (this.model === null && this.clearingModel) return;
     this.model ??= new DecisionModelRuntime({
       files: decisionModelFiles(this.keyFilePath()),
       onProxyChanged: () => this.connection?.modelChanged?.(),
+      onChanged: this.onModelChanged,
       ...this.modelOptions,
     });
     this.model.update(settings).catch((error: unknown) => {
@@ -797,7 +841,9 @@ export class DecisionsService {
   private async closeModel(): Promise<void> {
     const model = this.model;
     this.model = null;
-    await model?.close();
+    if (model === null) return;
+    await model.close();
+    this.onModelChanged();
   }
 
   private dropConnection(): void {
