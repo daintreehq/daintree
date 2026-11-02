@@ -1840,7 +1840,9 @@ describe("Decisions entry", () => {
       });
       const first = decisionsLaunchPort();
       // The start has its settings but no store or connection yet.
-      await vi.waitFor(() => expect(peekDecisionsService()?.getSettings()).not.toBeNull());
+      await vi.waitFor(() =>
+        expect(peekDecisionsService()?.getSettings()).toMatchObject({ enabled: true })
+      );
       const second = decisionsLaunchPort();
       expect(connections).toHaveLength(0);
 

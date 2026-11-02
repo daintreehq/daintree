@@ -509,7 +509,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       expect(mcpServerService.revokePaneBearer).toHaveBeenCalledWith(principal);
     });
 
-    it("revokes the Decisions bearer and file when a plugin agent's settings template can't be filled", async () => {
+    it("mints nothing for a plugin agent whose settings template can't be filled", async () => {
       decisionsOn();
       registerPluginAgents("acme.agents", [
         {
@@ -523,20 +523,20 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       ]);
       const prepare = vi.spyOn(mcpPaneConfigService, "preparePaneConfig");
 
-      await expect(
-        spawn({
-          id: "term-dec-template",
-          command: "acme --token=${settings:apiToken}",
-          launchAgentId: "acme-agent",
-        })
-      ).rejects.toThrow(/apiToken/);
-
-      const prepared = await prepare.mock.results[0]!.value;
-      prepare.mockRestore();
-      expect(prepared.decisionsToken).not.toBeNull();
-      expect(mcpPaneConfigService.getDecisionsBearerForToken(prepared.decisionsToken)).toBeNull();
+      try {
+        await expect(
+          spawn({
+            id: "term-dec-template",
+            command: "acme --token=${settings:apiToken}",
+            launchAgentId: "acme-agent",
+          })
+        ).rejects.toThrow(/apiToken/);
+        // Refused before any wiring: nothing for an exit that never comes to revoke.
+        expect(prepare).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+      }
       expect(mcpPaneConfigService.getDecisionsPrincipal("term-dec-template")).toBeNull();
-      await expect(fs.stat(prepared.configPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(ptyClient.spawn).not.toHaveBeenCalled();
     });
 

@@ -1101,6 +1101,30 @@ describe("DecisionsService relay connection", () => {
     await service.stop();
   });
 
+  it("lets a waiting launch go at once when a deferred replacement is called off", async () => {
+    const routes = questionRoutes();
+    let settle!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      openQuestions: routes.openQuestions,
+      connect: () => ({ start: () => {}, stop: () => stopped }),
+    });
+    await service.start(on(RELAY));
+    service.updateSettings(on({ ...RELAY, deviceId: "dev_another1" }));
+    const port = service.questionsPort(60_000);
+
+    // A disconnect while the old delivery is still settling: nothing is coming.
+    const suspending = service.suspendConnection();
+    await expect(port).resolves.toBeNull();
+    settle();
+    await suspending;
+    await service.stop();
+  });
+
   it("closes the questions when the connection stops for the lifetime, is revoked or let go", async () => {
     for (const end of [
       (options: RelayConnectionOptions) =>

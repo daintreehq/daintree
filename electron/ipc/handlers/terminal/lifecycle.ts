@@ -742,6 +742,34 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       projectsRoot: claudePaneStore ?? null,
     }).catch(() => undefined);
 
+    // Expand `${settings:*}` templates a plugin agent embedded in its command
+    // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
+    // concatenated into `safeCommand` upstream by `generateAgentCommand`, so the
+    // literal template is sitting in this string. MCP servers already resolve
+    // these at spawn (PluginMcpSupervisor.resolveContribution); the agent path
+    // had no equivalent, so the unexpanded token reached the PTY and the agent
+    // failed to authenticate (#10619). The cheap `includes` pre-check keeps a
+    // plain-shell or built-in-agent spawn off the lazy PluginService load
+    // entirely; only a plugin-contributed agent with a template pays for it.
+    // An unconfigured setting throws `SettingTemplateError` (surfaced as the
+    // spawn IPC's rejection) rather than leaking a literal `${...}` to the wire.
+    // Resolved before any MCP wiring is minted, so a failure here leaves
+    // nothing to revoke.
+    if (launchAgentId && safeCommand.includes("${settings:")) {
+      const pluginId = getPluginIdForAgent(launchAgentId);
+      if (pluginId) {
+        const pluginService = await getPluginService();
+        safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
+          const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
+          // `resolveSettingTemplate` returns "" for an unset/missing setting;
+          // treat that as unresolved so the command never spawns with a blank
+          // secret silently swapped in.
+          if (!value) throw new SettingTemplateError(pluginId, settingId);
+          return value;
+        });
+      }
+    }
+
     const launchMcp =
       typeof launchAgentId === "string"
         ? getEffectiveAgentConfig(launchAgentId)?.capabilities?.launchMcp
@@ -1208,39 +1236,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         userMessage: describeMissingPluginTools(requiredPluginToolStatuses),
         details: { code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools: requiredPluginToolStatuses },
       });
-    }
-
-    // Expand `${settings:*}` templates a plugin agent embedded in its command
-    // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
-    // concatenated into `safeCommand` upstream by `generateAgentCommand`, so the
-    // literal template is sitting in this string. MCP servers already resolve
-    // these at spawn (PluginMcpSupervisor.resolveContribution); the agent path
-    // had no equivalent, so the unexpanded token reached the PTY and the agent
-    // failed to authenticate (#10619). The cheap `includes` pre-check keeps a
-    // plain-shell or built-in-agent spawn off the lazy PluginService load
-    // entirely; only a plugin-contributed agent with a template pays for it.
-    // An unconfigured setting throws `SettingTemplateError` (surfaced as the
-    // spawn IPC's rejection) rather than leaking a literal `${...}` to the wire.
-    if (launchAgentId && safeCommand.includes("${settings:")) {
-      const pluginId = getPluginIdForAgent(launchAgentId);
-      if (pluginId) {
-        try {
-          const pluginService = await getPluginService();
-          safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
-            const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
-            // `resolveSettingTemplate` returns "" for an unset/missing setting;
-            // treat that as unresolved so the command never spawns with a blank
-            // secret silently swapped in.
-            if (!value) throw new SettingTemplateError(pluginId, settingId);
-            return value;
-          });
-        } catch (templateErr) {
-          // No PTY starts, so no exit would revoke the config minted above.
-          await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
-          forgetPluginToolsLaunch(id);
-          throw templateErr;
-        }
-      }
     }
 
     // Resolve spawn shell and args: project overrides > spawn options >

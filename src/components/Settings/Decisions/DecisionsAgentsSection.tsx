@@ -85,7 +85,8 @@ export function DecisionsAgentsSection() {
         <SettingsLoadErrorBanner
           title="Couldn't check which agents are installed"
           message={loadError}
-          onRetry={() => void refresh(true)}
+          // A probe that fails again lands in the store's `error`, shown here.
+          onRetry={() => void refresh(true).catch(() => {})}
         />
       ) : none ? (
         <SettingsGroup>

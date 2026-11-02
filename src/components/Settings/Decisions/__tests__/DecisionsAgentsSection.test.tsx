@@ -145,6 +145,26 @@ describe("DecisionsAgentsSection (#16012)", () => {
     expect(refresh).toHaveBeenCalledWith(true);
   });
 
+  it("keeps a Retry that fails again to the banner, raising nothing", async () => {
+    // The store records the failure and then rethrows it.
+    const refresh = vi.fn(async () => {
+      throw new Error("probe failed again");
+    });
+    useCliAvailabilityStore.setState({ refresh });
+    setAvailability({}, { hasRealData: false, error: "probe failed" });
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      render(<DecisionsAgentsSection />);
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
   it("shows nothing in a remote window, whose agents are the host's", () => {
     remote.hostName = "build-box";
     setAvailability(INSTALLED);
