@@ -405,6 +405,69 @@ describe("OwnerDevices", () => {
     expect(relay.approveCandidate).not.toHaveBeenCalled();
   });
 
+  it("runs a Host enrollment's sealing only once its turn among the key rotations comes", async () => {
+    const devices = owner();
+    relay.holdQueue = true;
+    const sealed = vi.fn(async () => "sealed");
+
+    const enrolling = devices.withCurrentKeys(sealed);
+    await vi.waitFor(() => expect(relay.queue).toHaveLength(1));
+    expect(sealed).not.toHaveBeenCalled();
+    releaseQueue();
+
+    await expect(enrolling).resolves.toBe("sealed");
+    expect(sealed).toHaveBeenCalledOnce();
+  });
+
+  it("answers what stopped another owner operation's request as an observation", async () => {
+    const devices = owner();
+    relay.lastFailure = { reason: "timeout", answered: false };
+    await expect(
+      devices.withClient(async () => {
+        throw new RelayError("network_error", "offline", 0);
+      })
+    ).resolves.toEqual({ result: "unreachable", origin: ORIGIN, reason: "timeout" });
+    await expect(owner(null).withCurrentKeys(async () => "never")).resolves.toEqual({
+      result: "not-set-up",
+    });
+  });
+
+  it("shows a list read's revoked devices to its observer before dropping them", async () => {
+    const observed: unknown[] = [];
+    const devices = new OwnerDevices({
+      relayOrigin: ORIGIN,
+      installationId: INSTALLATION,
+      deviceId: DEVICE,
+      keys: { load: vi.fn(async () => stored()) },
+      rotations,
+      onListed: (rows) => {
+        observed.push(...rows.map((row) => row.device_id));
+      },
+    });
+    relay.verifiedDevices.mockResolvedValueOnce([
+      {
+        device_id: "dev_host_live",
+        revoked_at: null,
+        created_at: "2026-11-01T00:00:00.000Z",
+        last_seen_at: null,
+        push_enabled: false,
+        cert: { label: "studio", role: "desktop-host" },
+      },
+      {
+        device_id: "dev_host_gone",
+        revoked_at: "2026-11-02T00:00:00.000Z",
+        created_at: "2026-11-01T00:00:00.000Z",
+        last_seen_at: null,
+        push_enabled: false,
+        cert: { label: "lab", role: "desktop-host" },
+      },
+    ]);
+
+    const listed = await devices.list();
+    expect(observed).toEqual(["dev_host_live", "dev_host_gone"]);
+    expect(listed).toMatchObject({ result: "listed", devices: [{ deviceId: "dev_host_live" }] });
+  });
+
   it("expires an approval whose invitation lapsed while it waited its turn", async () => {
     let clock = Date.now();
     const devices = owner(stored(), () => clock);

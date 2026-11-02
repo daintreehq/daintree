@@ -288,6 +288,24 @@ async function seal(identity: StoredIdentity, allowWeak: boolean): Promise<KeyFi
   return { v: FORMAT_VERSION, protection, ciphertext: ciphertext.toString("base64") };
 }
 
+/**
+ * The identity on disk wasn't what a conditional save expected when its turn
+ * came, so nothing was written.
+ */
+export class KeyFileChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KeyFileChangedError";
+  }
+}
+
+/**
+ * Every store's operations on one key file, in the order asked, shared by
+ * every store on that file: two stores on the same file (a lifetime's, and a
+ * Host enrollment's) never interleave one's read with the other's write.
+ */
+const fileQueues = new Map<string, Promise<unknown>>();
+
 function isMissing(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
 }
@@ -304,7 +322,8 @@ function isMissing(error: unknown): boolean {
  *   called; a file already sealed that way carries the consent forward, and
  *   the next save with a keyring present seals it properly.
  *
- * Operations run one at a time in the order asked. `close` ends the store for
+ * Operations run one at a time in the order asked, together with every other
+ * store's on the same file. `close` ends the store for
  * the lifetime that made it: what was already asked finishes, anything later
  * is refused.
  */
@@ -348,6 +367,19 @@ export class SealedKeyStore implements KeyStore {
   }
 
   save(identity: StoredIdentity): Promise<void> {
+    return this.saveIf(() => null, identity);
+  }
+
+  /**
+   * Saves `identity` only if `refusal` finds nothing wrong with what the file
+   * holds when the write's turn comes: one step, so nothing another store
+   * writes meanwhile is replaced unseen. `refusal` answers why not, or null;
+   * a refusal rejects with {@link KeyFileChangedError} and writes nothing.
+   */
+  saveIf(
+    refusal: (current: StoredIdentity | null) => string | null,
+    identity: StoredIdentity
+  ): Promise<void> {
     // Copied now, so a caller changing its object after the call can't change what is saved.
     let snapshot: unknown;
     try {
@@ -366,7 +398,9 @@ export class SealedKeyStore implements KeyStore {
     const next = snapshot;
     return this.enqueue(async () => {
       const existing = await this.readEnvelope();
-      if (existing) await openEnvelope(existing);
+      const current = existing ? await openEnvelope(existing) : null;
+      const refused = refusal(current);
+      if (refused !== null) throw new KeyFileChangedError(refused);
       const allowWeak = existing ? existing.protection === "basic" : this.weakConfirmed;
       const envelope = await seal(next, allowWeak);
       await ensureOwnerOnlyDir(dirname(this.filePath));
@@ -407,8 +441,14 @@ export class SealedKeyStore implements KeyStore {
 
   private enqueue<T>(step: () => Promise<T>): Promise<T> {
     if (this.closed) return Promise.reject(closedError());
-    const run = this.queue.then(step);
-    this.queue = run.catch(() => {});
+    const path = this.filePath;
+    const run = (fileQueues.get(path) ?? Promise.resolve()).then(step);
+    const settled = run.catch(() => {});
+    this.queue = settled;
+    fileQueues.set(path, settled);
+    void settled.then(() => {
+      if (fileQueues.get(path) === settled) fileQueues.delete(path);
+    });
     return run;
   }
 }

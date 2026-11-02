@@ -19,6 +19,11 @@ import type {
   VerifyDecisionsRecoveryKitPayload,
 } from "../../../../shared/types/decisions.js";
 import type { IpcContext } from "../../types.js";
+import type {
+  DecisionsHostEnrollResult,
+  DecisionsHostsResult,
+  EnrollDecisionsHostPayload,
+} from "../../../../shared/types/decisionsHosts.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -102,6 +107,19 @@ const decisionsEntry = vi.hoisted(() => ({
   ),
   revokeDevice: vi.fn(async (_deviceId: string) => ({ result: "revoked", keyEpoch: 2 })),
   rotateKeys: vi.fn(async () => ({ result: "rotated", keyEpoch: 2 })),
+  listHosts: vi.fn(async (): Promise<DecisionsHostsResult> => ({
+    result: "listed",
+    autoEnroll: true,
+    hosts: [],
+  })),
+  enrollDecisionsHost: vi.fn(async (_hostId: string): Promise<DecisionsHostEnrollResult> => ({
+    result: "not-connected",
+  })),
+  setAutoEnrollHosts: vi.fn(async (enabled: boolean): Promise<DecisionsHostsResult> => ({
+    result: "listed",
+    autoEnroll: enabled,
+    hosts: [],
+  })),
 }));
 const dialogMock = vi.hoisted(() => ({
   showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
@@ -136,6 +154,9 @@ vi.mock("../../../services/decisions/index.js", () => {
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
     rotateKeys: decisionsEntry.rotateKeys,
+    listHosts: decisionsEntry.listHosts,
+    enrollDecisionsHost: decisionsEntry.enrollDecisionsHost,
+    setAutoEnrollHosts: decisionsEntry.setAutoEnrollHosts,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -190,6 +211,15 @@ const setProxyAllowlisted = decisionsNamespace.ops.setProxyAllowlisted.handler a
   allowed: boolean
 ) => Promise<DecisionsPolicy>;
 
+const listHosts = decisionsNamespace.ops.listHosts
+  .handler as unknown as () => Promise<DecisionsHostsResult>;
+const enrollHost = decisionsNamespace.ops.enrollHost.handler as unknown as (
+  payload: EnrollDecisionsHostPayload
+) => Promise<DecisionsHostEnrollResult>;
+const setAutoEnrollHosts = decisionsNamespace.ops.setAutoEnrollHosts.handler as unknown as (
+  enabled: boolean
+) => Promise<DecisionsHostsResult>;
+
 type ExportHandler = (
   ctx: { senderWindow: unknown },
   payload: ExportDecisionsDataPayload
@@ -240,6 +270,9 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
   CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
   CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
+  CHANNELS.DECISIONS_LIST_HOSTS,
+  CHANNELS.DECISIONS_ENROLL_HOST,
+  CHANNELS.DECISIONS_SET_AUTO_ENROLL_HOSTS,
 ];
 
 describe("decisions IPC", () => {
@@ -447,6 +480,20 @@ describe("decisions IPC", () => {
 
     expect(decisionsEntry.evaluated).toBe(0);
     expect(decisionsEntry.libraries).toBe(0);
+  });
+
+  it("refuses to list, enroll or change how Remote Hosts are enrolled while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
+      saved.value = value;
+
+      await expect(listHosts()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(enrollHost({ hostId: "studio" })).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setAutoEnrollHosts(false)).rejects.toMatchObject({ code: "PERMISSION" });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+    expect(store.set).not.toHaveBeenCalled();
   });
 
   it("refuses to claim, restore or disconnect once quit has sealed the loader", async () => {
@@ -667,6 +714,39 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.getDecisionsPolicy).toHaveBeenCalledOnce();
     expect(decisionsEntry.setDecisionsProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("lists, enrolls and switches Remote Host enrollment through Decisions itself once on", async () => {
+    saved.value = { enabled: true };
+
+    await expect(listHosts()).resolves.toMatchObject({ result: "listed" });
+    await expect(enrollHost({ hostId: "studio" })).resolves.toEqual({ result: "not-connected" });
+    await expect(setAutoEnrollHosts(false)).resolves.toMatchObject({ autoEnroll: false });
+
+    expect(decisionsEntry.listHosts).toHaveBeenCalledOnce();
+    expect(decisionsEntry.enrollDecisionsHost).toHaveBeenCalledExactlyOnceWith("studio");
+    expect(decisionsEntry.setAutoEnrollHosts).toHaveBeenCalledExactlyOnceWith(false);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes only a host id to enroll, and only a boolean for automatic enrollment", () => {
+    const enrollSchema = decisionsNamespace.ops.enrollHost.schema as SafeParse;
+    expect(enrollSchema.safeParse({ hostId: "studio" }).success).toBe(true);
+    for (const value of [
+      undefined,
+      "studio",
+      { hostId: "" },
+      { hostId: "x".repeat(257) },
+      { hostId: "studio", replace: "dev" },
+    ]) {
+      expect(enrollSchema.safeParse(value).success).toBe(false);
+    }
+    const autoSchema = decisionsNamespace.ops.setAutoEnrollHosts.schema as SafeParse;
+    expect(autoSchema.safeParse(false).success).toBe(true);
+    expect(autoSchema.safeParse(true).success).toBe(true);
+    for (const value of [undefined, "false", 0, { autoEnrollHosts: false }]) {
+      expect(autoSchema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("takes only a boolean for the allowlist, and nothing that could carry a gate", () => {

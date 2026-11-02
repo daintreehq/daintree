@@ -46,6 +46,7 @@ import {
 import { composeLinkActivity } from "./linkActivity.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installDeviceAnswerHost } from "../deviceAnswer/hostInstall.js";
+import { installDecisionsHost } from "../decisions/hostInstall.js";
 import { installVoicePaneHost } from "../voice/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay, relayCallerOf } from "../assistant/hostMcpRelay.js";
@@ -192,6 +193,8 @@ async function buildHostListener(
   teardowns.push(installCanopyHost(server));
   // Devices paired with those Shells answering this host's agents, under its own lease.
   teardowns.push(installDeviceAnswerHost(server));
+  // The Decisions owner among those Shells enrolls this host as its own device (#16021).
+  teardowns.push(installDecisionsHost(server));
   // A Shell dictating into one of this host's panes reads its context here (#14782).
   teardowns.push(installVoicePaneHost(server));
   // The sender each Shell proves, for the tools this host runs for its

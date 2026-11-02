@@ -62,7 +62,13 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
     rotateKeys.mockReset();
     Object.defineProperty(window, "electron", {
       value: {
-        decisions: { listDevices, revokeDevice, rotateKeys },
+        decisions: {
+          listDevices,
+          revokeDevice,
+          rotateKeys,
+          // The Remote Hosts group under the list reads its own rows (#16021).
+          listHosts: async () => ({ result: "listed", autoEnroll: true, hosts: [] }),
+        },
         events: {
           on: (name: string, listener: () => void) => {
             if (name !== "decisions:devices-changed") return () => {};

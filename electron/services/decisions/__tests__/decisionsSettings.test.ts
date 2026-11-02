@@ -25,6 +25,7 @@ const connected: DecisionsSettings = {
   consentedAt: 1_761_955_200_000,
   revokedAt: null,
   recoveryKit: null,
+  autoEnrollHosts: true,
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -52,6 +53,25 @@ function memoryStore(initial?: unknown) {
 }
 
 describe("sanitizeDecisionsSettings", () => {
+  it("enrolls Remote Hosts automatically unless the saved value is exactly false", () => {
+    // A setting saved before the field existed has none, and needs no migration.
+    const { autoEnrollHosts: _absent, ...beforeTheField } = connected;
+    expect(sanitizeDecisionsSettings(beforeTheField).autoEnrollHosts).toBe(true);
+    for (const value of [true, "false", 0, null, {}]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, autoEnrollHosts: value }).autoEnrollHosts,
+        String(value)
+      ).toBe(true);
+    }
+    expect(
+      sanitizeDecisionsSettings({ ...connected, autoEnrollHosts: false }).autoEnrollHosts
+    ).toBe(false);
+    // Turning it off survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore({ ...connected, autoEnrollHosts: false });
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual({ ...connected, autoEnrollHosts: false });
+  });
+
   it("reads anything that isn't a settings object as off with no relay, without throwing", () => {
     for (const raw of [undefined, null, "on", 1, true, [], [{ enabled: true }], () => true]) {
       const settings = sanitizeDecisionsSettings(raw);

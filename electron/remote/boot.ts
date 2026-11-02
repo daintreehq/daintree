@@ -20,6 +20,7 @@ import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
+import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
 import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
 import { getRemoteService } from "./runtime.js";
@@ -317,6 +318,14 @@ function startClient(options: StartRemoteHostsOptions): void {
   // A device paired here answers the agents on the hosts this Shell is connected to.
   teardowns.push(
     installDeviceAnswerHostsClient({
+      registry: client.registry,
+      manager: client.manager,
+      sessionFor: client.sessionFor,
+    })
+  );
+  // The Decisions owner here enrolls the hosts it connects to as devices (#16021).
+  teardowns.push(
+    installDecisionsHostsClient({
       registry: client.registry,
       manager: client.manager,
       sessionFor: client.sessionFor,

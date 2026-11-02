@@ -74,6 +74,7 @@ describe("store ownership derived from the settings catalog", () => {
         installationId: "owner-installation",
         deviceId: "owner-desktop-01",
       },
+      autoEnrollHosts: false,
     };
     const hostCopy: DecisionsSettings = {
       enabled: false,
@@ -85,6 +86,7 @@ describe("store ownership derived from the settings catalog", () => {
       consentedAt: null,
       revokedAt: null,
       recoveryKit: null,
+      autoEnrollHosts: true,
     };
     expect(mergeByOwnership(owners, hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual(owners);
     expect(splitByOwnership(hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual({

@@ -4,10 +4,14 @@ import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
-import { getMcpServerServiceRef, getPtyClient } from "../../window/serviceRefs.js";
+import {
+  getMcpServerServiceRef,
+  getPtyClient,
+  watchDecisionsHostsPort,
+} from "../../window/serviceRefs.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
-import type { RelayConfig } from "@daintreehq/decisions-client";
+import { enrollHost, verifiedDevices, type RelayConfig } from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
 import {
   DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH,
@@ -38,6 +42,10 @@ import {
   type RestoreDecisionsIdentityPayload,
   type VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
+import type {
+  DecisionsHostEnrollResult,
+  DecisionsHostsResult,
+} from "../../../shared/types/decisionsHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
@@ -49,6 +57,8 @@ import type { PaneSignal } from "./answerDelivery.js";
 import type { DecisionsDeliveryDeps, DecisionsService } from "./DecisionsService.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
+import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
+import { HostRecords } from "./hostEnrollmentRecords.js";
 import { openDecisionsMcpRoute, type DecisionsMcpRouteSources } from "./mcpRoute.js";
 import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
@@ -102,6 +112,99 @@ let ownerDevices: OwnerDevices | null = null;
 function forgetOwnerDevices(): void {
   ownerDevices?.dispose();
   ownerDevices = null;
+}
+
+/**
+ * Enrolls the Remote Hosts this computer connects to (#16021), for as long
+ * as an enabled lifetime runs: started when the service's status leaves
+ * off, stopped when it returns there. What it shows rides on the status
+ * push, as the policy does, so Settings reads the Hosts again with it.
+ */
+function makeHostEnroller(): HostEnroller {
+  return new HostEnroller({
+    watchPort: watchDecisionsHostsPort,
+    owner: () => hostEnrollmentOwner(),
+    autoEnroll: () => (service?.getSettings() ?? readDecisionsSettings(store)).autoEnrollHosts,
+    onChanged: () => publishStatus(),
+  });
+}
+let hostEnroller = makeHostEnroller();
+/** One record keeper per store and installation, so its writes run one at a time. */
+let hostRecords: {
+  store: DaintreeLocalStore;
+  installationId: string;
+  records: HostRecords;
+} | null = null;
+
+function hostRecordsFor(localStore: DaintreeLocalStore, installationId: string): HostRecords {
+  if (hostRecords?.store !== localStore || hostRecords.installationId !== installationId) {
+    hostRecords = {
+      store: localStore,
+      installationId,
+      records: new HostRecords(localStore, installationId),
+    };
+  }
+  return hostRecords.records;
+}
+
+/** The owner's devices for Host enrollment; anything that stops it reads as not set up. */
+async function ownerDevicesForHosts(): Promise<OwnerDevices | DecisionsRelayRequestFailure> {
+  try {
+    return await ownerDevicesFor();
+  } catch {
+    return { result: "not-set-up" };
+  }
+}
+
+/** This computer as the owner that enrolls Hosts: only with a relay identity of its own, unrevoked. */
+function hostEnrollmentOwner(): HostEnrollerOwner | null {
+  const running = service;
+  if (shutDown || running === null) return null;
+  const settings = running.getSettings();
+  if (
+    settings === null ||
+    !settings.enabled ||
+    settings.relayOrigin === null ||
+    settings.installationId === null ||
+    settings.deviceId === null ||
+    settings.revokedAt !== null
+  ) {
+    return null;
+  }
+  const { relayOrigin, installationId, deviceId } = settings;
+  const localStore = running.getStore();
+  return {
+    key: `${relayOrigin}\n${installationId}\n${deviceId}`,
+    installationId,
+    deviceId,
+    connected: running.getStatus().state === "connected",
+    records: localStore ? hostRecordsFor(localStore, installationId) : null,
+    devices: async () => {
+      const devices = await ownerDevicesForHosts();
+      return devices instanceof OwnerDevices
+        ? devices.withClient((client) => verifiedDevices(client))
+        : devices;
+    },
+    enroll: async (request) => {
+      const devices = await ownerDevicesForHosts();
+      // It seals the current key, so it takes its turn among key rotations (#16010).
+      return devices instanceof OwnerDevices
+        ? devices.withCurrentKeys(async (client) => ({
+            response: (await enrollHost(client, request)).response,
+          }))
+        : devices;
+    },
+  };
+}
+
+function hostEnrollerFollows(state: DecisionsStatus["state"]): void {
+  if (state === "off") {
+    hostEnroller.stop();
+    return;
+  }
+  hostEnroller.start();
+  // Connecting is when Hosts already up get their attempt: setup finishing among them.
+  if (state === "connected") hostEnroller.sweep();
 }
 /** Counts policy changes, so a policy read that lands after a newer change can't roll it back. */
 let policyRevision = 0;
@@ -281,7 +384,10 @@ export function getDecisionsService(): Promise<DecisionsService> {
         delivery: deliveryDeps,
         onDevicesChanged: publishDevicesChanged,
       });
-      next.onStatusChanged(() => publishStatus());
+      next.onStatusChanged((event) => {
+        hostEnrollerFollows(event.status.state);
+        publishStatus();
+      });
       service = next;
       return next;
     });
@@ -410,6 +516,7 @@ function recordIdentity(
   }
   running.updateSettings(saved);
   forgetOwnerDevices();
+  hostEnroller.forget();
   return saved;
 }
 
@@ -480,6 +587,7 @@ export function disconnectRelay(): Promise<DecisionsStatus> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
+    hostEnroller.forget();
     // The socket and delivery run on these keys, so they stop before the keys
     // go, and a rotation still saving a key finishes first, so none is
     // written after.
@@ -614,8 +722,10 @@ export function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
   cancelKitExports();
   return serialize(async () => {
     let outcome: LocalEraseOutcome;
-    // Its invitations and requests run on the keys this deletes.
+    // Its invitations and requests run on the keys this deletes, and the
+    // Hosts' record goes with the rest.
     forgetOwnerDevices();
+    hostEnroller.forget();
     try {
       outcome = await (await runningService()).eraseLocalData();
     } finally {
@@ -645,7 +755,12 @@ async function ownerDevicesFor(): Promise<OwnerDevices | DecisionsRelayRequestFa
   const record = { relayOrigin, installationId, deviceId };
   if (!ownerDevices?.matches(record)) {
     ownerDevices?.dispose();
-    ownerDevices = new OwnerDevices({ ...record, keys, rotations: running.getKeyRotations() });
+    ownerDevices = new OwnerDevices({
+      ...record,
+      keys,
+      rotations: running.getKeyRotations(),
+      onListed: (devices) => hostEnroller.observeDevices(devices),
+    });
   }
   return ownerDevices;
 }
@@ -654,6 +769,34 @@ async function ownerDevicesFor(): Promise<OwnerDevices | DecisionsRelayRequestFa
 export async function listDevices(): Promise<DecisionsDevicesResult> {
   const devices = await ownerDevicesFor();
   return devices instanceof OwnerDevices ? devices.list() : devices;
+}
+
+/** The Remote Hosts this computer enrolls, or could (#16021). Asks no Host and no relay. */
+export async function listHosts(): Promise<DecisionsHostsResult> {
+  await runningService();
+  return hostEnroller.list();
+}
+
+/** Enroll, from Settings: enrolls one connected Host now, whatever automatic enrollment says. */
+export async function enrollDecisionsHost(hostId: string): Promise<DecisionsHostEnrollResult> {
+  await runningService();
+  return hostEnroller.enroll(hostId);
+}
+
+/**
+ * Turns automatic Host enrollment on or off. Turning it on offers every
+ * connected Host not yet tried on its current connection its attempt.
+ */
+export function setAutoEnrollHosts(enabled: boolean): Promise<DecisionsHostsResult> {
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (shutDown || !current.enabled) throw setupRefused();
+    const saved = writeDecisionsSettings(store, { ...current, autoEnrollHosts: enabled });
+    service?.updateSettings(saved);
+    if (saved.autoEnrollHosts) hostEnroller.sweep();
+    publishStatus();
+    return hostEnroller.list();
+  });
 }
 
 /** Makes a one-time invitation for a phone to pair (#16009). */
@@ -1010,6 +1153,7 @@ export async function stopDecisions(): Promise<void> {
   cancelRelayChecks();
   forgetOwnerDevices();
   cancelKitExports();
+  hostEnroller.dispose();
   for (const controller of setups) controller.abort();
   await (await settledService())?.dispose();
 }
@@ -1028,4 +1172,7 @@ export function _resetDecisionsForTesting(): void {
   statusRevision = 0;
   statusPushes = Promise.resolve();
   policyRevision = 0;
+  hostEnroller.dispose();
+  hostEnroller = makeHostEnroller();
+  hostRecords = null;
 }

@@ -22,7 +22,7 @@ import {
   keychainSessionFailure,
   SECRET_STORAGE_TIMEOUT_MS,
 } from "../../osKeychain.js";
-import { DecisionsKeyStoreError, SealedKeyStore } from "../keyStore.js";
+import { DecisionsKeyStoreError, KeyFileChangedError, SealedKeyStore } from "../keyStore.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -132,6 +132,49 @@ describe("SealedKeyStore", () => {
     }
 
     await expect(new SealedKeyStore(file).load()).resolves.toEqual(identity());
+  });
+
+  it("saves conditionally on what the file holds when the write's turn comes, writing nothing on a refusal", async () => {
+    keyed("v10");
+    const owner = identity();
+    await new SealedKeyStore(file).save(owner);
+    const before = await readFile(file, "utf8");
+    const seen: Array<StoredIdentity | null> = [];
+
+    const refused = new SealedKeyStore(file).saveIf(
+      (current) => {
+        seen.push(current);
+        return current === null ? null : "Something else holds it";
+      },
+      identity({ config: { ...owner.config, deviceId: "dev_other_0001" } })
+    );
+    await expect(refused).rejects.toBeInstanceOf(KeyFileChangedError);
+    await expect(refused).rejects.toThrow("Something else holds it");
+    expect(seen).toEqual([owner]);
+    expect(await readFile(file, "utf8")).toBe(before);
+  });
+
+  it("runs every store's steps on one file in turn, so one's read never lands inside another's write", async () => {
+    keyed("v10");
+    await new SealedKeyStore(file).save(identity());
+    // The first store's write waits on the keychain.
+    let unseal!: () => void;
+    const sealing = new Promise<void>((resolve) => (unseal = resolve));
+    safeStorageMock.encryptStringAsync.mockImplementationOnce(async (plaintext) => {
+      await sealing;
+      return sealed("v10", plaintext);
+    });
+    const next = identity({ currentEpoch: 3 });
+    const writing = new SealedKeyStore(file).save(next);
+    const reading = new SealedKeyStore(file).load();
+    let read: StoredIdentity | null | undefined;
+    void reading.then((value) => (read = value));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(read).toBeUndefined();
+
+    unseal();
+    await writing;
+    await expect(reading).resolves.toEqual(next);
   });
 
   it("saves what it was handed at the call, not what the caller changes afterwards", async () => {
