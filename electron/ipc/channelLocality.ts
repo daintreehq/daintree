@@ -1007,6 +1007,7 @@ export const CHANNEL_LOCALITY = {
   "recovery:reload-app": "shell",
   "recovery:reset-and-reload": "shell",
   "remote-hosts:add": "shell",
+  "remote-hosts:bring-back": "shell",
   "remote-hosts:connect": "shell",
   "remote-hosts:disconnect": "shell",
   "remote-hosts:discover": "shell",

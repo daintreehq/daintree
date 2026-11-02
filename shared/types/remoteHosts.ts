@@ -1,4 +1,5 @@
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
+import type { HostWakeSetup } from "./hostWake.js";
 
 /**
  * Remote Hosts: shared vocabulary for the Shell (the machine you sit at) and
@@ -312,6 +313,12 @@ export interface HostDescriptor {
    * its resource is torn down. Absent for every host the user added.
    */
   ownerWorktreeId?: string;
+  /**
+   * How this machine can wake the host from the network (#16170), as the
+   * person recorded it; absent when nothing is set up. Dropped with the
+   * observations when the host is pointed at another target.
+   */
+  wake?: HostWakeSetup;
 }
 
 export type HostConnectionState =

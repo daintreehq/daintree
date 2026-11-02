@@ -1661,6 +1661,9 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["remote-hosts:add"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:add"]["result"]>;
+    bringBack(
+      ...args: IpcInvokeMap["remote-hosts:bring-back"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:bring-back"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["remote-hosts:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:cancel-install"]["result"]>;

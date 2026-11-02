@@ -1642,6 +1642,7 @@ export const CHANNELS = {
   REMOTE_HOSTS_FORGET: "remote-hosts:forget",
   REMOTE_HOSTS_CONNECT: "remote-hosts:connect",
   REMOTE_HOSTS_DISCONNECT: "remote-hosts:disconnect",
+  REMOTE_HOSTS_BRING_BACK: "remote-hosts:bring-back",
   REMOTE_HOSTS_GET_WINDOW_HOST: "remote-hosts:get-window-host",
   REMOTE_HOSTS_TAKE_PROJECT_OFFER: "remote-hosts:take-project-offer",
   REMOTE_HOSTS_SWITCH_WINDOW_HOST: "remote-hosts:switch-window-host",

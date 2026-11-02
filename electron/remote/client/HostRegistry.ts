@@ -15,6 +15,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type { AddHostPayload, UpdateHostPayload } from "../../../shared/types/ipc/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { normalizeHostWake, type HostWakeSetup } from "../../../shared/types/hostWake.js";
 import { parseHostConnection, requireSupportedConnection } from "./connection.js";
 
 /**
@@ -170,9 +171,16 @@ function sanitize(raw: unknown): HostDescriptor[] {
       ...(typeof host.ownerWorktreeId === "string" && host.ownerWorktreeId
         ? { ownerWorktreeId: host.ownerWorktreeId }
         : {}),
+      ...(connection.kind === "ssh" ? wakeOf(host.wake) : {}),
     });
   }
   return out;
+}
+
+/** A stored wake setup that still reads as one; anything else is as if none was set up. */
+function wakeOf(value: unknown): { wake?: HostWakeSetup } {
+  const wake = normalizeHostWake(value);
+  return wake ? { wake } : {};
 }
 
 export class HostRegistry {
@@ -264,6 +272,25 @@ export class HostRegistry {
         next.lastSeenAt = null;
         // Pointed at another machine by hand, it is no longer the worktree's box.
         delete next.ownerWorktreeId;
+        // Nor is the adapter and LAN recorded for the old one its own.
+        delete next.wake;
+      }
+    }
+    if (payload.wake !== undefined) {
+      if (payload.wake === null) {
+        delete next.wake;
+      } else {
+        const wake = normalizeHostWake(payload.wake);
+        if (!wake) {
+          throw invalid(
+            "A wake needs the host's hardware address (aa:bb:cc:dd:ee:ff) and its LAN, such as 192.168.1.0/24."
+          );
+        }
+        // A WSL distro is this PC: there is no other machine to wake.
+        if (next.connection.kind !== "ssh") {
+          throw invalid("Only a host reached over SSH can be woken from the network.");
+        }
+        next.wake = wake;
       }
     }
     if (payload.notificationsEnabled !== undefined) {

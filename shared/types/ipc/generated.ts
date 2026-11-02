@@ -3561,6 +3561,26 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
+  "remote-hosts:bring-back": {
+    args: [payload: { hostId: string }];
+    result: {
+      status:
+        | "cancelled"
+        | "unreachable"
+        | "connected"
+        | "woken"
+        | "started"
+        | "not_wakeable"
+        | "not_startable"
+        | "version_mismatch"
+        | "timed_out";
+      wake: "failed" | "sent" | "not_needed" | "not_set_up" | "not_on_lan";
+      reached: boolean;
+      startRequested: boolean;
+      observed: string | null;
+      elapsedMs: number;
+    };
+  };
   "remote-hosts:cancel-install": {
     args: [payload: { opId: string }];
     result: boolean;
