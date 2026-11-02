@@ -314,22 +314,47 @@ describe("the decision model's runtime (#16026)", () => {
     await runtime.update({ modelLearning: false, modelAdapter: "claude" });
     release();
 
-    await expect(running).resolves.toMatchObject({ action: "abstain" });
+    await expect(running).resolves.toEqual({ action: "abstain", reason: "model-off" });
     expect(runtime.proxy()).toBeNull();
     expect(onProxyChanged).toHaveBeenCalledTimes(2);
   });
 
-  it("disarms for another CLI, whose evidence it doesn't have, and arms again for the one evaluated", async () => {
-    const { runtime, onProxyChanged } = await armedRuntime();
+  it("asks only the CLI chosen, disarms for another whose evidence it doesn't have, and keeps the proxy through a repeat", async () => {
+    const claude = rebasingCli();
+    const codex = rebasingCli();
+    const { runtime, onProxyChanged, createAdapter } = makeRuntime({ claude, codex });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+    await runtime.evaluate();
+    await runtime.setAutoAnswerThreshold(0.8);
+    const armed = runtime.proxy();
+    expect(armed).not.toBeNull();
 
-    await runtime.update({ modelLearning: true, modelAdapter: null });
+    // The same preferences again change nothing: the attempt asking this proxy carries on.
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    expect(runtime.proxy()).toBe(armed);
+    expect(onProxyChanged).toHaveBeenCalledTimes(1);
+
+    await runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    expect(createAdapter.mock.calls.map(([adapter]) => adapter)).toEqual(["claude", "codex"]);
     expect(runtime.proxy()).toBeNull();
     expect(runtime.getEvaluation()).toBeNull();
+    expect(onProxyChanged).toHaveBeenCalledTimes(2);
     await expect(runtime.setAutoAnswerThreshold(0.8)).rejects.toThrow();
+    expect(codex.calls).toHaveLength(0);
 
+    // Back to the CLI the stored evaluation is for: armed again, without evaluating.
     await runtime.update({ modelLearning: true, modelAdapter: "claude" });
     expect(runtime.proxy()).not.toBeNull();
     expect(onProxyChanged).toHaveBeenCalledTimes(3);
+
+    // Evaluating codex replays through codex alone, and its report replaces claude's.
+    await runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    const claudeCalls = claude.calls.length;
+    await expect(runtime.evaluate()).resolves.toMatchObject({ adapter: "codex" });
+    expect(codex.calls.length).toBeGreaterThan(0);
+    expect(claude.calls).toHaveLength(claudeCalls);
+    expect(runtime.proxy()).toBeNull();
   });
 
   it("arms a later lifetime from what was stored, without evaluating again", async () => {
@@ -363,6 +388,79 @@ describe("the decision model's runtime (#16026)", () => {
       expect(later.runtime.proxy(), JSON.stringify(value).slice(0, 60)).toBeNull();
       await later.runtime.close();
     }
+  });
+
+  it("disarms an armed proxy on close without asking for a replacement: the connection is going too", async () => {
+    const { runtime, onProxyChanged } = await armedRuntime();
+    const proxy = runtime.proxy()!;
+    await runtime.close();
+    expect(runtime.proxy()).toBeNull();
+    expect(onProxyChanged).toHaveBeenCalledTimes(1);
+    await expect(
+      proxy.suggest(proxyInput({ questionId: "q-new-0003" }), new AbortController().signal)
+    ).resolves.toEqual({ action: "abstain", reason: "model-off" });
+  });
+
+  it("cancels an evaluation asked for just before a close, before it sends anything", async () => {
+    const cli = rebasingCli();
+    const { runtime } = makeRuntime({ claude: cli });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+
+    const evaluating = runtime.evaluate();
+    await runtime.close();
+    await expect(evaluating).rejects.toThrow(/cancelled/);
+    expect(cli.calls).toHaveLength(0);
+  });
+
+  it("evaluates the CLI chosen just before it was asked, rather than cancelling", async () => {
+    const claude = rebasingCli();
+    const codex = rebasingCli();
+    const { runtime } = makeRuntime({ claude, codex });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+
+    const switched = runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    const evaluating = runtime.evaluate();
+    await switched;
+    await expect(evaluating).resolves.toMatchObject({ adapter: "codex" });
+    expect(claude.calls).toHaveLength(0);
+  });
+
+  it("closes a history whose setup fails, and tries again on the next change", async () => {
+    const closed = vi.fn();
+    let fail = true;
+    const runtime = new DecisionModelRuntime({
+      files,
+      onProxyChanged: () => {},
+      openHistory: () => {
+        const history = new SqliteHistoryStore(files.history);
+        const setLearning = history.setLearningEnabled.bind(history);
+        const close = history.close.bind(history);
+        return Object.assign(history, {
+          setLearningEnabled: (on: boolean) => {
+            if (fail) throw new Error("readonly database");
+            setLearning(on);
+          },
+          close: () => {
+            closed();
+            close();
+          },
+        });
+      },
+    });
+    runtimes.push(runtime);
+    await expect(runtime.update({ modelLearning: true, modelAdapter: null })).rejects.toThrow(
+      /readonly/
+    );
+    expect(closed).toHaveBeenCalledTimes(1);
+
+    fail = false;
+    await runtime.update({ modelLearning: true, modelAdapter: null });
+    await runtime.learner.learn(decision(1));
+    await runtime.close();
+    expect(closed).toHaveBeenCalledTimes(2);
+    expect(storedExamples()).toHaveLength(1);
   });
 
   it("stops on close: an evaluation running is cancelled, and no replacement is asked for", async () => {

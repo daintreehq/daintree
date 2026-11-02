@@ -700,7 +700,11 @@ describe("RelayConnection", () => {
 
     // Nothing changed for the attempt running: it carries on.
     h.connection.modelChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.closedByClient).toBeNull();
+    expect(h.statuses.at(-1)).toEqual({ state: "connected" });
     expect(h.relay.tickets).toHaveLength(1);
+    expect(bridges).toHaveLength(1);
 
     armed = proxy;
     h.connection.modelChanged();
@@ -723,11 +727,20 @@ describe("RelayConnection", () => {
     start.mockRestore();
   });
 
-  it("leaves a 4409's wait alone when the proxy changes (#16026)", async () => {
+  it("leaves a 4409's wait alone when the proxy changes, and the attempt after it asks the new one (#16026)", async () => {
     const proxy: ProxyEngine = {
       suggest: vi.fn(async () => ({ action: "abstain" as const, reason: "test" })),
     };
     let armed: ProxyEngine | null = null;
+    const bridges: DecisionsBridge[] = [];
+    const original = DecisionsBridge.prototype.start;
+    const start = vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
+      this: DecisionsBridge,
+      ...args
+    ) {
+      bridges.push(this);
+      return original.apply(this, args);
+    });
     const h = await harness({
       rand: () => 0.5,
       overrides: { model: { learner: { learn: () => {} }, proxy: () => armed } },
@@ -735,13 +748,22 @@ describe("RelayConnection", () => {
     h.connection.start();
     const first = await connectLive(h);
     first.drop(4409);
-    await h.status("replaced");
+    const replaced = await h.status("replaced");
+    const deadline = (replaced as { nextAttemptAt: number }).nextAttemptAt;
 
     armed = proxy;
     h.connection.modelChanged();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.relay.tickets).toHaveLength(1);
+    expect(h.statuses.at(-1)).toEqual({ state: "replaced", nextAttemptAt: deadline });
+
+    await vi.advanceTimersByTimeAsync(deadline - Date.now());
+    const second = await h.relay.socket(1);
+    second.accept();
+    await h.status("connected");
+    expect((bridges.at(-1) as unknown as { o: { proxy?: ProxyEngine } }).o.proxy).toBe(proxy);
     h.connection.stop();
+    start.mockRestore();
   });
 
   it("refreshes nothing during a 4409's wait", async () => {

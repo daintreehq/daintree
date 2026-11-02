@@ -1889,6 +1889,33 @@ describe("DecisionsService decision model (#16026)", () => {
     }
   });
 
+  it("deletes the model's files with local data while learning is off, companions and all", async () => {
+    const t = modelled(undefined, {
+      openRows: async () => ({ erase: () => {}, exist: () => false }),
+      forgetIdentity: () => on(),
+    });
+    try {
+      const names = [
+        "model-history.sqlite",
+        "model-history.sqlite-journal",
+        "model-history.sqlite-wal",
+        "model-history.sqlite-shm",
+        "model-evaluation.json",
+      ];
+      for (const name of names)
+        writeFileSync(join(t.dir, name), "plaintext from an earlier lifetime");
+      await t.service.start(on(RELAY));
+      expect(t.service.getDecisionModel()).toBeNull();
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({ result: "deleted" });
+      expect(readdirSync(t.dir)).toEqual([]);
+      expect(t.histories).toHaveLength(0);
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it("deletes what the model learned with local data, and starts it again empty", async () => {
     const t = modelled((path) => new SqliteHistoryStore(path), {
       openRows: async () => ({ erase: () => {}, exist: () => false }),
@@ -1904,6 +1931,9 @@ describe("DecisionsService decision model (#16026)", () => {
       const history = join(t.dir, "model-history.sqlite");
       await vi.waitFor(() => expect(existsSync(history)).toBe(true));
       await t.made[0]!.options.model!.learner.learn(decision(1));
+      const before = new SqliteHistoryStore(history);
+      expect(before.count()).toBe(1);
+      before.close();
 
       await expect(t.service.eraseLocalData()).resolves.toEqual({ result: "deleted" });
 

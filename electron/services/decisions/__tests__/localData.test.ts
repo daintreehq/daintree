@@ -302,7 +302,7 @@ describe("local Decisions data deletion", () => {
       evaluation = join(dir, "model-evaluation.json");
     });
 
-    it("deletes them with the rows, learning on or not, and with no keys at all", async () => {
+    it("deletes them with the rows, with no keys at all", async () => {
       writeFileSync(history, HISTORY);
       writeFileSync(evaluation, "{}");
       const { rows, state } = fakeRows();
@@ -356,6 +356,34 @@ describe("local Decisions data deletion", () => {
 
       expect(readdirSync(dir)).toEqual([]);
       expect(forgotten).toBe(1);
+    });
+
+    it("deletes a model file a crash stopped short of moving, once the rows are found gone", async () => {
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(history, HISTORY);
+      writeFileSync(evaluation, "{}");
+      const { rows } = fakeRows(0);
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "deleted",
+      });
+
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(1);
+    });
+
+    it("keeps a relay set up since, while dropping what the given-up deletion set aside", async () => {
+      const newer = '{"v":1,"protection":"keychain","ciphertext":"newer"}';
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(keyFile, newer);
+      writeFileSync(erasingKeyFilePath(history), HISTORY);
+      const { rows } = fakeRows(0);
+
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("none");
+
+      expect(readdirSync(dir)).toEqual(["keys.bin"]);
+      expect(readFileSync(keyFile, "utf8")).toBe(newer);
+      expect(forgotten).toBe(0);
     });
 
     it("puts them back when a deletion stopped before the rows went", async () => {

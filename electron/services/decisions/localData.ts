@@ -113,30 +113,37 @@ function eraseRefusal(error: unknown): "disk-pressure" | "storage" {
 
 /**
  * What finishing a deletion that stopped partway did: `none` when there was
- * none (or only keys a later setup superseded), `restored` when it never
- * committed and the keys went back, `finished` when it had committed and the
- * keys and the relay record went too.
+ * none (or keys a later setup superseded), `restored` when it never
+ * committed and what was set aside went back, `finished` when it had
+ * committed and the set-aside files and the relay record went too.
  */
 export type EraseRecovery = "none" | "restored" | "finished";
 
 /**
  * Finishes a deletion that stopped partway: quit or a crash mid-way, or a
  * last step that failed. Rows still stored mean their transaction never
- * committed, so nothing was deleted and the keys and the decision model's
- * files go back. No rows mean it committed, so the relay record and those
- * files go too. A file written since (new keys sealed by a new setup) means
- * the one set aside was already given up. Run before the store opens, since a
- * row written after the deletion would read as one it never reached; a
- * failure here must leave the store closed for that reason.
+ * committed, so nothing was deleted and what was set aside goes back. No rows
+ * mean it committed, so the relay record and the set-aside files go too, and
+ * so does any of the decision model's files a crash stopped short of moving:
+ * nothing can have written one since, because nothing opens them until this
+ * has run. Keys sealed since (a new setup) mean the deletion was given up:
+ * the relay record is the new one's and stays, and the outcome is `none`, so
+ * a deletion asked for now deletes what is there. Run before the store opens,
+ * since a row written after the deletion would read as one it never reached;
+ * a failure here must leave the store closed for that reason.
  */
 export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<EraseRecovery> {
   const pending: string[] = [];
+  let superseded = false;
   for (const file of erasedFiles(deps)) {
     const aside = erasingKeyFilePath(file);
     if (!(await exists(aside))) continue;
-    // Written since (new keys sealed): what was set aside was already given up.
-    if (await exists(file)) await durableUnlinkIfPresent(aside);
-    else pending.push(file);
+    if (await exists(file)) {
+      if (file === deps.keyFilePath) superseded = true;
+      await durableUnlinkIfPresent(aside);
+    } else {
+      pending.push(file);
+    }
   }
   if (pending.length === 0) {
     await syncKeyDirectory(deps.keyFilePath);
@@ -148,9 +155,10 @@ export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<Eras
     for (const file of pending) await resilientRename(erasingKeyFilePath(file), file);
     return "restored";
   }
-  deps.forgetIdentity();
+  if (!superseded) deps.forgetIdentity();
   for (const file of pending) await durableUnlinkIfPresent(erasingKeyFilePath(file));
-  return "finished";
+  for (const file of deps.modelFiles ?? []) await durableUnlinkIfPresent(file);
+  return superseded ? "none" : "finished";
 }
 
 /**

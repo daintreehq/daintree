@@ -464,12 +464,12 @@ export type DecisionsRelayDeleteResult =
  * - `failed`: nothing was deleted (`disk-pressure`: writes are refused while
  *   disk space is critical; `storage`: the database refused; `keys`: the key
  *   file couldn't be moved; `model`: a decision model file couldn't be moved).
- * - `incomplete`: a step didn't finish. With `erased`, the history is
- *   deleted but the keys or the relay record are still to go; with it false,
- *   nothing was deleted, but the keys couldn't be put back where they were;
- *   null when the history couldn't be read to tell which.
- *   Deleting again finishes or undoes it, and so does the next start when
- *   keys were involved. Decisions holds no store until then.
+ * - `incomplete`: a step didn't finish. With `erased`, the stored rows are
+ *   deleted but the keys, the decision model's files or the relay record are
+ *   still to go; with it false, nothing was deleted, but what was set aside
+ *   couldn't be put back where it was; null when the history couldn't be read
+ *   to tell which. Deleting again finishes or undoes it, and so does the next
+ *   start when files were set aside. Decisions holds no store until then.
  */
 export type DecisionsLocalDeleteResult =
   | { result: "deleted"; status: DecisionsStatus }

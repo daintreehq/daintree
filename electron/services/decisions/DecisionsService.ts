@@ -513,9 +513,10 @@ export class DecisionsService {
         await this.settledConnections();
         // An ask still spooling finishes too; the spool it leaves goes with the rows.
         await this.closeAttachments();
-        // The model's history closes before its files are set aside.
-        await this.closeModel();
         const store = this.detachStore();
+        // With no store attached no settings change can make another model,
+        // and its history closes before its files are set aside.
+        await this.closeModel();
         const keyStore = this.keyStore;
         const rotations = this.rotations;
         this.keyStore = null;
@@ -630,8 +631,9 @@ export class DecisionsService {
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
     await this.closeAttachments();
-    await this.closeModel();
     const store = this.detachStore();
+    // With no store attached no settings change can make another model meanwhile.
+    await this.closeModel();
     const keyStore = this.keyStore;
     const rotations = this.rotations;
     this.keyStore = null;
@@ -762,16 +764,18 @@ export class DecisionsService {
   }
 
   /**
-   * The decision model (#16026) takes the settings as they are now. It runs
-   * only in the owner's lifetime and only with the store open: a deletion of
-   * local data closes it with the store, and one that didn't finish leaves
-   * its files set aside, so nothing may open them until the next start
-   * finishes it. A Remote Host's lifetime never has one, whatever its
-   * settings say.
+   * The decision model (#16026) takes the settings as they are now, made the
+   * first time learning is on. It runs only in the owner's lifetime and only
+   * with the store attached: a deletion of local data closes it with the
+   * store, and one that didn't finish leaves its files set aside, so nothing
+   * may open them until the next start finishes it. A Remote Host's lifetime
+   * never has one, whatever its settings say.
    */
   private applyModel(): void {
     const settings = this.settings;
     if (this.disposed || settings === null || this.role !== "owner" || this.store === null) return;
+    // With learning off there is nothing to run: no history, no proxy.
+    if (this.model === null && !settings.modelLearning) return;
     this.model ??= new DecisionModelRuntime({
       files: decisionModelFiles(this.keyFilePath()),
       onProxyChanged: () => this.connection?.modelChanged?.(),

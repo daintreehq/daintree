@@ -206,6 +206,11 @@ function withoutItems(report: EvaluationReport): DecisionModelEvaluation["report
   return rest;
 }
 
+interface ModelChoice {
+  adapter: DecisionsModelAdapter;
+  engine: DecisionModel;
+}
+
 interface Armed {
   model: DecisionModel;
   proxy: ProxyEngine;
@@ -235,10 +240,11 @@ export class DecisionModelRuntime {
   private readonly now: () => number;
   private learning = false;
   private history: HistoryStore | null = null;
-  private model: { adapter: DecisionsModelAdapter; engine: DecisionModel } | null = null;
+  private model: ModelChoice | null = null;
   private evaluation: DecisionModelEvaluation | null = null;
   private armed: Armed | null = null;
-  private readonly evaluations = new Set<AbortController>();
+  /** Running evaluations, by the model each replays; null while one still waits its turn. */
+  private readonly evaluations = new Map<AbortController, ModelChoice | null>();
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
 
@@ -274,18 +280,25 @@ export class DecisionModelRuntime {
    * CLI is chosen, it was cancelled, or either changed while it ran.
    */
   async evaluate(signal?: AbortSignal): Promise<DecisionModelEvaluation> {
-    const model = await this.enqueue(() => {
-      if (this.closed || this.history === null || this.model === null) {
-        throw new Error("The decision model needs learning on and a CLI chosen to be evaluated");
-      }
-      return this.model;
-    });
+    // Held from the first moment, so a close while this waits its turn cancels it too.
     const controller = new AbortController();
     const cancel = () => controller.abort();
     signal?.addEventListener("abort", cancel, { once: true });
-    if (signal?.aborted) cancel();
-    this.evaluations.add(controller);
+    if (signal?.aborted || this.closed) cancel();
+    this.evaluations.set(controller, null);
     try {
+      const model = await this.enqueue(() => {
+        if (controller.signal.aborted)
+          throw new Error("The decision model's evaluation was cancelled");
+        if (this.history === null || this.model === null) {
+          throw new Error("The decision model needs learning on and a CLI chosen to be evaluated");
+        }
+        // From here a change of CLI cancels it; one made before it got its turn is the one it evaluates.
+        this.evaluations.set(controller, this.model);
+        return this.model;
+      });
+      if (controller.signal.aborted)
+        throw new Error("The decision model's evaluation was cancelled");
       const report = await model.engine.evaluate({ signal: controller.signal });
       return await this.enqueue(async () => {
         // A cancelled replay stops partway and reports what it reached, which proves nothing.
@@ -339,7 +352,7 @@ export class DecisionModelRuntime {
   close(): Promise<void> {
     this.closed = true;
     this.disarm(false);
-    for (const controller of this.evaluations) controller.abort();
+    for (const controller of this.evaluations.keys()) controller.abort();
     return this.enqueue(() => {
       this.model = null;
       this.evaluation = null;
@@ -362,9 +375,14 @@ export class DecisionModelRuntime {
       await ensureOwnerOnlyDir(dirname(this.files.history));
       if (this.closed) return;
       const history = this.openHistory(this.files.history);
-      tightenFilePermissionsSync(this.files.history);
-      // The store keeps its own flag, which a file from an earlier lifetime may have off.
-      history.setLearningEnabled(true);
+      try {
+        tightenFilePermissionsSync(this.files.history);
+        // The store keeps its own flag, which a file from an earlier lifetime may have off.
+        history.setLearningEnabled(true);
+      } catch (error) {
+        history.close?.();
+        throw error;
+      }
       this.history = history;
       this.evaluation = readEvaluation(this.files.evaluation);
     }
@@ -428,8 +446,9 @@ export class DecisionModelRuntime {
     if (notify) this.onProxyChanged();
   }
 
+  /** Cancels the evaluations replaying a model, which a change of CLI or learning off just replaced. */
   private cancelEvaluations(): void {
-    for (const controller of this.evaluations) controller.abort();
+    for (const [controller, model] of this.evaluations) if (model !== null) controller.abort();
   }
 
   private closeHistory(): void {
