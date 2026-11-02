@@ -1011,6 +1011,10 @@ function TerminalPaneComponent({
   }, [getTerminal, id, isArmed, isFocused]);
 
   const handleClick = (e?: React.MouseEvent) => {
+    // A click something inside already handled leaves the selection alone,
+    // as ContentPanel does: a header chip opening its popover is one, and
+    // selecting would send the keyboard home and close what it opened.
+    if (e?.defaultPrevented) return;
     const target = e?.target as HTMLElement | null;
     const isBufferClick = !!target?.closest(".xterm");
     const managed = peekTerminalService()?.get(id) ?? null;

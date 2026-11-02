@@ -11,6 +11,7 @@ import {
 } from "../../window/serviceRefs.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
+import { setAnswerAttention } from "../runAnswerAttentionSource.js";
 import { enrollHost, verifiedDevices, type RelayConfig } from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
 import {
@@ -377,6 +378,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
       const sources = mcpRouteSources(() => next);
       const next: DecisionsService = new DecisionsService({
         publishPaneState,
+        publishAnswerAttention: setAnswerAttention,
         onRelayRevoked: recordRevocation,
         forgetIdentity: forgetRecordedIdentity,
         openQuestions: (source, previousClosed) =>

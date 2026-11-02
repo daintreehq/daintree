@@ -413,3 +413,57 @@ describe("PaneDecisionStates", () => {
     warn.mockRestore();
   });
 });
+
+describe("PaneDecisionStates answer attention", () => {
+  const stopped = (n: number, paneId = "pane-a") =>
+    row(n, {
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: answers({}),
+      origin: { pane_id: paneId },
+    });
+
+  it("tells the fleet how many answers each pane has that need a person", () => {
+    const counts: Array<Map<string, number>> = [];
+    const states = new PaneDecisionStates(
+      () => {},
+      () => 0,
+      (next) => counts.push(new Map(next))
+    );
+
+    states.replace([stopped(1), stopped(2), row(3, { origin: { pane_id: "pane-b" } })]);
+
+    expect([...counts.at(-1)!]).toEqual([["pane-a", 2]]);
+  });
+
+  it("clears every count once the panes go, whether or not the views are told", () => {
+    for (const notify of [true, false]) {
+      const counts: Array<Map<string, number>> = [];
+      const states = new PaneDecisionStates(
+        () => {},
+        () => 0,
+        (next) => counts.push(new Map(next))
+      );
+      states.replace([stopped(1)]);
+      states.clear(notify);
+      expect(counts.at(-1)?.size).toBe(0);
+    }
+  });
+
+  it("keeps a failed count update from unwinding the pane push", () => {
+    const pushes: string[] = [];
+    const states = new PaneDecisionStates(
+      (_projectId, state) => pushes.push(state.terminalId),
+      () => 0,
+      () => {
+        throw new Error("fleet gone");
+      }
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() => states.replace([stopped(1)])).not.toThrow();
+    expect(pushes).toEqual(["pane-a"]);
+    warn.mockRestore();
+  });
+});

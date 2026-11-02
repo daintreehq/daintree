@@ -22,7 +22,11 @@ import {
   type LocalEraseOutcome,
 } from "./localData.js";
 import type { DecisionsQuestions } from "./mcpRoute.js";
-import { PaneDecisionStates, type PaneDecisionStatePublisher } from "./paneDecisionState.js";
+import {
+  PaneDecisionStates,
+  type AnswerAttentionPublisher,
+  type PaneDecisionStatePublisher,
+} from "./paneDecisionState.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import {
   RelayConnection,
@@ -85,6 +89,8 @@ export interface DecisionsServiceOptions {
   attachmentSpoolDir?: (keyFilePath: string) => string;
   /** Sends one pane's state to its project's views (`terminal:decision-state`). */
   publishPaneState?: PaneDecisionStatePublisher;
+  /** Tells the fleet which panes have answers needing a person (`runAnswerAttentionSource`). */
+  publishAnswerAttention?: AnswerAttentionPublisher;
   /**
    * The relay revoked the identity this lifetime connected with. The entry
    * records it in the setting, so no later lifetime connects with it either.
@@ -194,7 +200,11 @@ export class DecisionsService {
     this.keyFilePath = options.keyFilePath ?? decisionsKeyFilePath;
     this.attachmentSpoolDir =
       options.attachmentSpoolDir ?? ((keyFilePath) => join(dirname(keyFilePath), "spool"));
-    this.panes = new PaneDecisionStates(options.publishPaneState ?? (() => {}));
+    this.panes = new PaneDecisionStates(
+      options.publishPaneState ?? (() => {}),
+      Date.now,
+      options.publishAnswerAttention
+    );
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
     this.onDevicesChanged = options.onDevicesChanged ?? (() => {});

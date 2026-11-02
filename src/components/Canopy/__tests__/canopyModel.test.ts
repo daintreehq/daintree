@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import type { CanopyCard, CanopyReadMark, CanopySeen } from "@shared/types/ipc/canopy";
+import {
+  CANOPY_NEEDS_YOU_PRIORITY,
+  type CanopyCard,
+  type CanopyReadMark,
+  type CanopySeen,
+} from "@shared/types/ipc/canopy";
 import { buildPilotGroups, type PilotRowContext } from "@/components/Pilot/pilotRows";
 import {
   buildCanopyInbox,
   CHECK_IN_CEILING,
   CHECK_IN_FLOOR,
+  itemAnswerAttention,
   itemContextWarning,
   itemFacts,
   itemLooksDone,
@@ -962,5 +968,41 @@ describe("unmatchedTerms", () => {
   it("never matches by scattered letters", () => {
     // Every letter of "cmtsf" appears in order in the summary, nowhere as written.
     expect(left("cmtsf")).toEqual(["cmtsf"]);
+  });
+});
+
+describe("answers needing attention", () => {
+  const idle = { agentState: "waiting", waitingReason: "prompt", since: NOW - 5_000 } as const;
+
+  it("puts a run in the needs-you tier whatever its screen says, and lifts it to the tier's floor", () => {
+    // The inbox comes back ranked, so the runs are found by id.
+    const items = inbox([run("plain", idle), run("held", { ...idle, answerAttention: 1 })]);
+    const plain = items.find((item) => item.runId === "plain");
+    const held = items.find((item) => item.runId === "held");
+    expect(items.map((item) => item.runId)).toEqual(["held", "plain"]);
+    expect(itemNeedsAttention(plain!)).toBe(false);
+    expect(itemNeedsAttention(held!)).toBe(true);
+    expect(itemPriority(held!, NOW)).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
+    expect(shownPriority(held!, NOW)).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
+    expect(itemAnswerAttention(held!)).toBe(1);
+  });
+
+  it("keeps a parked or snoozed run put aside even with an answer needing attention", () => {
+    const items = inbox([
+      run("parked", { ...idle, answerAttention: 1, park: { parkedAt: NOW - 1_000, note: "" } }),
+      run("snoozed", { ...idle, answerAttention: 1, snooze: { snoozedAt: NOW } }),
+    ]);
+    for (const item of items) {
+      expect(itemNeedsAttention(item)).toBe(false);
+      expect(itemPriority(item, NOW)).toBeLessThanOrEqual(PUT_ASIDE_PRIORITY);
+    }
+  });
+
+  it("never lowers a run already ranked above the floor", () => {
+    const [item] = inbox(
+      [run("a", { agentState: "waiting", waitingReason: "question", answerAttention: 1 })],
+      [card("a", { category: "question", priority: 90 })]
+    );
+    expect(itemPriority(item!, NOW)).toBe(90);
   });
 });

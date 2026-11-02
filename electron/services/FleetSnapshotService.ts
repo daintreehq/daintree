@@ -23,6 +23,7 @@ import {
   canopyRefinementFor,
   onCanopyRefinementsChanged,
 } from "./canopy/canopyRefinementSource.js";
+import { answerAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
@@ -126,6 +127,9 @@ export class FleetSnapshotService {
     // A refinement is a decoration, like a park: nothing on the host moved, so
     // the recompute reuses its inventory rather than asking it again.
     this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.onDecorationsChanged()));
+    // And so are Decisions' answers needing attention: a delivery that stopped
+    // moved nothing on the host.
+    this.eventUnsubscribes.push(onAnswerAttentionChanged(() => this.onDecorationsChanged()));
     // So is a wait's seen mark: a look moved nothing on the host either.
     const offWaits = this.handBacks?.onWaitChanged(() => this.onDecorationsChanged());
     if (offWaits) this.eventUnsubscribes.push(offWaits);
@@ -301,6 +305,7 @@ export class FleetSnapshotService {
         x.wait?.stoppedAt !== y.wait?.stoppedAt ||
         x.wait?.seenAt !== y.wait?.seenAt ||
         x.quietSince !== y.quietSince ||
+        x.answerAttention !== y.answerAttention ||
         !sameCanopyRefinement(x.canopy, y.canopy)
       ) {
         return false;
@@ -357,6 +362,7 @@ export class FleetSnapshotService {
         const handBack = this.handBacks?.getRecord(terminal.id, terminal.spawnedAt);
         const wait = this.waitFor(terminal, readStartedAt);
         const canopy = canopyRefinementFor(terminal.id, terminal.spawnedAt);
+        const answerAttention = answerAttentionFor(terminal.id);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -396,6 +402,7 @@ export class FleetSnapshotService {
           ...(handBack !== undefined ? { handBack } : {}),
           ...(wait !== undefined ? { wait } : {}),
           ...(canopy !== undefined ? { canopy } : {}),
+          ...(answerAttention !== undefined ? { answerAttention } : {}),
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the
@@ -478,7 +485,8 @@ export class FleetSnapshotService {
   }
 
   /**
-   * Canopy's refinements, or a wait's seen mark, moved. A degraded fleet keeps
+   * Canopy's refinements, a wait's seen mark, or Decisions' answers needing
+   * attention moved. A degraded fleet keeps
    * its last good rows, and those must not keep a reading Canopy has since
    * withdrawn — turned off, or the tier lapsed — nor a wait the user has since
    * looked at, until the host recovers: the retained rows are decorated afresh
@@ -491,13 +499,16 @@ export class FleetSnapshotService {
         const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
         const wait =
           run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
+        const answerAttention = answerAttentionFor(run.runId);
         const rest = { ...run };
         delete rest.canopy;
         delete rest.wait;
+        delete rest.answerAttention;
         return {
           ...rest,
           ...(wait !== undefined ? { wait } : {}),
           ...(canopy !== undefined ? { canopy } : {}),
+          ...(answerAttention !== undefined ? { answerAttention } : {}),
         };
       });
       if (!this.runsEqual(runs, previous.runs)) {

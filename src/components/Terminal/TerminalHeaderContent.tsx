@@ -22,6 +22,7 @@ import {
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
+import { TerminalDecisionsChip } from "./TerminalDecisionsChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
@@ -449,6 +450,11 @@ export function TerminalHeaderContent({
           so it sits ahead of the ambient glyph and telemetry that a narrow
           pane's header clips first (#12374). */}
       <SubagentChip terminalId={id} />
+
+      {/* Decisions — self-gating; shown only while Decisions is on and this
+          pane's agent has a question out, an answer waiting to be typed in,
+          or an answer that needs a person. */}
+      {hasPtyKind && <TerminalDecisionsChip terminalId={id} />}
 
       {/* Terminal notices — self-gating; shown only while an agent in this
           pane is waiting to hear about other terminals, and the one place the

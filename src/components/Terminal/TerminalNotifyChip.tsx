@@ -12,6 +12,7 @@ import {
   HEADER_CHIP_FOCUS_CLASS,
   HEADER_CHIP_SURFACE,
   HEADER_CHIP_TRIGGER_CLASS,
+  holdPaneSelection,
 } from "./terminalHeaderChip";
 import { POPOVER_HEADER_CLASS, POPOVER_TITLE_CLASS } from "@/components/ui/popoverHeader";
 import { logWarn } from "@/utils/logger";
@@ -167,38 +168,41 @@ export function TerminalNotifyChip({
 
   return (
     <Popover>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                footer
-                  ? cn(FOOTER_ITEM_CLASS, "shrink-0 gap-1 aria-expanded:bg-overlay-soft")
-                  : cn(
-                      HEADER_CHIP_CLASS,
-                      HEADER_CHIP_SURFACE,
-                      HEADER_CHIP_TRIGGER_CLASS,
-                      HEADER_CHIP_FOCUS_CLASS
-                    ),
-                tone === "warning"
-                  ? "text-status-warning"
-                  : footer
-                    ? "hover:text-text-primary"
-                    : "text-text-secondary hover:text-text-primary"
-              )}
-              aria-label={`${heading}; Daintree may type a notice into this pane`}
-              data-testid="terminal-notify-chip"
-            >
-              <Radar className="w-3 h-3 shrink-0" aria-hidden="true" />
-              <span className="tabular-nums">{footer && !compact ? counted : count}</span>
-            </button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side={footer ? "top" : "bottom"}>
-          {heading}. Daintree may type a notice into this pane.
-        </TooltipContent>
-      </Tooltip>
+      {/* Selecting the pane would close the popover this opens. */}
+      <span className="contents" onClick={holdPaneSelection}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  footer
+                    ? cn(FOOTER_ITEM_CLASS, "shrink-0 gap-1 aria-expanded:bg-overlay-soft")
+                    : cn(
+                        HEADER_CHIP_CLASS,
+                        HEADER_CHIP_SURFACE,
+                        HEADER_CHIP_TRIGGER_CLASS,
+                        HEADER_CHIP_FOCUS_CLASS
+                      ),
+                  tone === "warning"
+                    ? "text-status-warning"
+                    : footer
+                      ? "hover:text-text-primary"
+                      : "text-text-secondary hover:text-text-primary"
+                )}
+                aria-label={`${heading}; Daintree may type a notice into this pane`}
+                data-testid="terminal-notify-chip"
+              >
+                <Radar className="w-3 h-3 shrink-0" aria-hidden="true" />
+                <span className="tabular-nums">{footer && !compact ? counted : count}</span>
+              </button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side={footer ? "top" : "bottom"}>
+            {heading}. Daintree may type a notice into this pane.
+          </TooltipContent>
+        </Tooltip>
+      </span>
       <PopoverContent
         side={footer ? "top" : "bottom"}
         align="end"

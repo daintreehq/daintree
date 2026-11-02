@@ -33,6 +33,7 @@ import {
   notifyCanopyRefinementsChanged,
   setCanopyRefinementSource,
 } from "../canopy/canopyRefinementSource.js";
+import { setAnswerAttention } from "../runAnswerAttentionSource.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 
 const NOW = 1_830_001;
@@ -810,6 +811,36 @@ describe("FleetSnapshotService", () => {
       expect(lastSnapshot().runs[0].canopy).toBeUndefined();
     } finally {
       setCanopyRefinementSource(null);
+      service.stop();
+    }
+  });
+
+  it("decorates a run with Decisions' answers needing attention, and re-publishes when they change", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    const service = new FleetSnapshotService(client as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].answerAttention).toBeUndefined();
+      const published = broadcastMock.mock.calls.length;
+
+      setAnswerAttention(new Map([["t1", 2]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+      expect(lastSnapshot().runs[0].answerAttention).toBe(2);
+
+      // The same counts told again are no fleet change.
+      setAnswerAttention(new Map([["t1", 2]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+
+      // Decisions stopping takes every count with it.
+      setAnswerAttention(new Map());
+      await vi.advanceTimersByTimeAsync(250);
+      expect(lastSnapshot().runs[0].answerAttention).toBeUndefined();
+    } finally {
+      setAnswerAttention(new Map());
       service.stop();
     }
   });
