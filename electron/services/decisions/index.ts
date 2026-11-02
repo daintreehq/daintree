@@ -54,6 +54,13 @@ import type {
   DecisionsHostsResult,
 } from "../../../shared/types/decisionsHosts.js";
 import type { HeldHost, OwnerStateAnnouncement } from "../../types/decisionsHosts.js";
+import type {
+  DecisionsAnswerDestinations,
+  DecisionsAnswerOutcome,
+  DecisionsAttentionList,
+  MarkDecisionsAnswerHandledPayload,
+  ReassignDecisionsAnswerPayload,
+} from "../../../shared/types/decisionsAttention.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
@@ -61,7 +68,7 @@ import {
   readDecisionsSettings,
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
-import type { PaneSignal } from "./answerDelivery.js";
+import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
 import type { DecisionsDeliveryDeps, DecisionsService } from "./DecisionsService.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
@@ -395,6 +402,13 @@ const deliveryDeps: DecisionsDeliveryDeps = {
     },
     isDirectory: async (path) => (await stat(path)).isDirectory(),
   },
+  labels: {
+    projectName: async (projectId) => {
+      const { projectStore } = await import("../ProjectStore.js");
+      return projectStore.getProjectById(projectId)?.name ?? null;
+    },
+    listTerminals: async () => (await getPtyClient()?.getAllTerminalsAsync()) ?? [],
+  },
 };
 
 function serialize<T>(step: () => Promise<T>): Promise<T> {
@@ -477,6 +491,82 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     revision,
   };
 }
+
+/**
+ * The running lifetime's answer delivery, for the needs-attention list
+ * (#16020). Never makes or starts the service: null until a connection with a
+ * relay identity runs.
+ */
+function answerDelivery(): AnswerDelivery | null {
+  return service?.getAnswerDelivery() ?? null;
+}
+
+/** A delivery that stopped under a call answers as not running; anything else is a fault. */
+async function whileDelivering<T>(
+  act: (delivery: AnswerDelivery) => Promise<T>,
+  notRunning: T
+): Promise<T> {
+  const delivery = answerDelivery();
+  if (delivery === null) return notRunning;
+  try {
+    return await act(delivery);
+  } catch (error) {
+    // The store refuses a stopped delivery's reads (`RetiredAttemptError`, named
+    // here rather than imported, so the entry doesn't load the transport).
+    const retired = error instanceof Error && error.name === "RetiredAttemptError";
+    if (retired || answerDelivery() !== delivery) return notRunning;
+    throw error;
+  }
+}
+
+/** Every answer a person has to decide about, opened, oldest question first. */
+export function listDecisionsAttention(): Promise<DecisionsAttentionList> {
+  return whileDelivering<DecisionsAttentionList>(
+    async (delivery) => ({ result: "listed", items: await delivery.attentionItems() }),
+    { result: "not-running" }
+  );
+}
+
+/** The delimited block of an answer needing attention, for the person to paste in themselves. */
+export async function copyDecisionsAnswer(questionId: string): Promise<string> {
+  const text = await whileDelivering((delivery) => delivery.copiedAnswer(questionId), null);
+  if (text === null) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "No answer is waiting to be typed in for that question",
+    });
+  }
+  return text;
+}
+
+export function resumeDecisionsAnswer(questionId: string): Promise<DecisionsAnswerOutcome> {
+  return whileDelivering((delivery) => delivery.resumeAnswer(questionId), NOT_RUNNING);
+}
+
+export function listDecisionsAnswerDestinations(
+  questionId: string
+): Promise<DecisionsAnswerDestinations> {
+  return whileDelivering((delivery) => delivery.answerDestinations(questionId), {
+    result: "not-running",
+  });
+}
+
+export function reassignDecisionsAnswer(
+  payload: ReassignDecisionsAnswerPayload
+): Promise<DecisionsAnswerOutcome> {
+  return whileDelivering(
+    (delivery) => delivery.reassignAnswer(payload.questionId, payload.terminalId),
+    NOT_RUNNING
+  );
+}
+
+export function markDecisionsAnswerHandled(
+  payload: MarkDecisionsAnswerHandledPayload
+): Promise<DecisionsAnswerOutcome> {
+  return whileDelivering((delivery) => delivery.markHandled(payload.questionId), NOT_RUNNING);
+}
+
+const NOT_RUNNING: DecisionsAnswerOutcome = { result: "refused", reason: "not-running" };
 
 /** A pane's state for its view to show on mount. Never makes or starts the service: null until it runs. */
 export function getDecisionsPaneState(terminalId: string): PaneDecisionState | null {

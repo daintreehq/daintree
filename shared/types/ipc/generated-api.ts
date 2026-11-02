@@ -304,6 +304,9 @@ export interface GeneratedElectronAPI {
     claimRelay(
       ...args: IpcInvokeMap["decisions:claim-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:claim-relay"]["result"]>;
+    copyAnswer(
+      ...args: IpcInvokeMap["decisions:copy-answer"]["args"]
+    ): Promise<IpcInvokeMap["decisions:copy-answer"]["result"]>;
     declinePairing(
       ...args: IpcInvokeMap["decisions:decline-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:decline-pairing"]["result"]>;
@@ -340,15 +343,30 @@ export interface GeneratedElectronAPI {
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
+    listAnswerDestinations(
+      ...args: IpcInvokeMap["decisions:list-answer-destinations"]["args"]
+    ): Promise<IpcInvokeMap["decisions:list-answer-destinations"]["result"]>;
+    listAttention(
+      ...args: IpcInvokeMap["decisions:list-attention"]["args"]
+    ): Promise<IpcInvokeMap["decisions:list-attention"]["result"]>;
     listDevices(
       ...args: IpcInvokeMap["decisions:list-devices"]["args"]
     ): Promise<IpcInvokeMap["decisions:list-devices"]["result"]>;
     listHosts(
       ...args: IpcInvokeMap["decisions:list-hosts"]["args"]
     ): Promise<IpcInvokeMap["decisions:list-hosts"]["result"]>;
+    markAnswerHandled(
+      ...args: IpcInvokeMap["decisions:mark-answer-handled"]["args"]
+    ): Promise<IpcInvokeMap["decisions:mark-answer-handled"]["result"]>;
+    reassignAnswer(
+      ...args: IpcInvokeMap["decisions:reassign-answer"]["args"]
+    ): Promise<IpcInvokeMap["decisions:reassign-answer"]["result"]>;
     restoreIdentity(
       ...args: IpcInvokeMap["decisions:restore-identity"]["args"]
     ): Promise<IpcInvokeMap["decisions:restore-identity"]["result"]>;
+    resumeAnswer(
+      ...args: IpcInvokeMap["decisions:resume-answer"]["args"]
+    ): Promise<IpcInvokeMap["decisions:resume-answer"]["result"]>;
     revokeDevice(
       ...args: IpcInvokeMap["decisions:revoke-device"]["args"]
     ): Promise<IpcInvokeMap["decisions:revoke-device"]["result"]>;

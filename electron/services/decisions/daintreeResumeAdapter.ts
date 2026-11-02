@@ -218,6 +218,15 @@ export class DaintreeResume {
       : "resume_unsupported_agent";
   }
 
+  /**
+   * A person chose to resume the run that asked (#16020): a run a resume
+   * already handed an answer to, and which then went away, may be reopened
+   * once more. Without this, whoever closed it would only see it come back.
+   */
+  allowAgain(origin: QuestionOrigin): void {
+    this.resumedInto.delete(originRun(origin));
+  }
+
   /** Forgets this pass's resumes and reasons, so the next pass (or "Try resume") starts afresh. */
   endPass(): void {
     this.attempts.clear();

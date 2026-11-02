@@ -242,6 +242,11 @@ export class RelayConnection {
   }
 
   /** What the connection last observed; null before `start`. */
+  /** The lifetime's delivery, once the identity has loaded and until the connection stops (#16020). */
+  getDelivery(): AnswerDelivery | null {
+    return this.delivery;
+  }
+
   getStatus(): RelayConnectionStatus | null {
     return this.status;
   }

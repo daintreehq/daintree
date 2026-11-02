@@ -1552,6 +1552,14 @@ export const CHANNELS = {
   DECISIONS_START_SETUP_CHECK: "decisions:start-setup-check",
   DECISIONS_GET_SETUP_CHECK: "decisions:get-setup-check",
   DECISIONS_CANCEL_SETUP_CHECK: "decisions:cancel-setup-check",
+  // Answers that need a person (#16020): the list, copying one, resuming
+  // its agent, choosing another pane, and marking it handled.
+  DECISIONS_LIST_ATTENTION: "decisions:list-attention",
+  DECISIONS_COPY_ANSWER: "decisions:copy-answer",
+  DECISIONS_RESUME_ANSWER: "decisions:resume-answer",
+  DECISIONS_LIST_ANSWER_DESTINATIONS: "decisions:list-answer-destinations",
+  DECISIONS_REASSIGN_ANSWER: "decisions:reassign-answer",
+  DECISIONS_MARK_ANSWER_HANDLED: "decisions:mark-answer-handled",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

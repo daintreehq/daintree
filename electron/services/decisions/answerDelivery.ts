@@ -1,6 +1,8 @@
 import {
   DecisionsBridge,
   DeliveryEngine,
+  openAnswerContent,
+  openQuestionContent,
   parseAnswers,
   serializeAnswers,
   type Identity,
@@ -8,17 +10,42 @@ import {
   type KeyStore,
   type LocalStore,
   type LocateResult,
+  type OpenAnswerEntry,
   type QuestionOrigin,
+  type QuestionRow,
   type RelayClient,
   type TerminalSink,
 } from "@daintreehq/decisions-client";
+import { basename } from "node:path";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import type {
+  DecisionsAnswerDestination,
+  DecisionsAnswerDestinations,
+  DecisionsAnswerOutcome,
+  DecisionsAnswerOrigin,
+  DecisionsAttentionItem,
+} from "../../../shared/types/decisionsAttention.js";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
 import type { LaneWake, OwnPane } from "../mcp-server/terminalNotify.js";
 import {
+  answerPreviewOf,
+  copiedAnswerText,
+  markAnswerHandled,
+  needsAttention,
+  pendingEntries,
+  questionLine,
+  readHandledAnswers,
+  resumableReason,
+  withoutHandled,
+} from "./attentionList.js";
+import {
   DaintreeResume,
+  RESUMABLE_AGENTS,
   withResumeReasons,
   type SessionResumeDeps,
 } from "./daintreeResumeAdapter.js";
+import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js";
+import { reasonOf } from "./paneDecisionState.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
 import { RetiredAttemptError, retireable } from "./relayTransport.js";
 
@@ -62,6 +89,33 @@ export interface AnswerDeliveryDeps extends Omit<DaintreeTerminalSinkDeps, "queu
    */
   resume?: SessionResumeDeps;
   diagnostics?: DiagnosticTerminals;
+  /** Names for the needs-attention list (#16020); without them it shows ids. */
+  labels?: AttentionLabelDeps;
+}
+
+/** A pane as the pty host lists it, for the needs-attention list's names and destinations. */
+export interface AttentionTerminal {
+  id: string;
+  title?: string;
+  projectId?: string;
+  worktreeId?: string;
+  cwd?: string;
+  isAssistantTerminal?: boolean;
+  hasPty?: boolean;
+  isExited?: boolean;
+  isTrashed?: boolean;
+  detectedAgentId?: string;
+  launchAgentId?: string;
+  agentIncarnation?: number;
+  launchGeneration?: number;
+  agentSessionId?: string;
+}
+
+export interface AttentionLabelDeps {
+  /** A project's name; null when it isn't one of this computer's projects. */
+  projectName(projectId: string): Promise<string | null>;
+  /** Every pane the pty host holds now. */
+  listTerminals(): Promise<AttentionTerminal[]>;
 }
 
 /** The store as delivery uses it: the library's, and its indexed read of whether anything waits. */
@@ -224,6 +278,363 @@ export class AnswerDelivery {
       ...(deps.now ? { now: deps.now } : {}),
     });
     this.engine = this.owner.delivery;
+  }
+
+  /**
+   * The answers a person has to decide about (#16020), oldest question first,
+   * without those marked handled. Each is opened here, in memory: the
+   * question's first line and the answer waiting to be typed in.
+   */
+  async attentionItems(): Promise<DecisionsAttentionItem[]> {
+    const rows = withoutHandled(
+      (await this.store.listQuestions()).filter(needsAttention),
+      await readHandledAnswers(this.store)
+    ).sort((a, b) => a.alias - b.alias);
+    if (rows.length === 0) return [];
+    const terminals = await this.terminals();
+    const projects = new Map<string, Promise<string | null>>();
+    const projectName = (projectId: string) => {
+      let name = projects.get(projectId);
+      if (name === undefined) {
+        name =
+          this.o.deps.labels?.projectName(projectId).catch(() => null) ?? Promise.resolve(null);
+        projects.set(projectId, name);
+      }
+      return name;
+    };
+    const items: DecisionsAttentionItem[] = [];
+    for (const row of rows) {
+      const opened = await this.openPending(row);
+      const answer = opened === null ? null : answerPreviewOf(opened);
+      const answerUnavailable = answer !== null ? null : opened === null ? "unreadable" : "none";
+      let question: string | null = null;
+      try {
+        const content = await openQuestionContent(this.owner.ctx, row);
+        question = content === null ? null : questionLine(content.question);
+      } catch {
+        question = null;
+      }
+      const status = row.delivery_status as DecisionsAttentionItem["status"];
+      const reassignable =
+        status === "needs-attention" && answer !== null && this.ownHostId(row.origin);
+      items.push({
+        questionId: row.question_id,
+        alias: row.alias,
+        status,
+        reason: reasonOf(row.error_code),
+        question,
+        askedAt: row.origin_created_at,
+        origin: await this.originOf(row.origin, terminals, projectName),
+        answer,
+        answerUnavailable,
+        canResume: reassignable && (await this.resumable(row)),
+        canReassign: reassignable,
+      });
+    }
+    return items;
+  }
+
+  /** The delimited block a person pastes in themselves; null when nothing is waiting to be typed. */
+  async copiedAnswer(questionId: string): Promise<string | null> {
+    const row = await this.store.getQuestion(questionId);
+    if (row === null || !needsAttention(row)) return null;
+    const opened = await this.openPending(row);
+    return opened === null ? null : copiedAnswerText(row, opened);
+  }
+
+  /**
+   * "Try resume" (#16020): the person asks for the run that asked to be
+   * reopened and the answer typed in, as delivery would on its own (#16019),
+   * past the guard that stops a run it already reopened being reopened again.
+   * Resolves once delivery has had its go, with what became of the answer.
+   */
+  async resumeAnswer(questionId: string): Promise<DecisionsAnswerOutcome> {
+    if (this.stopped) return { result: "refused", reason: "not-running" };
+    const refused = await this.lock.run(async () => {
+      const row = await this.store.getQuestion(questionId);
+      const early = await this.actionable(row);
+      if (early !== null || row === null) return early ?? { result: "resolved" as const };
+      this.resume?.allowAgain(row.origin);
+      await this.store.updateQuestion(questionId, {
+        delivery_status: "desktop-received",
+        error_code: null,
+      });
+      await this.owner.ctx.audit.log({
+        event: "delivery.retry-requested",
+        question_id: questionId,
+        requirement: row.requirement,
+        result: "resume",
+      });
+      return null;
+    });
+    if (refused !== null) return refused;
+    await this.deliverNow();
+    return this.outcomeOf(questionId);
+  }
+
+  /** The panes `questionId`'s answer could be typed into instead: agents running here now. */
+  async answerDestinations(questionId: string): Promise<DecisionsAnswerDestinations> {
+    if (this.stopped) return { result: "not-running" };
+    const row = await this.store.getQuestion(questionId);
+    if ((await this.actionable(row)) !== null || row === null) return { result: "unavailable" };
+    const destinations: DecisionsAnswerDestination[] = [];
+    const projects = new Map<string, string | null>();
+    for (const terminal of await this.terminals()) {
+      if (this.runOf(terminal) === null) continue;
+      const projectId = terminal.projectId!;
+      if (!projects.has(projectId)) {
+        projects.set(
+          projectId,
+          (await this.o.deps.labels?.projectName(projectId).catch(() => null)) ?? null
+        );
+      }
+      const agentId = (terminal.detectedAgentId ?? terminal.launchAgentId)!;
+      destinations.push({
+        terminalId: terminal.id,
+        title: terminal.title?.trim() || (agentNameOf(agentId) ?? agentId),
+        agentId,
+        agentName: agentNameOf(agentId),
+        projectId,
+        projectName: projects.get(projectId) ?? null,
+        worktreeId: terminal.worktreeId ?? NO_WORKTREE,
+        worktreeName: folderName(terminal.cwd),
+        askedHere: terminal.id === row.origin.pane_id,
+      });
+    }
+    // The pane that asked, then its worktree, then its project, then the rest.
+    const rank = (d: DecisionsAnswerDestination) =>
+      d.askedHere ? 0 : d.projectId === row.origin.project_id ? 1 : 2;
+    destinations.sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title));
+    return { result: "listed", destinations };
+  }
+
+  /**
+   * "Choose destination" (#16020): the person confirmed another live pane
+   * for the answer. Its origin becomes that pane's run, recorded in the
+   * audit trail with both panes, and it is typed in there through the usual
+   * gate: never while that agent is working.
+   */
+  async reassignAnswer(questionId: string, terminalId: string): Promise<DecisionsAnswerOutcome> {
+    if (this.stopped) return { result: "refused", reason: "not-running" };
+    const terminal = (await this.terminals()).find((candidate) => candidate.id === terminalId);
+    const run = terminal === undefined ? null : this.runOf(terminal);
+    if (terminal === undefined || run === null) {
+      return { result: "refused", reason: "destination-gone" };
+    }
+    const refused = await this.lock.run(async () => {
+      const row = await this.store.getQuestion(questionId);
+      const early = await this.actionable(row);
+      if (early !== null || row === null) return early ?? { result: "resolved" as const };
+      const origin: QuestionOrigin = {
+        ...row.origin,
+        host_id: run.hostId,
+        pane_id: terminal.id,
+        terminal_generation: run.generation,
+        ownership_principal: run.principal,
+        agent_incarnation: run.incarnation,
+        agent_kind: run.agentId,
+        agent_session_id: terminal.agentSessionId ?? null,
+        project_id: terminal.projectId!,
+        worktree_id: terminal.worktreeId ?? NO_WORKTREE,
+        worktree_root: terminal.cwd ?? "",
+      };
+      await this.store.updateQuestion(questionId, {
+        origin,
+        delivery_status: "desktop-received",
+        error_code: null,
+        agent_resume_strategy: "reassigned",
+      });
+      await this.owner.ctx.audit.log({
+        event: "delivery.reassigned",
+        question_id: questionId,
+        requirement: row.requirement,
+        result: "person",
+        detail: {
+          from_pane: row.origin.pane_id,
+          from_generation: row.origin.terminal_generation,
+          from_agent: row.origin.agent_kind,
+          to_pane: terminal.id,
+          to_generation: run.generation,
+          to_agent: run.agentId,
+        },
+      });
+      return null;
+    });
+    if (refused !== null) return refused;
+    await this.deliverNow();
+    return this.outcomeOf(questionId);
+  }
+
+  /**
+   * "Mark handled" (#16020): the person dealt with the answer themselves. It
+   * leaves the list, the pane and Canopy, and is never typed in; a later
+   * correction needs a person again. The row itself is left as the library
+   * wrote it.
+   */
+  async markHandled(questionId: string): Promise<DecisionsAnswerOutcome> {
+    if (this.stopped) return { result: "refused", reason: "not-running" };
+    return this.lock.run(async () => {
+      const row = await this.store.getQuestion(questionId);
+      if (row === null || !needsAttention(row)) return { result: "resolved" };
+      await markAnswerHandled(this.store, row);
+      await this.owner.ctx.audit.log({
+        event: "delivery.handled",
+        question_id: questionId,
+        requirement: row.requirement,
+        result: "person",
+        detail: { status: row.delivery_status },
+      });
+      return { result: "handled" };
+    });
+  }
+
+  /** Null when a person can act on `row`'s answer; otherwise why not. */
+  private async actionable(row: QuestionRow | null): Promise<DecisionsAnswerOutcome | null> {
+    if (row === null || !needsAttention(row)) return { result: "resolved" };
+    const handled = await readHandledAnswers(this.store);
+    if (withoutHandled([row], handled).length === 0) return { result: "resolved" };
+    if (
+      row.delivery_status === "delivery-uncertain" ||
+      (await this.store.hasUncertainIntent(row.question_id))
+    ) {
+      return { result: "refused", reason: "uncertain" };
+    }
+    if (pendingEntries(row).length === 0) return { result: "refused", reason: "no-answer" };
+    return null;
+  }
+
+  /** Tries delivery now, and resolves once the attempt that serves this ask is done. */
+  private async deliverNow(): Promise<void> {
+    this.request();
+    await this.running;
+  }
+
+  private async outcomeOf(questionId: string): Promise<DecisionsAnswerOutcome> {
+    const row = await this.store.getQuestion(questionId);
+    if (row === null) return { result: "resolved" };
+    if (needsAttention(row)) {
+      return {
+        result: "needs-attention",
+        status: row.delivery_status as "needs-attention" | "delivery-uncertain",
+        reason: reasonOf(row.error_code),
+      };
+    }
+    const terminalId = row.origin.pane_id;
+    const title =
+      (await this.terminals()).find((terminal) => terminal.id === terminalId)?.title?.trim() ||
+      null;
+    if (pendingEntries(row).length === 0) return { result: "delivered", terminalId, title };
+    return {
+      result: "waiting",
+      terminalId,
+      title,
+      waitsFor: row.delivery_status === "pending-host" ? "host" : "idle",
+    };
+  }
+
+  /** The answers still waiting to be typed in, opened; null when one can't be opened here. */
+  private async openPending(row: QuestionRow): Promise<OpenAnswerEntry[] | null> {
+    const opened: OpenAnswerEntry[] = [];
+    try {
+      for (const entry of pendingEntries(row)) {
+        const content = await openAnswerContent(this.owner.ctx, row.question_id, entry);
+        const { sealed: _sealed, ...rest } = entry;
+        opened.push({ ...rest, ...content });
+      }
+    } catch {
+      return null;
+    }
+    return opened;
+  }
+
+  /** What a resume needs that can be checked without launching anything. */
+  private async resumable(row: QuestionRow): Promise<boolean> {
+    const { origin } = row;
+    const isDirectory = this.o.deps.resume?.isDirectory;
+    if (this.resume === null || isDirectory === undefined) return false;
+    if (!resumableReason(row.error_code) || !RESUMABLE_AGENTS.has(origin.agent_kind)) return false;
+    if ((origin.agent_session_id?.trim() ?? "") === "") return false;
+    if (origin.project_id === "" || origin.worktree_id === NO_WORKTREE) return false;
+    if (origin.worktree_root.trim() === "") return false;
+    return isDirectory(origin.worktree_root).catch(() => false);
+  }
+
+  private async terminals(): Promise<AttentionTerminal[]> {
+    try {
+      return (await this.o.deps.labels?.listTerminals()) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * The run in `terminal` an answer could be typed into: an agent running
+   * here now, holding a Decisions principal, every part of its identity
+   * observed. Null for anything else.
+   */
+  private runOf(terminal: AttentionTerminal): {
+    hostId: string;
+    generation: number;
+    principal: string;
+    incarnation: string;
+    agentId: string;
+  } | null {
+    if (terminal.isAssistantTerminal === true) return null;
+    if (terminal.isExited === true || terminal.hasPty === false || terminal.isTrashed === true) {
+      return null;
+    }
+    const agentId = terminal.detectedAgentId ?? terminal.launchAgentId;
+    const incarnation = incarnationOf(terminal);
+    const hostId = this.o.deps.hostId();
+    const principal = this.o.deps.principalFor(terminal.id);
+    const client = this.o.deps.getPtyClient();
+    if (!agentId || !terminal.projectId || incarnation === null || hostId === null) return null;
+    if (principal === null || client === null) return null;
+    const generation = client.getLiveGeneration(terminal.id);
+    if (generation === null || !client.isLiveGeneration(terminal.id, generation)) return null;
+    if (terminal.launchGeneration !== undefined && terminal.launchGeneration !== generation) {
+      return null;
+    }
+    const target = {
+      hostId,
+      paneId: terminal.id,
+      terminalGeneration: generation,
+      ownershipPrincipal: principal,
+      agentIncarnation: incarnation,
+      agentSessionId: terminal.agentSessionId ?? null,
+      worktreeId: terminal.worktreeId ?? NO_WORKTREE,
+    };
+    if (identityMismatch(this.o.deps, target, terminal) !== null) return null;
+    return { hostId, generation, principal, incarnation, agentId };
+  }
+
+  private async originOf(
+    origin: QuestionOrigin,
+    terminals: readonly AttentionTerminal[],
+    projectName: (projectId: string) => Promise<string | null>
+  ): Promise<DecisionsAnswerOrigin> {
+    const pane = this.ownHostId(origin)
+      ? terminals.find(
+          (terminal) =>
+            terminal.id === origin.pane_id &&
+            terminal.isTrashed !== true &&
+            terminal.isExited !== true
+        )
+      : undefined;
+    return {
+      projectId: origin.project_id,
+      projectName: origin.project_id === "" ? null : await projectName(origin.project_id),
+      worktreeId: origin.worktree_id,
+      worktreeName: folderName(origin.worktree_root),
+      agentId: origin.agent_kind,
+      agentName: agentNameOf(origin.agent_kind),
+      paneId: origin.pane_id,
+      paneTitle: pane?.title?.trim() || null,
+    };
+  }
+
+  private ownHostId(origin: QuestionOrigin): boolean {
+    return origin.host_id === this.o.deps.hostId();
   }
 
   /** The lock every bridge over this store must use, so answer appends and delivery marks never interleave. */
@@ -586,4 +997,16 @@ export class AnswerDelivery {
       clear: () => keys.clear(),
     };
   }
+}
+
+function agentNameOf(agentId: string): string | null {
+  return getEffectiveAgentConfig(agentId)?.name ?? null;
+}
+
+/** A recorded directory by its last segment: what a worktree is called on disk. */
+function folderName(path: string | undefined): string | null {
+  const trimmed = path?.trim().replace(/[\\/]+$/, "") ?? "";
+  if (trimmed === "") return null;
+  const name = basename(trimmed.replace(/\\/g, "/"));
+  return name === "" ? null : name;
 }
