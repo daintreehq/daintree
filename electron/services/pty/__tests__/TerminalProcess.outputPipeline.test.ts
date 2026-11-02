@@ -397,6 +397,45 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     terminal.dispose();
   });
 
+  it("keeps the latest banner on the pane for an account switch to read (#16136)", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+
+    ptyOnDataCallback!("■ You've hit your usage limit. Try again at 3:40 PM.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().usageLimitObservedAt).toBe(seen[0]?.observedAt);
+
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(60_000);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(2);
+    expect(terminal.getInfo().usageLimitObservedAt).toBe(seen[1]?.observedAt);
+
+    terminal.dispose();
+  });
+
+  it("remembers a limit hit again inside the event's cooldown (#16136)", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    // The pane worked again, and its memory went with it.
+    terminal.getInfo().usageLimitObservedAt = undefined;
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(1_000);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen).toHaveLength(1);
+    expect(terminal.getInfo().usageLimitObservedAt).toBeGreaterThan(Number(seen[0]?.observedAt));
+
+    terminal.dispose();
+  });
+
   it("ignores a plain shell with no agent", async () => {
     const seen = collect();
     const terminal = createTerminal();
@@ -404,6 +443,7 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     ptyOnDataCallback!("HTTP 429 Too Many Requests\r\n");
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toHaveLength(0);
+    expect(terminal.getInfo().usageLimitObservedAt).toBeUndefined();
 
     terminal.dispose();
   });

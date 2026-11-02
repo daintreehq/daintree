@@ -81,6 +81,42 @@ function isLifecycleEvent(event: AgentEvent): boolean {
   return event.type === "exit" || event.type === "kill" || event.type === "respawn";
 }
 
+/**
+ * How long the screen must have kept changing after a usage-limit banner, in
+ * the turn that settles, before the pane counts as working again (#16136).
+ * Canopy's turn hold, for the same reason: a local command such as `/usage`
+ * on a spent account draws once and stops, however long the monitor takes to
+ * call the turn over, and is no sign the account took a turn.
+ */
+export const USAGE_LIMIT_WORK_HOLD_MS = 3_000;
+
+/**
+ * Whether a pane that showed a usage-limit banner has worked since (#16136),
+ * read at each settle out of `working`. A settle on an error is how the
+ * classifier reads a limit banner in the transcript: the user's "continue" on
+ * a spent account hits it again, often with the old banner still in view. Any
+ * other settle clears the memory once the visible content (spinners and
+ * tickers aside, `lastOutputChangeAt`) went on changing past the hold after
+ * both the turn's start and the banner, so a limit retried and lifted within
+ * one turn counts too. An exit, or a new session in the pane, runs on the
+ * same account and keeps it.
+ */
+function noteUsageLimitProgress(
+  terminal: TerminalInfo,
+  previousState: AgentState,
+  workingSince: number | undefined,
+  newState: AgentState
+): void {
+  const observedAt = terminal.usageLimitObservedAt;
+  if (observedAt === undefined || previousState !== "working") return;
+  if (newState === "working" || newState === "exited") return;
+  if (newState === "waiting" && terminal.waitingReason === "error") return;
+  const workedFrom = Math.max(workingSince ?? observedAt, observedAt);
+  const changedAt = terminal.lastOutputChangeAt;
+  if (changedAt === undefined || changedAt - workedFrom < USAGE_LIMIT_WORK_HOLD_MS) return;
+  terminal.usageLimitObservedAt = undefined;
+}
+
 // Backend-side identity used when routing agent-state events (who is this
 // event about?). Detection wins; during the boot window the launch hint is
 // used so a cold-launched agent's first state transitions carry a stable
@@ -253,6 +289,7 @@ export class AgentStateService {
     const effectiveAgentId = terminal.detectedAgentId ?? terminal.launchAgentId;
 
     const previousState = terminal.agentState || "idle";
+    const previousStateChange = terminal.lastStateChange;
     const newState = nextAgentState(previousState, event);
 
     if (newState === previousState) {
@@ -453,6 +490,8 @@ export class AgentStateService {
     } else {
       terminal.waitingReason = undefined;
     }
+
+    noteUsageLimitProgress(terminal, previousState, previousStateChange, newState);
 
     events.emit("agent:state-changed", validatedStateChange.data);
     this.emitTerminalActivity(terminal);

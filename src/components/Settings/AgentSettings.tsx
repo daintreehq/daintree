@@ -672,7 +672,9 @@ export function AgentSettings({
             </SettingsGroup>
           </SettingsSection>
 
+          {/* Keyed so an offer raised for one agent never shows under another. */}
           <AgentAccountsSection
+            key={activeAgent.id}
             agentId={activeAgent.id}
             agentName={activeAgent.name}
             entry={activeEntry}
