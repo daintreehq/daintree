@@ -5,12 +5,14 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useDecisions } from "./useDecisions";
 import { useDecisionsPolicy } from "./useDecisionsPolicy";
+import { useDecisionsModel } from "./useDecisionsModel";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
 import { DecisionsConnectionSection, kitUnverified } from "./DecisionsConnectionSection";
 import { DecisionsDevicesSection } from "./DecisionsDevicesSection";
 import { DecisionsAgentsSection } from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
+import { DecisionsModelSection } from "./DecisionsModelSection";
 import { DecisionsVoiceSection } from "./DecisionsVoiceSection";
 import { DecisionsDataSection } from "./DecisionsDataSection";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
@@ -55,6 +57,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   const on = status !== null && status.state !== "off";
   // One read for the two sections it feeds, so one Retry recovers both.
   const policy = useDecisionsPolicy(on);
+  const model = useDecisionsModel(on);
   const enabled = pending?.enabled ?? on;
   const locked = status === null || pending !== null;
 
@@ -117,6 +120,10 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
           <DecisionsAgentsSection />
           <DecisionsQuestionsSection policy={policy} />
           <DecisionsPolicySection policy={policy} />
+          <DecisionsModelSection
+            model={model}
+            proxyAllowlisted={policy.policy?.proxyAllowlisted === true}
+          />
           <DecisionsVoiceSection />
           <DecisionsDataSection
             status={status}

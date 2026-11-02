@@ -614,6 +614,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").ApproveDecisionsPairingPayload];
     result: import("../decisions.js").DecisionsPairingApproveResult;
   };
+  "decisions:cancel-model-evaluation": {
+    args: [payload: import("../decisionsModel.js").CancelDecisionsModelEvaluationPayload];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
   "decisions:cancel-setup-check": {
     args: [payload: import("../decisions.js").CancelDecisionsSetupCheckPayload];
     result: import("../decisions.js").DecisionsSetupCheckRun | null;
@@ -625,6 +629,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:claim-relay": {
     args: [payload: import("../decisions.js").ClaimDecisionsRelayPayload];
     result: import("../decisions.js").DecisionsConnectResult;
+  };
+  "decisions:clear-model-history": {
+    args: [];
+    result: import("../decisionsModel.js").DecisionsModelState;
   };
   "decisions:copy-answer": {
     args: [questionId: string];
@@ -657,6 +665,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:export-recovery-kit": {
     args: [payload: import("../decisions.js").ExportDecisionsRecoveryKitPayload];
     result: import("../decisions.js").DecisionsKitExportResult;
+  };
+  "decisions:get-model": {
+    args: [];
+    result: import("../decisionsModel.js").DecisionsModelState;
   };
   "decisions:get-pairing": {
     args: [pairingId: string];
@@ -730,9 +742,21 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:set-model": {
+    args: [payload: import("../decisionsModel.js").SetDecisionsModelPayload];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:set-model-threshold": {
+    args: [payload: import("../decisionsModel.js").SetDecisionsModelThresholdPayload];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
   "decisions:set-proxy-allowlisted": {
     args: [allowed: boolean];
     result: import("../decisions.js").DecisionsPolicy;
+  };
+  "decisions:start-model-evaluation": {
+    args: [];
+    result: import("../decisionsModel.js").DecisionsModelState;
   };
   "decisions:start-pairing": {
     args: [];
