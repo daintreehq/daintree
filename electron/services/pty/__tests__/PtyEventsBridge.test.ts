@@ -2,10 +2,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { bridgePtyEvent } from "../PtyEventsBridge.js";
 import { events } from "../../events.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
+import {
+  clearClaudeUsageObservations,
+  readClaudeUsageObservations,
+} from "../../claude/ClaudeUsageObservations.js";
 
 describe("bridgePtyEvent", () => {
   afterEach(() => {
     events.removeAllListeners();
+    clearClaudeUsageObservations();
   });
 
   it("normalizes agent-state trigger and confidence before emitting", () => {
@@ -430,6 +435,56 @@ describe("bridgePtyEvent", () => {
     });
     expect(handled).toBe(true);
     expect(heard).toEqual([{ id: "term-3", expiresAt: 1_800_000_020_000 }]);
+  });
+
+  describe("Claude usage observations (#15727)", () => {
+    const observed = {
+      type: "agent-claude-usage-observed",
+      terminalId: "term-4",
+      window: "weekly limit",
+      statement: "used",
+      usedPercent: 87,
+      resetsAt: 1_793_599_200_000,
+      observedAt: 1_793_590_000_000,
+      timestamp: 1_793_590_000_000,
+    } as const;
+
+    it("records the parsed fields for agent.readQuota and keeps them off the bus", () => {
+      const heard: unknown[] = [];
+      events.on("agent:claude-usage-observed", (payload) => heard.push(payload));
+
+      // A field the pty host should never send is not carried into the record.
+      expect(bridgePtyEvent({ ...observed, line: "You've used 87%…" } as never)).toBe(true);
+
+      expect(heard).toEqual([]);
+      expect(readClaudeUsageObservations()).toEqual([
+        {
+          terminalId: "term-4",
+          window: "weekly limit",
+          statement: "used",
+          usedPercent: 87,
+          resetsAt: 1_793_599_200_000,
+          observedAt: 1_793_590_000_000,
+        },
+      ]);
+    });
+
+    it.each([
+      ["an unknown limit", { window: "monthly limit" }],
+      ["an unknown statement", { statement: "nearly" }],
+      ["a percent past 100", { usedPercent: 140 }],
+      ["a reset that isn't a time", { resetsAt: Number.NaN }],
+      ["no observation time", { observedAt: undefined }],
+      ["no pane", { terminalId: "" }],
+    ])("drops one with %s", (_name, change) => {
+      expect(bridgePtyEvent({ ...observed, ...change } as never)).toBe(true);
+      expect(readClaudeUsageObservations()).toEqual([]);
+    });
+
+    it("leaves a host throwaway run's out (#14445)", () => {
+      bridgePtyEvent({ ...observed, terminalId: "daintree-throwaway-1" });
+      expect(readClaudeUsageObservations()).toEqual([]);
+    });
   });
 
   it("returns false for unhandled event types", () => {

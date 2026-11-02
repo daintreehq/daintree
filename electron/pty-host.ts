@@ -1165,6 +1165,19 @@ events.on("agent:rate-limit-observed", (payload) => {
   });
 });
 
+events.on("agent:claude-usage-observed", (payload) => {
+  sendEvent({
+    type: "agent-claude-usage-observed",
+    terminalId: payload.terminalId,
+    window: payload.window,
+    statement: payload.statement,
+    usedPercent: payload.usedPercent,
+    resetsAt: payload.resetsAt,
+    observedAt: payload.observedAt,
+    timestamp: payload.timestamp,
+  });
+});
+
 events.on("agent:fallback-triggered", (payload) => {
   sendEvent({
     type: "agent-fallback-triggered",

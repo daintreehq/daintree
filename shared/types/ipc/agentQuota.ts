@@ -83,3 +83,46 @@ export interface CodexQuotaProfile {
   presetNames: string[];
   result: CodexQuotaProfileResult;
 }
+
+/**
+ * The limit a Claude Code usage message names (#15727), as it prints it: its
+ * 5-hour limit ("session limit" in older builds), its weekly limit, one
+ * model's, or an unqualified "usage limit" or "limit". Nothing is inferred
+ * from the name, such as a duration or which plan's limit it is.
+ */
+export const CLAUDE_USAGE_WINDOWS = [
+  "5-hour limit",
+  "session limit",
+  "weekly limit",
+  "Opus limit",
+  "Sonnet limit",
+  "Fable limit",
+  "usage limit",
+  "limit",
+] as const;
+
+export type ClaudeUsageWindow = (typeof CLAUDE_USAGE_WINDOWS)[number];
+
+/**
+ * What the message says about use: `used` names the percent, `over` a percent
+ * it is past, `approaching` gives no figure, and `reached` is a hit limit.
+ */
+export const CLAUDE_USAGE_STATEMENTS = ["used", "over", "approaching", "reached"] as const;
+
+export type ClaudeUsageStatement = (typeof CLAUDE_USAGE_STATEMENTS)[number];
+
+/**
+ * A usage message a Claude Code pane showed, as parsed fields only: the line
+ * itself is terminal content and never leaves the pty host (#12797).
+ */
+export interface ClaudeUsageObservation {
+  window: ClaudeUsageWindow;
+  statement: ClaudeUsageStatement;
+  /** The percent the message names: exact for `used`, a floor for `over`, else null. */
+  usedPercent: number | null;
+  /** Epoch ms of the reset the message names; null when it named none we could read. */
+  resetsAt: number | null;
+  terminalId: string;
+  /** Epoch ms the message appeared in the pane. */
+  observedAt: number;
+}

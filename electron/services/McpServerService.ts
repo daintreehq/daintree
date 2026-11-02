@@ -107,6 +107,7 @@ import type {
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
+import { readClaudeUsageObservations } from "./claude/ClaudeUsageObservations.js";
 import { wireMcpServerToConnectivityRegistry } from "./connectivity/index.js";
 
 // PluginService is loaded lazily, like every other main-side caller: it pulls in
@@ -510,6 +511,7 @@ export class McpServerService {
         const { readCodexQuota } = await import("./codex/CodexQuotaService.js");
         return readCodexQuota();
       },
+      readClaudeUsage: readClaudeUsageObservations,
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
