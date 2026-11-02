@@ -65,6 +65,46 @@ describe("useGridGroupAmbientState", () => {
     expect(result.current).toBeUndefined();
   });
 
+  it("waits for a hidden tab's observed ask without Canopy until the look marks it seen", () => {
+    fleet([
+      { runId: "shown", agentState: "waiting", waitingReason: "prompt" },
+      { runId: "hidden", agentState: "waiting", waitingReason: "question", wait: { stoppedAt: 0 } },
+    ]);
+    const { result } = renderHook(() => useGridGroupAmbientState(panels, "shown"));
+    expect(result.current).toBe("waiting");
+
+    fleet([
+      { runId: "shown", agentState: "waiting", waitingReason: "prompt" },
+      {
+        runId: "hidden",
+        agentState: "waiting",
+        waitingReason: "question",
+        wait: { stoppedAt: 0, seenAt: 1 },
+      },
+    ]);
+    expect(result.current).toBeUndefined();
+
+    // A new ask is a new wait, unseen again.
+    fleet([
+      { runId: "shown", agentState: "waiting", waitingReason: "prompt" },
+      { runId: "hidden", agentState: "waiting", waitingReason: "question", wait: { stoppedAt: 5 } },
+    ]);
+    expect(result.current).toBe("waiting");
+  });
+
+  it("lets Canopy's reading decide: a hidden question it read as asking nothing raises nothing", () => {
+    fleet([
+      {
+        runId: "hidden",
+        agentState: "waiting",
+        waitingReason: "question",
+        canopy: { kind: "not-asking", quote: "Done.", readAt: 0, seen: false },
+      },
+    ]);
+    const { result } = renderHook(() => useGridGroupAmbientState(panels, "shown"));
+    expect(result.current).toBeUndefined();
+  });
+
   it("hands the ask to the pane once its tab is the one shown", () => {
     fleet([{ runId: "hidden", agentState: "waiting", waitingReason: "question", canopy: ask }]);
     const { result, rerender } = renderHook(

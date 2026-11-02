@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { isNeedsYouPane, resolvePaneSessionPresentation } from "../paneSessionPresentation";
+import {
+  isNeedsYouPane,
+  isUnseenAskPane,
+  resolvePaneSessionPresentation,
+} from "../paneSessionPresentation";
 import { FLEET_BANDS } from "../fleetAttention";
 
 describe("resolvePaneSessionPresentation", () => {
@@ -86,5 +90,23 @@ describe("pane observation ahead of the band", () => {
         runtimeStatus: "error",
       })
     ).toBe("waiting");
+  });
+});
+
+describe("isUnseenAskPane", () => {
+  it("holds a pane the fleet reads as asking unseen while it is still stopped", () => {
+    for (const agentState of ["waiting", "completed", "idle", undefined] as const) {
+      expect(isUnseenAskPane(true, { agentState }), String(agentState)).toBe(true);
+      expect(isUnseenAskPane(false, { agentState }), String(agentState)).toBe(false);
+    }
+  });
+
+  it("drops it once the pane has seen the agent work, exit, restart or hit an error", () => {
+    for (const agentState of ["working", "directing", "exited"] as const) {
+      expect(isUnseenAskPane(true, { agentState }), agentState).toBe(false);
+    }
+    expect(isUnseenAskPane(true, { agentState: "waiting", waitingReason: "error" })).toBe(false);
+    expect(isUnseenAskPane(true, { agentState: "waiting", isRestarting: true })).toBe(false);
+    expect(isUnseenAskPane(true, { agentState: "waiting", runtimeStatus: "exited" })).toBe(false);
   });
 });

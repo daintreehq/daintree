@@ -164,7 +164,7 @@ describe("getGroupAmbientAgentState", () => {
     expect(getGroupAmbientAgentState(panels, NONE)).toBe(undefined);
   });
 
-  it("returns 'waiting' for a hidden tab the fleet places in needs-you, over work", () => {
+  it("returns 'waiting' for a hidden tab the fleet reads as asking unseen, over work", () => {
     const panels = [
       { id: "shown", agentState: "working" as const },
       { id: "asking", agentState: "completed" as const },
@@ -172,7 +172,7 @@ describe("getGroupAmbientAgentState", () => {
     expect(getGroupAmbientAgentState(panels, new Set(["asking"]), "shown")).toBe("waiting");
   });
 
-  it("takes no wait from a prompt, a hand-back or an unread wait the band doesn't call needs-you", () => {
+  it("takes no wait from a tab the fleet doesn't read as asking unseen", () => {
     const panels = [
       { id: "prompt", agentState: "waiting" as const, waitingReason: "prompt" as const },
       { id: "approval", agentState: "waiting" as const, waitingReason: "approval" as const },
@@ -187,7 +187,7 @@ describe("getGroupAmbientAgentState", () => {
     expect(getGroupAmbientAgentState(panels, new Set(["shown"]), "shown")).toBe(undefined);
   });
 
-  it("drops a needs-you tab its pane has since seen go back to work, exit or error", () => {
+  it("drops an asking tab its pane has since seen go back to work, exit or error", () => {
     const asking = new Set(["t"]);
     for (const panel of [
       { id: "t", agentState: "exited" as const },

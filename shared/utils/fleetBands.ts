@@ -1,5 +1,10 @@
 import type { FleetRunRow, RunCanopyRefinement } from "../types/ipc/fleet.js";
-import { isHandBackStop, isHandBackUnseen, isWaitUnseen } from "./runHandBack.js";
+import {
+  isHandBackStop,
+  isHandBackUnseen,
+  isObservedAskWait,
+  isWaitUnseen,
+} from "./runHandBack.js";
 import { canopyPlacement } from "./canopyRefinement.js";
 
 /**
@@ -131,6 +136,26 @@ export function bandForRun(run: BandableRun): FleetBand {
     default:
       return "idle";
   }
+}
+
+/**
+ * The run's current stop is an ask the user hasn't had in front of them: the
+ * moment the full-pane amber edge marks. Canopy's unread ask (`needs-you`), or,
+ * where no reading places the stop, an approval or question wait the patterns
+ * observed and the user hasn't seen — `review` for that reason alone, never for
+ * a hand-back or a question Canopy read as asking nothing.
+ *
+ * Read off the band, so the park, the snooze and Canopy keep their precedence,
+ * and the look that marks the wait seen drops it. Only the pane edge reads it:
+ * glyphs and counts keep to the band, where an observed ask is unread news and
+ * never a demand.
+ */
+export function isUnseenAsk(run: BandableRun, band: FleetBand = bandForRun(run)): boolean {
+  if (band === "needs-you") return true;
+  if (band !== "review" || run.agentState === undefined) return false;
+  return (
+    isObservedAskWait(run.agentState, run.waitingReason) && runCanopyPlacement(run) === undefined
+  );
 }
 
 /** The Canopy refinement placing this run now, if any; see `canopyPlacement`. */

@@ -2,12 +2,13 @@ import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import {
   FLEET_BANDS,
   bandForRun,
+  isUnseenAsk,
   runCanopyPlacement,
   type FleetBand,
 } from "@shared/utils/fleetBands";
 import { isHandBackStop } from "@shared/utils/runHandBack";
 
-export { FLEET_BANDS, bandForRun, runCanopyPlacement, type FleetBand };
+export { FLEET_BANDS, bandForRun, isUnseenAsk, runCanopyPlacement, type FleetBand };
 
 /** Bands that constitute a demand on the user — the ones an idle fleet has none of. */
 export const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
@@ -84,8 +85,38 @@ export function fleetBandRunKey(
   return key;
 }
 
-/** The one band amber stands for: a Canopy reading of an ask the user hasn't seen. */
+/**
+ * The one band the amber glyph and the counts stand for: a Canopy reading of an
+ * ask the user hasn't seen. The pane edge reads the wider {@link isUnseenAsk}.
+ */
 export const NEEDS_YOU_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["needs-you"]);
+
+const unseenAskCache = new WeakMap<FleetSnapshot, { ids: ReadonlySet<string>; key: string }>();
+
+function unseenAsks(snapshot: FleetSnapshot): { ids: ReadonlySet<string>; key: string } {
+  let entry = unseenAskCache.get(snapshot);
+  if (entry === undefined) {
+    const ids = snapshot.runs.filter((run) => isUnseenAsk(run)).map((run) => run.runId);
+    entry = { ids: new Set(ids), key: ids.sort().join("\n") };
+    unseenAskCache.set(snapshot, entry);
+  }
+  return entry;
+}
+
+/**
+ * Every run whose current stop is an ask the user hasn't seen, as one sorted
+ * string of run ids: what the pane edge draws amber for. Like
+ * {@link fleetBandRunKey}, a primitive cached per snapshot, and nobody before
+ * the first snapshot.
+ */
+export function fleetUnseenAskRunKey(snapshot: FleetSnapshot | null): string {
+  return snapshot === null ? "" : unseenAsks(snapshot).key;
+}
+
+/** Whether one run (`runId` is the terminal id) asks unseen; false before the snapshot arrives. */
+export function isFleetUnseenAsk(snapshot: FleetSnapshot | null, runId: string): boolean {
+  return snapshot !== null && unseenAsks(snapshot).ids.has(runId);
+}
 
 const bandIndexCache = new WeakMap<FleetSnapshot, Map<string, FleetBand>>();
 

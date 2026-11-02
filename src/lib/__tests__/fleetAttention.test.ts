@@ -10,8 +10,11 @@ import {
   FLEET_BANDS,
   fleetBandForRun,
   fleetBandRunKey,
+  fleetUnseenAskRunKey,
   isAttentionBand,
   isDemandBand,
+  isFleetUnseenAsk,
+  isUnseenAsk,
   NEEDS_YOU_BANDS,
   UNREAD_FILTER_BANDS,
 } from "../fleetAttention";
@@ -33,7 +36,7 @@ describe("bandForRun", () => {
   it("reads an error wait as blocked and an unread ask wait no reading placed as review", () => {
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "error" }))).toBe("blocked");
     for (const waitingReason of ["question", "approval"] as const) {
-      // The patterns' guess is news, never a demand: no reading, no amber.
+      // The patterns' guess is news, never a demand: unread, not needs-you.
       expect(bandForRun(run({ agentState: "waiting", waitingReason }))).toBe("review");
       const unseen = run({ agentState: "waiting", waitingReason, wait: { stoppedAt: NOW } });
       expect(bandForRun(unseen)).toBe("review");
@@ -696,6 +699,28 @@ describe("fleetBandRunKey", () => {
     ]);
   });
 
+  it("holds Canopy's unread asks and unseen observed waits for the pane edge", () => {
+    expect(fleetUnseenAskRunKey(fleet).split("\n")).toEqual([
+      "approval",
+      "canopy-approval",
+      "canopy-ask",
+    ]);
+    expect(isFleetUnseenAsk(fleet, "approval")).toBe(true);
+    expect(isFleetUnseenAsk(fleet, "looked-approval")).toBe(false);
+    expect(isFleetUnseenAsk(fleet, "unread")).toBe(false);
+    expect(isFleetUnseenAsk(fleet, "parked-ask")).toBe(false);
+    expect(isFleetUnseenAsk(fleet, "missing")).toBe(false);
+    for (const r of fleet.runs) expect(isFleetUnseenAsk(fleet, r.runId)).toBe(isUnseenAsk(r));
+  });
+
+  it("holds no unseen ask before the first snapshot, and the same set in any order", () => {
+    expect(fleetUnseenAskRunKey(null)).toBe("");
+    expect(isFleetUnseenAsk(null, "approval")).toBe(false);
+    expect(fleetUnseenAskRunKey(snapshot([...fleet.runs].reverse()))).toBe(
+      fleetUnseenAskRunKey(fleet)
+    );
+  });
+
   it("holds nobody before the first snapshot", () => {
     expect(fleetBandRunKey(null, ATTENTION_FILTER_BANDS)).toBe("");
     expect(fleetBandRunKey(snapshot([]), UNREAD_FILTER_BANDS)).toBe("");
@@ -717,5 +742,112 @@ describe("fleetBandRunKey", () => {
     expect(one(unseen)).toBe("t1");
     expect(one(seen)).toBe("");
     expect(one({ ...seen, markedUnreadAt: NOW })).toBe("t1");
+  });
+});
+
+describe("isUnseenAsk", () => {
+  const unseenWait = { stoppedAt: NOW - 60_000 };
+  const seenWait = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+  const asked = { kind: "asked", quote: "Ship it?", readAt: NOW, seen: false } as const;
+  const notAsking = {
+    kind: "not-asking",
+    quote: "All tests pass.",
+    readAt: NOW,
+    seen: false,
+  } as const;
+
+  it("reads an observed approval or question wait as an ask until it is seen", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      expect(isUnseenAsk(run({ agentState: "waiting", waitingReason }))).toBe(true);
+      expect(isUnseenAsk(run({ agentState: "waiting", waitingReason, wait: unseenWait }))).toBe(
+        true
+      );
+      expect(isUnseenAsk(run({ agentState: "waiting", waitingReason, wait: seenWait }))).toBe(
+        false
+      );
+    }
+  });
+
+  it("follows Canopy's read mark where its reading applies", () => {
+    for (const waitingReason of [undefined, "prompt", "approval", "question"] as const) {
+      expect(isUnseenAsk(run({ agentState: "waiting", waitingReason, canopy: asked }))).toBe(true);
+      // A seen ask stays seen even though the wait's own record is unseen.
+      expect(
+        isUnseenAsk(
+          run({
+            agentState: "waiting",
+            waitingReason,
+            wait: unseenWait,
+            canopy: { ...asked, seen: true },
+          })
+        )
+      ).toBe(false);
+    }
+    expect(isUnseenAsk(run({ agentState: "completed", handBack: seenWait, canopy: asked }))).toBe(
+      true
+    );
+  });
+
+  it("draws nothing for a question Canopy read as asking nothing, seen or not", () => {
+    for (const seen of [false, true]) {
+      const row = run({
+        agentState: "waiting",
+        waitingReason: "question",
+        wait: unseenWait,
+        canopy: { ...notAsking, seen },
+      });
+      expect(isUnseenAsk(row)).toBe(false);
+    }
+    // A reading never clears an approval Daintree observed itself.
+    expect(
+      isUnseenAsk(run({ agentState: "waiting", waitingReason: "approval", canopy: notAsking }))
+    ).toBe(true);
+  });
+
+  it("is never a prompt, a hand-back, an error, work, or a run the user set aside", () => {
+    const quiet = [
+      run({ agentState: "waiting" }),
+      run({ agentState: "waiting", waitingReason: "prompt", wait: unseenWait }),
+      run({ agentState: "waiting", handBack: unseenWait }),
+      run({ agentState: "completed", handBack: unseenWait }),
+      run({ agentState: "waiting", waitingReason: "error", wait: unseenWait }),
+      run({ agentState: "working", wait: unseenWait }),
+      run({ agentState: "idle" }),
+      run({ agentState: "exited" }),
+      run({ agentState: "waiting", waitingReason: "approval", park: { parkedAt: NOW } }),
+      run({
+        agentState: "waiting",
+        waitingReason: "question",
+        snooze: { snoozedAt: NOW - 60_000, snoozedUntil: NOW + 900_000 },
+      }),
+    ];
+    for (const row of quiet) expect(isUnseenAsk(row), JSON.stringify(row)).toBe(false);
+  });
+
+  it("covers every needs-you run and otherwise only unread ones", () => {
+    const states = [
+      { agentState: "completed" },
+      { agentState: "waiting" },
+      { agentState: "waiting", waitingReason: "prompt" },
+      { agentState: "waiting", waitingReason: "question" },
+      { agentState: "waiting", waitingReason: "approval" },
+      { agentState: "waiting", waitingReason: "error" },
+      { agentState: "working" },
+      { agentState: "idle" },
+    ] as const;
+    const canopies = [undefined, asked, { ...asked, seen: true }, notAsking];
+    for (const state of states) {
+      for (const handBack of [undefined, unseenWait, seenWait]) {
+        for (const wait of [undefined, unseenWait, seenWait]) {
+          for (const canopy of canopies) {
+            const row = run({ ...state, handBack, wait, canopy });
+            const band = bandForRun(row);
+            const key = JSON.stringify({ state, handBack, wait, canopy });
+            if (band === "needs-you") expect(isUnseenAsk(row), key).toBe(true);
+            else if (band !== "review") expect(isUnseenAsk(row), key).toBe(false);
+          }
+        }
+      }
+    }
   });
 });

@@ -40,13 +40,25 @@ function isStillStopped(pane: PaneObservation): boolean {
 /**
  * A pane the fleet places in `needs-you` — Canopy read an ask on its current
  * turn that the user hasn't had in front of them — and still stopped as the
- * pane last saw it. The only thing pane chrome draws amber for.
+ * pane last saw it. What the amber glyph and the counts stand for; the pane
+ * edge reads the wider {@link isUnseenAskPane}.
  */
 export function isNeedsYouPane(
   needsYouRunIds: ReadonlySet<string>,
   panel: PaneObservation & { id: string }
 ): boolean {
   return needsYouRunIds.has(panel.id) && isStillStopped(panel);
+}
+
+/**
+ * A pane whose current stop the fleet reads as an ask the user hasn't seen
+ * (`isUnseenAsk`: Canopy's unread ask, or, with no reading placing it, an
+ * observed approval or question wait not yet looked at), still stopped as the
+ * pane last saw it. What the full-pane amber edge draws for, the pane's own or
+ * a hidden tab's.
+ */
+export function isUnseenAskPane(unseenAsk: boolean, pane: PaneObservation): boolean {
+  return unseenAsk && isStillStopped(pane);
 }
 
 /**
@@ -61,8 +73,9 @@ export function isNeedsYouPane(
  * nothing, a seen ask, the user's own park or snooze, or no fleet report yet —
  * resolves to nothing, since none of them is news: list rows leave it unmarked,
  * and the pane header, whose glyph is its permanent status, draws its own grey
- * waiting ring. Work in flight keeps the state observed. The grid edge reads
- * its amber from here too, so the two agree.
+ * waiting ring. Work in flight keeps the state observed. The grid edge's amber
+ * is {@link isUnseenAskPane}, which an observed ask reaches too: the edge marks
+ * the moment, the glyph keeps to the band.
  */
 export function resolvePaneSessionPresentation(
   displayState: AgentState | undefined,
