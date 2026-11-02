@@ -9,7 +9,6 @@ import { findOnPath } from "../../utils/findOnPath.js";
 import { scanWindowsPath } from "../../utils/windowsExecutable.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
-import { readDefaultEditor } from "../../services/defaultEditor.js";
 import { resolveEffectiveEditor, type EditorConfig } from "../../../shared/types/editor.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { resolveContainedPath, assertExtensionAllowed } from "./pathGuard.js";
@@ -356,6 +355,7 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
         // ignore — the default and then EditorService's own order still apply
       }
     }
+    const { readDefaultEditor } = await import("../../services/defaultEditor.js");
     const editorConfig = resolveEffectiveEditor(projectEditor, readDefaultEditor());
 
     const { openFile } = await import("../../services/EditorService.js");

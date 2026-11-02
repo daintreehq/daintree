@@ -446,6 +446,9 @@ describe("settings splits", () => {
     const { invoke, listener } = setup(forward, () => "local");
     await invoke(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE, [{ projectId: "p1" }]);
     expect(forward).toHaveBeenCalledTimes(1);
+    expect(forward).toHaveBeenCalledWith(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE, [
+      { projectId: "p1" },
+    ]);
     expect(listener).not.toHaveBeenCalled();
   });
 

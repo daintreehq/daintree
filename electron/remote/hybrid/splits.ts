@@ -30,7 +30,6 @@ import type { HybridSplit } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
 import { composeBootResult, readShellHydrateFields } from "../../ipc/handlers/app/state.js";
 import { readHydrateTerminalConfig } from "../../services/AppHydrationService.js";
-import { readDefaultEditor } from "../../services/defaultEditor.js";
 import { store } from "../../store.js";
 import {
   APP_STATE_FIELD_OWNERSHIP,
@@ -418,6 +417,7 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
       // No preference readable: this machine's default still gets a chance.
     }
   }
+  const { readDefaultEditor } = await import("../../services/defaultEditor.js");
   const editorId = resolveEffectiveEditor(preferredEditor, readDefaultEditor())?.id ?? null;
 
   // The editor's own remote: SSH for an ssh host, WSL for a distro on this PC.

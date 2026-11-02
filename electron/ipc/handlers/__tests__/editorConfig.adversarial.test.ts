@@ -272,10 +272,22 @@ describe("editorConfig IPC adversarial", () => {
       expect(storeData.get("defaultEditor")).toEqual({ id: "antigravity-ide" });
     });
 
-    it("clearProjectPreference writes nothing for a project already on the default", async () => {
+    it("clearProjectPreference writes nothing for a project already on the fallback", async () => {
       projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+      // With a default and without one: the project has no choice to clear either way.
+      await getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "p1" });
+      storeData.set("defaultEditor", { id: "antigravity-ide" });
       await getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "p1" });
       expect(projectStoreMock.saveProjectSettings).not.toHaveBeenCalled();
+    });
+
+    it("clearProjectPreference clears a saved choice when no default is set", async () => {
+      projectStoreMock.getProjectSettings.mockResolvedValue({
+        runCommands: [],
+        preferredEditor: { id: "zed" },
+      });
+      await getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "p1" });
+      expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledWith("p1", { runCommands: [] });
     });
 
     it("clearProjectPreference refuses a call without a project", async () => {

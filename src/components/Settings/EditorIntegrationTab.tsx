@@ -52,6 +52,18 @@ function editorLabel(editor: EditorConfig): string {
     : EDITOR_LABELS[editor.id];
 }
 
+/**
+ * A stored config as draft fields, kept as stored: a custom editor saved without
+ * a template drafts an empty one, so an untouched draft matches what is saved.
+ */
+function draftFieldsOf(config: EditorConfig) {
+  return {
+    id: config.id,
+    command: config.customCommand ?? "",
+    template: config.id === "custom" ? (config.customTemplate ?? "") : DEFAULT_CUSTOM_TEMPLATE,
+  };
+}
+
 function sameEditor(a: EditorConfig | null, b: EditorConfig): boolean {
   if (!a || a.id !== b.id) return false;
   if (b.id !== "custom") return true;
@@ -94,10 +106,8 @@ export function EditorIntegrationTab() {
   const activeProjectPath = useProjectStore((s) => s.currentProject?.path);
   const activeProjectName = useProjectStore((s) => s.currentProject?.name);
   // A write that lands after the project changed belongs to the old project's view.
-  const activeProjectIdRef = useRef(activeProjectId);
-  activeProjectIdRef.current = activeProjectId;
   const isCurrentProject = (projectId: string) =>
-    isMountedRef.current && activeProjectIdRef.current === projectId;
+    isMountedRef.current && useProjectStore.getState().currentProject?.id === projectId;
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -122,9 +132,10 @@ export function EditorIntegrationTab() {
         // The draft starts at what a launch would try first.
         const effective = pref ?? fallback ?? null;
         if (effective) {
-          setSelectedId(effective.id);
-          setCustomCommand(effective.customCommand ?? "");
-          setCustomTemplate(effective.customTemplate ?? DEFAULT_CUSTOM_TEMPLATE);
+          const draft = draftFieldsOf(effective);
+          setSelectedId(draft.id);
+          setCustomCommand(draft.command);
+          setCustomTemplate(draft.template);
         } else {
           // Auto-select first available
           const first = discovered.find((d) => d.available);
@@ -243,9 +254,10 @@ export function EditorIntegrationTab() {
       setPreferredEditor(null);
       setCommandError(null);
       if (defaultEditor) {
-        setSelectedId(defaultEditor.id);
-        setCustomCommand(defaultEditor.customCommand ?? "");
-        setCustomTemplate(defaultEditor.customTemplate ?? DEFAULT_CUSTOM_TEMPLATE);
+        const draft = draftFieldsOf(defaultEditor);
+        setSelectedId(draft.id);
+        setCustomCommand(draft.command);
+        setCustomTemplate(draft.template);
       }
     } catch (err) {
       if (!isCurrentProject(projectId)) return;

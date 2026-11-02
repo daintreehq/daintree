@@ -1,5 +1,4 @@
 import { projectStore } from "../../services/ProjectStore.js";
-import { readDefaultEditor, writeDefaultEditor } from "../../services/defaultEditor.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   EditorClearProjectPreferencePayload,
@@ -36,7 +35,10 @@ export const editorConfigNamespace = defineIpcNamespace({
     getConfig: op(
       EDITOR_CONFIG_METHOD_CHANNELS.getConfig,
       async (projectId?: string): Promise<EditorGetConfigResult> => {
-        const { discover } = await import("../../services/EditorService.js");
+        const [{ discover }, { readDefaultEditor }] = await Promise.all([
+          import("../../services/EditorService.js"),
+          import("../../services/defaultEditor.js"),
+        ]);
         const [discoveredEditors, preferredEditor] = await Promise.all([
           discover(),
           readProjectEditor(projectId),
@@ -73,6 +75,7 @@ export const editorConfigNamespace = defineIpcNamespace({
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
+        const { writeDefaultEditor } = await import("../../services/defaultEditor.js");
         writeDefaultEditor((payload as unknown as { editor: unknown }).editor);
       }
     ),

@@ -581,5 +581,106 @@ describe("EditorIntegrationTab", () => {
       expect(isOff(button("Test saved editor"))).toBe(true);
       expect(screen.getByText(/Unsaved changes/)).toBeTruthy();
     });
+
+    it("opens a custom default saved without a template as saved, not as an edit", async () => {
+      await renderWith(
+        { preferredEditor: null, defaultEditor: { id: "custom", customCommand: "hx" } },
+        /Using default:/
+      );
+
+      expect(
+        (screen.getByRole("textbox", { name: "Arguments template" }) as HTMLInputElement).value
+      ).toBe("");
+      expect(screen.queryByText(/Unsaved changes/)).toBeNull();
+      expect(isOff(button("Set default"))).toBe(true);
+      expect(isOff(button("Test saved editor"))).toBe(false);
+    });
+
+    it("refetches settings after a reset rather than serving the cleared choice from cache", async () => {
+      // The cache entry expires 500ms after it is written; a frozen clock keeps it live.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      try {
+        ipcGetSettings
+          .mockResolvedValueOnce({ runCommands: [], preferredEditor: { id: "vscode" } })
+          .mockResolvedValue({ runCommands: [] });
+        await renderWith(
+          { preferredEditor: { id: "vscode" }, defaultEditor: { id: "antigravity-ide" } },
+          /Saved:/
+        );
+        await projectClient.getSettings("proj-1");
+        await projectClient.getSettings("proj-1");
+        expect(ipcGetSettings).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(button("Reset editor to default"));
+        await screen.findByText(/Using default:/);
+
+        const afterReset = await projectClient.getSettings("proj-1");
+        expect(ipcGetSettings).toHaveBeenCalledTimes(2);
+        expect(afterReset.preferredEditor).toBeUndefined();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("holds every other write while one is in flight", async () => {
+      let settle!: () => void;
+      setConfigMock.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          })
+      );
+      await renderWith(
+        { preferredEditor: { id: "vscode" }, defaultEditor: { id: "antigravity-ide" } },
+        /Saved:/
+      );
+      selectEditor("sublime");
+      fireEvent.click(button(/^save$/i));
+
+      await waitFor(() => expect(setConfigMock).toHaveBeenCalledTimes(1));
+      expect(isOff(button("Set default"))).toBe(true);
+      expect(screen.queryByRole("button", { name: "Reset editor to default" })).toBeNull();
+
+      await act(async () => {
+        settle();
+      });
+      expect(await screen.findByText("Saved:", { exact: false })).toBeTruthy();
+      expect(isOff(button("Set default"))).toBe(false);
+    });
+
+    it("keeps a save that lands after a project switch off the new project's page", async () => {
+      let settle!: () => void;
+      setConfigMock.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          })
+      );
+      await renderWith({ preferredEditor: null, defaultEditor: null }, /Not saved yet/);
+      selectEditor("sublime");
+      fireEvent.click(button(/^save$/i));
+      await waitFor(() => expect(setConfigMock).toHaveBeenCalledTimes(1));
+
+      getConfigMock.mockResolvedValue({
+        preferredEditor: null,
+        defaultEditor: null,
+        discoveredEditors: DISCOVERED,
+      });
+      act(() => {
+        useProjectStore.setState({
+          currentProject: { ...TEST_PROJECT, id: "proj-2", name: "Other" },
+        });
+      });
+      await waitFor(() => expect(getConfigMock).toHaveBeenCalledWith("proj-2"));
+      await screen.findByText(/Not saved yet/);
+
+      await act(async () => {
+        settle();
+      });
+
+      expect(setConfigMock).toHaveBeenCalledWith(expect.objectContaining({ projectId: "proj-1" }));
+      expect(screen.queryByText(/Saved:/)).toBeNull();
+      expect(screen.getByText(/Not saved yet/)).toBeTruthy();
+    });
   });
 });
