@@ -197,10 +197,12 @@ describe("When done in the preview (#16172)", () => {
     expect(
       describeTerminal({ type: "claude", initialPrompt: "Review", whenDone: "background" })
     ).toContain("when done: move to background");
-    // No prompt, nothing armed; a shell step never is.
-    expect(describeTerminal({ type: "claude", whenDone: "close" }).join("\n")).not.toContain(
-      "when done"
-    );
+    // No prompt, a blank one or a slash command arms nothing; a shell step never is.
+    for (const initialPrompt of [undefined, "   ", "/prompts:merge-prs"]) {
+      expect(
+        describeTerminal({ type: "claude", initialPrompt, whenDone: "close" }).join("\n")
+      ).not.toContain("when done");
+    }
     expect(
       describeTerminal({
         type: "terminal",

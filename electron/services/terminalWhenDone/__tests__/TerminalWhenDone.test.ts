@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendHandbackInstruction,
   buildHandbackInstruction,
@@ -16,7 +16,9 @@ const SPAWNED_AT = 1_800_000_000_040;
 const PROJECT = "project-1";
 const TERMINAL = "terminal-1";
 
-function setup(options: { outcome?: WhenDoneOutcome; hold?: boolean } = {}) {
+function setup(
+  options: { outcome?: WhenDoneOutcome; hold?: boolean; launchTimeoutMs?: number } = {}
+) {
   let generation: number | undefined = 4;
   let shuttingDown = false;
   let nextCode = 0;
@@ -51,6 +53,7 @@ function setup(options: { outcome?: WhenDoneOutcome; hold?: boolean } = {}) {
     onActiveChange: (value) => active.push(value),
     mintCode: () => `code0${nextCode++}`,
     logWarn: () => {},
+    launchConfirmationTimeoutMs: options.launchTimeoutMs,
   });
   return {
     service,
@@ -413,7 +416,13 @@ describe("TerminalWhenDone lifecycle", () => {
 });
 
 describe("TerminalWhenDone launch arming (#16172)", () => {
-  const launch = (overrides: Partial<{ launchGeneration: number; code: string }> = {}) => ({
+  const launch = (
+    overrides: Partial<{
+      launchGeneration: number;
+      code: string;
+      choice: "background" | "close";
+    }> = {}
+  ) => ({
     terminalId: TERMINAL,
     projectId: PROJECT,
     launchGeneration: 4,
@@ -441,6 +450,7 @@ describe("TerminalWhenDone launch arming (#16172)", () => {
     expect(notified).toEqual([]);
 
     service.handleSpawnResult(TERMINAL, confirmed);
+    service.handleSpawnResult(TERMINAL, confirmed);
 
     expect(service.list(PROJECT)).toEqual([{ terminalId: TERMINAL, choice: "close" }]);
     expect(notified).toEqual([{ terminalId: TERMINAL, choice: "close" }]);
@@ -449,14 +459,14 @@ describe("TerminalWhenDone launch arming (#16172)", () => {
 
   it("applies the choice when the launch prompt's code reports done", async () => {
     const { service, applied } = setup();
-    service.armLaunch(launch());
+    service.armLaunch(launch({ choice: "background" }));
     service.handleSpawnResult(TERMINAL, confirmed);
 
     service.handleReport(done("launch"));
     await flush();
 
     expect(applied).toHaveLength(1);
-    expect(applied[0]).toMatchObject({ choice: "close", spawnedAt: SPAWNED_AT });
+    expect(applied[0]).toMatchObject({ choice: "background", spawnedAt: SPAWNED_AT });
   });
 
   it("acts on no report before the spawn is confirmed", async () => {
@@ -470,15 +480,26 @@ describe("TerminalWhenDone launch arming (#16172)", () => {
     expect(service.peek(TERMINAL)?.outstanding).toBe("launch");
   });
 
-  it("drops a launch whose spawn failed, silently and without touching listeners twice", () => {
+  it("drops a launch whose spawn failed, silently", () => {
     const { service, notified, active } = setup();
     service.armLaunch(launch());
 
-    service.handleSpawnResult(TERMINAL, { success: false, launchGeneration: 4 });
+    service.handleSpawnResult(TERMINAL, { ...confirmed, success: false });
+    service.handleSpawnResult(TERMINAL, { ...confirmed, success: false });
 
     expect(service.peek(TERMINAL)).toBeUndefined();
     expect(notified).toEqual([]);
     expect(active).toEqual([true, false]);
+  });
+
+  it("drops a launch whose confirmation names no incarnation", () => {
+    const { service, notified } = setup();
+    service.armLaunch(launch());
+
+    service.handleSpawnResult(TERMINAL, { success: true, launchGeneration: 4 });
+
+    expect(service.peek(TERMINAL)).toBeUndefined();
+    expect(notified).toEqual([]);
   });
 
   it("ignores another generation's spawn result", () => {
@@ -508,13 +529,19 @@ describe("TerminalWhenDone launch arming (#16172)", () => {
     const { service, apply } = setup();
     service.armLaunch(launch());
 
-    expect(service.decorate(TERMINAL, "and then this")?.handbackCode).toBe("code00");
+    expect(service.decorate(TERMINAL, "and then this")).toEqual({
+      text: appendHandbackInstruction("and then this", "code00", "run"),
+      handbackCode: "code00",
+      handbackInstruction: "run",
+    });
     service.handleSpawnResult(TERMINAL, confirmed);
     service.handleReport(done("launch"));
     await flush();
-
     expect(apply).not.toHaveBeenCalled();
-    expect(service.peek(TERMINAL)?.outstanding).toBe("code00");
+
+    service.handleReport(done("code00"));
+    await flush();
+    expect(apply).toHaveBeenCalledTimes(1);
   });
 
   it("is dropped by an exit, a lost host or Keep before it is confirmed", async () => {
@@ -522,16 +549,62 @@ describe("TerminalWhenDone launch arming (#16172)", () => {
     exited.service.armLaunch(launch());
     exited.service.handleExit(TERMINAL, SPAWNED_AT);
     expect(exited.service.peek(TERMINAL)).toBeUndefined();
+    expect(exited.notified).toEqual([]);
+    expect(exited.active).toEqual([true, false]);
 
     const lost = setup();
     lost.service.armLaunch(launch());
+    lost.service.handleIncarnationLost(TERMINAL, 3);
+    expect(lost.service.peek(TERMINAL)).toBeDefined();
     lost.service.handleIncarnationLost(TERMINAL, 4);
     expect(lost.service.peek(TERMINAL)).toBeUndefined();
+    expect(lost.notified).toEqual([]);
 
     const kept = setup();
     kept.service.armLaunch(launch());
     await kept.service.set(TERMINAL, "keep", PROJECT);
     expect(kept.service.peek(TERMINAL)).toBeUndefined();
     expect(kept.notified).toEqual([]);
+  });
+
+  describe("a spawn the host never confirms", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("is dropped, silently, once its bound passes", () => {
+      const { service, notified, active } = setup({ launchTimeoutMs: 1_000 });
+      service.armLaunch(launch());
+
+      vi.advanceTimersByTime(999);
+      expect(service.peek(TERMINAL)).toBeDefined();
+      vi.advanceTimersByTime(1);
+      expect(service.peek(TERMINAL)).toBeUndefined();
+      expect(notified).toEqual([]);
+      expect(active).toEqual([true, false]);
+
+      // A late confirmation arms nothing.
+      service.handleSpawnResult(TERMINAL, confirmed);
+      expect(service.list(PROJECT)).toEqual([]);
+    });
+
+    it("never drops a confirmed launch or a choice picked from the menu meanwhile", async () => {
+      const confirmedLaunch = setup({ launchTimeoutMs: 1_000 });
+      confirmedLaunch.service.armLaunch(launch());
+      confirmedLaunch.service.handleSpawnResult(TERMINAL, confirmed);
+      vi.advanceTimersByTime(5_000);
+      expect(confirmedLaunch.service.list(PROJECT)).toEqual([
+        { terminalId: TERMINAL, choice: "close" },
+      ]);
+
+      const picked = setup({ launchTimeoutMs: 1_000 });
+      picked.service.armLaunch(launch());
+      await picked.service.set(TERMINAL, "background", PROJECT);
+      vi.advanceTimersByTime(5_000);
+      expect(picked.service.peek(TERMINAL)?.choice).toBe("background");
+    });
   });
 });

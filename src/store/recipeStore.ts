@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { isAgentRecipeType, isPluginRecipe } from "@shared/types/project";
+import { isAgentRecipeType, isPluginRecipe, promptCarriesWhenDone } from "@shared/types/project";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
@@ -1509,10 +1509,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
             // A step's When done (#16172) is armed on this launch alone, its
             // prompt the request a fresh code answers. A step that launches
-            // with no prompt has no request to answer; its pane is armed from
-            // the menu like any other.
+            // with no prompt, or a slash command, has no request to answer;
+            // its pane is armed from the menu like any other.
             const whenDone =
-              initialPrompt && (terminal.whenDone === "background" || terminal.whenDone === "close")
+              promptCarriesWhenDone(initialPrompt) &&
+              (terminal.whenDone === "background" || terminal.whenDone === "close")
                 ? terminal.whenDone
                 : undefined;
             const handbackCode = whenDone !== undefined ? mintHandbackCode() : undefined;

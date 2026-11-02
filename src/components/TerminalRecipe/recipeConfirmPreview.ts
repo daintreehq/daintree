@@ -1,5 +1,5 @@
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types";
-import { isAgentRecipeType } from "@shared/types/project";
+import { isAgentRecipeType, promptCarriesWhenDone } from "@shared/types/project";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { pluralize } from "@/lib/pluralize";
@@ -68,8 +68,8 @@ export function describeTerminal(
   if (terminal.systemPrompt) {
     lines.push(`system prompt: ${fragment(terminal.systemPrompt)}`);
   }
-  // Only a launch with a prompt is armed (#16172).
-  if (terminal.initialPrompt && isAgentRecipeType(terminal.type)) {
+  // Only a launch whose prompt can carry the instruction is armed (#16172).
+  if (promptCarriesWhenDone(terminal.initialPrompt) && isAgentRecipeType(terminal.type)) {
     if (terminal.whenDone === "background") lines.push("when done: move to background");
     if (terminal.whenDone === "close") lines.push("when done: close, keeping the session");
   }

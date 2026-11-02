@@ -503,8 +503,30 @@ describe("RecipeEditor", () => {
       await pick("terminal-when-done-0", "Close, keeping the session");
       expect((await save())[0]?.whenDone).toBe("close");
 
+      await pick("terminal-when-done-0", "Move to background");
+      expect((await save())[0]?.whenDone).toBe("background");
+
       await pick("terminal-when-done-0", "Keep open (default)");
       expect((await save())[0]?.whenDone).toBeUndefined();
+    });
+
+    it("carries the choice to another agent", async () => {
+      renderEditor({ ...AGENT, terminals: [{ ...AGENT.terminals[0]!, whenDone: "close" }] });
+      await pick("terminal-type-0", "Codex");
+      expect((await save())[0]).toMatchObject({ type: "codex", whenDone: "close" });
+    });
+
+    it("names why a slash-command prompt can't set it", () => {
+      renderEditor({
+        ...AGENT,
+        terminals: [
+          { type: "codex", title: "Merge", initialPrompt: "/prompts:merge-prs", env: {} },
+        ],
+      });
+      expect(document.getElementById("terminal-when-done-0")!.hasAttribute("disabled")).toBe(true);
+      expect(document.getElementById("terminal-when-done-help-0")?.textContent).toContain(
+        "slash command"
+      );
     });
 
     it("offers it only once the step has a prompt, pointing at the terminal menu until then", () => {

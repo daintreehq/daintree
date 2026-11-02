@@ -1341,7 +1341,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // A recipe step's When done (#16172) arms only a fresh agent launch whose
       // prompt carries the instruction for its code, asked for by the
       // project's driver: never the Assistant, a scheduled run, a restore, or
-      // an id that already ran, which a restart or a resume would be.
+      // an id main has a launch on record for, which a restart or a resume
+      // would be. A live id is refused by the host, which drops the arming.
       const whenDone =
         whenDoneLive !== null &&
         validatedOptions.handbackCode !== undefined &&

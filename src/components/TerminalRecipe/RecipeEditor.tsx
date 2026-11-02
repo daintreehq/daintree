@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { FolderGit2, FolderOpen, GitBranch, Globe, Plus, Trash2 } from "lucide-react";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { isAgentRecipeType } from "@shared/types/project";
+import { isAgentRecipeType, promptCarriesWhenDone } from "@shared/types/project";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -576,20 +576,23 @@ export function RecipeEditor({
     const helpId = `terminal-when-done-help-${index}`;
     // The launch arms the pane only through its prompt, the request the agent
     // answers (#16172); without one the pane is armed from its menu.
-    const hasPrompt = !!terminal.initialPrompt?.trim();
+    const armable = promptCarriesWhenDone(terminal.initialPrompt);
+    const isSlashCommand = !!terminal.initialPrompt?.trim().startsWith("/");
     return (
       <FormRow
         label="When done"
         htmlFor={id}
         hint={hint(
           helpId,
-          hasPrompt
+          armable
             ? "What the terminal does once its agent reports the prompt done"
-            : "Add an initial prompt to set this, or choose When done from the terminal menu once it runs"
+            : isSlashCommand
+              ? "Not available for a slash command; choose When done from the terminal menu once it runs"
+              : "Add an initial prompt to set this, or choose When done from the terminal menu once it runs"
         )}
       >
         <Select
-          value={hasPrompt ? normalizeWhenDone(terminal) : "keep"}
+          value={armable ? normalizeWhenDone(terminal) : "keep"}
           onValueChange={(value) => {
             const newTerminals = [...terminals];
             const current = newTerminals[index];
@@ -600,7 +603,7 @@ export function RecipeEditor({
             };
             setTerminals(newTerminals);
           }}
-          disabled={isSaving || !hasPrompt}
+          disabled={isSaving || !armable}
         >
           <SelectTrigger id={id} aria-describedby={helpId} className={FIELD_CONTROL_SIZE}>
             <SelectValue />

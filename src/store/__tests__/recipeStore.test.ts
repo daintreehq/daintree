@@ -1125,10 +1125,13 @@ describe("recipeStore", () => {
         expect(first).toMatchObject({ whenDone: "close", handbackCode: expect.any(String) });
         expect(second).toMatchObject({ whenDone: "background", handbackCode: expect.any(String) });
         expect(first!.handbackCode).not.toBe(second!.handbackCode);
-        const code = first!.handbackCode as string;
+        for (const options of [first!, second!]) {
+          const code = options.handbackCode as string;
+          expect(code).toMatch(/^[a-z0-9]{6}$/);
+          expect(options.command).toContain(`DAINTREE-DONE-${code}`);
+          expect(options.command).toContain(`DAINTREE-NEEDS-YOU-${code}`);
+        }
         expect(first!.command).toContain("Review feature/x");
-        expect(first!.command).toContain(`DAINTREE-DONE-${code}`);
-        expect(first!.command).toContain(`DAINTREE-NEEDS-YOU-${code}`);
         // The pane's first-prompt record is what the recipe wrote, not the instruction.
         expect(first!.launchPrompt).toMatchObject({ text: "Review feature/x" });
       });
@@ -1141,6 +1144,8 @@ describe("recipeStore", () => {
         await runSteps(terminals);
 
         const [first, second] = spawnOptions();
+        expect(first!.handbackCode).toMatch(/^[a-z0-9]{6}$/);
+        expect(second!.handbackCode).toMatch(/^[a-z0-9]{6}$/);
         expect(first!.handbackCode).not.toBe(second!.handbackCode);
       });
 
@@ -1149,9 +1154,11 @@ describe("recipeStore", () => {
           { type: "claude", initialPrompt: "Review" },
           { type: "claude", whenDone: "close" },
           { type: "claude", initialPrompt: "{{issue_number}}", whenDone: "close" },
+          // A slash command would take the instruction as its arguments.
+          { type: "codex", initialPrompt: "/prompts:merge-prs", whenDone: "close" },
         ]);
 
-        expect(spawnOptions()).toHaveLength(3);
+        expect(spawnOptions()).toHaveLength(4);
         for (const options of spawnOptions()) {
           expect(options).not.toHaveProperty("whenDone");
           expect(options).not.toHaveProperty("handbackCode");
@@ -1160,11 +1167,18 @@ describe("recipeStore", () => {
       });
 
       it("never arms a step that launches no agent", async () => {
-        await runSteps([
-          { type: "terminal", command: "npm test", whenDone: "close" } as RecipeTerminal,
+        const results = await runSteps([
+          {
+            type: "terminal",
+            command: "npm test",
+            initialPrompt: "Review",
+            whenDone: "close",
+          } as RecipeTerminal,
         ]);
 
+        expect(results.spawned).toHaveLength(1);
         expect(spawnOptions()[0]).not.toHaveProperty("whenDone");
+        expect(spawnOptions()[0]).not.toHaveProperty("handbackCode");
       });
     });
 
@@ -2814,6 +2828,28 @@ describe("recipeStore", () => {
     const updated = useRecipeStore.getState().recipes[0];
     expect(updated?.terminals[0]?.args).toBe("--model opus");
     expect(updated?.terminals[1]?.args).toBeUndefined();
+  });
+
+  it("saves When done on agent steps only, and keep as no setting (#16172)", async () => {
+    useRecipeStore.setState({ currentProjectId: "project-1" });
+    await useRecipeStore.getState().createRecipe(
+      "project-1",
+      "Recipe",
+      undefined,
+      [
+        { type: "claude", initialPrompt: "Review", whenDone: "background", env: {} },
+        { type: "terminal", command: "npm test", whenDone: "close", env: {} },
+        { type: "codex", whenDone: "keep" as never, env: {} },
+      ],
+      false
+    );
+
+    const saved = useRecipeStore.getState().recipes[0]?.terminals ?? [];
+    expect(saved.map((t) => t.whenDone)).toEqual(["background", undefined, undefined]);
+    const written = updateInRepoRecipeMock.mock.calls.at(-1)?.[1] as TerminalRecipe;
+    expect(
+      JSON.parse(JSON.stringify(written.terminals)).map((t: object) => "whenDone" in t)
+    ).toEqual([true, false, false]);
   });
 
   describe("global recipes", () => {

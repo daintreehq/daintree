@@ -536,6 +536,17 @@ export function isAgentRecipeType(type: string): boolean {
   return type !== "terminal" && type !== "dev-preview" && type !== "plugin-panel";
 }
 
+/**
+ * Whether a launch prompt can carry the When done instruction (#16172): text
+ * for the agent to work on. An empty prompt asks nothing, and an agent CLI's
+ * slash command would take the instruction as its arguments, so neither is
+ * armed, as a send of either isn't (#16171).
+ */
+export function promptCarriesWhenDone(prompt: string | undefined): boolean {
+  const trimmed = prompt?.trim() ?? "";
+  return trimmed !== "" && !trimmed.startsWith("/");
+}
+
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
   /** Type of terminal to spawn */

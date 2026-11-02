@@ -3730,15 +3730,43 @@ describe("terminal spawn handler - a recipe step's When done (#16172)", () => {
     expect(ptyClient.spawn.mock.calls[1]?.[1]).not.toHaveProperty("handbackInstruction");
   });
 
-  it("never arms a restore, a launch with no code, or a plain shell", async () => {
+  it("arms the choice it was given", async () => {
+    await recipeSpawn({ whenDone: "background" });
+
+    expect(mockArmWhenDoneLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ choice: "background" })
+    );
+  });
+
+  it("never arms a restore, a launch with no code, a shell, or an agent with no command", async () => {
     await recipeSpawn({ id: "restored", restore: true });
     await recipeSpawn({ id: "no-code", handbackCode: undefined });
-    await recipeSpawn({ id: "shell", launchAgentId: undefined, command: undefined });
+    await recipeSpawn({ id: "shell", launchAgentId: undefined });
+    await recipeSpawn({ id: "bare-agent", command: "" });
 
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(4);
     expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
     for (const call of ptyClient.spawn.mock.calls) {
       expect(call[1]).not.toHaveProperty("handbackInstruction");
     }
+  });
+
+  it("leaves a scheduled run's launch to its own done policy", async () => {
+    const reserved = reserveScheduledLaunch({
+      runId: "run-1",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      terminalId: "terminal-review",
+      agentId: "claude",
+      admit: vi.fn(),
+    });
+
+    await recipeSpawn({ scheduledRun: { scheduleId: "schedule-1", runId: "run-1" } });
+
+    expect(reserved.state()).toEqual({ kind: "registered" });
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+    // The run's own report still goes out for its code.
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({ handbackInstruction: "run" });
   });
 
   it("never arms the Assistant's own terminal", async () => {

@@ -515,6 +515,7 @@ describe("a recipe step's launch armed with When done (#16172)", () => {
       success: false,
       id: TERMINAL,
       launchGeneration: 4,
+      spawnedAt: SPAWNED_AT,
     });
 
     expect(getTerminalWhenDone().peek(TERMINAL)).toBeUndefined();
