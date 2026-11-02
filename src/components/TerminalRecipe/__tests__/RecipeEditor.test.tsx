@@ -496,6 +496,9 @@ describe("RecipeEditor", () => {
 
     it("saves the choice picked for an agent step, and nothing for keep", async () => {
       renderEditor(AGENT);
+      expect(document.getElementById("terminal-when-done-help-0")?.textContent).not.toContain(
+        "filled-in"
+      );
       expect(document.getElementById("terminal-when-done-0")?.textContent).toBe(
         "Keep open (default)"
       );
@@ -523,7 +526,7 @@ describe("RecipeEditor", () => {
       });
       expect(document.getElementById("terminal-when-done-0")!.hasAttribute("disabled")).toBe(false);
       expect(document.getElementById("terminal-when-done-help-0")?.textContent).toContain(
-        "filled-in prompt"
+        "if the filled-in prompt isn't empty or a slash command"
       );
     });
 
