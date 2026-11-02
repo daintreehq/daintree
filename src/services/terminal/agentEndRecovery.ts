@@ -1,5 +1,5 @@
 import type { AgentExitedPayload } from "@shared/types";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, presetSwitchLaunchOf, type PtyPanelData } from "@shared/types/panel";
 import { getAgentConfig } from "@/config/agents";
 import { usePanelStore } from "@/store/panelStore";
 import { saveNormalized } from "@/store/slices/panelRegistry/persistence";
@@ -220,7 +220,7 @@ export async function returnAfterRefusedSwitch(
 ): Promise<RestoreRecoveryLaunchResult> {
   const refused = refusedSwitchAt(panelId);
   if (!refused) return "unavailable";
-  const { attempt } = refused;
+  const { panel: refusedPane, attempt } = refused;
   const state = usePanelStore.getState();
   if (siblingHeldSessionIds(state.panelsById, panelId, attempt.agentId).has(attempt.sessionId)) {
     return "held-elsewhere";
@@ -243,8 +243,26 @@ export async function returnAfterRefusedSwitch(
       return { panelsById };
     });
     if (!restored) return "unavailable";
+    const restartKey = refusedPane.restartKey ?? 0;
     await usePanelStore.getState().restartTerminal(panelId, { resumeSessionId: attempt.sessionId });
-    return "launched";
+    // A restart refused before its spawn (the shell moved on, the folder
+    // failed validation) leaves the count alone: put the pane back on the
+    // preset that refused, offer and all, rather than relabelled for nothing.
+    let started = true;
+    usePanelStore.setState((current) => {
+      const latest = current.panelsById[panelId];
+      if (!latest || !isPtyPanel(latest) || (latest.restartKey ?? 0) !== restartKey) {
+        return current;
+      }
+      started = false;
+      const panelsById = {
+        ...current.panelsById,
+        [panelId]: { ...latest, ...presetSwitchLaunchOf(refusedPane), presetSwitchResume: attempt },
+      };
+      saveNormalized(panelsById, current.panelIds);
+      return { panelsById };
+    });
+    return started ? "launched" : "unavailable";
   } finally {
     release();
   }

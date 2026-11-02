@@ -324,10 +324,21 @@ describe("a preset switch that kept the conversation (#16045)", () => {
     expect(store.state.restartTerminalOnPreset).toHaveBeenCalledWith("pane-a", "company");
   });
 
+  /** A restart that spawned: the store bumps the pane's restart count. */
+  function restartSpawns(): void {
+    store.state.restartTerminal.mockImplementation(async () => {
+      const panel = current();
+      store.state.panelsById = {
+        "pane-a": { ...panel, restartKey: (panel.restartKey ?? 0) + 1 },
+      };
+    });
+  }
+
   it("goes back to the launch it left, persisted, and reopens the conversation there", async () => {
     store.state.panelsById = {
       "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
     };
+    restartSpawns();
 
     await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("launched");
 
@@ -370,19 +381,37 @@ describe("a preset switch that kept the conversation (#16045)", () => {
     expect(store.state.restartTerminal).not.toHaveBeenCalled();
   });
 
-  it("holds the conversation while going back, and lets it go after", async () => {
+  it("puts the pane back on the refusing preset, offer and all, when the restart started nothing", async () => {
+    // The restart refused before its spawn: the count never moved.
+    store.state.panelsById = {
+      "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
+    };
+
+    await expect(returnAfterRefusedSwitch("pane-a")).resolves.toBe("unavailable");
+
+    expect(store.state.restartTerminal).toHaveBeenCalledTimes(1);
+    expect(current().agentPresetId).toBe("company");
+    expect(current().env).toEqual({ CODEX_HOME: "/home/me/.codex-company" });
+    expect(current().presetSwitchResume).toEqual({ ...attempt, refused: true });
+    expect(saveNormalized).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds the conversation for the whole restart, and lets it go after", async () => {
     store.state.panelsById = {
       "pane-a": switched({ presetSwitchResume: { ...attempt, refused: true } }),
     };
     const { isResumeSessionReserved } = await import("../restoreRecoveryLaunch");
-    let heldDuring = false;
-    store.state.restartTerminal.mockImplementation(async () => {
-      heldDuring = isResumeSessionReserved("codex", LAUNCH_ID);
-    });
+    let finish: () => void = () => {};
+    store.state.restartTerminal.mockImplementation(
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
 
-    await returnAfterRefusedSwitch("pane-a");
+    const back = returnAfterRefusedSwitch("pane-a");
+    await Promise.resolve();
+    expect(isResumeSessionReserved("codex", LAUNCH_ID)).toBe(true);
 
-    expect(heldDuring).toBe(true);
+    finish();
+    await back;
     expect(isResumeSessionReserved("codex", LAUNCH_ID)).toBe(false);
   });
 

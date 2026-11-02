@@ -2173,8 +2173,10 @@ async function respawnAgentOnPreset(
         ...priorSnapshot,
         // The folder goes back with `conversationCwd`, or a kept id would be
         // filed under the one the failed launch moved to. A move that landed
-        // since owns the folder now.
-        ...(isPtyPanel(t) && t.cwd === launchCwd ? { cwd: terminal.cwd } : {}),
+        // since owns the folder, and the conversation is filed against it.
+        ...(isPtyPanel(t) && t.cwd !== launchCwd
+          ? conversationOriginPatch(terminal, t.cwd)
+          : { cwd: terminal.cwd }),
         // Nothing runs to watch, and the conversation stays reachable.
         presetSwitchResume: undefined,
         ...(resumedSessionId ? { agentSessionId: resumedSessionId } : {}),

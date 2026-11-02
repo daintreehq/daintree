@@ -2455,6 +2455,40 @@ describe("restartTerminalOnPreset", () => {
       }
     });
 
+    it("files the conversation against a folder a move set while the spawn failed", async () => {
+      const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-a", "/repo/.worktrees/a"],
+            ["wt-b", "/repo/.worktrees/b"],
+          ])
+      );
+      try {
+        seed({ launchAgentId: "codex", cwd: "/repo/.worktrees/a", worktreeId: "wt-b" });
+        await resumeBuilds();
+        mockSpawn.mockImplementationOnce(async () => {
+          // What a live move writes while the spawn is out.
+          const moved = pane();
+          usePanelStore.setState({
+            panelsById: {
+              "test-1": { ...moved, cwd: "/elsewhere", conversationCwd: "/repo/.worktrees/a" },
+            },
+          });
+          throw new Error("spawn failed");
+        });
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+        expect(pane().cwd).toBe("/elsewhere");
+        expect(pane().conversationCwd).toBe("/repo/.worktrees/a");
+      } finally {
+        setWorktreePathIndexAccessor(() => null);
+      }
+    });
+
     it("drops the switch's watch on the next restart", async () => {
       seed();
       await resumeBuilds();

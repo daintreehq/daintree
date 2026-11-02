@@ -109,6 +109,22 @@ describe("formatAgentPresetPreviewLines", () => {
     expect(text).not.toContain("Colour");
   });
 
+  it("shows the usage-limit settings changing apart from each other", () => {
+    const text = formatAgentPresetPreviewLines(
+      update(
+        { id: "user-work", name: "Work", fallbackOnRateLimit: true },
+        {
+          id: "user-work",
+          name: "Work",
+          fallbackOnRateLimit: true,
+          keepConversationOnRateLimit: true,
+        }
+      )
+    ).join("\n");
+    expect(text).toContain("Keep the conversation on usage limits: Off → On");
+    expect(text).not.toContain("Fall back on usage limits");
+  });
+
   it("shows a fallback swap between two presets sharing a name", () => {
     const names = { "user-a": "Fast", "user-b": "Fast" };
     const text = formatAgentPresetPreviewLines(

@@ -77,6 +77,19 @@ describe("FallbackChainEditor — keeping the conversation on a usage limit (#16
     expect(onUpdatePreset).toHaveBeenCalledWith("home", { keepConversationOnRateLimit: true });
   });
 
+  it.each([
+    ["an agent that can keep it", "codex", "unless you keep it"],
+    ["an agent that can't", "gemini", "conversation ends"],
+  ])("tells the usage-limit opt-in's consequence for %s", (_label, agentId, words) => {
+    renderEditor(optedIn, agentId);
+    const toggle = screen.getByRole("switch", { name: "Fall back on usage limits" });
+    const description = (toggle.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(description).toContain(words);
+  });
+
   it("clears it rather than storing false", () => {
     const onUpdatePreset = renderEditor({ ...optedIn, keepConversationOnRateLimit: true }, "codex");
     const toggle = screen.getByRole("switch", { name: "Keep the conversation" });

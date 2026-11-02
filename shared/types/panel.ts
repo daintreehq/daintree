@@ -419,6 +419,24 @@ export type PresetSwitchPriorLaunch = Pick<
   | "conversationCwd"
 > & { cwd: string };
 
+/** The launch fields of `panel` a preset switch replaces, in the shape "Back" restores. */
+export function presetSwitchLaunchOf(panel: PtyPanelData): PresetSwitchPriorLaunch {
+  return {
+    agentPresetId: panel.agentPresetId,
+    agentPresetColor: panel.agentPresetColor,
+    originalPresetId: panel.originalPresetId,
+    isUsingFallback: panel.isUsingFallback,
+    fallbackChainIndex: panel.fallbackChainIndex,
+    command: panel.command,
+    agentLaunchFlags: panel.agentLaunchFlags,
+    callerLaunchFlags: panel.callerLaunchFlags,
+    agentModelId: panel.agentModelId,
+    env: panel.env,
+    conversationCwd: panel.conversationCwd,
+    cwd: panel.cwd,
+  };
+}
+
 /**
  * A preset switch that asked the CLI to reopen the pane's conversation
  * (#16045), held while the run it launched lives so the CLI's own refusal can
