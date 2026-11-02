@@ -166,6 +166,7 @@ export const config: AgentConfig = {
     // so any of these is a sufficient signal that the CLI is usable.
     envVar: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"],
   },
+  account: { kind: "api-key", keyVars: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"] },
   prerequisites: [
     {
       tool: "opencode",

@@ -1,5 +1,6 @@
 import type { PanelLocation } from "@/types";
 import type {
+  AccountSwitchTarget,
   PanelRegistryStoreApi,
   PanelRegistrySlice,
   PresetRespawnOptions,
@@ -54,6 +55,7 @@ import {
 } from "@/config/agents";
 import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 import { agentPresetTitle } from "@shared/utils/agentLaunchPlan";
+import { keepPaneAccount, paneAccountEnv, withAccountEnv } from "@shared/utils/agentAccounts";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
@@ -920,7 +922,14 @@ export const createRestartActions = (
           });
           return null;
         })(),
-        buildRestartEnv(capturedProjectId, runtimeForEnv?.settings.env, "restart"),
+        // The pane's own account rides on top, never one resolved again (#16040).
+        buildRestartEnv(
+          capturedProjectId,
+          isAgent
+            ? keepPaneAccount(runtimeForEnv?.settings.env, effectiveAgentId, currentTerminal)
+            : runtimeForEnv?.settings.env,
+          "restart"
+        ),
       ]);
 
       // Settled here, with no await before the command choice and the state
@@ -1685,6 +1694,9 @@ export const createRestartActions = (
 
   restartTerminalOnPreset: (id, presetId, options) =>
     respawnAgentOnPreset(set, get, id, presetId, { kind: "switch" }, options),
+
+  restartTerminalOnAccount: (id, account) =>
+    respawnAgentOnPreset(set, get, id, undefined, { kind: "account", account }),
 });
 
 /**
@@ -1715,13 +1727,17 @@ export function presetSwitchTitle(
   return nextTitle ? { title: nextTitle, titleMode: "custom" } : current;
 }
 
-type PresetRespawnMode = { kind: "fallback"; originalPresetId: string } | { kind: "switch" };
+type PresetRespawnMode =
+  | { kind: "fallback"; originalPresetId: string }
+  | { kind: "switch" }
+  /** Same preset, only the account changed (#16040). */
+  | { kind: "account"; account: AccountSwitchTarget };
 
 async function respawnAgentOnPreset(
   set: Set,
   get: Get,
   id: string,
-  nextPresetId: string,
+  requestedPresetId: string | undefined,
   mode: PresetRespawnMode,
   options?: PresetRespawnOptions
 ): Promise<PresetRespawnResult> {
@@ -1760,6 +1776,8 @@ async function respawnAgentOnPreset(
   if (keepConversation && !supportsConversationKeepingSwitch(effectiveAgentId)) {
     return { success: false, error: "agent can't keep its conversation on another preset" };
   }
+  // An account switch keeps the pane's own preset; the others name the next one.
+  const nextPresetId = mode.kind === "account" ? terminal.agentPresetId : requestedPresetId;
 
   markTerminalRestarting(id);
   set((state) =>
@@ -1789,6 +1807,7 @@ async function respawnAgentOnPreset(
     agentModelId: livePanel.agentModelId,
     conversationCwd: terminal.conversationCwd,
     env: terminal.env,
+    agentAccountId: terminal.agentAccountId,
   };
   // Set only when a switch retitled the pane, so a failure can put back the
   // stamp it replaced — unless the user renamed it in the meantime.
@@ -1814,13 +1833,36 @@ async function respawnAgentOnPreset(
       projectPresets,
     });
     const nextPreset = runtimeSettings.preset;
-    if (!nextPreset) {
+    // An account switch on a pane whose preset has since gone runs bare, as a
+    // plain restart of it would; a preset switch or hop needs its preset.
+    if (!nextPreset && mode.kind !== "account") {
       throw new Error(`preset "${nextPresetId}" not found`);
     }
+    const presetKept = mode.kind === "account" && nextPreset !== undefined;
     // A switch makes the chosen preset the pane's own: the chain it was
     // walking, and the tooltip that says so, belong to the preset it left.
-    // A hop keeps walking the original's chain.
-    const nextOriginalPresetId = mode.kind === "fallback" ? mode.originalPresetId : nextPreset.id;
+    // A hop keeps walking the original's chain, and an account switch leaves
+    // the pane's preset state as it was.
+    const nextOriginalPresetId =
+      mode.kind === "fallback"
+        ? mode.originalPresetId
+        : presetKept
+          ? terminal.originalPresetId
+          : nextPreset?.id;
+    // The account is chosen separately from the preset (#16040): a preset
+    // switch or hop keeps the pane's own, and an account switch replaces it.
+    const launchEnv =
+      mode.kind === "account"
+        ? mode.account
+          ? withAccountEnv(runtimeSettings.env, mode.account.envVar, mode.account.configDir)
+          : runtimeSettings.env
+        : keepPaneAccount(runtimeSettings.env, effectiveAgentId, terminal);
+    const nextAccountId =
+      mode.kind === "account"
+        ? (mode.account?.id ?? undefined)
+        : paneAccountEnv(effectiveAgentId, terminal)
+          ? terminal.agentAccountId
+          : undefined;
 
     const effectiveEntry = runtimeSettings.effectiveEntry;
 
@@ -1847,7 +1889,7 @@ async function respawnAgentOnPreset(
     // (#14954), so a caller's own resume selector (`--continue`,
     // `resume --last`) can't ride along into the new home.
     const keptCallerFlags =
-      mode.kind === "switch" || filedLaunchCwd(get, id, terminal) !== terminal.cwd
+      mode.kind !== "fallback" || filedLaunchCwd(get, id, terminal) !== terminal.cwd
         ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
         : storedCallerFlags;
     const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
@@ -1859,7 +1901,7 @@ async function respawnAgentOnPreset(
           clipboardDirectory,
           modelId: terminal.agentModelId,
           systemPromptArgs,
-          presetArgs: nextPreset.args,
+          presetArgs: nextPreset?.args,
           globalSkipPermissions,
           globalUseAltScreen,
         }),
@@ -1869,7 +1911,7 @@ async function respawnAgentOnPreset(
         ...buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
           modelId: terminal.agentModelId,
           systemPromptArgs,
-          presetArgs: nextPreset.args,
+          presetArgs: nextPreset?.args,
           globalSkipPermissions,
           globalUseAltScreen,
         }),
@@ -1974,15 +2016,22 @@ async function respawnAgentOnPreset(
         // A relaunch on another preset, not the process restore rebuilt (#14017).
         restoreProvenance: undefined,
         command: commandToRun,
-        agentPresetId: nextPreset.id,
-        agentPresetColor: nextPreset.color,
+        agentPresetId: nextPreset?.id,
+        agentPresetColor: nextPreset?.color,
         originalPresetId: nextOriginalPresetId,
-        isUsingFallback: mode.kind === "fallback" ? true : undefined,
-        fallbackChainIndex: mode.kind === "fallback" ? nextChainIndex : undefined,
+        isUsingFallback:
+          mode.kind === "fallback" ? true : presetKept ? terminal.isUsingFallback : undefined,
+        fallbackChainIndex:
+          mode.kind === "fallback"
+            ? nextChainIndex
+            : presetKept
+              ? terminal.fallbackChainIndex
+              : undefined,
         // The launch layer a cold restore replays ahead of the preset's own
         // env (#10922). Left as it was, a relaunch would bring the pane back
-        // on the preset it just moved off.
-        env: sanitizeAgentEnv(runtimeSettings.env),
+        // on the preset it just moved off, or the account.
+        env: sanitizeAgentEnv(launchEnv),
+        agentAccountId: nextAccountId,
         agentLaunchFlags: nextLaunchFlags,
         agentModelId: terminal.agentModelId,
         callerLaunchFlags: callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
@@ -2044,7 +2093,7 @@ async function respawnAgentOnPreset(
     const capturedProjectId = projectStore.getState().currentProject?.id;
     const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
 
-    const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
+    const restartEnv = await buildRestartEnv(capturedProjectId, launchEnv, "fallback");
 
     // Live at spawn time for the same reason as the restart path above: the
     // hop awaits, and a move that lands mid-hop must not be undone by it.
@@ -2062,7 +2111,7 @@ async function respawnAgentOnPreset(
       worktreeId: fallbackWorktreeId,
       worktreeSource: fallbackWorktreeId !== undefined ? "explicit" : undefined,
       agentModelId: terminal.agentModelId,
-      agentPresetId: nextPreset.id,
+      agentPresetId: nextPreset?.id,
       originalPresetId: nextOriginalPresetId,
       agentLaunchFlags: nextLaunchFlags,
       env: computeEnvProvenance(restartEnv),
@@ -2073,7 +2122,7 @@ async function respawnAgentOnPreset(
     const liveTitle = titleAtSpawn(get, id, terminal);
     const currentTitle = withCleanedModelTitle(liveTitle, livePanel, terminal);
     const fallbackTitle =
-      mode.kind === "switch"
+      mode.kind === "switch" && nextPreset
         ? presetSwitchTitle(currentTitle, {
             agentId: effectiveAgentId,
             modelId: terminal.agentModelId,
@@ -2122,8 +2171,8 @@ async function respawnAgentOnPreset(
       // drops it strands the run in the palette's "No worktree" bucket for
       // the rest of its life (#12060).
       worktreeId: fallbackWorktreeId,
-      agentPresetId: nextPreset.id,
-      agentPresetColor: nextPreset.color,
+      agentPresetId: nextPreset?.id,
+      agentPresetColor: nextPreset?.color,
       originalAgentPresetId: nextOriginalPresetId,
       // On the record as the PTY starts, so the kept conversation is the
       // pane's from its first moment (#11782).
@@ -2199,7 +2248,12 @@ async function respawnAgentOnPreset(
           recoverable: false,
           context: {
             failedCwd: launchCwd,
-            phase: mode.kind === "fallback" ? "fallback-activation" : "preset-switch",
+            phase:
+              mode.kind === "fallback"
+                ? "fallback-activation"
+                : mode.kind === "account"
+                  ? "account-switch"
+                  : "preset-switch",
             nextPresetId,
           },
         },
@@ -2208,7 +2262,9 @@ async function respawnAgentOnPreset(
     logError(
       mode.kind === "fallback"
         ? "[TerminalStore] Failed to activate fallback preset"
-        : "[TerminalStore] Failed to restart terminal on preset",
+        : mode.kind === "account"
+          ? "[TerminalStore] Failed to restart terminal on account"
+          : "[TerminalStore] Failed to restart terminal on preset",
       error,
       {
         id,

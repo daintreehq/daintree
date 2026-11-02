@@ -803,6 +803,12 @@ export interface PtyPanelData extends BasePanelData {
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time; overridden by live settings lookup */
   agentPresetColor?: string;
+  /**
+   * The account this pane launched on (#16040), recorded rather than resolved
+   * again later: a relaunch keeps its folder, read back from `env`. Absent is
+   * the CLI's default login. Persisted.
+   */
+  agentAccountId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** The scheduled run this terminal was launched for; present exactly when `spawnedBy` is `"schedule"`. */
@@ -1466,6 +1472,12 @@ export interface TerminalInstance {
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time; overridden by live settings lookup */
   agentPresetColor?: string;
+  /**
+   * The account this pane launched on (#16040), recorded rather than resolved
+   * again later: a relaunch keeps its folder, read back from `env`. Absent is
+   * the CLI's default login. Persisted.
+   */
+  agentAccountId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** The scheduled run this terminal was launched for; present exactly when `spawnedBy` is `"schedule"`. */

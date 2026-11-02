@@ -155,12 +155,12 @@ describe("CliAvailabilityService", () => {
   const envKeysToClear = [
     ...new Set(
       getAgentIds().flatMap((id) => {
-        const authCheck = getAgentConfig(id)?.authCheck;
-        const envVar = authCheck?.envVar;
+        const config = getAgentConfig(id);
+        const envVar = config?.authCheck?.envVar;
         const envVars = !envVar ? [] : Array.isArray(envVar) ? envVar : [envVar];
         // A relocated config root moves every probed path, so a developer's
         // own KIMI_CODE_HOME (and the like) must not leak in either.
-        const homeVar = authCheck?.configHome?.envVar;
+        const homeVar = config?.account?.kind === "config-folder" ? config.account.envVar : undefined;
         return homeVar ? [...envVars, homeVar] : envVars;
       })
     ),

@@ -133,6 +133,7 @@ export const config: AgentConfig = {
     configPathsAll: [".vibe/.env", ".vibe/config.toml"],
     envVar: "MISTRAL_API_KEY",
   },
+  account: { kind: "api-key", keyVars: ["MISTRAL_API_KEY"] },
   prerequisites: [
     {
       tool: "vibe",

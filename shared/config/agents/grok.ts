@@ -139,6 +139,7 @@ export const config: AgentConfig = {
     configPathsAll: [".grok/auth.json"],
     envVar: "XAI_API_KEY",
   },
+  account: { kind: "api-key", keyVars: ["XAI_API_KEY"] },
   prerequisites: [
     {
       tool: "grok",

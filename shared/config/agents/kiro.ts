@@ -130,6 +130,7 @@ export const config: AgentConfig = {
     // those users get `authConfirmed: false` but remain launchable.
     configPathsAll: [".aws/sso/cache/kiro-auth-token.json"],
   },
+  account: { kind: "fixed" },
   prerequisites: [
     {
       tool: "kiro-cli",

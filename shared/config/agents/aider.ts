@@ -167,6 +167,19 @@ export const config: AgentConfig = {
       "AIDER_ANTHROPIC_API_KEY",
     ],
   },
+  account: {
+    kind: "api-key",
+    keyVars: [
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "DEEPSEEK_API_KEY",
+      "OPENROUTER_API_KEY",
+      "AIDER_API_KEY",
+      "AIDER_OPENAI_API_KEY",
+      "AIDER_ANTHROPIC_API_KEY",
+    ],
+  },
   envSuggestions: [
     { key: "AIDER_MODEL", hint: "Default model id (e.g. sonnet, gpt-5, deepseek)" },
     { key: "AIDER_OPENAI_API_KEY", hint: "OpenAI key when not using OPENAI_API_KEY" },

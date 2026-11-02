@@ -14,6 +14,7 @@ import {
   getEffectiveRegistry,
   type AgentConfig,
   type AgentAuthCheck,
+  type AgentAccountDeclaration,
 } from "../../shared/config/agentRegistry.js";
 import { refreshPath, expandWindowsEnvVars } from "../setup/environment.js";
 import { store } from "../store.js";
@@ -421,7 +422,7 @@ export class CliAvailabilityService {
     // found nothing), classify as `unauthenticated` — the binary exists but
     // will require login on first launch. The CLI handles auth at runtime.
     const authConfirmed = config.authCheck
-      ? await this.checkAuth(config.id, config.authCheck)
+      ? await this.checkAuth(config.id, config.authCheck, config.account)
       : undefined;
 
     const state: AgentAvailabilityState = authConfirmed === false ? "unauthenticated" : "ready";
@@ -443,7 +444,11 @@ export class CliAvailabilityService {
     };
   }
 
-  private async checkAuth(agentId: string, authCheck: AgentAuthCheck): Promise<boolean> {
+  private async checkAuth(
+    agentId: string,
+    authCheck: AgentAuthCheck,
+    account: AgentAccountDeclaration | undefined
+  ): Promise<boolean> {
     // Shared flag so the checkPromise knows the timeoutPromise already won
     // the race. Without this, a slow fs.access can later resolve/reject and
     // emit a misleading "auth discovery: no credential found" log for an
@@ -508,8 +513,9 @@ export class CliAvailabilityService {
         }
       }
 
-      if (authCheck.configHome) {
-        const { envVar, defaultDir, paths } = authCheck.configHome;
+      if (authCheck.configHomePaths && account?.kind === "config-folder") {
+        const { envVar, defaultDir } = account;
+        const paths = authCheck.configHomePaths;
         const relocated = process.env[envVar];
         const isRelocated = relocated !== undefined && relocated.trim() !== "";
         // A root that isn't fully qualified resolves against the agent's

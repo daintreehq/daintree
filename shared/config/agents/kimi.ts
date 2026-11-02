@@ -128,12 +128,9 @@ export const config: AgentConfig = {
     // launched, but it is the only place an API-key or third-party provider
     // setup lives and its contents are not ours to read. No envVar: the CLI
     // ignores credentials exported in the shell.
-    configHome: {
-      envVar: "KIMI_CODE_HOME",
-      defaultDir: ".kimi-code",
-      paths: ["credentials/kimi-code.json", "config.toml"],
-    },
+    configHomePaths: ["credentials/kimi-code.json", "config.toml"],
   },
+  account: { kind: "config-folder", envVar: "KIMI_CODE_HOME", defaultDir: ".kimi-code" },
   prerequisites: [
     {
       tool: "kimi",

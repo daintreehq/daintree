@@ -191,6 +191,9 @@ export const config: AgentConfig = {
     configPathsAll: [".claude.json", ".claude/config.json"],
     envVar: "ANTHROPIC_API_KEY",
   },
+  // CLAUDE_CONFIG_DIR gives each folder its own settings, history and login,
+  // and keys the macOS Keychain entry to the folder too.
+  account: { kind: "config-folder", envVar: "CLAUDE_CONFIG_DIR", defaultDir: ".claude" },
   prerequisites: [
     {
       tool: "claude",

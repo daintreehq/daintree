@@ -378,6 +378,7 @@ export const agentActionRuns = {
       interactive,
       model,
       presetId,
+      accountId,
       activateDockOnCreate,
       env,
       excludeFromPersistence,
@@ -400,6 +401,7 @@ export const agentActionRuns = {
       interactive?: boolean;
       model?: string;
       presetId?: string | null;
+      accountId?: string | null;
       activateDockOnCreate?: boolean;
       env?: Record<string, string>;
       excludeFromPersistence?: boolean;
@@ -509,6 +511,7 @@ export const agentActionRuns = {
       interactive,
       modelId: model,
       presetId,
+      accountId,
       activateDockOnCreate,
       env,
       excludeFromPersistence,

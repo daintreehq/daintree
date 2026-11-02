@@ -107,6 +107,7 @@ export function buildRestoreRecoveryLaunchOptions(
     // The launch env was captured when the pane first ran (#10922) and carries
     // any redirected CODEX_HOME — the profile its conversations live under.
     env: panel.env,
+    agentAccountId: panel.agentAccountId,
     extensionState: panel.extensionState,
     extensionStateVersion: panel.extensionStateVersion,
     pluginId: panel.pluginId,

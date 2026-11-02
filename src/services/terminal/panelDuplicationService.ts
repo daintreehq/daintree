@@ -19,6 +19,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
+import { keepPaneAccount, paneAccountEnv } from "@shared/utils/agentAccounts";
 import {
   appendCallerLaunchFlagsToCommand,
   splitCallerLaunchFlags,
@@ -47,6 +48,7 @@ function duplicateTitleMode(
 export interface ResolvedCommand {
   command: string | undefined;
   env: Record<string, string> | undefined;
+  agentAccountId?: string;
   agentLaunchFlags: string[] | undefined;
   /** The caller's verbatim tail of `agentLaunchFlags` (#13046), when known. */
   callerLaunchFlags: string[] | undefined;
@@ -151,9 +153,13 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             globalUseAltScreen,
           }
         );
+        // The copy runs on the source pane's account, not whichever is the
+        // default now (#16040).
+        const accountEnv = paneAccountEnv(panel.launchAgentId, panel);
         return {
           command,
-          env: runtimeSettings.env,
+          env: keepPaneAccount(runtimeSettings.env, panel.launchAgentId, panel),
+          agentAccountId: accountEnv ? panel.agentAccountId : undefined,
           agentLaunchFlags: [...baseLaunchFlags, ...caller],
           callerLaunchFlags: caller.length > 0 ? caller : undefined,
           preset,
@@ -407,6 +413,7 @@ export async function buildPanelDuplicateOptions(
   const {
     command,
     env,
+    agentAccountId,
     agentLaunchFlags,
     callerLaunchFlags,
     preset,
@@ -451,6 +458,7 @@ export async function buildPanelDuplicateOptions(
       callerLaunchFlags,
       agentSessionId,
       env,
+      agentAccountId,
       requiredPluginTools: sourcePanel.requiredPluginTools
         ? [...sourcePanel.requiredPluginTools]
         : undefined,

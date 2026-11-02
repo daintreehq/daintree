@@ -71,6 +71,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     // changes the relaunched pane's chrome, so the continued launch would not be
     // the launch that was originally asked for.
     agentPresetColor: panel.agentPresetColor,
+    agentAccountId: panel.agentAccountId,
     env: readPresetEnv(panel),
     // Since env is persisted onto the panel (#10922), dropping these would let
     // a session-scoped secret leak into the on-disk snapshot on relaunch.
@@ -90,6 +91,7 @@ export interface MissingCliContinueArgs {
   worktreeId?: string;
   model?: string;
   presetId: string | null;
+  accountId: string | null;
   activateDockOnCreate?: true;
   env?: Record<string, string>;
   excludeFromPersistence?: boolean;
@@ -137,6 +139,9 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
     // Explicit null preserves a deliberately preset-free launch; forwarding
     // undefined would let the agent-level default reappear on recovery.
     presetId: panel.agentPresetId ?? null,
+    // The account the gate resolved, or explicitly the default login, so a
+    // changed default doesn't move the continued launch to another account.
+    accountId: panel.agentAccountId ?? null,
     // A dock replacement that doesn't activate starts parked and offscreen, so
     // the recovery the user just asked for would produce nothing visible.
     activateDockOnCreate: location === "dock" ? true : undefined,

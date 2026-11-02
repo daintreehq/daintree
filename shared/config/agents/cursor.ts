@@ -96,6 +96,7 @@ export const config: AgentConfig = {
       win32: ["AppData/Roaming/Cursor/User/globalStorage/storage.json"],
     },
   },
+  account: { kind: "fixed" },
   prerequisites: [
     {
       tool: "cursor-agent",

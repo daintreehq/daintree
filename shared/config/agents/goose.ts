@@ -129,6 +129,7 @@ export const config: AgentConfig = {
     },
     envVar: ["GOOSE_PROVIDER", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"],
   },
+  account: { kind: "api-key", keyVars: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"] },
   prerequisites: [
     {
       tool: "goose",

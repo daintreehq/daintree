@@ -21,6 +21,7 @@ import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
+import { isAccountId } from "@shared/utils/agentAccounts";
 import { canSelectAgentModel } from "@shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
 import {
@@ -217,6 +218,8 @@ export interface SavedTerminalData {
    * boundary before use.
    */
   env?: Record<string, unknown>;
+  /** Untrusted on-disk value (#16040) — read through `readAccountId`. */
+  agentAccountId?: unknown;
   isUsingFallback?: boolean;
   fallbackChainIndex?: number;
   /** Untrusted on-disk values (#12434) — sanitized in `restoreRecovery.ts`. */
@@ -269,6 +272,13 @@ function readPresetId(saved: SavedTerminalData): string | undefined {
 
 function readPresetColor(saved: SavedTerminalData): string | undefined {
   return saved.agentPresetColor ?? saved.agentFlavorColor;
+}
+
+/** The pane's account, only beside the saved env that holds its folder (#16040). */
+function readAccountId(saved: SavedTerminalData): string | undefined {
+  return isAccountId(saved.agentAccountId) && sanitizeAgentEnv(saved.env)
+    ? saved.agentAccountId
+    : undefined;
 }
 
 // Backend snapshots carry the waiting reason so re-created views keep their
@@ -504,6 +514,7 @@ export function buildArgsForBackendTerminal(
     // instead of dropping it and reintroducing the provider swap on the next
     // full restart (#10922). Not used to spawn here — the PTY already has it.
     env: sanitizeAgentEnv(saved.env),
+    agentAccountId: readAccountId(saved),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -599,6 +610,7 @@ export function buildArgsForReconnectedFallback(
     // snapshot WITH env rather than dropping it and reintroducing the provider
     // swap on the next full restart (#10922). Not used to spawn — PTY has it.
     env: sanitizeAgentEnv(saved.env),
+    agentAccountId: readAccountId(saved),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -1165,6 +1177,8 @@ export function buildArgsForRespawn(
     // current store. Falls back to live re-resolution for legacy snapshots saved
     // before env was persisted, or when the saved env sanitizes to nothing safe.
     env: sanitizeAgentEnv(saved.env) ?? presetEnv,
+    // The folder is in the saved env, so the account comes back only with it.
+    agentAccountId: readAccountId(saved),
     extensionState: saved.extensionState,
     extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,

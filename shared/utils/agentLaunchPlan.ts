@@ -10,6 +10,7 @@ import {
   mintAssignedSessionId,
   replayableLaunchFlags,
   resolveEffectivePresetId,
+  type AgentAccount,
   type AgentSettings,
 } from "../types/agentSettings.js";
 import type { AgentCliDetail } from "../types/ipc/system.js";
@@ -23,6 +24,7 @@ import {
   type PresetInventoryState,
 } from "./agentPresets.js";
 import { sanitizeTerminalName } from "./agentLaunchValidation.js";
+import { resolveLaunchAccount, withAccountEnv } from "./agentAccounts.js";
 import { isAbsolute, isPathInside, pathComparisonKey } from "./path.js";
 
 /**
@@ -44,6 +46,11 @@ export function agentPresetTitle(
 export interface AgentLaunchPlanOptions {
   /** `null` launches the bare agent; omitted, the saved preset for the worktree applies. */
   presetId?: string | null;
+  /**
+   * The account to launch on (#16040): `null` is the CLI's default login;
+   * omitted, the worktree's account applies, else the agent's default.
+   */
+  accountId?: string | null;
   /** Layered over the agent's global env and the preset's env. */
   env?: Record<string, string>;
   prompt?: string;
@@ -90,6 +97,14 @@ export interface AgentLaunchPlan {
   assignedSessionId: string | undefined;
   env: Record<string, string> | undefined;
   preset: AgentPreset | undefined;
+  /** The account the launch runs on, its folder already set in `env`; the pane records it. */
+  account: AgentAccount | undefined;
+  /**
+   * The account id the launch was asked to run on but no saved account has.
+   * Set only on a plan that resolved nothing: the caller must not start it,
+   * since running on another account than the one chosen bills someone else.
+   */
+  missingAccountId: string | undefined;
   /** The availability detail the command was resolved from, reused by the launch gate. */
   cliDetail: AgentCliDetail | undefined;
   title: string;
@@ -191,6 +206,7 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
   let assignedSessionId: string | undefined;
   let env: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
+  let account: AgentAccount | undefined;
   let cliDetail: AgentCliDetail | undefined;
 
   // Before anything else, so an unread inventory never reaches the fallback,
@@ -209,6 +225,8 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       titleMode: undefined,
       modelId: undefined,
       unloadedPresetId,
+      account: undefined,
+      missingAccountId: undefined,
     };
   }
 
@@ -222,6 +240,26 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
 
   if (agentConfig) {
     const entry = input.settings?.agents?.[agentId] ?? {};
+    const accountChoice = isAgent
+      ? resolveLaunchAccount(agentId, entry, worktreeId, options?.accountId)
+      : ({ kind: "default" } as const);
+    if (accountChoice.kind === "missing") {
+      return {
+        command: undefined,
+        launchFlags: undefined,
+        callerLaunchFlags: undefined,
+        assignedSessionId: undefined,
+        env: undefined,
+        preset: undefined,
+        cliDetail: undefined,
+        title: agentConfig.name,
+        titleMode: undefined,
+        modelId: undefined,
+        unloadedPresetId: undefined,
+        account: undefined,
+        missingAccountId: accountChoice.accountId,
+      };
+    }
     const scopedId =
       worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
     // null = explicitly default — skip preset lookup entirely
@@ -284,12 +322,17 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
 
     // Merge: global env (base) overridden by preset env (preset wins on
     // conflicts). Caller-supplied env layers on top of both — used for
-    // session-bound secrets like DAINTREE_MCP_TOKEN.
+    // session-bound secrets like DAINTREE_MCP_TOKEN. The account's folder goes
+    // last, so it wins for its own variable whatever a preset sets (#16040).
     const sanitizedGlobal = sanitizeAgentEnv(entry.globalEnv as Record<string, unknown>);
     const sanitizedPreset = preset?.env;
     const callerEnv = options?.env;
     if (sanitizedGlobal || sanitizedPreset || callerEnv) {
       env = { ...sanitizedGlobal, ...sanitizedPreset, ...callerEnv };
+    }
+    if (accountChoice.kind === "account") {
+      account = accountChoice.account;
+      env = withAccountEnv(env, accountChoice.envVar, account.configDir);
     }
 
     // Per-preset behavioral overrides (incl. tri-state bypass mode) on top of
@@ -377,6 +420,8 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     titleMode: trimmedName || hasPresetTitle ? "custom" : undefined,
     modelId,
     unloadedPresetId: undefined,
+    account,
+    missingAccountId: undefined,
   };
 }
 

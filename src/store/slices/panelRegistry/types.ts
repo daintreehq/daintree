@@ -22,6 +22,9 @@ export type { AddPanelOptions };
  * behaviour; flags are opt-in for specific callers whose intent differs from
  * the standard graceful-restart flow.
  */
+/** The account a switch moves a pane to: its folder and the variable that carries it. `null` is the default login. */
+export type AccountSwitchTarget = { id: string; envVar: string; configDir: string } | null;
+
 export interface RestartTerminalOptions {
   /**
    * When `false`, suppresses session continuity from the kill: the session id
@@ -328,6 +331,17 @@ export interface PanelRegistrySlice {
     id: string,
     presetId: string,
     options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
+  /**
+   * Respawn an agent pane in place on another account (#16040), keeping its
+   * preset, model and flags. Always a new conversation for now: the preset
+   * switch's `keepConversation` (#16045) isn't offered here yet. `null` is
+   * the CLI's default login. The account's folder replaces the one in the
+   * saved launch layer so a cold restore comes back on it.
+   */
+  restartTerminalOnAccount: (
+    id: string,
+    account: AccountSwitchTarget
   ) => Promise<PresetRespawnResult>;
   /** Open a terminal's Scratchpad column (#12835), or expand a collapsed one. */
   showScratchpad: (id: string) => void;
