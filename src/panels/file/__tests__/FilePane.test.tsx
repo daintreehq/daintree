@@ -12,6 +12,13 @@ import {
   useGridGroupAttention,
   type GridGroupAttention,
 } from "@/components/Panel/gridGroupAttention";
+import {
+  GridGroupTabReorderContext,
+  useGridGroupTabReorder,
+  type GridGroupTabReorder,
+} from "@/components/Panel/gridGroupTabReorder";
+import type { TabInfo } from "@/components/Panel/TabButton";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -20,8 +27,9 @@ import {
 // wiring — the seam that shipped the bug. The stub also renders `toolbar`, so
 // the toolbar-owned open-in-editor error banner (#11114) is observable.
 const contentPanelProps: Array<Record<string, unknown>> = [];
-// The tab group edge each render's ContentPanel took, read the way the real one reads it.
+// The tab group edge and reorder each render's ContentPanel took, read the way the real one reads them.
 const groupEdges: Array<GridGroupAttention | null> = [];
+const groupReorders: Array<GridGroupTabReorder | null> = [];
 
 vi.mock("@/components/Panel/ContentPanel", () => ({
   ContentPanel: (
@@ -34,6 +42,7 @@ vi.mock("@/components/Panel/ContentPanel", () => ({
   ) => {
     contentPanelProps.push(props);
     groupEdges.push(useGridGroupAttention(props.id, props.location ?? "grid"));
+    groupReorders.push(useGridGroupTabReorder(props.id, props.location ?? "grid"));
     // Render children too so the Source/Rendered branch is observable, not just
     // the toolbar (#11191 HTML preview branch).
     return (
@@ -434,6 +443,7 @@ beforeEach(() => {
 afterEach(() => {
   contentPanelProps.length = 0;
   groupEdges.length = 0;
+  groupReorders.length = 0;
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
@@ -495,6 +505,57 @@ describe("FilePane tab group edges (#16151)", () => {
   it("takes no edge meant for another tab", () => {
     render(inGroup("other"));
     expect(groupEdges.at(-1)).toBeNull();
+  });
+});
+
+describe("FilePane tab reorder (#16160)", () => {
+  const tabs: TabInfo[] = [
+    {
+      id: "file-1",
+      title: "spec.md",
+      chrome: deriveTerminalChrome(),
+      kind: "file",
+      isActive: true,
+    },
+    {
+      id: "t-2",
+      title: "Shell",
+      chrome: deriveTerminalChrome(),
+      kind: "terminal",
+      isActive: false,
+    },
+  ];
+  const onTabReorder = vi.fn();
+
+  function inGroup(panelId: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/spec.md" };
+    return (
+      <TooltipProvider>
+        <GridGroupTabReorderContext.Provider value={{ panelId, groupId: "g-1", onTabReorder }}>
+          <FilePane
+            id="file-1"
+            title="spec.md"
+            isFocused={false}
+            location="grid"
+            onFocus={() => {}}
+            onClose={() => {}}
+            tabs={tabs}
+          />
+        </GridGroupTabReorderContext.Provider>
+      </TooltipProvider>
+    );
+  }
+
+  it("hands its strip its tab group's reorder", () => {
+    render(inGroup("file-1"));
+    expect(lastContentPanelProps().tabs).toBe(tabs);
+    expect(groupReorders.at(-1)).toMatchObject({ groupId: "g-1", onTabReorder });
+  });
+
+  it("takes no reorder meant for another tab", () => {
+    render(inGroup("other"));
+    expect(lastContentPanelProps().tabs).toBe(tabs);
+    expect(groupReorders.at(-1)).toBeNull();
   });
 });
 

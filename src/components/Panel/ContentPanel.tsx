@@ -41,6 +41,7 @@ import { isUnseenAskPane } from "@/lib/paneSessionPresentation";
 import { isFailedExitCode } from "@/store/panelFailureStore";
 import { usePanelFailureEdge } from "./usePanelFailureEdge";
 import { useGridGroupAttention } from "./gridGroupAttention";
+import { useGridGroupTabReorder } from "./gridGroupTabReorder";
 
 /**
  * Base props for all panel types.
@@ -150,14 +151,12 @@ export interface ContentPanelProps extends BasePanelProps {
    */
   compactTitle?: string;
 
-  // Tab support
+  // Tab support. Reordering comes from the grid tab group by context.
   tabs?: TabInfo[];
-  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
-  onTabReorder?: (newOrder: string[]) => void;
 }
 
 interface GridChromeInputs {
@@ -265,12 +264,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     compactTitle,
     isVoiceArming = false,
     tabs,
-    groupId,
     onTabClick,
     onTabClose,
     onTabRename,
     onAddTab,
-    onTabReorder,
   },
   ref
 ) {
@@ -448,6 +445,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // A grid tab group's hidden tabs reach the edge of the tab it shows, whatever
   // that tab's kind, without changing its header chip.
   const groupAttention = useGridGroupAttention(id, location);
+  const groupTabReorder = useGridGroupTabReorder(id, location);
   const ambientAgentState = groupAttention?.ambientAgentState;
   // Determine effective agent state for container border styling.
   // ambientAgentState takes priority so tab groups can surface highest-urgency
@@ -844,12 +842,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             headerActions={headerActions}
             headerToolbar={headerToolbar}
             tabs={tabs}
-            groupId={groupId}
+            groupId={groupTabReorder?.groupId}
             onTabClick={onTabClick}
             onTabClose={onTabClose}
             onTabRename={onTabRename}
             onAddTab={onAddTab}
-            onTabReorder={onTabReorder}
+            onTabReorder={groupTabReorder?.onTabReorder}
           />
         </PanelContextMenuTrigger>
       )}

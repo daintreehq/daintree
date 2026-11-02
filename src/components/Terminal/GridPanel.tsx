@@ -32,7 +32,6 @@ export interface GridPanelProps {
   titleOverride?: string;
   // Tab support
   tabs?: TabInfo[];
-  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
@@ -46,7 +45,6 @@ export interface GridPanelProps {
   // stable handler (e.g., `ctx.handleAddTabForPanel`) — GridPanel composes
   // the no-arg shape internally and skips it in fleet scope.
   onAddTabForPanel?: (terminal: PanelInstance) => void | Promise<void>;
-  onTabReorder?: (newOrder: string[]) => void;
 }
 
 export const GridPanel = React.memo(function GridPanel({
@@ -57,13 +55,11 @@ export const GridPanel = React.memo(function GridPanel({
   isFleetScope = false,
   titleOverride,
   tabs,
-  groupId,
   onTabClick,
   onTabClose,
   onTabRename,
   onAddTab,
   onAddTabForPanel,
-  onTabReorder,
 }: GridPanelProps) {
   // Subscribe to the terminal slice keyed by id. `useShallow` does per-field
   // identity comparison, so re-renders fire only when fields of THIS terminal
@@ -135,12 +131,10 @@ export const GridPanel = React.memo(function GridPanel({
         onTitleChange: handleTitleChange,
         onMinimize: isFleetScope ? undefined : handleMinimize,
         tabs,
-        groupId,
         onTabClick,
         onTabClose,
         onTabRename,
         onAddTab: composedOnAddTab,
-        onTabReorder,
         ...(isFleetScope ? { isInputLocked: true } : undefined),
         ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
       },
@@ -156,12 +150,10 @@ export const GridPanel = React.memo(function GridPanel({
     handleTitleChange,
     handleMinimize,
     tabs,
-    groupId,
     onTabClick,
     onTabClose,
     onTabRename,
     composedOnAddTab,
-    onTabReorder,
     isFleetScope,
     titleOverride,
   ]);
@@ -195,12 +187,10 @@ export const GridPanel = React.memo(function GridPanel({
         onTitleChange={handleTitleChange}
         onMinimize={handleMinimize}
         tabs={tabs}
-        groupId={groupId}
         onTabClick={onTabClick}
         onTabClose={onTabClose}
         onTabRename={onTabRename}
         onAddTab={composedOnAddTab}
-        onTabReorder={onTabReorder}
       >
         {isPluginOwned ? (
           <PluginMissingPanel

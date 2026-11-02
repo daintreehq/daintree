@@ -20,6 +20,10 @@ import {
   GridGroupAttentionContext,
   type GridGroupAttention,
 } from "@/components/Panel/gridGroupAttention";
+import {
+  GridGroupTabReorderContext,
+  type GridGroupTabReorder,
+} from "@/components/Panel/gridGroupTabReorder";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -279,12 +283,17 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );
 
-  // Handle tab reorder - update group panel order
+  // Handle tab reorder - update group panel order. It reaches the shown pane's
+  // strip by context, whatever that pane's kind.
   const handleTabReorder = useCallback(
     (newOrder: string[]) => {
       reorderGroupTabsWithUndo(group.id, newOrder);
     },
     [group.id]
+  );
+  const groupTabReorder = useMemo<GridGroupTabReorder>(
+    () => ({ panelId: shownPanelId, groupId: group.id, onTabReorder: handleTabReorder }),
+    [shownPanelId, group.id, handleTabReorder]
   );
 
   // Handle add tab - duplicate the current panel as a new tab. Delegates to the
@@ -309,19 +318,19 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   return (
     <GridGroupAttentionContext.Provider value={groupAttention}>
-      <GridPanel
-        terminalId={activePanel.id}
-        isFocused={isFocused}
-        isMaximized={isMaximized}
-        isMultiPanelGrid={isMultiPanelGrid}
-        tabs={tabs}
-        groupId={group.id}
-        onTabClick={handleTabClick}
-        onTabClose={handleTabClose}
-        onTabRename={handleTabRename}
-        onAddTab={canAddTab ? handleAddTab : undefined}
-        onTabReorder={handleTabReorder}
-      />
+      <GridGroupTabReorderContext.Provider value={groupTabReorder}>
+        <GridPanel
+          terminalId={activePanel.id}
+          isFocused={isFocused}
+          isMaximized={isMaximized}
+          isMultiPanelGrid={isMultiPanelGrid}
+          tabs={tabs}
+          onTabClick={handleTabClick}
+          onTabClose={handleTabClose}
+          onTabRename={handleTabRename}
+          onAddTab={canAddTab ? handleAddTab : undefined}
+        />
+      </GridGroupTabReorderContext.Provider>
     </GridGroupAttentionContext.Provider>
   );
 });

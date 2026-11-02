@@ -42,6 +42,7 @@ import {
   KeyboardSensor,
   TouchSensor,
   type DragEndEvent,
+  type DragStartEvent,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import {
@@ -55,6 +56,7 @@ import {
   PrimaryMouseSensor,
   TOUCH_SENSOR_OPTIONS,
 } from "@/components/DragDrop/dragActivation";
+import { useNestedDragGuard } from "@/components/DragDrop/useNestedDragGuard";
 import { PanelTabList } from "./PanelTabList";
 import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
@@ -912,17 +914,26 @@ function PanelHeaderComponent({
   // While a tab drag is live (keyboard pickup), the tablist arrow handler must
   // not also move focus/selection — dnd-kit's sensor owns the arrow keys.
   const isTabDragActiveRef = useRef(false);
-  const handleTabDragStart = useCallback(() => {
-    isTabDragActiveRef.current = true;
-  }, []);
+  // DndProvider never sees a strip drag, so the strip raises the webview shield
+  // itself: a tab dragged down over a browser pane's page must not lose its drop.
+  const { beginDrag: beginTabDrag, finishDrag: finishTabDrag } = useNestedDragGuard();
+  const handleTabDragStart = useCallback(
+    (event: DragStartEvent) => {
+      isTabDragActiveRef.current = true;
+      beginTabDrag(event.activatorEvent);
+    },
+    [beginTabDrag]
+  );
   const handleTabDragCancel = useCallback(() => {
     isTabDragActiveRef.current = false;
-  }, []);
+    finishTabDrag();
+  }, [finishTabDrag]);
 
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
     (event: DragEndEvent) => {
       isTabDragActiveRef.current = false;
+      finishTabDrag();
       const { active, over } = event;
       if (!over || active.id === over.id || !tabs || !onTabReorder) return;
 
@@ -938,7 +949,7 @@ function PanelHeaderComponent({
         onTabReorder(newOrder);
       }
     },
-    [tabs, onTabReorder]
+    [tabs, onTabReorder, finishTabDrag]
   );
 
   // APG tabs with manual activation, like every document tab strip: arrows and

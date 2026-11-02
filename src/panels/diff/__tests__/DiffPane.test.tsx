@@ -12,23 +12,33 @@ import type { DiffChangeSetEntry } from "@shared/types/git";
 
 // A fragment, so the toolbar stays a sibling of the keydown host rather than
 // wrapping it — the stepping shortcuts bubble through the same subtree as before.
-// It reads its tab group's edge the way the real ContentPanel does.
+// It reads its tab group's edge and reorder the way the real ContentPanel does.
 vi.mock("@/components/Panel/ContentPanel", async () => {
   const { useGridGroupAttention } = await import("@/components/Panel/gridGroupAttention");
+  const { useGridGroupTabReorder } = await import("@/components/Panel/gridGroupTabReorder");
   return {
     ContentPanel: (props: {
       id: string;
       location?: "grid" | "dock" | "dialog";
+      tabs?: Array<{ id: string }>;
       toolbar?: ReactNode;
       children?: ReactNode;
     }) => {
       const attention = useGridGroupAttention(props.id, props.location ?? "grid");
+      const reorder = useGridGroupTabReorder(props.id, props.location ?? "grid");
       return (
         <>
           <span
             data-testid="group-edge"
             data-group-ambient={attention?.ambientAgentState}
             data-group-failed={attention?.hiddenTabFailed || undefined}
+          />
+          <span
+            data-testid="group-reorder"
+            data-group-id={reorder?.groupId}
+            onClick={() =>
+              reorder?.onTabReorder([...(props.tabs ?? [])].reverse().map((t) => t.id))
+            }
           />
           {props.toolbar}
           {props.children}
@@ -196,6 +206,8 @@ function sourceEnabledCalls(): boolean[] {
 
 import { DiffPane } from "../DiffPane";
 import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
+import { GridGroupTabReorderContext } from "@/components/Panel/gridGroupTabReorder";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { actionService } from "@/services/ActionService";
 
 const PANEL_ID = "diff-1";
@@ -547,6 +559,55 @@ describe("DiffPane — tab group edges (#16151)", () => {
     rerender(inGroup("other"));
     expect(edge().hasAttribute("data-group-ambient")).toBe(false);
     expect(edge().hasAttribute("data-group-failed")).toBe(false);
+  });
+});
+
+describe("DiffPane — tab reorder (#16160)", () => {
+  const tabs = ["diff-1", "t-2"].map((id) => ({
+    id,
+    title: id,
+    chrome: deriveTerminalChrome(),
+    kind: id === PANEL_ID ? "diff" : "terminal",
+    isActive: id === PANEL_ID,
+  }));
+
+  function inGroup(panelId: string, onTabReorder: (order: string[]) => void) {
+    return (
+      <GridGroupTabReorderContext.Provider value={{ panelId, groupId: "g-1", onTabReorder }}>
+        <DiffPane
+          id={PANEL_ID}
+          title="pane"
+          isFocused={false}
+          location="grid"
+          worktreeId={WORKTREE_ID}
+          onFocus={() => {}}
+          onClose={() => {}}
+          tabs={tabs}
+        />
+      </GridGroupTabReorderContext.Provider>
+    );
+  }
+
+  it("reorders its tab group's tabs from its own strip", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    const onTabReorder = vi.fn();
+    render(inGroup(PANEL_ID, onTabReorder));
+    const probe = screen.getByTestId("group-reorder");
+    expect(probe.getAttribute("data-group-id")).toBe("g-1");
+
+    fireEvent.click(probe);
+    expect(onTabReorder).toHaveBeenCalledWith(["t-2", "diff-1"]);
+  });
+
+  it("takes no reorder meant for another tab", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    const onTabReorder = vi.fn();
+    render(inGroup("other", onTabReorder));
+    const probe = screen.getByTestId("group-reorder");
+    expect(probe.hasAttribute("data-group-id")).toBe(false);
+
+    fireEvent.click(probe);
+    expect(onTabReorder).not.toHaveBeenCalled();
   });
 });
 
