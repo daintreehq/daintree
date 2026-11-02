@@ -188,6 +188,12 @@ export interface PanelRegistrySlice {
    * and is what the next restore calls last seen.
    */
   noteAgentObservation: (id: string, agentState: AgentState, at: number) => void;
+  /**
+   * Copy the host's count of agent sessions in a terminal, down as well as up.
+   * Written before the state it came with, by the live listener and by resync
+   * alike, so the pane never names the wrong session beside that state.
+   */
+  setAgentIncarnation: (id: string, agentIncarnation: number) => void;
   updateActivity: (
     id: string,
     headline: string,

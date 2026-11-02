@@ -130,7 +130,10 @@ type HostAgentStateRecord = Pick<
 export function takeHostAgentState(
   id: string,
   record: HostAgentStateRecord,
-  store: Pick<PanelState, "panelsById" | "updateAgentState" | "noteAgentObservation">,
+  store: Pick<
+    PanelState,
+    "panelsById" | "updateAgentState" | "noteAgentObservation" | "setAgentIncarnation"
+  >,
   instances: { setAgentState: (id: string, state: AgentState) => void },
   overGuess = false
 ): void {
@@ -145,6 +148,12 @@ export function takeHostAgentState(
   const observedAt = hostObservedAt(panel);
   if (!newIncarnation && observedAt !== undefined && record.lastStateChange <= observedAt) {
     return;
+  }
+  // Taken with the state, as the live listener takes it: the session a wait
+  // belongs to is what tells a relaunch's failure from the one before it, and
+  // a count left behind would make every later resync look like a new session.
+  if (record.agentIncarnation !== undefined) {
+    store.setAgentIncarnation(id, record.agentIncarnation);
   }
   instances.setAgentState(id, record.agentState);
   // Same guard as the live state listener: a waiting report never overwrites
