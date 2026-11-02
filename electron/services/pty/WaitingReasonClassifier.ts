@@ -229,9 +229,7 @@ export function classifyWaitingReason(
     composerRow !== undefined && composerRow >= 0 && composerRow < lines.length
       ? lines.slice(Math.max(0, composerRow + 1 - rows), composerRow + 1).map((l) => stripAnsi(l))
       : strippedLines;
-  const errorCandidates = errorLines
-    .filter((l) => l.trim().length > 0)
-    .slice(-ERROR_SCAN_LINES);
+  const errorCandidates = errorLines.filter((l) => l.trim().length > 0).slice(-ERROR_SCAN_LINES);
   for (const line of errorCandidates) {
     if (ERROR_PATTERNS.some((p) => p.test(line))) {
       return "error";

@@ -451,7 +451,12 @@ describe("AgentStateService", () => {
     it.each([
       ["the agent is not waiting", { agentState: "working" as const }, "prompt" as const, 5_000],
       ["the reason is unchanged", {}, "error" as const, 5_000],
-      ["a later settle already read the screen", { lastStateChange: 6_000 }, "prompt" as const, 5_000],
+      [
+        "a later settle already read the screen",
+        { lastStateChange: 6_000 },
+        "prompt" as const,
+        5_000,
+      ],
     ])("changes nothing when %s", (_label, overrides, reason, observedAt) => {
       const { service, terminal, stateChanges, activityEvents } = settledOnError();
       Object.assign(terminal, overrides);

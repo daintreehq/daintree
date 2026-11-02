@@ -129,7 +129,7 @@ export function findEmptyComposerRow(
   return undefined;
 }
 
-const LEXEME_BRACKET_CONFIRM =/[[(]\s*[yY](?:es)?\s*\/\s*[nN](?:o)?\s*[\])]/;
+const LEXEME_BRACKET_CONFIRM = /[[(]\s*[yY](?:es)?\s*\/\s*[nN](?:o)?\s*[\])]/;
 const LEXEME_TRAILING_QUESTION = /\?\s*$/;
 const LEXEME_KEYWORD_COLON =
   /(?:password|passphrase|username|token|host|enter|select|choose|confirm|input)\s*:\s*$/i;

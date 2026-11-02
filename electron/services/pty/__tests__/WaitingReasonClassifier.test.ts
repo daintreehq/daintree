@@ -427,9 +427,9 @@ describe("classifyWaitingReason with the input row known (#16093)", () => {
     "API Error: Rate limit reached",
     "Claude usage limit reached. Your limit will reset at 5pm.",
   ])("still reads %s in the transcript as an error", (banner) => {
-    expect(classify(["● Working.", `  ⎿  ${banner}`, "", RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(
-      "error"
-    );
+    expect(
+      classify(["● Working.", `  ⎿  ${banner}`, "", RULE, "❯ ", RULE, "  ? for shortcuts"])
+    ).toBe("error");
   });
 
   it("reads a boxed input row the same way", () => {
@@ -460,7 +460,6 @@ describe("classifyWaitingReason with the input row known (#16093)", () => {
     expect(classify(["Should I also update the docs?", "", RULE, "❯ ", RULE])).toBe("question");
   });
 });
-
 
 describe("hasRateLimitMessage (#12797)", () => {
   it.each([
