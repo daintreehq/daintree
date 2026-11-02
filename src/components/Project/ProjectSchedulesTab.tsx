@@ -381,6 +381,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
           <ScheduleOsJobStatus
             status={osJob.status}
             schedules={schedules}
+            switches={state.snapshot?.switches ?? null}
             repairing={osJob.repairing}
             error={osJob.error}
             onRepair={osJob.repair}
