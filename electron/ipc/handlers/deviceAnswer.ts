@@ -18,6 +18,7 @@ import type {
 } from "../../../shared/types/ipc/deviceAnswer.js";
 import type {
   ApproveDecisionsPairingPayload,
+  CancelDecisionsSetupCheckPayload,
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
   DecisionsDevicesResult,
@@ -34,6 +35,8 @@ import type {
   DecisionsRelayDeleteResult,
   DecisionsRevokeDeviceResult,
   DecisionsRotateKeysResult,
+  DecisionsSetupCheckRun,
+  DecisionsSetupCheckStartResult,
   DecisionsStatus,
   DeleteDecisionsRelayDataPayload,
   ExportDecisionsDataPayload,
@@ -195,6 +198,9 @@ const verifyRecoveryKitSchema = z
 
 // A host id as the host list keeps it.
 const enrollHostSchema = z.object({ hostId: z.string().min(1).max(256) }).strict();
+
+// A run id main minted (a UUID); a cancel names the run it means to end.
+const cancelSetupCheckSchema = z.object({ runId: z.string().min(1).max(64) }).strict();
 
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
@@ -505,6 +511,35 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setAutoEnrollHosts(enabled);
+      }
+    ),
+    // The setup check (#16024): the whole loop, run when the person asks,
+    // its progress read and pushed, and called off. Reading and cancelling
+    // answer null while off, without loading Decisions.
+    startSetupCheck: op(
+      CHANNELS.DECISIONS_START_SETUP_CHECK,
+      async (): Promise<DecisionsSetupCheckStartResult> => {
+        refuseWhileOff("check setup");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.startSetupCheck();
+      }
+    ),
+    getSetupCheck: op(
+      CHANNELS.DECISIONS_GET_SETUP_CHECK,
+      async (): Promise<DecisionsSetupCheckRun | null> => {
+        if (!decisionsOn()) return null;
+        const decisions = await loadDecisions();
+        return decisions ? decisions.getSetupCheck() : null;
+      }
+    ),
+    cancelSetupCheck: opValidated(
+      CHANNELS.DECISIONS_CANCEL_SETUP_CHECK,
+      cancelSetupCheckSchema,
+      async (payload: CancelDecisionsSetupCheckPayload): Promise<DecisionsSetupCheckRun | null> => {
+        if (!decisionsOn()) return null;
+        const decisions = await loadDecisions();
+        return decisions ? decisions.cancelSetupCheck(payload) : null;
       }
     ),
   },

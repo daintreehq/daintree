@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import type {
   DecisionsRelayCheck,
   DecisionsRelayCompatibility,
+  DecisionsSetupCheckStartResult,
   DecisionsStatus,
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -11,6 +12,20 @@ import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
+const startSetupCheck = vi.fn<() => Promise<DecisionsSetupCheckStartResult>>();
+
+/** The bridge the section reaches: the relay check, and the setup check's read, start and cancel. */
+function electronStub() {
+  return {
+    decisions: {
+      checkRelay,
+      getSetupCheck: () => Promise.resolve(null),
+      startSetupCheck,
+      cancelSetupCheck: () => Promise.resolve(null),
+    },
+    events: { on: () => () => {} },
+  };
+}
 
 const SAME: DecisionsRelayCompatibility = {
   relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
@@ -55,7 +70,7 @@ describe("DecisionsConnectionSection relay check", () => {
   beforeEach(() => {
     checkRelay.mockReset();
     Object.defineProperty(window, "electron", {
-      value: { decisions: { checkRelay } },
+      value: electronStub(),
       configurable: true,
       writable: true,
     });
@@ -324,7 +339,7 @@ describe("DecisionsConnectionSection connection state", () => {
     checkRelay.mockReset();
     checkRelay.mockReturnValue(new Promise(() => {}));
     Object.defineProperty(window, "electron", {
-      value: { decisions: { checkRelay } },
+      value: electronStub(),
       configurable: true,
       writable: true,
     });
@@ -387,7 +402,7 @@ describe("DecisionsConnectionSection setup unfinished", () => {
   beforeEach(() => {
     checkRelay.mockReset();
     Object.defineProperty(window, "electron", {
-      value: { decisions: { checkRelay } },
+      value: electronStub(),
       configurable: true,
       writable: true,
     });
@@ -426,13 +441,48 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     expect(onFinishSetup).toHaveBeenCalledOnce();
   });
 
-  it("warns of nothing once a kit is verified, or before any relay is set up", () => {
-    renderSection({ state: "not-connected", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+  it("warns of nothing once a kit is verified and a setup check passed, or before any relay is set up", () => {
+    renderSection({
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    });
     expect(screen.queryByText("Setup isn't finished")).toBeNull();
     cleanup();
 
     renderSection({ state: "not-connected" });
     expect(screen.queryByText("Setup isn't finished")).toBeNull();
+  });
+
+  it("asks for the setup check once the kit is verified, and starts it from the warning", async () => {
+    startSetupCheck.mockReturnValue(new Promise(() => {}));
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+
+    expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+    expect(screen.getByText(/Run the setup check to finish/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save recovery kit" })).toBeNull();
+
+    // The warning's own button, beside the setup check row's.
+    const fromWarning = screen
+      .getAllByRole("button", { name: "Check setup" })
+      .find((button) => !button.hasAttribute("data-decisions-setup-check-start"))!;
+    await act(async () => {
+      fireEvent.click(fromWarning);
+    });
+    expect(startSetupCheck).toHaveBeenCalledOnce();
+  });
+
+  it("names the step the last setup check stopped at", () => {
+    renderSection({
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: "push" },
+    });
+
+    expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+    expect(screen.getByText(/The last setup check stopped at push configuration/)).toBeTruthy();
   });
 
   it("leaves a revoked relay, or one that can't be used, to say so on its own row", () => {

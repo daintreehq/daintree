@@ -8,6 +8,7 @@ import type {
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
 import type { AnswerDeliveryDeps } from "./answerDelivery.js";
+import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
@@ -34,6 +35,7 @@ import {
   type RelayBinding,
   type RelayConnectionOptions,
 } from "./relayConnection.js";
+import type { SetupDiagnostics } from "./setupDiagnostic.js";
 import { createTrustedPolicy } from "./workflowGates.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
@@ -43,6 +45,8 @@ export interface DecisionsRelayConnection {
   start(): void;
   /** Resolves, if it returns a promise, once the connection writes nothing more to the store. */
   stop(): void | Promise<void>;
+  /** Starts a fresh attempt now; false when none can start. */
+  refresh?(): boolean;
 }
 
 /** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
@@ -119,6 +123,8 @@ export interface DecisionsServiceOptions {
   openQuestions?: (source: QuestionSource, previousClosed: Promise<void>) => DecisionsQuestions;
   /** Types received answers into the panes that asked (#16017); without it answers stay stored. */
   delivery?: DecisionsDeliveryDeps;
+  /** The setup check's diagnostic terminals (#16024), whose own image their questions attach. */
+  diagnostics?: SetupDiagnostics;
 }
 
 /**
@@ -161,6 +167,9 @@ export class DecisionsService {
   private readonly openQuestions: NonNullable<DecisionsServiceOptions["openQuestions"]> | null;
   /** The route agents ask through, while the connection can take questions. */
   private questions: DecisionsQuestions | null = null;
+  /** What the running connection takes questions through, once it can; null otherwise. */
+  private questionSource: QuestionSource | null = null;
+  private readonly diagnostics: SetupDiagnostics | null;
   /** Routes closed and not yet let go of the listener; a stop waits for them. */
   private questionsClosing: Promise<void> = Promise.resolve();
   /**
@@ -216,6 +225,7 @@ export class DecisionsService {
       });
     this.openQuestions = options.openQuestions ?? null;
     this.delivery = options.delivery ?? null;
+    this.diagnostics = options.diagnostics ?? null;
   }
 
   getStatus(): DecisionsStatus {
@@ -290,6 +300,20 @@ export class DecisionsService {
     this.dropConnection();
     if (this.settings !== null && !this.disposed) this.setStatus({ state: "not-connected" });
     return this.settledConnections();
+  }
+
+  /**
+   * What the running connection takes questions through, for the setup
+   * check (#16024) to ask its test question the way an agent's is asked;
+   * null while no connection can take one.
+   */
+  getQuestionSource(): QuestionSource | null {
+    return this.questionSource;
+  }
+
+  /** Starts the running connection's fresh attempt (#16024); false when there is none, or it can't. */
+  refreshConnection(): boolean {
+    return this.connection?.refresh?.() ?? false;
   }
 
   /** Connects again after `suspendConnection`, if the settings still want it. */
@@ -590,6 +614,7 @@ export class DecisionsService {
       },
       onQuestionsReady: (source) => {
         if (this.connection !== connection) return;
+        this.questionSource = source;
         if (this.openQuestions !== null) {
           this.closeQuestions();
           try {
@@ -628,6 +653,7 @@ export class DecisionsService {
     const connection = this.connection;
     this.connection = null;
     this.connectionKey = null;
+    this.questionSource = null;
     this.closeQuestions();
     this.settleQuestions();
     const stopped = connection?.stop();
@@ -701,6 +727,9 @@ export class DecisionsService {
     this.attachments = new DecisionsAttachments({
       dir: this.attachmentSpoolDir(keyFilePath),
       referenced: () => store.referencedAttachmentIds(),
+      ...(this.diagnostics
+        ? { resolver: this.diagnostics.attachmentResolver(createWorktreeAttachmentResolver()) }
+        : {}),
     });
   }
 

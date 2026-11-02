@@ -222,6 +222,7 @@ export const SETTING_CATALOG = {
           revokedAt: device,
           recoveryKit: device,
           autoEnrollHosts: device,
+          setupCheck: device,
         },
       },
       remoteHostsPreferences: device,

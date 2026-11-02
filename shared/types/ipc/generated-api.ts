@@ -295,6 +295,9 @@ export interface GeneratedElectronAPI {
     approvePairing(
       ...args: IpcInvokeMap["decisions:approve-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:approve-pairing"]["result"]>;
+    cancelSetupCheck(
+      ...args: IpcInvokeMap["decisions:cancel-setup-check"]["args"]
+    ): Promise<IpcInvokeMap["decisions:cancel-setup-check"]["result"]>;
     checkRelay(
       ...args: IpcInvokeMap["decisions:check-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:check-relay"]["result"]>;
@@ -331,6 +334,9 @@ export interface GeneratedElectronAPI {
     getPolicy(
       ...args: IpcInvokeMap["decisions:get-policy"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-policy"]["result"]>;
+    getSetupCheck(
+      ...args: IpcInvokeMap["decisions:get-setup-check"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-setup-check"]["result"]>;
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
@@ -361,6 +367,9 @@ export interface GeneratedElectronAPI {
     startPairing(
       ...args: IpcInvokeMap["decisions:start-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:start-pairing"]["result"]>;
+    startSetupCheck(
+      ...args: IpcInvokeMap["decisions:start-setup-check"]["args"]
+    ): Promise<IpcInvokeMap["decisions:start-setup-check"]["result"]>;
     verifyRecoveryKit(
       ...args: IpcInvokeMap["decisions:verify-recovery-kit"]["args"]
     ): Promise<IpcInvokeMap["decisions:verify-recovery-kit"]["result"]>;

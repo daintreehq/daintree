@@ -280,6 +280,22 @@ export class RelayConnection {
     this.begin();
   }
 
+  /**
+   * Starts a fresh attempt now, whatever the current one is doing, so the
+   * setup check (#16024) sees a socket open on a new ticket. False when none
+   * can start: the connection has ended (revoked or stopped), its identity
+   * isn't loaded yet, or a 4409's wait is still running, which this never
+   * cuts short.
+   */
+  refresh(): boolean {
+    if (this.ended || this.identity === null) return false;
+    if (this.replacedUntil > this.now()) return false;
+    if (this.current) this.retire(this.current);
+    this.failures = 0;
+    this.begin();
+    return true;
+  }
+
   private async prepare(): Promise<void> {
     let identity: Identity;
     try {

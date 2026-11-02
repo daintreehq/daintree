@@ -120,6 +120,9 @@ const decisionsEntry = vi.hoisted(() => ({
     autoEnroll: enabled,
     hosts: [],
   })),
+  startSetupCheck: vi.fn(async (): Promise<unknown> => ({ result: "not-set-up" })),
+  getSetupCheck: vi.fn((): unknown => null),
+  cancelSetupCheck: vi.fn(async (_payload: { runId: string }): Promise<unknown> => null),
 }));
 const dialogMock = vi.hoisted(() => ({
   showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
@@ -157,6 +160,9 @@ vi.mock("../../../services/decisions/index.js", () => {
     listHosts: decisionsEntry.listHosts,
     enrollDecisionsHost: decisionsEntry.enrollDecisionsHost,
     setAutoEnrollHosts: decisionsEntry.setAutoEnrollHosts,
+    startSetupCheck: decisionsEntry.startSetupCheck,
+    getSetupCheck: decisionsEntry.getSetupCheck,
+    cancelSetupCheck: decisionsEntry.cancelSetupCheck,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -243,6 +249,13 @@ const revokeDevice = decisionsNamespace.ops.revokeDevice.handler as unknown as (
   deviceId: string
 ) => Promise<unknown>;
 const rotateKeys = decisionsNamespace.ops.rotateKeys.handler as unknown as () => Promise<unknown>;
+const startSetupCheck = decisionsNamespace.ops.startSetupCheck
+  .handler as unknown as () => Promise<unknown>;
+const getSetupCheck = decisionsNamespace.ops.getSetupCheck
+  .handler as unknown as () => Promise<unknown>;
+const cancelSetupCheck = decisionsNamespace.ops.cancelSetupCheck.handler as unknown as (payload: {
+  runId: string;
+}) => Promise<unknown>;
 
 const SECRET = "claim-secret-0123456789abcdef";
 const PASSPHRASE = "correct horse battery staple";
@@ -273,6 +286,9 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_LIST_HOSTS,
   CHANNELS.DECISIONS_ENROLL_HOST,
   CHANNELS.DECISIONS_SET_AUTO_ENROLL_HOSTS,
+  CHANNELS.DECISIONS_START_SETUP_CHECK,
+  CHANNELS.DECISIONS_GET_SETUP_CHECK,
+  CHANNELS.DECISIONS_CANCEL_SETUP_CHECK,
 ];
 
 describe("decisions IPC", () => {
@@ -296,6 +312,9 @@ describe("decisions IPC", () => {
     decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
     decisionsEntry.revokeDevice.mockClear();
     decisionsEntry.rotateKeys.mockClear();
+    decisionsEntry.startSetupCheck.mockClear();
+    decisionsEntry.getSetupCheck.mockClear();
+    decisionsEntry.cancelSetupCheck.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
@@ -496,6 +515,19 @@ describe("decisions IPC", () => {
     expect(store.set).not.toHaveBeenCalled();
   });
 
+  it("refuses to check setup while off, and reads or cancels nothing, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }]) {
+      saved.value = value;
+
+      await expect(startSetupCheck()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(getSetupCheck()).resolves.toBeNull();
+      await expect(cancelSetupCheck({ runId: "run-1" })).resolves.toBeNull();
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+  });
+
   it("refuses to claim, restore or disconnect once quit has sealed the loader", async () => {
     saved.value = { enabled: true };
     sealDecisionsModule();
@@ -561,6 +593,35 @@ describe("decisions IPC", () => {
 
     expect(decisionsEntry.evaluated).toBe(1);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("runs, reads and cancels the setup check through Decisions itself once the setting is on", async () => {
+    saved.value = { enabled: true };
+    const running = { runId: "run-1", revision: 3, state: "running" };
+    const cancelled = { runId: "run-1", revision: 4, state: "cancelled" };
+    decisionsEntry.startSetupCheck.mockResolvedValueOnce({ result: "started", run: running });
+    decisionsEntry.getSetupCheck.mockReturnValueOnce(running);
+    decisionsEntry.cancelSetupCheck.mockResolvedValueOnce(cancelled);
+
+    await expect(startSetupCheck()).resolves.toEqual({ result: "started", run: running });
+    await expect(getSetupCheck()).resolves.toEqual(running);
+    await expect(cancelSetupCheck({ runId: "run-1" })).resolves.toEqual(cancelled);
+
+    expect(decisionsEntry.cancelSetupCheck).toHaveBeenCalledExactlyOnceWith({ runId: "run-1" });
+  });
+
+  it("takes only a bounded run id to cancel", () => {
+    const schema = decisionsNamespace.ops.cancelSetupCheck.schema as SafeParse;
+    expect(schema.safeParse({ runId: "0b8c7a2e-0f3d-4c8b-9a51-2f0e6d1c9b7a" }).success).toBe(true);
+    for (const bad of [
+      {},
+      { runId: "" },
+      { runId: "x".repeat(65) },
+      { runId: 7 },
+      { runId: "a", extra: 1 },
+    ]) {
+      expect(schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 
   it("asks Decisions itself for a pane's state once the setting is on", async () => {

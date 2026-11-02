@@ -1621,6 +1621,8 @@ export interface IpcEventMap {
   "decisions:status-changed": import("../decisions.js").DecisionsStatus;
   // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
   "decisions:devices-changed": null;
+  // The setup check's progress (#16024). Its own windows only.
+  "decisions:setup-check-changed": import("../decisions.js").DecisionsSetupCheckRun;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
@@ -2782,6 +2784,7 @@ export type IpcEventBusMap = Pick<
   // This machine's Decisions status (local windows only)
   | "decisions:status-changed"
   | "decisions:devices-changed"
+  | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

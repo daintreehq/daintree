@@ -53,8 +53,10 @@ import {
   DELIVERY_CHECK_INTERVAL_MS,
   DELIVERY_SETTLE_MS,
   RECOVERY_RETRIES,
+  type DiagnosticTerminals,
   type PaneSignal,
 } from "../answerDelivery.js";
+import { SetupDiagnostics } from "../setupDiagnostic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../persistence/migrations");
@@ -292,6 +294,7 @@ function setup(
       /** Held until the test lets the launch finish. */
       launchGate?: Promise<void>;
     };
+    diagnostics?: DiagnosticTerminals;
   } = {}
 ) {
   const store = options.store ?? new DaintreeLocalStore(sqlite);
@@ -409,6 +412,7 @@ function setup(
         return () => signals.delete(onPane);
       },
       ...(resume ? { resume } : {}),
+      ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}),
     },
     identity,
     store,
@@ -601,6 +605,48 @@ describe("AnswerDelivery", () => {
     // Typed once, however long it waits afterwards.
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted).toHaveLength(1);
+    await stopped(h.delivery);
+  });
+
+  it("types a setup check's answer into its diagnostic terminal alone, never into an agent's pane", async () => {
+    const diagnostics = new SetupDiagnostics();
+    const terminal = diagnostics.open(HOST, () => {});
+    terminal.expect(Q1);
+    const h = setup({ diagnostics });
+    await answered(h.store, Q1, 1, "received", { origin: terminal.origin });
+    await answered(h.store, Q2, 2, "approve");
+
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+    await until(() => h.client.submitted.length === 1);
+
+    expect(terminal.answerTypedFor(Q1)?.text).toContain("choice: received");
+    // The agent's pane got only its own answer.
+    expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
+    await until(() => h.terminalReports().length === 2);
+    expect(h.terminalReports().map((report) => report.body.question_id)).toContain(Q1);
+    await stopped(h.delivery);
+  });
+
+  it("leaves a diagnostic terminal's answer untyped once the terminal has closed", async () => {
+    const diagnostics = new SetupDiagnostics();
+    const terminal = diagnostics.open(HOST, () => {});
+    terminal.expect(Q1);
+    diagnostics.close(terminal);
+    const located = vi.spyOn(diagnostics.sink, "locate");
+    const h = setup({ diagnostics });
+    const read = vi.spyOn(h.client, "getTerminalAsync");
+    await answered(h.store, Q1, 1, "received", { origin: terminal.origin });
+
+    h.delivery.start();
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+
+    // Asked of the diagnostic terminals, never of the pty host as an agent's pane.
+    expect(located).toHaveBeenCalled();
+    expect(read.mock.calls.some(([id]) => id === terminal.origin.pane_id)).toBe(false);
+    expect(h.client.submitted).toEqual([]);
+    expect((await h.question(Q1))?.delivery_status).not.toBe("terminal-delivered");
+    expect(h.terminalReports()).toEqual([]);
     await stopped(h.delivery);
   });
 

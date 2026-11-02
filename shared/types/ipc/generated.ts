@@ -606,6 +606,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").ApproveDecisionsPairingPayload];
     result: import("../decisions.js").DecisionsPairingApproveResult;
   };
+  "decisions:cancel-setup-check": {
+    args: [payload: import("../decisions.js").CancelDecisionsSetupCheckPayload];
+    result: import("../decisions.js").DecisionsSetupCheckRun | null;
+  };
   "decisions:check-relay": {
     args: [url: string];
     result: import("../decisions.js").DecisionsRelayCheck;
@@ -654,6 +658,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsPolicy;
   };
+  "decisions:get-setup-check": {
+    args: [];
+    result: import("../decisions.js").DecisionsSetupCheckRun | null;
+  };
   "decisions:get-status": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
@@ -693,6 +701,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:start-pairing": {
     args: [];
     result: import("../decisions.js").DecisionsPairingStartResult;
+  };
+  "decisions:start-setup-check": {
+    args: [];
+    result: import("../decisions.js").DecisionsSetupCheckStartResult;
   };
   "decisions:verify-recovery-kit": {
     args: [payload: import("../decisions.js").VerifyDecisionsRecoveryKitPayload];

@@ -36,6 +36,17 @@ export interface DecisionWakeHold {
  */
 export type PaneSignal = "settled" | "appeared";
 
+/**
+ * The terminals that aren't agents' panes: the setup check's diagnostic
+ * terminal (#16024). Every pane id it `handles` is delivered through `sink`
+ * alone, whether or not one is open, so its answers never reach an agent's
+ * pane and no agent's answer reaches it.
+ */
+export interface DiagnosticTerminals {
+  handles(paneId: string): boolean;
+  readonly sink: TerminalSink;
+}
+
 /** What delivery needs from the rest of main; the lazy entry supplies the real ones. */
 export interface AnswerDeliveryDeps extends Omit<DaintreeTerminalSinkDeps, "queueWake" | "now"> {
   /** Takes a hold on the wake engine. Called before the first delivery, and again after a failure. */
@@ -50,6 +61,7 @@ export interface AnswerDeliveryDeps extends Omit<DaintreeTerminalSinkDeps, "queu
    * (#16019). Without it, an answer whose run is gone needs a person.
    */
   resume?: SessionResumeDeps;
+  diagnostics?: DiagnosticTerminals;
 }
 
 /** The store as delivery uses it: the library's, and its indexed read of whether anything waits. */
@@ -105,6 +117,21 @@ function typedIntoOf(origin: QuestionOrigin, intent: InjectionIntent): QuestionO
   };
 }
 
+/** `agents` for every pane, except the ones `diagnostics` handles. */
+function routedSink(
+  agents: TerminalSink,
+  diagnostics: DiagnosticTerminals | undefined
+): TerminalSink {
+  if (!diagnostics) return agents;
+  const sinkFor = (paneId: string) => (diagnostics.handles(paneId) ? diagnostics.sink : agents);
+  return {
+    locate: (origin) => sinkFor(origin.pane_id).locate(origin),
+    isIdle: (target) => sinkFor(target.paneId).isIdle(target),
+    inject: (target, text, injectionId) => sinkFor(target.paneId).inject(target, text, injectionId),
+    hasMarker: (target, injectionId) => sinkFor(target.paneId).hasMarker(target, injectionId),
+  };
+}
+
 function runKey(o: QuestionOrigin): string {
   return JSON.stringify([
     o.host_id,
@@ -141,6 +168,8 @@ export class AnswerDelivery {
   private readonly o: AnswerDeliveryOptions;
   private readonly store: AnswerDeliveryStore;
   private readonly sink: DaintreeTerminalSink;
+  /** The agent sink, with diagnostic terminals routed to their own. */
+  private readonly routed: TerminalSink;
   private readonly owner: DecisionsBridge;
   private readonly engine: DeliveryEngine;
   private readonly resume: DaintreeResume | null;
@@ -184,11 +213,12 @@ export class AnswerDelivery {
           signal: this.resumeAbort.signal,
         })
       : null;
+    this.routed = routedSink(this.sink, deps.diagnostics);
     this.owner = new DecisionsBridge({
       identity: options.identity,
       keyStore: this.keysFor(retireable(options.keys, () => this.retired)),
       store: this.resume ? withResumeReasons(this.store, this.resume) : this.store,
-      sink: this.sink,
+      sink: this.routed,
       client: options.client,
       ...(this.resume ? { adapters: this.resume.adapters } : {}),
       ...(deps.now ? { now: deps.now } : {}),
@@ -383,14 +413,16 @@ export class AnswerDelivery {
       }
       const typedInto = typedIntoOf(row.origin, intent);
       const key = runKey(typedInto);
-      const where = located.get(key) ?? (await this.sink.locate(typedInto));
+      const where = located.get(key) ?? (await this.routed.locate(typedInto));
       if (where.state === "host-offline" && intent.host_id === hostId && !giveUp) {
         complete = false;
         continue;
       }
       located.set(key, where);
       if (where.state === "alive" && where.target) {
-        const found = await this.sink.readMarker(where.target, intent.injection_id);
+        const found = this.o.deps.diagnostics?.handles(where.target.paneId)
+          ? await this.routed.hasMarker(where.target, intent.injection_id)
+          : await this.sink.readMarker(where.target, intent.injection_id);
         if (found === null && !giveUp) {
           complete = false;
           continue;

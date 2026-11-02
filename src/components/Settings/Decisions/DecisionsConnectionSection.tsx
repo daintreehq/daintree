@@ -16,6 +16,9 @@ import { DecisionsRelayDeploy } from "./DecisionsRelayDeploy";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { onRelayUrlRequest, takePendingRelayUrlRequest } from "./relayUrlRequest";
+import { DecisionsSetupCheck } from "./DecisionsSetupCheck";
+import { SETUP_STEP_LABEL, unfinishedReason } from "./setupCheckCopy";
+import { useSetupCheck } from "./useSetupCheck";
 
 function relayHost(origin: string | undefined): string | null {
   if (!origin) return null;
@@ -47,7 +50,7 @@ const PROBLEM_DETAIL: Record<NonNullable<DecisionsStatus["problem"]>, string> = 
 };
 
 /** A relay is set up here, but no recovery kit has been verified for it (#16007). */
-export function setupUnfinished(status: DecisionsStatus): boolean {
+export function kitUnverified(status: DecisionsStatus): boolean {
   return status.relayOrigin !== undefined && status.recoveryKitVerifiedAt === undefined;
 }
 
@@ -135,14 +138,16 @@ export function DecisionsConnectionSection({
   onFinishSetup?: () => void;
 }) {
   const { label, detail, severity } = describeConnection(status);
-  // A revoked relay, or one that can't be used, says so on its own row: no kit changes that.
-  const unfinished =
-    setupUnfinished(status) && status.state !== "revoked" && status.problem === undefined;
+  // A revoked relay, or one that can't be used, says so on its own row: no kit or check changes that.
+  const reason =
+    status.state !== "revoked" && status.problem === undefined ? unfinishedReason(status) : null;
   const savedOrigin = status.relayOrigin ?? null;
   const connected = status.state === "connected";
   const keysStored = status.keysStored === true;
   const relay = useRelayCheck();
   const identity = useRelayIdentity((next) => onChanged?.(next));
+  const setup = useSetupCheck(status.relayOrigin);
+  const checking = setup.run?.state === "running";
   const [draft, setDraft] = useState("");
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   const urlInput = useRef<HTMLInputElement>(null);
@@ -230,7 +235,7 @@ export function DecisionsConnectionSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
       </span>
-      {unfinished && (
+      {reason === "kit" && (
         <Callout
           severity="warning"
           title="Setup isn't finished"
@@ -240,9 +245,32 @@ export function DecisionsConnectionSection({
             </Button>
           }
         >
-          Save a recovery kit and verify it to finish. Everything on the relay is encrypted with
-          keys only this computer holds: without a kit or these keys, none of it can be recovered,
-          by anyone.
+          Save a recovery kit and verify it, then run the setup check to finish. Everything on the
+          relay is encrypted with keys only this computer holds: without a kit or these keys, none
+          of it can be recovered, by anyone.
+        </Callout>
+      )}
+      {reason !== null && reason !== "kit" && (
+        <Callout
+          severity="warning"
+          title="Setup isn't finished"
+          action={
+            checking ? undefined : (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                loading={setup.starting}
+                onClick={() => setup.start()}
+              >
+                {reason === "check" ? "Check setup" : "Check again"}
+              </Button>
+            )
+          }
+        >
+          {reason === "check"
+            ? "Run the setup check to finish. It sends a test question to your paired phones and types your answer into a diagnostic terminal that runs no agent."
+            : `The last setup check stopped at ${SETUP_STEP_LABEL[reason.failedStep].toLowerCase()}. Setup finishes once every step passes.`}
         </Callout>
       )}
       <SettingsGroup>
@@ -398,6 +426,9 @@ export function DecisionsConnectionSection({
           />
         )}
       </SettingsGroup>
+      {savedOrigin !== null && status.state !== "revoked" && (
+        <DecisionsSetupCheck check={setup} status={status} disabled={busy} />
+      )}
       {savedOrigin === null && (
         <DecisionsRelayDeploy
           disabled={busy}

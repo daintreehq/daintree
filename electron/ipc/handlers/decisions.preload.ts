@@ -25,6 +25,9 @@ export const DECISIONS_METHOD_CHANNELS = {
   listHosts: "decisions:list-hosts",
   enrollHost: "decisions:enroll-host",
   setAutoEnrollHosts: "decisions:set-auto-enroll-hosts",
+  startSetupCheck: "decisions:start-setup-check",
+  getSetupCheck: "decisions:get-setup-check",
+  cancelSetupCheck: "decisions:cancel-setup-check",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

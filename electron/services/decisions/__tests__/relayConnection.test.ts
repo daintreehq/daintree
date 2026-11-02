@@ -644,6 +644,50 @@ describe("RelayConnection", () => {
     h.connection.stop();
   });
 
+  it("opens a fresh attempt with a new ticket when refreshed, even one just after another began", async () => {
+    const h = await harness();
+    h.connection.start();
+    const first = await connectLive(h);
+    first.event(1);
+    await first.waitFor((frame) => frame.t === "ack" && frame.seq === 1);
+
+    // A resume coalesces into an attempt this young; a refresh never does.
+    expect(h.connection.refresh()).toBe(true);
+    const second = await h.relay.socket(1);
+    expect(first.closedByClient).toBe(1000);
+    expect(h.statuses.at(-1)).toEqual({ state: "connecting" });
+    second.accept(1);
+    expect(await second.waitFor((frame) => frame.t === "sync")).toEqual({ t: "sync", after: 1 });
+    await h.status("connected");
+    expect(h.relay.tickets).toHaveLength(2);
+    h.connection.stop();
+  });
+
+  it("refreshes nothing during a 4409's wait", async () => {
+    const h = await harness({ rand: () => 0.5 });
+    h.connection.start();
+    const first = await connectLive(h);
+    first.drop(4409);
+    await h.status("replaced");
+
+    expect(h.connection.refresh()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.relay.tickets).toHaveLength(1);
+    h.connection.stop();
+  });
+
+  it("refreshes nothing once stopped", async () => {
+    const h = await harness();
+    h.connection.start();
+    await connectLive(h);
+    h.connection.stop();
+
+    expect(h.connection.refresh()).toBe(false);
+    await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS);
+    expect(h.relay.tickets).toHaveLength(1);
+    expect(h.relay.sockets).toHaveLength(1);
+  });
+
   it("cuts a backoff wait short on resume", async () => {
     const h = await harness({ rand: () => 0.999 });
     h.connection.start();
