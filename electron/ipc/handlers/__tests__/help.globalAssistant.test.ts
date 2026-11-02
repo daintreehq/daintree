@@ -33,6 +33,15 @@ vi.mock("../../../services/events.js", () => ({
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 vi.mock("../../utils.js", () => ({ broadcastToRenderer: broadcast }));
+const windows = vi.hoisted(() => ({ managers: new Map<number, unknown>() }));
+vi.mock("../../../window/windowRef.js", () => ({
+  getWindowRegistry: () => ({
+    getByWindowId: (id: number) => {
+      const manager = windows.managers.get(id);
+      return manager ? { services: { projectViewManager: manager } } : undefined;
+    },
+  }),
+}));
 
 function seen(terminalId: string, state: string) {
   for (const listener of bus.stateChanged) listener({ terminalId, state });
@@ -321,5 +330,85 @@ describe("global assistant IPC handlers", () => {
       await flush();
       expect(lastBroadcast()?.agentState).toBe("idle");
     });
+  });
+});
+
+describe("window global assistant panel IPC handlers (#16099)", () => {
+  const shown = {
+    showing: true,
+    target: {
+      hostId: "local",
+      scope: { kind: "global" as const },
+      terminalId: "g",
+      incarnation: 1,
+    },
+  };
+
+  function fakeManager(viewIds: number[], record: unknown = shown) {
+    return {
+      ownsView: (id: number) => viewIds.includes(id),
+      getGlobalAssistantPanel: vi.fn(() => record),
+      recordGlobalAssistantPanel: vi.fn(() => true),
+    };
+  }
+
+  beforeEach(() => {
+    windows.managers.clear();
+  });
+
+  it("answers a view with its own window's record, and nothing else", async () => {
+    const otherRecord = { showing: false, target: null };
+    windows.managers.set(1, fakeManager([10]));
+    windows.managers.set(2, fakeManager([20], otherRecord));
+
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, 1))).toEqual(shown);
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(20, 2))).toEqual(otherRecord);
+    // A webContents that isn't one of the window's views, or no window at all.
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(20, 1))).toBeNull();
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, null))).toBeNull();
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, 3))).toBeNull();
+  });
+
+  it("hands a view's report to its window's manager under the sender's id", async () => {
+    const first = fakeManager([10]);
+    const second = fakeManager([20]);
+    windows.managers.set(1, first);
+    windows.managers.set(2, second);
+
+    await handlers.handleReportWindowGlobalAssistantPanel(ctx(10, 1), shown);
+    expect(first.recordGlobalAssistantPanel).toHaveBeenCalledWith(10, shown);
+    expect(second.recordGlobalAssistantPanel).not.toHaveBeenCalled();
+
+    await handlers.handleReportWindowGlobalAssistantPanel(ctx(20, 1), {
+      showing: false,
+      target: null,
+    });
+    expect(first.recordGlobalAssistantPanel).toHaveBeenCalledTimes(1);
+
+    await handlers.handleReportWindowGlobalAssistantPanel(ctx(20, 2), {
+      showing: true,
+      target: null,
+    });
+    expect(second.recordGlobalAssistantPanel).toHaveBeenCalledWith(20, {
+      showing: true,
+      target: null,
+    });
+  });
+
+  it("refuses a panel that isn't this machine's global assistant", async () => {
+    const manager = fakeManager([10]);
+    windows.managers.set(1, manager);
+    const refused = [
+      null,
+      { showing: "yes", target: null },
+      { showing: true, target: { ...shown.target, scope: { kind: "project", projectId: "p" } } },
+      { showing: true, target: { ...shown.target, hostId: "studio-01" } },
+    ];
+    for (const panel of refused) {
+      await expect(
+        handlers.handleReportWindowGlobalAssistantPanel(ctx(10, 1), panel as never)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(manager.recordGlobalAssistantPanel).not.toHaveBeenCalled();
   });
 });

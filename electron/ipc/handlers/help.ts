@@ -807,6 +807,16 @@ export const helpNamespace = defineIpcNamespace({
       globalAssistant.handleDiscardGlobalAssistant,
       { withContext: true }
     ),
+    getWindowGlobalAssistantPanel: op(
+      HELP_METHOD_CHANNELS.getWindowGlobalAssistantPanel,
+      globalAssistant.handleGetWindowGlobalAssistantPanel,
+      { withContext: true }
+    ),
+    reportWindowGlobalAssistantPanel: op(
+      HELP_METHOD_CHANNELS.reportWindowGlobalAssistantPanel,
+      globalAssistant.handleReportWindowGlobalAssistantPanel,
+      { withContext: true }
+    ),
     getPinnedActionContext: op(
       HELP_METHOD_CHANNELS.getPinnedActionContext,
       handleGetPinnedActionContext,

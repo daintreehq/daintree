@@ -123,6 +123,17 @@ export interface GlobalAssistantInputStamp {
   inputEpoch: number;
 }
 
+/**
+ * Whether a window's Assistant panel was last showing the global assistant
+ * (#16099), and the exact run it was pinned to. Held by main per window and
+ * never persisted: a window switching project hands it to the view it switches
+ * to, and an app boot starts without one.
+ */
+export interface WindowGlobalAssistantPanel {
+  showing: boolean;
+  target: AgentDirectorySubject | null;
+}
+
 /** A window's reader on the global assistant, and the input epoch it holds. */
 export interface GlobalAssistantAttachment {
   attachmentId: string;

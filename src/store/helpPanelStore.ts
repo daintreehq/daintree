@@ -8,7 +8,8 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
+import { isSameAssistantRun, type AgentDirectorySubject } from "@shared/types/agentDirectory";
+import type { WindowGlobalAssistantPanel } from "@shared/types/ipc/help";
 import { legacyHelpPanelAgentId } from "./persistence/agentDefaultsLegacy";
 import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
 import { logError } from "@/utils/logger";
@@ -243,6 +244,12 @@ interface HelpPanelState {
    * never shown in its place.
    */
   globalTarget: AgentDirectorySubject | null;
+  /**
+   * The latest `focusRequest` the global pane must treat as already served,
+   * or -1. Global brought back by a project switch (#16099) wasn't asked for,
+   * so the keyboard stays where the switch put it until a newer request.
+   */
+  globalFocusHandledThrough: number;
 }
 
 interface HelpPanelActions {
@@ -276,6 +283,13 @@ interface HelpPanelActions {
   setActiveSlot: (slot: number) => void;
   /** Show the global assistant, pinned to one exact run or following whichever runs. */
   selectGlobal: (target?: AgentDirectorySubject | null) => void;
+  /**
+   * Take on the window's panel as the view it switched from left it (#16099).
+   * Global showing there shows here, at once and without taking the keyboard;
+   * Global closed there closes it here. A project lane is this project's own
+   * and is never opened or closed by it, and nothing is ever launched.
+   */
+  applyWindowGlobalPanel: (panel: WindowGlobalAssistantPanel | null) => void;
   /**
    * A person choosing the assistant agent: shown at once, saved on the host,
    * and, unless `switchSession` is false, queued to replace this view's live
@@ -330,6 +344,7 @@ const initialState: HelpPanelState = {
   dictationFocusRequest: null,
   globalSelected: false,
   globalTarget: null,
+  globalFocusHandledThrough: -1,
 };
 
 /**
@@ -636,6 +651,27 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         ),
 
       selectGlobal: (target = null) => set({ globalSelected: true, globalTarget: target }),
+
+      applyWindowGlobalPanel: (panel) =>
+        set((s) => {
+          if (!panel) return s;
+          if (!panel.showing) return s.isOpen && s.globalSelected ? { isOpen: false } : s;
+          if (
+            s.isOpen &&
+            s.globalSelected &&
+            (s.globalTarget === panel.target || isSameAssistantRun(s.globalTarget, panel.target))
+          ) {
+            return s;
+          }
+          // One update: an open panel on a project lane, even for a render, is
+          // one that lane may auto-launch into.
+          return {
+            isOpen: true,
+            globalSelected: true,
+            globalTarget: panel.target,
+            globalFocusHandledThrough: s.focusRequest,
+          };
+        }),
 
       setPreferredAgent: (agentId, options) => {
         const epoch = ++assistantAgentWriteEpoch;

@@ -109,6 +109,7 @@ export function GlobalAssistantPane({
   const isOpen = useHelpPanelStore((s) => s.isOpen);
   const target = useHelpPanelStore((s) => s.globalTarget);
   const focusRequest = useHelpPanelStore((s) => s.focusRequest);
+  const passiveFocusHandledThrough = useHelpPanelStore((s) => s.globalFocusHandledThrough);
   const canopyOpen = useCanopyStore((s) => s.isOpen);
   const viewCached = useSyncExternalStore(subscribeViewCache, isProjectViewCached);
   // A window bound to another host reaches that host's assistants, not this one's.
@@ -154,10 +155,12 @@ export function GlobalAssistantPane({
   // Shown or asked for focus, the keyboard comes here, as a lane's tab hands it
   // to its terminal: to the composer, else the terminal, else the pane's one
   // action. The request may predate this lazily loaded pane, so none counts as
-  // handled before it has mounted.
+  // handled before it has mounted. A project switch bringing Global back
+  // serves the request it found, mounted or not: the switch placed the keyboard.
   const handledFocusRef = useRef(focusHandledThrough);
   useEffect(() => {
-    if (!isVisible || !isOpen || handledFocusRef.current === focusRequest) return;
+    if (!isVisible || !isOpen) return;
+    if (focusRequest <= Math.max(handledFocusRef.current, passiveFocusHandledThrough)) return;
     let frame = 0;
     const attempt = (tries: number) => {
       const root = rootRef.current;
@@ -184,7 +187,7 @@ export function GlobalAssistantPane({
     };
     frame = requestAnimationFrame(() => attempt(0));
     return () => cancelAnimationFrame(frame);
-  }, [isVisible, isOpen, focusRequest, paneKey]);
+  }, [isVisible, isOpen, focusRequest, paneKey, passiveFocusHandledThrough]);
 
   const handleStart = async () => {
     if (starting) return;

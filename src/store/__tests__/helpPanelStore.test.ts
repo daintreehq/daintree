@@ -611,6 +611,92 @@ describe("helpPanelStore persistence migration", () => {
       expect(persisted).not.toHaveProperty("globalSelected");
       expect(persisted).not.toHaveProperty("globalTarget");
     });
+
+    describe("a window's panel carried over a project switch (#16099)", () => {
+      it("shows Global in one update, without asking for the keyboard", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().openSlot();
+        store.getState().requestFocus();
+        const focusRequest = store.getState().focusRequest;
+        const seen: Array<{ isOpen: boolean; globalSelected: boolean }> = [];
+        const off = store.subscribe((s) =>
+          seen.push({ isOpen: s.isOpen, globalSelected: s.globalSelected })
+        );
+
+        store.getState().applyWindowGlobalPanel({ showing: true, target });
+        off();
+
+        // Never an open panel on a project lane, which that lane could launch into.
+        expect(seen).toEqual([{ isOpen: true, globalSelected: true }]);
+        // The lane behind it is kept to come back to.
+        expect(store.getState()).toMatchObject({
+          globalTarget: target,
+          activeSlot: 1,
+          focusRequest,
+          globalFocusHandledThrough: focusRequest,
+        });
+        const persisted: unknown = store.persist.getOptions().partialize?.(store.getState());
+        expect(persisted).not.toHaveProperty("globalFocusHandledThrough");
+        expect(persisted).not.toHaveProperty("isOpen");
+      });
+
+      it("leaves a panel already showing the same run untouched", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().selectGlobal(target);
+        store.getState().setOpen(true);
+        store.getState().requestFocus();
+        const before = store.getState();
+
+        store.getState().applyWindowGlobalPanel({ showing: true, target: { ...target } });
+
+        expect(store.getState()).toBe(before);
+        // A successor run, or following whichever runs, is another target, and is taken.
+        store.getState().applyWindowGlobalPanel({
+          showing: true,
+          target: { ...target, incarnation: 3 },
+        });
+        expect(store.getState().globalTarget).toMatchObject({ incarnation: 3 });
+        store.getState().applyWindowGlobalPanel({ showing: true, target: null });
+        expect(store.getState().globalTarget).toBeNull();
+        const following = store.getState();
+        store.getState().applyWindowGlobalPanel({ showing: true, target: null });
+        expect(store.getState()).toBe(following);
+      });
+
+      it("closes Global the window closed, keeping it selected for the next open", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().selectGlobal(target);
+        store.getState().setOpen(true);
+
+        store.getState().applyWindowGlobalPanel({ showing: false, target: null });
+
+        expect(store.getState()).toMatchObject({
+          isOpen: false,
+          globalSelected: true,
+          globalTarget: target,
+        });
+      });
+
+      it("never opens or closes this project's own lane, and ignores no record", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().setOpen(true);
+        const laneOpen = store.getState();
+
+        store.getState().applyWindowGlobalPanel({ showing: false, target: null });
+        expect(store.getState()).toBe(laneOpen);
+        store.getState().applyWindowGlobalPanel(null);
+        expect(store.getState()).toBe(laneOpen);
+
+        store.getState().setOpen(false);
+        const closed = store.getState();
+        store.getState().applyWindowGlobalPanel({ showing: false, target: null });
+        expect(store.getState()).toBe(closed);
+      });
+    });
   });
 
   describe("assistant lanes (#12108)", () => {

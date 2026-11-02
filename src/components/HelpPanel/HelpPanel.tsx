@@ -568,7 +568,9 @@ export function HelpPanel({
   const [autoResumeAgentId, setAutoResumeAgentId] = useState<string | null>(null);
   const coldResumeArmedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!activeWorkspaceId || terminalId || !isReadyToLaunch) return;
+    // A lane resumes when it's the one on screen. Global can be on screen as
+    // a cold view opens, brought by the project switch that opened it (#16099).
+    if (!activeWorkspaceId || terminalId || !isReadyToLaunch || globalSelected) return;
     if (coldResumeArmedRef.current === activeWorkspaceId) return;
     const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId, activeSlot);
     if (!peek) return;
@@ -587,7 +589,7 @@ export function HelpPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, activeSlot, terminalId, isReadyToLaunch, setOpen]);
+  }, [activeWorkspaceId, activeSlot, terminalId, isReadyToLaunch, globalSelected, setOpen]);
 
   // Fire the captured resume once the panel has opened. The `!terminalId` guard
   // covers two cases: a DevTools reload that still holds a live session, and the
@@ -601,14 +603,14 @@ export function HelpPanel({
   // or a stale peek), the controller aborts instead of fresh-launching a blank
   // session that would displace the resumed backend (#10815).
   useEffect(() => {
-    if (!autoResumeAgentId || !isOpen) return;
+    if (!autoResumeAgentId || !isOpen || globalSelected) return;
     if (terminalId) {
       setAutoResumeAgentId(null);
       return;
     }
     controller.launch({ agentId: autoResumeAgentId, replaceExisting: true, resumeOnly: true });
     setAutoResumeAgentId(null);
-  }, [autoResumeAgentId, isOpen, terminalId, controller]);
+  }, [autoResumeAgentId, isOpen, globalSelected, terminalId, controller]);
 
   // Lifecycle is NOT driven from here (#12108). Every open lane — the active
   // one included — is armed by its own `HelpSessionLaneRuntime` below.
