@@ -55,7 +55,12 @@ vi.mock("../../ProjectStore.js", () => ({
   projectStore: {
     getAllProjectIdentities: () => [{ id: "p1", path: "/repo", name: "Repo" }],
     schedules: {
-      list: async (projectId: string) => ({ projectId, schedules: mocks.schedules, revision: 1 }),
+      list: async (projectId: string) => ({
+        projectId,
+        switches: { schedulesOn: true, startWhenClosed: true, schedulesOnSince: 1 },
+        schedules: mocks.schedules,
+        revision: 1,
+      }),
       subscribe: () => () => {},
     },
   },

@@ -15,7 +15,12 @@ const mocks = vi.hoisted(() => {
     instances,
     activeShutdown: null as object | null,
     launchScheduledRunLive: vi.fn(async () => ({ status: "not-found" as const })),
-    list: vi.fn(async (projectId: string) => ({ projectId, schedules: [], revision: 3 })),
+    list: vi.fn(async (projectId: string) => ({
+      projectId,
+      switches: { schedulesOn: true, startWhenClosed: false, schedulesOnSince: null },
+      schedules: [],
+      revision: 3,
+    })),
     unsubscribe: vi.fn(),
     subscribe: vi.fn(),
     recorder: { evaluationPoint: () => null },
@@ -133,6 +138,7 @@ describe("scheduledRunSchedulerLive", () => {
     expect(deps.projectExists("gone")).toBe(false);
     await expect(deps.listSchedules("project-1")).resolves.toEqual({
       projectId: "project-1",
+      switches: { schedulesOn: true, startWhenClosed: false, schedulesOnSince: null },
       schedules: [],
       revision: 3,
     });
