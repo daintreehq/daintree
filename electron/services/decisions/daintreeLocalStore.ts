@@ -263,6 +263,11 @@ function toOutboxRecord(i: OutboxItem): OutboxRecord {
   };
 }
 
+function isMarkedPublished(payload: string): boolean {
+  const parsed = JSON.parse(payload) as { maybePublished?: unknown } | null;
+  return parsed?.maybePublished === true;
+}
+
 function outboxFrom(r: OutboxRecord): OutboxItem {
   return {
     id: r.id,
@@ -480,10 +485,58 @@ export class DaintreeLocalStore implements LocalStore {
     });
   }
 
+  /**
+   * A create's `maybePublished` mark, once stored, stays (#16014): the
+   * publisher rewrites the create from its own copy after each attachment it
+   * uploads, and that copy predates a mark a cancel set meanwhile.
+   */
   putOutbox(item: OutboxItem): Promise<void> {
     return this.enqueueWith("write", () => {
       const record = toOutboxRecord(item);
-      return () => this.writeOutbox(record);
+      return () =>
+        this.writeOutbox(record.kind === "create" ? this.keepingPublishedMark(record) : record);
+    });
+  }
+
+  /**
+   * Marks a question's pending create as possibly published, changing nothing
+   * else in it: not its upload progress, not its retry time. False when it has
+   * no create left, which is never put back.
+   */
+  markCreateMaybePublished(questionId: string): Promise<boolean> {
+    return this.enqueue("write", () => {
+      const r = this.st(
+        `UPDATE decisions_outbox SET payload = json_set(payload, '$.maybePublished', json('true'))
+         WHERE question_id = ? AND kind = 'create'`
+      ).run(questionId);
+      return r.changes > 0;
+    });
+  }
+
+  /**
+   * Every attachment id a pending create names, whatever its question's state,
+   * retry time or upload progress: the spool entries still owed to the relay.
+   * Throws on a create it can't read, so a sweep deletes nothing then.
+   */
+  referencedAttachmentIds(): Promise<Set<string>> {
+    return this.enqueue("read", () => {
+      const ids = new Set<string>();
+      const rows = this.st("SELECT payload FROM decisions_outbox WHERE kind = 'create'").all() as {
+        payload: string;
+      }[];
+      for (const { payload } of rows) {
+        const attachments = (JSON.parse(payload) as { attachments?: unknown }).attachments;
+        if (attachments === undefined) continue;
+        if (!Array.isArray(attachments))
+          throw new Error("A pending create's attachments are unreadable");
+        for (const attachment of attachments as { attachment_id?: unknown }[]) {
+          if (typeof attachment?.attachment_id !== "string") {
+            throw new Error("A pending create names an unreadable attachment");
+          }
+          ids.add(attachment.attachment_id);
+        }
+      }
+      return ids;
     });
   }
 
@@ -846,6 +899,15 @@ export class DaintreeLocalStore implements LocalStore {
     };
     this.st(UPDATE_QUESTION).run(toRecord(next));
     return next;
+  }
+
+  private keepingPublishedMark(record: OutboxRecord): OutboxRecord {
+    const stored = this.st("SELECT payload FROM decisions_outbox WHERE id = ?").get(record.id) as
+      { payload: string } | undefined;
+    if (stored === undefined || !isMarkedPublished(stored.payload)) return record;
+    if (isMarkedPublished(record.payload)) return record;
+    const payload = JSON.parse(record.payload) as Record<string, unknown>;
+    return { ...record, payload: JSON.stringify({ ...payload, maybePublished: true }) };
   }
 
   private writeOutbox(record: OutboxRecord): void {

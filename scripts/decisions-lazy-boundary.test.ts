@@ -96,6 +96,8 @@ describe("Decisions lazy boundary", () => {
       "electron/services/decisions/paneAccess.ts",
       "electron/services/decisions/questionBridge.ts",
       "electron/services/decisions/questionFeed.ts",
+      "electron/services/decisions/attachmentResolver.ts",
+      "electron/services/decisions/attachmentSpool.ts",
     ]) {
       expect(inputs, file).toContain(file);
     }

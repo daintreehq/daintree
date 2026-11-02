@@ -29,6 +29,7 @@ import {
   watchNetwork,
   watchResume,
 } from "./relayTransport.js";
+import type { QuestionAttachments } from "./attachmentSpool.js";
 
 /** The relay identity a connection is for, as the setting records it. */
 export interface RelayBinding {
@@ -52,6 +53,8 @@ export type RelayConnectionStatus =
 export type RelayConnectionStore = LocalStore & {
   isFaulted?(): boolean;
   hasPendingDelivery?(): Promise<boolean>;
+  /** Marks a question's pending create as possibly published, atomically, if it has one (#16014). */
+  markCreateMaybePublished?(questionId: string): Promise<boolean>;
 };
 
 /**
@@ -64,9 +67,11 @@ export interface QuestionSource {
   /** The started attempt's bridge, while it is current; null between attempts. */
   live(): DecisionsBridge | null;
   /** The lifetime's store, refused to anyone once the connection has ended. */
-  readonly store: LocalStore;
+  readonly store: RelayConnectionStore;
   /** The lifetime's trusted policy, the one every attempt's bridge asks under. */
   readonly policy: PolicyRegistry;
+  /** The lifetime's attachments, the ones every attempt's bridge asks with; none refuses them. */
+  readonly attachments?: QuestionAttachments;
 }
 
 export interface RelayConnectionOptions {
@@ -79,6 +84,13 @@ export interface RelayConnectionOptions {
    * bridge that is running.
    */
   policy: PolicyRegistry;
+  /**
+   * The resolver, durable spool and ask gate of the lifetime's store
+   * (#16014), shared by every attempt's bridge so a flush after a restart or
+   * a reconnect uploads what an earlier one spooled. Without them,
+   * attachments are refused.
+   */
+  attachments?: QuestionAttachments;
   onStatus(status: RelayConnectionStatus): void;
   /** The relay revoked this identity. Called once, after which nothing reconnects. */
   onRevoked(): void;
@@ -302,6 +314,7 @@ export class RelayConnection {
       },
       store: this.store,
       policy: this.o.policy,
+      ...(this.o.attachments ? { attachments: this.o.attachments } : {}),
     });
     if (this.ended) return;
     await this.startDelivery(identity);
@@ -422,6 +435,9 @@ export class RelayConnection {
         ),
         sink: holdingTerminalSink,
         policy: this.o.policy,
+        ...(this.o.attachments
+          ? { resolver: this.o.attachments.resolver, spool: this.o.attachments.spool }
+          : {}),
         client,
         webSocket: (url) => this.openSocket(attempt, url),
         ...(this.o.pumpIntervalMs !== undefined ? { pumpIntervalMs: this.o.pumpIntervalMs } : {}),

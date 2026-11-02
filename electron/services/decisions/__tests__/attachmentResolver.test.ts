@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { BridgeError, type QuestionOrigin } from "@daintreehq/decisions-client";
 import { LIMITS } from "@daintreehq/decisions-protocol";
-import { createWorktreeAttachmentResolver, isInsideRoot } from "../attachmentResolver.js";
+import {
+  createWorktreeAttachmentResolver,
+  isInsideRoot,
+  relativeIdProblem,
+} from "../attachmentResolver.js";
 
 /** Planted in every file, so a test can prove no refusal repeats what it read. */
 const SECRET = "SECRET-FILE-CONTENT-never-echoed";
@@ -81,11 +85,12 @@ describe("createWorktreeAttachmentResolver", () => {
     }
   });
 
-  it("takes an absolute path that lands inside the worktree", async () => {
+  it("refuses an absolute path, even one inside the worktree", async () => {
     const file = path.join(worktree, "shots", "after.png");
     fs.writeFileSync(file, withSecret(PNG));
-    const resolved = await createWorktreeAttachmentResolver().resolve(origin(), file);
-    expect(resolved?.bytes.length).toBe(PNG.length + SECRET.length);
+    expect((await refusal(file)).message).toMatch(
+      /must be a path relative to this terminal's worktree/
+    );
   });
 
   it("follows a symlink that stays inside the worktree", async () => {
@@ -97,21 +102,23 @@ describe("createWorktreeAttachmentResolver", () => {
 
   it("refuses a path that climbs out of the worktree", async () => {
     fs.writeFileSync(path.join(outside, "secret.png"), withSecret(PNG));
-    expect((await refusal("../outside/secret.png")).message).toMatch(/outside this terminal's worktree/);
+    expect((await refusal("../outside/secret.png")).message).toMatch(
+      /outside this terminal's worktree/
+    );
     expect((await refusal("shots/../../outside/secret.png")).message).toMatch(/outside/);
-  });
-
-  it("refuses an absolute path outside the worktree", async () => {
-    const file = path.join(outside, "secret.png");
-    fs.writeFileSync(file, withSecret(PNG));
-    expect((await refusal(file)).message).toMatch(/outside this terminal's worktree/);
   });
 
   it("refuses a sibling directory whose name only starts like the worktree's", async () => {
     const sibling = `${worktree}-evil`;
     fs.mkdirSync(sibling);
     fs.writeFileSync(path.join(sibling, "shot.png"), withSecret(PNG));
-    expect((await refusal(path.join(sibling, "shot.png"))).message).toMatch(/outside/);
+    expect((await refusal(`../${path.basename(sibling)}/shot.png`)).message).toMatch(/outside/);
+  });
+
+  it("takes a name that only starts with two dots", async () => {
+    fs.writeFileSync(path.join(worktree, "..preview.png"), withSecret(PNG));
+    const resolved = await createWorktreeAttachmentResolver().resolve(origin(), "..preview.png");
+    expect(resolved?.bytes.length).toBe(PNG.length + SECRET.length);
   });
 
   it("refuses a symlinked file that points outside the worktree", async () => {
@@ -123,12 +130,25 @@ describe("createWorktreeAttachmentResolver", () => {
   it("refuses a file reached through a symlinked directory outside the worktree", async () => {
     fs.writeFileSync(path.join(outside, "secret.png"), withSecret(PNG));
     fs.symlinkSync(outside, path.join(worktree, "linked"), "dir");
-    expect((await refusal("linked/secret.png")).message).toMatch(/outside this terminal's worktree/);
+    expect((await refusal("linked/secret.png")).message).toMatch(
+      /outside this terminal's worktree/
+    );
   });
 
   it("refuses a file whose name says image but whose content isn't one", async () => {
     fs.writeFileSync(path.join(worktree, "shots", "fake.png"), `not an image: ${SECRET}`);
     expect((await refusal("shots/fake.png")).message).toMatch(/isn't a PNG, JPEG or WebP image/);
+  });
+
+  it("refuses a file that carries only the start of a PNG signature", async () => {
+    fs.writeFileSync(path.join(worktree, "half.png"), withSecret(PNG.slice(0, 4)));
+    expect((await refusal("half.png")).message).toMatch(/isn't a PNG, JPEG or WebP image/);
+  });
+
+  it("takes a real image whatever its name says", async () => {
+    fs.writeFileSync(path.join(worktree, "shot.txt"), withSecret(JPEG));
+    const resolved = await createWorktreeAttachmentResolver().resolve(origin(), "shot.txt");
+    expect(resolved?.bytes.length).toBe(JPEG.length + SECRET.length);
   });
 
   it("refuses SVG, even named as a PNG", async () => {
@@ -155,7 +175,9 @@ describe("createWorktreeAttachmentResolver", () => {
     expect((await refusal("empty.png")).message).toMatch(/is empty/);
     expect((await refusal("shots")).message).toMatch(/isn't a regular file/);
     expect((await refusal(".")).message).toMatch(/isn't a regular file/);
-    expect((await refusal("shots/none.png")).message).toMatch(/isn't a file in this terminal's worktree/);
+    expect((await refusal("shots/none.png")).message).toMatch(
+      /isn't a file in this terminal's worktree/
+    );
     expect((await refusal("empty.png/inner.png")).message).toMatch(/isn't a file/);
   });
 
@@ -180,6 +202,23 @@ describe("createWorktreeAttachmentResolver", () => {
     expect((await refusal("shot.png", path.join(base, "gone"))).message).toMatch(
       /worktree can't be opened/
     );
+  });
+});
+
+describe("relativeIdProblem", () => {
+  it("refuses absolute paths on either platform", () => {
+    expect(relativeIdProblem("/etc/passwd", "linux")).toMatch(/relative/);
+    expect(relativeIdProblem("shots/a.png", "linux")).toBeNull();
+    expect(relativeIdProblem("C:\\Users\\a.png", "win32")).toMatch(/relative/);
+    expect(relativeIdProblem("\\\\server\\share\\a.png", "win32")).toMatch(/relative/);
+    expect(relativeIdProblem("\\a.png", "win32")).toMatch(/relative/);
+    expect(relativeIdProblem("shots\\a.png", "win32")).toBeNull();
+  });
+
+  it("refuses drive-relative paths and alternate streams on Windows only", () => {
+    expect(relativeIdProblem("C:a.png", "win32")).toMatch(/relative/);
+    expect(relativeIdProblem("a.png:hidden", "win32")).toMatch(/relative/);
+    expect(relativeIdProblem("a:b.png", "darwin")).toBeNull();
   });
 });
 

@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { PolicyRegistry, QuestionRow } from "@daintreehq/decisions-client";
 import type {
   DecisionsSettings,
@@ -7,6 +8,7 @@ import type {
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
 import type { AnswerDeliveryDeps } from "./answerDelivery.js";
+import { DecisionsAttachments } from "./attachmentSpool.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
@@ -76,6 +78,11 @@ export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;
   /** Where the sealed keys live: `userData/decisions/keys.bin` unless a test says otherwise. */
   keyFilePath?: () => string;
+  /**
+   * Where asked attachments' ciphertext waits to upload, given where the keys
+   * live: `spool` beside the key file unless a test says otherwise.
+   */
+  attachmentSpoolDir?: (keyFilePath: string) => string;
   /** Sends one pane's state to its project's views (`terminal:decision-state`). */
   publishPaneState?: PaneDecisionStatePublisher;
   /**
@@ -163,6 +170,9 @@ export class DecisionsService {
   private paused = false;
   /** The store didn't open for this lifetime; the next start tries it again. */
   private storeFailed = false;
+  /** The open store's attachment spool and ask gate (#16014); null while it is closed. */
+  private attachments: DecisionsAttachments | null = null;
+  private readonly attachmentSpoolDir: (keyFilePath: string) => string;
   /**
    * The identity a connection saw revoked. Held until the settings name
    * another relay or none, so a start that carries settings read before the
@@ -175,6 +185,8 @@ export class DecisionsService {
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
     this.keyFilePath = options.keyFilePath ?? decisionsKeyFilePath;
+    this.attachmentSpoolDir =
+      options.attachmentSpoolDir ?? ((keyFilePath) => join(dirname(keyFilePath), "spool"));
     this.panes = new PaneDecisionStates(options.publishPaneState ?? (() => {}));
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
@@ -326,11 +338,12 @@ export class DecisionsService {
       // socket until one opens, so on is honestly "not connected" for now.
       if (this.state === "off") this.setStatus({ state: "not-connected" });
       if (!this.store) {
+        const keyFilePath = this.keyFilePath();
         let opened: DaintreeLocalStore | null;
         try {
           // A deletion that stopped partway is finished or undone before any row
           // can be written, since the rows left are how it tells which.
-          await finishInterruptedErase(this.eraseDeps());
+          await finishInterruptedErase(this.eraseDeps(keyFilePath));
           if (this.disposed) return;
           opened = await this.openStore(() => this.disposed);
         } catch (error) {
@@ -343,7 +356,7 @@ export class DecisionsService {
           return;
         }
         this.storeFailed = false;
-        await this.adoptStore(opened);
+        await this.adoptStore(opened, keyFilePath);
       }
       this.reconcileConnection();
     });
@@ -366,10 +379,13 @@ export class DecisionsService {
       // The connection goes first: nothing may reach the store or keys once they close.
       this.paused = true;
       let outcome: LocalEraseOutcome;
+      const keyFilePath = this.keyFilePath();
       try {
         this.dropConnection();
         // An answer being typed settles before the store stops taking its result.
         await this.settledConnections();
+        // An ask still spooling finishes too; the spool it leaves goes with the rows.
+        await this.closeAttachments();
         const store = this.detachStore();
         const keyStore = this.keyStore;
         const rotations = this.rotations;
@@ -384,7 +400,7 @@ export class DecisionsService {
             await rotations?.close();
             await keyStore?.close();
           }
-          outcome = await eraseLocalDecisionsData(this.eraseDeps());
+          outcome = await eraseLocalDecisionsData(this.eraseDeps(keyFilePath));
         } finally {
           this.erasing = false;
         }
@@ -394,7 +410,8 @@ export class DecisionsService {
           try {
             const reopened = await this.openStore(() => this.disposed);
             this.storeFailed = false;
-            await this.adoptStore(reopened);
+            // No create is left, so its attachments' first sweep empties the spool.
+            await this.adoptStore(reopened, keyFilePath);
           } catch (err) {
             // The next start tries again; the deletion stands either way.
             this.storeFailed = true;
@@ -440,6 +457,7 @@ export class DecisionsService {
     await this.settledConnections();
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
+    await this.closeAttachments();
     const store = this.detachStore();
     const keyStore = this.keyStore;
     const rotations = this.rotations;
@@ -511,6 +529,7 @@ export class DecisionsService {
       ...(delivery
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
         : {}),
+      ...(this.attachments ? { attachments: this.attachments } : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.
@@ -561,8 +580,9 @@ export class DecisionsService {
   }
 
   /** Makes `opened` the lifetime's store, and shows each pane what it holds before anything new arrives. */
-  private async adoptStore(opened: DaintreeLocalStore | null): Promise<void> {
+  private async adoptStore(opened: DaintreeLocalStore | null, keyFilePath: string): Promise<void> {
     this.store = opened;
+    if (opened) this.openAttachments(opened, keyFilePath);
     await this.feedFrom(opened);
   }
 
@@ -579,9 +599,9 @@ export class DecisionsService {
     while (this.stopping.size > 0) await Promise.all([...this.stopping]);
   }
 
-  private eraseDeps(): LocalEraseDeps {
+  private eraseDeps(keyFilePath: string): LocalEraseDeps {
     return {
-      keyFilePath: this.keyFilePath(),
+      keyFilePath,
       openRows: this.openRows,
       forgetIdentity: () => {
         const saved = this.forgetIdentity();
@@ -608,6 +628,24 @@ export class DecisionsService {
     this.feed = feed;
     this.offCommit = store.onCommit(() => void feed.refresh());
     return feed.refresh();
+  }
+
+  /**
+   * The attachments of `store`, swept now of what an earlier run or lifetime
+   * left, before any ask can spool.
+   */
+  private openAttachments(store: DaintreeLocalStore, keyFilePath: string): void {
+    this.attachments = new DecisionsAttachments({
+      dir: this.attachmentSpoolDir(keyFilePath),
+      referenced: () => store.referencedAttachmentIds(),
+    });
+  }
+
+  /** Takes no more asks, once the one spooling (and its cleanup) has settled. Files stay. */
+  private async closeAttachments(): Promise<void> {
+    const attachments = this.attachments;
+    this.attachments = null;
+    await attachments?.close();
   }
 
   /** Refuses agents' questions at once; the listener hold goes when the route has let go. */
