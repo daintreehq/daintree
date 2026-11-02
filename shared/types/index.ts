@@ -717,6 +717,8 @@ export type {
   EditorConfig,
   DiscoveredEditor,
   EditorSetConfigPayload,
+  EditorSetDefaultPayload,
+  EditorClearProjectPreferencePayload,
   EditorGetConfigResult,
 } from "./editor.js";
 

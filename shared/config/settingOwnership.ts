@@ -232,6 +232,8 @@ export const SETTING_CATALOG = {
       // An enrolled Host's own record of its enrollment, kept on the Host itself.
       decisionsHost: device,
       remoteHostsPreferences: device,
+      // The editor launches on the machine you sit at, so its fallback is that machine's.
+      defaultEditor: device,
       // What this machine lets a host's plugins do with its clipboard.
       remoteHostPluginClipboardGrants: devicePerHost,
       // Which host plugins may run their view code on this machine, and what code.

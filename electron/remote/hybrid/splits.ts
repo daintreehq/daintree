@@ -8,7 +8,11 @@ import type {
   ProjectSwitchResult,
   ProjectSwitchTrace,
 } from "../../../shared/types/ipc/project.js";
-import type { EditorConfig, EditorGetConfigResult } from "../../../shared/types/editor.js";
+import {
+  resolveEffectiveEditor,
+  type EditorConfig,
+  type EditorGetConfigResult,
+} from "../../../shared/types/editor.js";
 import type { SystemOpenInEditorFallback } from "../../../shared/types/ipc/system.js";
 import type { ScratchSwitchPayload } from "../../../shared/types/ipc/scratch.js";
 import type { Scratch } from "../../../shared/types/scratch.js";
@@ -26,6 +30,7 @@ import type { HybridSplit } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
 import { composeBootResult, readShellHydrateFields } from "../../ipc/handlers/app/state.js";
 import { readHydrateTerminalConfig } from "../../services/AppHydrationService.js";
+import { readDefaultEditor } from "../../services/defaultEditor.js";
 import { store } from "../../store.js";
 import {
   APP_STATE_FIELD_OWNERSHIP,
@@ -154,14 +159,23 @@ const terminalConfigGet: HybridSplit = async ({ local, remote }) => {
   return mergeByOwnership(device, host, TERMINAL_CONFIG_FIELD_OWNERSHIP);
 };
 
-/** Which project's editor preference is the host's; which editors exist is this machine's. */
+/**
+ * A project's own editor choice is the host's; which editors exist, and the
+ * default for projects without a choice, are this machine's, where the editor
+ * launches. Only the host's project field is read, so an older host's answer
+ * still works and the host's own default never reaches this machine.
+ */
 const editorGetConfig: HybridSplit = async ({ local, remote }) => {
   const [device, host] = (await Promise.all([local([undefined]), remote()])) as [
     EditorGetConfigResult,
     EditorGetConfigResult,
   ];
+  const preferredEditor = host.preferredEditor ?? null;
+  const defaultEditor = device.defaultEditor ?? null;
   return {
-    preferredEditor: host.preferredEditor,
+    preferredEditor,
+    defaultEditor,
+    effectiveEditor: resolveEffectiveEditor(preferredEditor, defaultEditor),
     discoveredEditors: device.discoveredEditors,
   } satisfies EditorGetConfigResult;
 };
@@ -393,17 +407,18 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
   const descriptor = hostDescriptor(hostId);
   if (!descriptor) return copyHostPathInstead(hostId, hostPath);
 
-  let editorId: EditorConfig["id"] | null = null;
+  let preferredEditor: EditorConfig | null = null;
   if (typeof payload.projectId === "string" && payload.projectId) {
     try {
       const config = (await remote(CHANNELS.EDITOR_GET_CONFIG, [
         payload.projectId,
       ])) as EditorGetConfigResult;
-      editorId = config.preferredEditor?.id ?? null;
+      preferredEditor = config.preferredEditor ?? null;
     } catch {
-      // No preference readable: the default editor still gets a chance.
+      // No preference readable: this machine's default still gets a chance.
     }
   }
+  const editorId = resolveEffectiveEditor(preferredEditor, readDefaultEditor())?.id ?? null;
 
   // The editor's own remote: SSH for an ssh host, WSL for a distro on this PC.
   const sshTarget = sshTargetOf(descriptor.connection);
@@ -527,6 +542,7 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.TERMINAL_CONFIG_GET]: terminalConfigGet,
   [CHANNELS.EDITOR_GET_CONFIG]: editorGetConfig,
   [CHANNELS.EDITOR_SET_CONFIG]: remoteOnly,
+  [CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE]: remoteOnly,
   [CHANNELS.PROJECT_SWITCH]: projectSwitch,
   [CHANNELS.PROJECT_REOPEN]: projectSwitch,
   [CHANNELS.PROJECT_GET_CURRENT]: remoteOnly,
@@ -607,6 +623,7 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.TERMINAL_CONFIG_GET,
   CHANNELS.EDITOR_GET_CONFIG,
   CHANNELS.EDITOR_SET_CONFIG,
+  CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE,
   CHANNELS.PROJECT_SWITCH,
   CHANNELS.PROJECT_REOPEN,
   CHANNELS.PROJECT_GET_CURRENT,

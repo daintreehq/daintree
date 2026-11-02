@@ -962,19 +962,24 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./driveLease.js").DriveLeaseTakeOverPayload];
     result: import("./driveLease.js").DriveLeaseView;
   };
+  "editor:clear-project-preference": {
+    args: [payload: import("../editor.js").EditorClearProjectPreferencePayload];
+    result: void;
+  };
   "editor:discover": {
     args: [];
     result: import("../editor.js").DiscoveredEditor[];
   };
   "editor:get-config": {
     args: [projectId?: string | undefined];
-    result: {
-      preferredEditor: import("../editor.js").EditorConfig | null;
-      discoveredEditors: import("../editor.js").DiscoveredEditor[];
-    };
+    result: import("../editor.js").EditorGetConfigResult;
   };
   "editor:set-config": {
     args: [payload: import("../editor.js").EditorSetConfigPayload];
+    result: void;
+  };
+  "editor:set-default": {
+    args: [payload: import("../editor.js").EditorSetDefaultPayload];
     result: void;
   };
   "element-picker:bind": {

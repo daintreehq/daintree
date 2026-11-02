@@ -9,6 +9,8 @@ export const RENDERER_API_SKIP = true as const;
 export const EDITOR_CONFIG_METHOD_CHANNELS = {
   getConfig: "editor:get-config",
   setConfig: "editor:set-config",
+  setDefault: "editor:set-default",
+  clearProjectPreference: "editor:clear-project-preference",
   discover: "editor:discover",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 

@@ -82,6 +82,14 @@ vi.mock("../../../services/EditorService.js", () => ({
   openFile: openFileMock,
 }));
 
+const readDefaultEditorMock = vi.hoisted(() =>
+  vi.fn<() => { id: "antigravity-ide" | "sublime" } | null>(() => null)
+);
+
+vi.mock("../../../services/defaultEditor.js", () => ({
+  readDefaultEditor: readDefaultEditorMock,
+}));
+
 const openExternalUrlMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../../utils/openExternal.js", () => ({
@@ -177,6 +185,7 @@ function resetGitMocks() {
   // editor preference, so both are per-suite state like the rest of these.
   fsMock.promises.stat.mockResolvedValue({ isFile: () => true, isDirectory: () => false });
   projectStoreMock.getProjectSettings.mockResolvedValue({ preferredEditor: null });
+  readDefaultEditorMock.mockReturnValue(null);
 }
 
 // Rejects the `.git` probe for the given roots, marking them as no longer
@@ -403,6 +412,54 @@ describe("system:open-in-editor containment", () => {
     await handler(fakeEvent, { path: dirPath, projectId: "proj-1" });
 
     expect(openFileMock).toHaveBeenCalledWith(dirPath, undefined, undefined, null, true);
+  });
+
+  describe("the default editor", () => {
+    const filePath = () => path.join(PROJECT_ROOT, "src", "app.ts");
+
+    it("launches the default for a project with no editor of its own", async () => {
+      readDefaultEditorMock.mockReturnValue({ id: "antigravity-ide" });
+      const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+
+      await handler(fakeEvent, { path: filePath(), projectId: "proj-1" });
+
+      expect(openFileMock).toHaveBeenCalledWith(
+        filePath(),
+        undefined,
+        undefined,
+        { id: "antigravity-ide" },
+        false
+      );
+    });
+
+    it("gives the project's own choice precedence over the default, whatever the default is", async () => {
+      projectStoreMock.getProjectSettings.mockResolvedValue({ preferredEditor: { id: "vscode" } });
+      const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+
+      for (const id of ["antigravity-ide", "sublime"] as const) {
+        readDefaultEditorMock.mockReturnValue({ id });
+        await handler(fakeEvent, { path: filePath(), projectId: "proj-1" });
+      }
+
+      expect(openFileMock.mock.calls.map((call) => (call as unknown[])[3])).toEqual([
+        { id: "vscode" },
+        { id: "vscode" },
+      ]);
+    });
+
+    it("still launches the default with no project, or when the project's settings can't be read", async () => {
+      readDefaultEditorMock.mockReturnValue({ id: "antigravity-ide" });
+      const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+
+      await handler(fakeEvent, { path: filePath() });
+      projectStoreMock.getProjectSettings.mockRejectedValue(new Error("db closed"));
+      await handler(fakeEvent, { path: filePath(), projectId: "proj-1" });
+
+      expect(openFileMock.mock.calls.map((call) => (call as unknown[])[3])).toEqual([
+        { id: "antigravity-ide" },
+        { id: "antigravity-ide" },
+      ]);
+    });
   });
 
   it("propagates a launch failure to the renderer", async () => {

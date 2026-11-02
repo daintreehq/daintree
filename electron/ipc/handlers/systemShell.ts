@@ -9,6 +9,8 @@ import { findOnPath } from "../../utils/findOnPath.js";
 import { scanWindowsPath } from "../../utils/windowsExecutable.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
+import { readDefaultEditor } from "../../services/defaultEditor.js";
+import { resolveEffectiveEditor, type EditorConfig } from "../../../shared/types/editor.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { resolveContainedPath, assertExtensionAllowed } from "./pathGuard.js";
 import {
@@ -343,15 +345,18 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       // ignore — treat an unclassifiable target as a file
     }
 
-    let editorConfig = null;
+    // The project's own choice, else this machine's default; with neither,
+    // EditorService falls through to its automatic order.
+    let projectEditor: EditorConfig | null = null;
     if (projectId) {
       try {
         const settings = await projectStore.getProjectSettings(projectId);
-        editorConfig = settings.preferredEditor ?? null;
+        projectEditor = settings.preferredEditor ?? null;
       } catch {
-        // ignore — fall through to EditorService defaults
+        // ignore — the default and then EditorService's own order still apply
       }
     }
+    const editorConfig = resolveEffectiveEditor(projectEditor, readDefaultEditor());
 
     const { openFile } = await import("../../services/EditorService.js");
     await openFile(realTarget, line, col, editorConfig, isDirectory);

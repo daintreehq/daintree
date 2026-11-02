@@ -564,6 +564,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   editor: {
     getConfig(projectId?: string): Promise<import("../editor.js").EditorGetConfigResult>;
     setConfig(payload: import("../editor.js").EditorSetConfigPayload): Promise<void>;
+    setDefault(payload: import("../editor.js").EditorSetDefaultPayload): Promise<void>;
+    clearProjectPreference(
+      payload: import("../editor.js").EditorClearProjectPreferencePayload
+    ): Promise<void>;
     discover(): Promise<import("../editor.js").DiscoveredEditor[]>;
   };
   // getResourceProfile comes from GeneratedElectronAPI; the rest are legacy
