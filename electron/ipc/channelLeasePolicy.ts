@@ -717,6 +717,7 @@ export const CHANNEL_LEASE_POLICY = {
   "terminal-config:set-memory-leak-auto-restart": "free",
   "terminal-config:set-memory-leak-detection": "free",
   "terminal-config:set-resource-monitoring": "free",
+  "terminal-session-file:get": "free",
   "terminal:acknowledge-data": "free",
   "terminal:activity": "free",
   "terminal:agent-title-state": "free",

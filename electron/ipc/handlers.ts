@@ -47,6 +47,7 @@ import { registerSlashCommandHandlers } from "./handlers/slashCommands.js";
 import { registerGeminiHandlers } from "./handlers/gemini.js";
 import { registerCodexHandlers } from "./handlers/codex.js";
 import { registerClaudeHandlers } from "./handlers/claude.js";
+import { registerTerminalSessionFileHandlers } from "./handlers/terminalSessionFile.js";
 import { registerEventsHandlers } from "./handlers/events.js";
 import { registerDevPreviewHandlers } from "./handlers/devPreview.js";
 import { registerAppAgentHandlers } from "./handlers/appAgent.js";
@@ -229,6 +230,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerGeminiHandlers());
     register(() => registerCodexHandlers());
     register(() => registerClaudeHandlers());
+    register(() => registerTerminalSessionFileHandlers());
     register(() => registerEventsHandlers(deps));
     register(() => registerDevPreviewHandlers(deps));
     register(() => registerAppAgentHandlers(deps));

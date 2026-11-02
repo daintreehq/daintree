@@ -499,6 +499,16 @@ export const terminalLifecycleActionRuns = {
     }
     return await readTerminalPaneInfo(targetId);
   },
+  "terminal.sessionFile.get": async (args: unknown, ctx: ActionContext) => {
+    const { terminalId } = args as { terminalId: string };
+    // The caller comes off the host-stamped context, never an argument.
+    if (ctx?.dispatchSource !== "plugin" || !ctx.callerPluginId) {
+      throw new UnactionableTargetError(
+        "Only a plugin can look up the session file a terminal's agent is writing."
+      );
+    }
+    return await window.electron.terminalSessionFile.get({ terminalId });
+  },
   "terminal.setHoldOnRestart": async (args: unknown, ctx: ActionContext) => {
     const { terminalId, hold } = SetHoldOnRestartArgsSchema.parse(args);
     // Who launched the pane comes off the host-stamped context, never an

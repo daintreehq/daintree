@@ -10,6 +10,11 @@ import { isForegroundDispatch } from "./dispatchSource";
 import { PanelPlacementResultSchema, throwTerminalMiss } from "./terminalPlacement";
 import { TerminalRestoredSchema } from "./schemas";
 import {
+  AGENT_SESSION_FILE_AGENT_IDS,
+  AGENT_SESSION_FILE_OBSERVATIONS,
+  AGENT_SESSION_FILE_UNKNOWN_REASONS,
+} from "@shared/types/agentSessionFile";
+import {
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
   StartHeldArgsSchema,
@@ -585,6 +590,48 @@ export function registerTerminalLifecycleActions(
     }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.info.get", args, ctx),
+  }));
+
+  // What a plugin carrying a conversation into another agent's CLI can't find
+  // on its own (#16097). Plugins only: the path locates a whole conversation,
+  // and nothing an MCP client does needs it.
+  actions.set("terminal.sessionFile.get", () => ({
+    id: "terminal.sessionFile.get",
+    title: "Get agent session file",
+    description:
+      "Plugins only: the session file the Codex or Claude Code agent in a terminal is writing, and how that was seen. Answers unknown with a reason instead of guessing.",
+    category: "terminal",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    mcpVisibility: "hidden",
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .trim()
+        .min(1)
+        .max(128)
+        .describe("Terminal panel id in this project. Required; no focus fallback."),
+    }),
+    resultSchema: z.object({
+      status: z.enum(["observed", "unknown"]),
+      agentId: z.enum(AGENT_SESSION_FILE_AGENT_IDS).optional(),
+      sessionId: z.string().optional(),
+      path: z
+        .string()
+        .optional()
+        .describe("Absolute path on this machine. The CLI's own file: read it, never write it."),
+      observedBy: z
+        .enum(AGENT_SESSION_FILE_OBSERVATIONS)
+        .optional()
+        .describe(
+          "'open-for-writing': the terminal's process holds it open (Codex). 'recorded-session-id': the transcript of the session id Daintree recorded (Claude Code), so a session the CLI switched to by itself isn't seen."
+        ),
+      reason: z.enum(AGENT_SESSION_FILE_UNKNOWN_REASONS).optional(),
+    }),
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.sessionFile.get", args, ctx),
   }));
 
   // The plugin-side half of "Resume agents after restart" (#13509, #14017): a

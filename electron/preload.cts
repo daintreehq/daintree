@@ -79,6 +79,7 @@ import { buildScheduledRunsPreloadBindings } from "./ipc/handlers/scheduledRuns.
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
+import { buildTerminalSessionFilePreloadBindings } from "./ipc/handlers/terminalSessionFile.preload.js";
 import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
 import { buildRecentDictationsPreloadBindings } from "./ipc/handlers/recentDictations.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
@@ -2655,6 +2656,7 @@ function buildElectronApi(): ElectronAPI {
     gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
     codex: buildCodexPreloadBindings(_unwrappingInvoke),
     claude: buildClaudePreloadBindings(_unwrappingInvoke),
+    terminalSessionFile: buildTerminalSessionFilePreloadBindings(_unwrappingInvoke),
 
     // Daintree CLI install API
     cli: buildCliPreloadBindings(_unwrappingInvoke),

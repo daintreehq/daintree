@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "child_process";
-import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "fs/promises";
+import { mkdtemp, mkdir, open, rename, rm, symlink, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 
@@ -30,6 +30,7 @@ vi.mock("fs/promises", async (importOriginal) => {
 });
 import {
   fitWithinResponseCap,
+  locateClaudeTranscript,
   readClaudeLastMessage,
   readClaudeRecentReplies,
   tailWithinJsonBytes,
@@ -1052,6 +1053,75 @@ describe("readClaudeLastMessage — which file", () => {
     });
 
     expect(ok(result).message?.text).toBe("Via the link.");
+  });
+});
+
+describe("locateClaudeTranscript (#16097)", () => {
+  const locate = () => locateClaudeTranscript({ projectsRoot, cwd: CWD, sessionId: SESSION });
+
+  it("names the transcript in the cwd's own directory without reading it", async () => {
+    const file = await seed([assistant("msg_1", [text("Reply.")])]);
+    // Any handle's prototype is every handle's, so a spy on it sees the locator's reads.
+    const sample = await open(file, "r");
+    const read = vi.spyOn(Object.getPrototypeOf(sample), "read");
+    await sample.close();
+    fsHook.opened.length = 0;
+    const opens: string[] = [];
+    fsHook.beforeOpen = async (target) => {
+      opens.push(target);
+    };
+
+    try {
+      expect(await locate()).toEqual({ status: "found", file });
+      // Opened once, to verify the descriptor, never read, and closed again.
+      expect(opens).toEqual([file]);
+      expect(read).not.toHaveBeenCalled();
+      expect(fsHook.opened.map((handle) => handle.fd)).toEqual([-1]);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("finds it by session id when the cwd slug does not match", async () => {
+    const file = await seed([assistant("msg_1", [text("Reply.")])], { slug: "-moved-folder" });
+
+    expect(await locate()).toEqual({ status: "found", file });
+  });
+
+  it("names none when the search turns up the id twice", async () => {
+    await seed([assistant("msg_1", [text("One.")])], { slug: "-folder-a" });
+    await seed([assistant("msg_1", [text("Two.")])], { slug: "-folder-b" });
+
+    expect(await locate()).toEqual({ status: "ambiguous" });
+  });
+
+  it("says missing before the first message", async () => {
+    expect(await locate()).toEqual({ status: "missing" });
+  });
+
+  it("refuses an id that would steer the path, even onto a file in the store", async () => {
+    // Joined unchecked, `../escape` from the cwd's directory names this file.
+    await writeFile(path.join(projectsRoot, "escape.jsonl"), assistant("msg_1", []) + "\n");
+    await mkdir(path.join(projectsRoot, deriveProjectSlug(CWD)), { recursive: true });
+    const opens: string[] = [];
+    fsHook.beforeOpen = async (target) => {
+      opens.push(target);
+    };
+
+    expect(
+      await locateClaudeTranscript({ projectsRoot, cwd: CWD, sessionId: "../escape" })
+    ).toEqual({ status: "missing" });
+    expect(opens).toEqual([]);
+  });
+
+  it("refuses a transcript that is a symlink", async () => {
+    const elsewhere = path.join(root, "elsewhere.jsonl");
+    await writeFile(elsewhere, assistant("msg_1", [text("Not this session's.")]) + "\n");
+    const dir = path.join(projectsRoot, deriveProjectSlug(CWD));
+    await mkdir(dir, { recursive: true });
+    await symlink(elsewhere, path.join(dir, `${SESSION}.jsonl`));
+
+    expect(await locate()).toEqual({ status: "unverified" });
   });
 });
 

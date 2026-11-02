@@ -4232,6 +4232,10 @@ export interface GeneratedIpcInvokeMap {
     args: [scrollbackLines: number];
     result: void;
   };
+  "terminal-session-file:get": {
+    args: [__1: { terminalId: string }];
+    result: import("../agentSessionFile.js").AgentSessionFileResult;
+  };
   "terminal:force-resume": {
     args: [id: string];
     result: void;
