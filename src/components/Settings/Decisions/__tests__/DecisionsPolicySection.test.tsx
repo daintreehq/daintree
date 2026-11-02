@@ -275,7 +275,9 @@ describe("Decisions policy and questions sections", () => {
   });
 
   it("puts the default expiry back to the library's default with Reset", async () => {
-    getPolicy.mockResolvedValue(policy({ defaultQuestionExpiryMs: null, maxQuestionExpiryMs: null }));
+    getPolicy.mockResolvedValue(
+      policy({ defaultQuestionExpiryMs: null, maxQuestionExpiryMs: null })
+    );
     setDefaultQuestionExpiry.mockResolvedValue(
       policy({
         defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,

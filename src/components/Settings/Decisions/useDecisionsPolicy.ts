@@ -145,7 +145,10 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
         (next) => accept(next, generation),
         (error: unknown) => {
           if (generation !== generationRef.current) return;
-          setExpirySaveFailure({ ms, message: formatErrorMessage(error, "Try again in a moment.") });
+          setExpirySaveFailure({
+            ms,
+            message: formatErrorMessage(error, "Try again in a moment."),
+          });
           void read();
         }
       )

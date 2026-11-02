@@ -75,7 +75,9 @@ export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisio
           }
           options={EXPIRY_OPTIONS}
           disabled={policy === null || pendingExpiry !== null}
-          isModified={policy !== null && policy.defaultQuestionExpiryMs !== DEFAULT_QUESTION_EXPIRY_MS}
+          isModified={
+            policy !== null && policy.defaultQuestionExpiryMs !== DEFAULT_QUESTION_EXPIRY_MS
+          }
           onReset={() => void setDefaultQuestionExpiry(DEFAULT_QUESTION_EXPIRY_MS)}
           resetAriaLabel="Reset default expiry"
         />
