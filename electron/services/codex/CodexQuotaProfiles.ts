@@ -11,6 +11,7 @@ import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
 import type { CodexQuotaProfileHomeReason } from "../../../shared/types/ipc/agentQuota.js";
 import { getMergedPresets, sanitizeAgentEnv } from "../../../shared/utils/agentPresets.js";
+import { sanitizeAgentAccounts } from "../../../shared/utils/agentAccounts.js";
 
 export interface CodexQuotaProfileTarget {
   /** Canonical absolute home, or the raw value when `invalid` is set. */
@@ -19,6 +20,8 @@ export interface CodexQuotaProfileTarget {
   presetNames: string[];
   /** Each name's position in the preset list, so a later merge can keep preset order. */
   presetOrder: number[];
+  /** The Codex accounts (#16040) whose folder this is, in account order. */
+  accountNames?: string[];
   invalid?: CodexQuotaProfileHomeReason;
   /**
    * Main's own home, read by inheriting main's env rather than naming it, and
@@ -113,9 +116,10 @@ export function resolveDefaultCodexTarget(
 }
 
 /**
- * Only presets that name their own home get a profile. A preset without one
- * runs on the default, and listing every such preset under it would bury the
- * presets that actually switch account.
+ * Every account's folder gets a profile (#16040), and so does every preset
+ * that names its own home. A preset without one runs on the default, and
+ * listing every such preset under it would bury the presets that actually
+ * switch account.
  */
 export function resolveCodexQuotaProfiles(
   entry: AgentSettingsEntry | undefined,
@@ -127,6 +131,26 @@ export function resolveCodexQuotaProfiles(
   const invalidByRaw = new Map<string, CodexQuotaProfileTarget>();
   if (defaultTarget.invalid) invalidByRaw.set(defaultTarget.home, defaultTarget);
   else byHome.set(homeIdentity(defaultTarget.home), defaultTarget);
+
+  // First, so a folder an account and a legacy preset share takes the
+  // account's place. Saved accounts are always fully qualified.
+  for (const account of sanitizeAgentAccounts(entry?.accounts)) {
+    const { home } = namedHome(account.configDir);
+    const existing = byHome.get(homeIdentity(home));
+    if (existing) {
+      existing.accountNames = [...(existing.accountNames ?? []), account.name];
+      continue;
+    }
+    const target: CodexQuotaProfileTarget = {
+      home,
+      isDefault: false,
+      presetNames: [],
+      presetOrder: [],
+      accountNames: [account.name],
+    };
+    byHome.set(homeIdentity(home), target);
+    targets.push(target);
+  }
 
   for (const [order, preset] of getMergedPresets(
     "codex",

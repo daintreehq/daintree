@@ -81,6 +81,8 @@ export interface CodexQuotaProfile {
   isDefault: boolean;
   /** Names of the presets that set this home, in preset order. */
   presetNames: string[];
+  /** Names of the Codex accounts kept in this home (#16040), in account order. */
+  accountNames?: string[];
   result: CodexQuotaProfileResult;
 }
 
