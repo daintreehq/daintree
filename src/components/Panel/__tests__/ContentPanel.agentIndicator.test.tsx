@@ -46,8 +46,13 @@ const chrome: TerminalChromeDescriptor = {
   hasExited: false,
 };
 
+/** What a test changes of the derived chrome: an exit, or an agent identity. */
+let mockChromeOverride: Partial<TerminalChromeDescriptor> = {};
+/** The pane's own store record beyond its id and kind. */
+let mockPanel: Record<string, unknown> = {};
+
 vi.mock("@/utils/terminalChrome", () => ({
-  deriveTerminalChrome: () => chrome,
+  deriveTerminalChrome: () => ({ ...chrome, ...mockChromeOverride }),
 }));
 
 vi.mock("@/components/Terminal/SubagentChip", () => ({
@@ -59,7 +64,7 @@ vi.mock("@/store", () => ({
     selector: (s: { showGridAgentHighlights: boolean; showAgentTaskTitles: boolean }) => unknown
   ) => selector({ showGridAgentHighlights: false, showAgentTaskTitles: true }),
   usePanelStore: (selector: (s: { panelsById: Record<string, unknown> }) => unknown) =>
-    selector({ panelsById: { "t-1": { id: "t-1", kind: "terminal" } } }),
+    selector({ panelsById: { "t-1": { id: "t-1", kind: "terminal", ...mockPanel } } }),
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -74,6 +79,8 @@ import { ContentPanel } from "../ContentPanel";
 afterEach(() => {
   cleanup();
   useFleetSnapshotStore.setState({ snapshot: null });
+  mockChromeOverride = {};
+  mockPanel = {};
 });
 
 /** The fleet reads an unread Canopy ask on t-1, the one thing the waiting ring draws. */
@@ -111,6 +118,8 @@ function panel(props: {
   kind?: "terminal" | "browser";
   tabs?: TabInfo[];
   completedWithNoChanges?: boolean;
+  isExited?: boolean;
+  exitCode?: number | null;
 }) {
   return (
     <ContentPanel
@@ -123,6 +132,8 @@ function panel(props: {
       onClose={() => {}}
       onToggleMaximize={() => {}}
       agentState={props.agentState}
+      isExited={props.isExited}
+      exitCode={props.exitCode}
       completedWithNoChanges={props.completedWithNoChanges}
       tabs={props.tabs}
       onTabClick={props.tabs ? () => {} : undefined}
@@ -136,6 +147,9 @@ const agentGlyphs = () =>
   screen
     .queryAllByRole("status")
     .filter((el) => (el.getAttribute("aria-label") ?? "").startsWith("Agent state:"));
+const glyphLabel = () => agentGlyphs()[0]?.getAttribute("aria-label") ?? null;
+const reportedState = (container: HTMLElement) =>
+  container.querySelector('[data-panel-id="t-1"]')!.getAttribute("data-agent-state");
 
 describe("ContentPanel agent glyph placement", () => {
   it("renders the glyph once, in the far-right box past the close button", () => {
@@ -155,26 +169,64 @@ describe("ContentPanel agent glyph placement", () => {
     expect(screen.getByTestId("panel-header-controls").nextElementSibling).toBe(box);
   });
 
-  it("keeps the box and the controls put while the glyph comes and goes", () => {
+  it("keeps the box and the controls put while the glyph changes", () => {
+    // A launched agent with no state committed yet still fills its slot.
     const { rerender } = render(panel({ agentId: "claude" }));
     const box = screen.getByTestId("panel-header-agent-indicator");
     const controls = screen.getByTestId("panel-header-controls").innerHTML;
-    expect(agentGlyphs()).toHaveLength(0);
-    expect(box.childElementCount).toBe(0);
+    expect(box.contains(agentGlyphs()[0]!)).toBe(true);
+    expect(glyphLabel()).toBe("Agent state: idle");
 
     rerender(panel({ agentId: "claude", agentState: "working" }));
     expect(screen.getByTestId("panel-header-agent-indicator")).toBe(box);
     expect(box.contains(agentGlyphs()[0]!)).toBe(true);
+    expect(glyphLabel()).toBe("Agent state: working");
     expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controls);
 
     act(seedUnreadAsk);
     rerender(panel({ agentId: "claude", agentState: "waiting" }));
     expect(box.contains(agentGlyphs()[0]!)).toBe(true);
+    expect(glyphLabel()).toBe("Agent state: waiting");
 
     rerender(panel({ agentId: "claude" }));
     expect(screen.getByTestId("panel-header-agent-indicator")).toBe(box);
-    expect(box.childElementCount).toBe(0);
+    expect(agentGlyphs()).toHaveLength(1);
     expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controls);
+  });
+
+  it("draws a live agent's wait before the fleet has reported, reporting what it observed", () => {
+    mockChromeOverride = { isAgent: true, agentId: "claude", runtimeKind: "agent" };
+    const { container } = render(panel({ agentId: "claude", agentState: "idle" }));
+
+    expect(glyphLabel()).toBe("Agent state: waiting");
+    expect(reportedState(container)).toBe("waiting");
+  });
+
+  it("draws a launched agent's exit with no session cost, and reports no state for it", () => {
+    mockChromeOverride = { hasExited: true };
+    const { container } = render(
+      panel({ agentId: "claude", agentState: "exited", isExited: true, exitCode: null })
+    );
+
+    const box = screen.getByTestId("panel-header-agent-indicator");
+    expect(box.contains(agentGlyphs()[0]!)).toBe(true);
+    expect(glyphLabel()).toBe("Agent state: exited");
+    expect(reportedState(container)).toBeNull();
+  });
+
+  it("draws the exit the pane saw while its last observation is still working", () => {
+    mockChromeOverride = { hasExited: true };
+    render(panel({ agentId: "claude", agentState: "working", isExited: true, exitCode: 1 }));
+
+    expect(glyphLabel()).toBe("Agent state: exited");
+  });
+
+  it("draws a restarting agent idle rather than exited", () => {
+    mockChromeOverride = { hasExited: true };
+    mockPanel = { isRestarting: true };
+    render(panel({ agentId: "claude", agentState: "exited", isExited: true, exitCode: 0 }));
+
+    expect(glyphLabel()).toBe("Agent state: idle");
   });
 
   it("keeps both trailing boxes while a mixed group shows its browser tab", () => {
