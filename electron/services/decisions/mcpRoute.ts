@@ -14,6 +14,8 @@ export const DECISIONS_MCP_PATH = "/mcp/decisions";
 
 /** The slice of a listener hold the route keeps (`McpServerService.holdListener`). */
 export interface DecisionsListenerHold {
+  /** The listener's port while the hold has it open; null otherwise. */
+  readonly port: number | null;
   release(): Promise<void>;
 }
 
@@ -86,6 +88,16 @@ export class DecisionsMcpRoute {
     return this.opening.then(() => {});
   }
 
+  /**
+   * The port agents reach the route on, once its hold is taken; null if the
+   * hold couldn't be had, or once closed.
+   */
+  async listenerPort(): Promise<number | null> {
+    if (this.closed) return null;
+    const hold = await this.opening?.catch(() => null);
+    return this.closed ? null : (hold?.port ?? null);
+  }
+
   /** Refuses every request from now on, then lets the listener hold go. Idempotent. */
   async close(): Promise<void> {
     this.closed = true;
@@ -98,8 +110,10 @@ export interface DecisionsMcpRouteSources extends PaneAccessSources {
   holdListener: DecisionsHoldListener;
 }
 
-/** What a lifetime closes when questions can no longer be asked. */
+/** The route a lifetime serves questions on: where launches point agents, and what it closes. */
 export interface DecisionsQuestions {
+  /** The listener port the route is served on; null while it has none (#16012). */
+  listenerPort(): Promise<number | null>;
   close(): Promise<void>;
 }
 

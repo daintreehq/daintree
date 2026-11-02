@@ -157,6 +157,10 @@ export class DecisionsService {
   private questions: DecisionsQuestions | null = null;
   /** Routes closed and not yet let go of the listener; a stop waits for them. */
   private questionsClosing: Promise<void> = Promise.resolve();
+  /** The connection is loading its identity: the route opens, or it stops, soon. */
+  private questionsPending = false;
+  /** Launches waiting on that, each woken once it is settled. */
+  private readonly questionsWaiters = new Set<() => void>();
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
   private offCommit: (() => void) | null = null;
@@ -306,6 +310,27 @@ export class DecisionsService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /**
+   * The listener port agents ask through (#16012), once this lifetime's
+   * connection has opened `/mcp/decisions`. A connection still loading its
+   * identity is waited for, up to `waitMs`. Null at once while stopped, with
+   * no connection, or with one that stopped for the lifetime.
+   */
+  async questionsPort(waitMs: number): Promise<number | null> {
+    if (this.questions === null && this.questionsPending) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          this.questionsWaiters.delete(done);
+          resolve();
+        };
+        const timer = setTimeout(done, waitMs);
+        this.questionsWaiters.add(done);
+      });
+    }
+    return (await this.questions?.listenerPort()) ?? null;
   }
 
   /** A pane's state as last pushed; null while stopped, and for a pane with nothing outstanding. */
@@ -533,17 +558,23 @@ export class DecisionsService {
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.
-        if (status.state === "not-connected" || status.state === "revoked") this.closeQuestions();
+        if (status.state === "not-connected" || status.state === "revoked") {
+          this.closeQuestions();
+          this.settleQuestions();
+        }
         this.setStatus(status);
       },
       onQuestionsReady: (source) => {
-        if (this.connection !== connection || this.openQuestions === null) return;
-        this.closeQuestions();
-        try {
-          this.questions = this.openQuestions(source, this.questionsClosing);
-        } catch (error) {
-          console.warn("[Decisions] /mcp/decisions couldn't be opened:", error);
+        if (this.connection !== connection) return;
+        if (this.openQuestions !== null) {
+          this.closeQuestions();
+          try {
+            this.questions = this.openQuestions(source, this.questionsClosing);
+          } catch (error) {
+            console.warn("[Decisions] /mcp/decisions couldn't be opened:", error);
+          }
         }
+        this.settleQuestions();
       },
       onRevoked: () => {
         if (this.connection !== connection) return;
@@ -555,6 +586,7 @@ export class DecisionsService {
     });
     this.connection = connection;
     this.connectionKey = key;
+    this.questionsPending = true;
     connection.start();
   }
 
@@ -573,6 +605,7 @@ export class DecisionsService {
     this.connection = null;
     this.connectionKey = null;
     this.closeQuestions();
+    this.settleQuestions();
     const stopped = connection?.stop();
     if (!(stopped instanceof Promise)) return;
     const settling = stopped.catch(() => {}).finally(() => this.stopping.delete(settling));
@@ -597,6 +630,12 @@ export class DecisionsService {
   /** Resolves once every connection stopped so far has settled. */
   private async settledConnections(): Promise<void> {
     while (this.stopping.size > 0) await Promise.all([...this.stopping]);
+  }
+
+  /** The route opened or won't: launches waiting on it go ahead with what there is. */
+  private settleQuestions(): void {
+    this.questionsPending = false;
+    for (const wake of [...this.questionsWaiters]) wake();
   }
 
   private eraseDeps(keyFilePath: string): LocalEraseDeps {

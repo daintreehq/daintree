@@ -34,6 +34,7 @@ import {
   ListBookmarksPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
+import { loadDecisionsModule } from "../../../window/serviceRefs.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
@@ -173,6 +174,25 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
   mcpServerService.setAssistantPluginLaneResolver((terminalId) =>
     helpSessionService.getAssistantPluginLane(terminalId)
   );
+}
+
+/**
+ * The listener port for a launch's `daintree-decisions` entry (#16012), or
+ * null for none. The setting is read before anything of Decisions is
+ * imported, so with Decisions off this loads nothing and the launch is
+ * exactly what it was.
+ */
+async function resolveDecisionsLaunchPort(): Promise<number | null> {
+  if (store.get("decisions")?.enabled !== true) return null;
+  try {
+    const decisions = await loadDecisionsModule(
+      () => import("../../../services/decisions/index.js")
+    );
+    return (await decisions?.decisionsLaunchPort()) ?? null;
+  } catch (err) {
+    console.warn("[TerminalSpawn] Couldn't reach Decisions; launching without it:", err);
+    return null;
+  }
 }
 
 function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
@@ -949,10 +969,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // for this project, each with a grant minted for this launch alone. Those
       // are independent of the Daintree tier: a project with Daintree MCP "off"
       // still gets its plugin endpoints, with no Daintree entry and no pane
-      // token. The grants are keyed by this terminal id, so every path that
-      // revokes the pane config (PTY exit, sync and async spawn failure, a
-      // re-prepare on restart) revokes them too. Every await — settings, the
-      // PluginService load, server readiness — happens before
+      // token. The Decisions entry is independent of the tier too. The grants
+      // and bearers are keyed by this terminal id, so every path that revokes
+      // the pane config (PTY exit, sync and async spawn failure, a re-prepare
+      // on restart) revokes them too. Every await — settings, the
+      // PluginService load, Decisions, server readiness — happens before
       // `preparePaneConfig` mints anything, per the binding rule above.
       let preparedForThisLaunch = false;
       let launchPluginServers: PanePluginServer[] = [];
@@ -1013,8 +1034,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             requiredPluginTools
           );
         }
+        // With Decisions on, every agent launch gets `/mcp/decisions` with a
+        // bearer of its own, whatever the tier (#16012). The Assistant asks
+        // through its own tools, never as an agent pane.
+        const decisionsPort = isHelpTerminal ? null : await resolveDecisionsLaunchPort();
+        let mcpServerService: McpServerSingleton | null = null;
+        let controlPort: number | null = null;
         if (tier !== "off" || pluginServers.length > 0) {
-          const mcpServerService = await getMcpServerService();
+          mcpServerService = await getMcpServerService();
           let ready: boolean;
           try {
             ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
@@ -1035,63 +1062,71 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             );
           }
           const port = mcpServerService.currentPort;
-          if (ready && port) {
-            const prepared = await mcpPaneConfigService.preparePaneConfig({
-              paneId: id,
-              port,
-              tier,
-              injection: launchMcp,
-              inheritedEnv: { ...process.env, ...(spawnEnv ?? {}) },
-              cwd,
-              ...(pluginServers.length > 0
-                ? {
-                    plugin: {
-                      projectId: resolvedProject.id,
-                      servers: pluginServers,
-                      launchAgentIdHint: launchAgentId,
-                      isEligible: isPluginMcpServerStillEligible(resolvedProject.id),
-                    },
-                  }
-                : {}),
-            });
-            if (!prepared) {
-              requiredPluginToolStatuses = failUnpreparedPluginTools(
-                requiredPluginToolStatuses,
-                pluginServers,
-                resolvedProject.id
-              );
+          if (ready && port) controlPort = port;
+        }
+        // One listener serves every route, so the Decisions entry shares the
+        // control surface's port when it has one. A listener open for
+        // Decisions alone serves neither the control surface nor a plugin.
+        const launchPort = controlPort ?? decisionsPort;
+        if (launchPort !== null) {
+          const prepared = await mcpPaneConfigService.preparePaneConfig({
+            paneId: id,
+            port: launchPort,
+            tier: controlPort !== null ? tier : "off",
+            injection: launchMcp,
+            inheritedEnv: { ...process.env, ...(spawnEnv ?? {}) },
+            cwd,
+            ...(controlPort !== null && pluginServers.length > 0
+              ? {
+                  plugin: {
+                    projectId: resolvedProject.id,
+                    servers: pluginServers,
+                    launchAgentIdHint: launchAgentId,
+                    isEligible: isPluginMcpServerStillEligible(resolvedProject.id),
+                  },
+                }
+              : {}),
+            ...(decisionsPort !== null ? { decisions: { workspaceId: resolvedProject.id } } : {}),
+          });
+          // Read as if Decisions weren't there: a config carrying neither
+          // Daintree's control entry nor a plugin grant handed no plugin over.
+          if (!prepared || (prepared.token === null && prepared.pluginServerKeys.length === 0)) {
+            requiredPluginToolStatuses = failUnpreparedPluginTools(
+              requiredPluginToolStatuses,
+              pluginServers,
+              resolvedProject.id
+            );
+          }
+          if (prepared) {
+            preparedForThisLaunch = true;
+            if (prepared.args.length > 0) {
+              safeCommand = `${safeCommand} ${prepared.args.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
             }
-            if (prepared) {
-              preparedForThisLaunch = true;
-              if (prepared.args.length > 0) {
-                safeCommand = `${safeCommand} ${prepared.args.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
-              }
-              if (Object.keys(prepared.env).length > 0) {
-                spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, prepared.env);
-              }
-              if (prepared.token !== null) {
-                // Bind the bearer to the workspace this pane was launched in, so
-                // its MCP session acts there for its whole life instead of on
-                // whichever window has focus when a call lands (#12486).
-                // Registered before this IPC resolves, because the CLI's first
-                // handshake can race ahead of anything later. Revoked with the token on PTY exit.
-                wirePaneTokenResolvers(mcpServerService);
-                mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
-                  workspaceId: resolvedProject.id,
-                  ...(launchViewWebContentsId !== null
-                    ? { launchWebContentsId: launchViewWebContentsId }
-                    : {}),
-                  ...(launchActionContext !== undefined
-                    ? { actionContext: launchActionContext }
-                    : {}),
-                  ...(tier === "full" && projSettings.daintreeMcpSkipConfirmations === true
-                    ? { skipConfirmations: true }
-                    : {}),
-                });
-                // Every format's hook for the orchestration bearer, whether or
-                // not the agent reads it from here.
-                spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
-              }
+            if (Object.keys(prepared.env).length > 0) {
+              spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, prepared.env);
+            }
+            if (prepared.token !== null && mcpServerService !== null) {
+              // Bind the bearer to the workspace this pane was launched in, so
+              // its MCP session acts there for its whole life instead of on
+              // whichever window has focus when a call lands (#12486).
+              // Registered before this IPC resolves, because the CLI's first
+              // handshake can race ahead of anything later. Revoked with the token on PTY exit.
+              wirePaneTokenResolvers(mcpServerService);
+              mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
+                workspaceId: resolvedProject.id,
+                ...(launchViewWebContentsId !== null
+                  ? { launchWebContentsId: launchViewWebContentsId }
+                  : {}),
+                ...(launchActionContext !== undefined
+                  ? { actionContext: launchActionContext }
+                  : {}),
+                ...(tier === "full" && projSettings.daintreeMcpSkipConfirmations === true
+                  ? { skipConfirmations: true }
+                  : {}),
+              });
+              // Every format's hook for the orchestration bearer, whether or
+              // not the agent reads it from here.
+              spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
             }
           }
         }
