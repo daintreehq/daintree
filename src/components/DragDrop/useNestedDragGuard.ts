@@ -1,15 +1,24 @@
 import { useCallback, useEffect, useRef } from "react";
-import { DRAG_RECOVERY_GRACE_MS } from "./useDragRecovery";
+import { DRAG_RECOVERY_GRACE_MS, dispatchDragCancelEscape } from "./useDragRecovery";
 
-/** Raises the `[data-dragging] webview` shield; false when something else already holds it. */
-function raiseShield(): boolean {
+// Strip drags in separate panes can overlap (one picked up by keyboard while
+// another is dragged by mouse), so the shield they raise is held by count and
+// comes down with the last of them, and never when DndProvider raised it.
+let nestedHolds = 0;
+let nestedRaisedShield = false;
+
+function holdShield(): void {
+  nestedHolds += 1;
   const root = document.documentElement;
-  if (root.dataset.dragging === "true") return false;
+  if (root.dataset.dragging === "true") return;
   root.dataset.dragging = "true";
-  return true;
+  nestedRaisedShield = true;
 }
 
-function lowerShield(): void {
+function releaseShield(): void {
+  nestedHolds = Math.max(0, nestedHolds - 1);
+  if (nestedHolds > 0 || !nestedRaisedShield) return;
+  nestedRaisedShield = false;
   delete document.documentElement.dataset.dragging;
 }
 
@@ -22,14 +31,14 @@ function lowerShield(): void {
  *
  * Unlike `useDragRecovery`, which sits once on the provider, this lives on every
  * strip, so it listens only while its own drag is live and only ever lowers a
- * `data-dragging` flag it raised itself.
+ * shield it holds.
  */
 export function useNestedDragGuard(): {
   beginDrag: (activatorEvent: Event | null | undefined) => void;
   finishDrag: () => void;
 } {
   const disarmRef = useRef<(() => void) | null>(null);
-  const ownsFlagRef = useRef(false);
+  const holdingRef = useRef(false);
   const lowerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const disarm = useCallback(() => {
@@ -46,21 +55,21 @@ export function useNestedDragGuard(): {
 
   const lowerFlag = useCallback(() => {
     cancelLower();
-    if (!ownsFlagRef.current) return;
-    ownsFlagRef.current = false;
-    lowerShield();
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
+    releaseShield();
   }, [cancelLower]);
 
   const beginDrag = useCallback(
     (activatorEvent: Event | null | undefined) => {
       disarm();
       cancelLower();
-      if (raiseShield()) ownsFlagRef.current = true;
+      if (!holdingRef.current) {
+        holdShield();
+        holdingRef.current = true;
+      }
       if (!(activatorEvent instanceof MouseEvent)) return;
 
-      // dnd-kit's pointer sensors cancel on a document keydown with
-      // code "Escape"; dispatched on body for the capture-phase handlers that
-      // read `event.target` as an element.
       let graceTimer: ReturnType<typeof setTimeout> | null = null;
       const clearGrace = () => {
         if (graceTimer !== null) clearTimeout(graceTimer);
@@ -68,9 +77,7 @@ export function useNestedDragGuard(): {
       };
       const recover = () => {
         clearGrace();
-        document.body.dispatchEvent(
-          new KeyboardEvent("keydown", { code: "Escape", bubbles: true, cancelable: true })
-        );
+        dispatchDragCancelEscape();
       };
       const handleMouseMove = (event: MouseEvent) => {
         if (event.buttons === 0) recover();
@@ -96,7 +103,7 @@ export function useNestedDragGuard(): {
   // listener has cancelled, to keep that Escape from also popping the stack.
   const finishDrag = useCallback(() => {
     disarm();
-    if (!ownsFlagRef.current || lowerTimerRef.current !== null) return;
+    if (!holdingRef.current || lowerTimerRef.current !== null) return;
     lowerTimerRef.current = setTimeout(lowerFlag, 0);
   }, [disarm, lowerFlag]);
 

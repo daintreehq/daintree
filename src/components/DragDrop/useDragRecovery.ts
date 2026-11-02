@@ -12,6 +12,22 @@ export const DRAG_RECOVERY_GRACE_MS = 500;
 type LiveDragKind = "mouse" | "other";
 
 /**
+ * Cancels a live pointer drag the way dnd-kit's pointer sensors expect: a
+ * document keydown with code "Escape" and no `key`, so ordinary Escape actions
+ * ignore it. Dispatched on body, not document: capture-phase key handlers cast
+ * event.target to HTMLElement (`.closest`), which a Document target would
+ * break. The matching keyup releases it for anything tracking held keys
+ * (`useDoubleShift`), which would otherwise read Escape as still down.
+ */
+export function dispatchDragCancelEscape(): void {
+  for (const type of ["keydown", "keyup"] as const) {
+    document.body.dispatchEvent(
+      new KeyboardEvent(type, { code: "Escape", bubbles: true, cancelable: true })
+    );
+  }
+}
+
+/**
  * Watchdog for drags whose native end event never reaches the host document
  * (#11291). Electron webviews are OOPIFs: a mouseup landing in one is
  * invisible to every host-side listener, so dnd-kit's internal active lock is
@@ -71,15 +87,10 @@ export function useDragRecovery(): {
   useEffect(() => {
     // Leaves liveDragRef set: a successful cancel lands in finishDrag via
     // onDragCancel, and an unheard Escape must not block a later retry.
-    // Dispatched on body, not document: capture-phase key handlers cast
-    // event.target to HTMLElement (`.closest`), which a Document target
-    // would break. It still bubbles to dnd-kit's document-level listener.
     const recover = () => {
       clearGraceTimer();
       if (liveDragRef.current !== "mouse") return;
-      document.body.dispatchEvent(
-        new KeyboardEvent("keydown", { code: "Escape", bubbles: true, cancelable: true })
-      );
+      dispatchDragCancelEscape();
     };
 
     const handleMouseOut = (event: MouseEvent) => {

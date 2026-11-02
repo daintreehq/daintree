@@ -102,6 +102,19 @@ describe("useDragRecovery", () => {
       expect(keydowns[0]?.key).toBe("");
     });
 
+    it("releases the Escape it presses, so held-key trackers don't read it as still down", () => {
+      const keyups: string[] = [];
+      const captureKeyup = (event: KeyboardEvent) => keyups.push(event.code);
+      document.addEventListener("keyup", captureKeyup);
+      const { result } = renderHook(() => useDragRecovery());
+      result.current.beginDrag(mouseActivator());
+      dispatchMouseMove(0);
+      document.removeEventListener("keyup", captureKeyup);
+
+      expect(escapeCodes()).toEqual(["Escape"]);
+      expect(keyups).toEqual(["Escape"]);
+    });
+
     it("does not stack timers across repeated boundary crossings", () => {
       const { result } = renderHook(() => useDragRecovery());
       result.current.beginDrag(mouseActivator());

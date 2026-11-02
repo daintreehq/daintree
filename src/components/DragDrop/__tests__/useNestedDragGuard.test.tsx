@@ -2,14 +2,18 @@
 // A drag a nested DndContext owns (a pane's tab strip) never reaches
 // DndProvider, so the strip raises the webview shield and recovers a release a
 // webview swallowed on its own, without disturbing the provider's flag.
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DRAG_RECOVERY_GRACE_MS } from "../useDragRecovery";
 import { useNestedDragGuard } from "../useNestedDragGuard";
 
+// Each Escape the guard sends, as type:code, in order.
 const escapes: string[] = [];
-const captureKeydown = (event: KeyboardEvent) => escapes.push(event.code);
+const captureKey = (event: KeyboardEvent) => {
+  if (event.code === "Escape") escapes.push(event.type);
+};
+const RECOVERED = ["keydown", "keyup"];
 
 const mouseActivator = () => new MouseEvent("mousedown", { bubbles: true });
 const keyboardActivator = () => new KeyboardEvent("keydown", { code: "Space" });
@@ -27,11 +31,15 @@ describe("useNestedDragGuard", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     escapes.length = 0;
-    document.addEventListener("keydown", captureKeydown);
+    document.addEventListener("keydown", captureKey);
+    document.addEventListener("keyup", captureKey);
   });
 
   afterEach(() => {
-    document.removeEventListener("keydown", captureKeydown);
+    // Unmounting releases every hold, which the guard counts across strips.
+    cleanup();
+    document.removeEventListener("keydown", captureKey);
+    document.removeEventListener("keyup", captureKey);
     vi.useRealTimers();
     delete document.documentElement.dataset.dragging;
   });
@@ -83,6 +91,33 @@ describe("useNestedDragGuard", () => {
     expect(flag()).toBe("true");
   });
 
+  it.each([
+    ["the first", 0],
+    ["the second", 1],
+  ] as const)(
+    "keeps the shield up while two strips overlap, whichever ends first (%s)",
+    (_label, firstToEnd) => {
+      const strips = [
+        renderHook(() => useNestedDragGuard()).result,
+        renderHook(() => useNestedDragGuard()).result,
+      ];
+      strips[0]!.current.beginDrag(keyboardActivator());
+      strips[1]!.current.beginDrag(mouseActivator());
+
+      strips[firstToEnd]!.current.finishDrag();
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(flag()).toBe("true");
+
+      strips[1 - firstToEnd]!.current.finishDrag();
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(flag()).toBeUndefined();
+    }
+  );
+
   it("cancels a mouse drag whose release the host never saw", () => {
     const { result } = renderHook(() => useNestedDragGuard());
     result.current.beginDrag(mouseActivator());
@@ -90,7 +125,7 @@ describe("useNestedDragGuard", () => {
     expect(escapes).toEqual([]);
 
     mouseMove(0);
-    expect(escapes).toEqual(["Escape"]);
+    expect(escapes).toEqual(RECOVERED);
   });
 
   it("cancels a mouse drag that leaves the document for longer than the grace period", () => {
@@ -116,7 +151,7 @@ describe("useNestedDragGuard", () => {
     act(() => {
       vi.advanceTimersByTime(DRAG_RECOVERY_GRACE_MS);
     });
-    expect(escapes).toEqual(["Escape"]);
+    expect(escapes).toEqual(RECOVERED);
   });
 
   it("stops listening once the drag ends, and never listens for a keyboard drag", () => {

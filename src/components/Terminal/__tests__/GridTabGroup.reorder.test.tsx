@@ -82,6 +82,7 @@ interface PaneProps {
   isMultiPanelGrid?: boolean;
   onFocus: () => void;
   onClose: () => void;
+  onToggleMaximize?: () => void;
   tabs?: TabInfo[];
   onTabClick?: (id: string) => void;
   onTabClose?: (id: string) => void;
@@ -102,6 +103,7 @@ const standIn = (kind: string) =>
         isMultiPanelGrid={props.isMultiPanelGrid}
         onFocus={props.onFocus}
         onClose={props.onClose}
+        onToggleMaximize={props.onToggleMaximize}
         tabs={props.tabs}
         onTabClick={props.onTabClick}
         onTabClose={props.onTabClose}
@@ -347,6 +349,7 @@ describe("GridTabGroup tab reorder (#16160)", () => {
     seed("diff");
     stubLayout();
     render(<StoredGroup isMaximized />);
+    expect(screen.getByRole("button", { name: "Restore grid view" })).toBeTruthy();
 
     dragShownTabPastSecond();
     expect(storedOrder()).toEqual(["second", SHOWN, "third"]);
