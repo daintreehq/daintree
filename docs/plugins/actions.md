@@ -489,7 +489,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `terminalId?` |
 | `terminal.restartService` | Restart terminal service | safe | — |
 | `terminal.resumeSessions` | Resume session… | safe | — |
-| `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId` |
+| `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId`, `generation?` |
 | `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
 | `terminal.setHoldOnRestart` | Hold agent on restart | safe | `hold`, `terminalId` |
 | `terminal.startHeld` | Start held pane | confirm | `start`, `terminalId` |

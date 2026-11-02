@@ -2383,6 +2383,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
           description: "Panel `id` this session created or was handed.",
         },
+        generation: {
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
       },
       required: ["terminalId"],
     },

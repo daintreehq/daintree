@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { z } from "zod";
 import { PanelCloseResultSchema } from "@shared/types/panelClose";
+import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { usePanelStore } from "@/store/panelStore";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
@@ -263,6 +264,7 @@ export function registerTerminalLifecycleActions(
     palette: { mode: "hidden" },
     argsSchema: z.object({
       terminalId: z.string().min(1).describe("Panel `id` this session created or was handed."),
+      generation: RunGenerationArgSchema,
     }),
     run: async () => {
       throw new Error(
