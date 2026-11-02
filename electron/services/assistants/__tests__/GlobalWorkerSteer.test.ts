@@ -480,6 +480,93 @@ describe("GlobalWorkerSteer (#14551)", () => {
       keys: ["Enter"],
     });
   });
+
+  describe("showing the person a worker's panel (#16096)", () => {
+    const shown = () => vi.fn(async () => "shown");
+
+    it("shows a worker someone is typing into, mid-turn, or one a steer is still writing to", async () => {
+      const show = shown();
+      fake.record = atPrompt({ lastTypedInputAt: 1_500, hasPendingSubmission: true });
+      await expect(steer.reveal(target(), show)).resolves.toBe("shown");
+
+      fake.record = atPrompt({ agentState: "working", waitingReason: undefined });
+      await expect(steer.reveal(target(), show)).resolves.toBe("shown");
+
+      fake.record = atPrompt({ waitingReason: "approval" });
+      const writing = steer.keys(target(), { keys: ["Down", "Enter"] });
+      await expect(steer.reveal(target(), show)).resolves.toBe("shown");
+      await writing;
+
+      expect(show).toHaveBeenCalledTimes(3);
+    });
+
+    // One gate: every run a steer can't reach, a reveal can't either, refused alike.
+    it.each<[string, () => void]>([
+      ["a plain shell", () => (fake.record = atPrompt({ detectedAgentId: undefined }))],
+      ["an exited agent", () => (fake.record = atPrompt({ isExited: true }))],
+      ["a trashed panel", () => (fake.record = atPrompt({ isTrashed: true }))],
+      ["a panel with no process", () => (fake.record = atPrompt({ hasPty: false }))],
+      ["an unreadable terminal", () => (fake.record = null)],
+      ["another project's terminal", () => (fake.projectId = "proj-2")],
+      ["a terminal its record puts elsewhere", () => (fake.record = atPrompt({ projectId: "x" }))],
+      ["an assistant", () => (fake.assistant = true)],
+      ["an assistant by its record", () => (fake.record = atPrompt({ isAssistantTerminal: true }))],
+      ["a restarted run", () => (fake.generation = 5)],
+    ])("refuses %s as a prompt is refused, showing nothing", async (_what, arrange) => {
+      arrange();
+      const show = shown();
+
+      const shownRefusal = await refusal(steer.reveal(target(), show));
+      const sentRefusal = await refusal(
+        steer.prompt(target(), { command: "go", handback: false, machineName: "m" })
+      );
+
+      expect(shownRefusal.code).toBe(sentRefusal.code);
+      expect(shownRefusal.message).toContain("Nothing was shown.");
+      expect(shownRefusal.message).not.toContain("Nothing was sent.");
+      expect(show).not.toHaveBeenCalled();
+      expect(submits).toEqual([]);
+    });
+
+    it("needs the generation it read, and refuses without one", async () => {
+      const show = shown();
+      const error = await refusal(steer.reveal(target({ generation: undefined }), show));
+
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(error.message).toContain("incarnation");
+      expect(error.message).toMatch(/^Showing/);
+      expect(show).not.toHaveBeenCalled();
+    });
+
+    it("shows nothing when the run is replaced while it is being read", async () => {
+      const show = shown();
+      const racing = new GlobalWorkerSteer({
+        getTerminalProjectId: () => PROJECT,
+        getLiveGeneration: () => fake.generation,
+        isAssistantTerminal: () => false,
+        getTerminal: async () => {
+          fake.generation = 5;
+          return atPrompt();
+        },
+        serializedState: async () => null,
+        submit: vi.fn(),
+        write: vi.fn(),
+        doubleEscape: vi.fn(),
+      });
+
+      expect((await refusal(racing.reveal(target(), show))).code).toBe(
+        WORKER_STEER_REFUSALS.restarted
+      );
+      expect(show).not.toHaveBeenCalled();
+    });
+
+    it("answers with the reveal's own failure, untouched", async () => {
+      const failure = new Error("no view");
+      await expect(steer.reveal(target(), async () => Promise.reject(failure))).rejects.toBe(
+        failure
+      );
+    });
+  });
 });
 
 describe("liveGlobalWorkerSteer (#14551)", () => {
