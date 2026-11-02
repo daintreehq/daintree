@@ -144,6 +144,7 @@ import { FileBrowserPane } from "@/panels/file-browser/FileBrowserPane";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { addTabForPanel } from "../useContentGridContext";
+import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
 import { usePanelStore } from "@/store/panelStore";
 
 interface TerminalStandInProps {
@@ -394,4 +395,68 @@ describe("GridTabGroup tab strip on every shown kind", () => {
       expect(vi.mocked(addTabForPanel).mock.calls.map(([panel]) => panel.id)).toEqual([shownId]);
     }
   );
+});
+
+describe("GridTabGroup tab reorder on a shown dev preview or file browser (#16160)", () => {
+  const TAB_WIDTH = 100;
+  // dnd-kit swallows clicks for 50ms after a drop.
+  const CLICK_GUARD_LAPSE_MS = 60;
+
+  afterEach(async () => {
+    act(() => {
+      fireEvent.mouseUp(document);
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, CLICK_GUARD_LAPSE_MS)));
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    vi.restoreAllMocks();
+  });
+
+  it.each(SHOWN)("reorders the group by dragging a tab on a shown %s pane", (_kind, shownId) => {
+    // jsdom lays nothing out: tabs sit side by side, each TAB_WIDTH wide. It has
+    // no scrollTo either, which the strip calls to bring the shown tab into view.
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      writable: true,
+      value: () => {},
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      const tabEls = [...document.querySelectorAll<HTMLElement>("[data-tab-id]")];
+      const inside = tabEls.filter((t) => this.contains(t));
+      const own = inside.length === 1 ? inside[0] : this.closest<HTMLElement>("[data-tab-id]");
+      if (own) {
+        return DOMRect.fromRect({
+          x: tabEls.indexOf(own) * TAB_WIDTH,
+          width: TAB_WIDTH,
+          height: 30,
+        });
+      }
+      const width = inside.length > 1 ? inside.length * TAB_WIDTH : 1200;
+      return DOMRect.fromRect({ width, height: inside.length > 1 ? 30 : 800 });
+    });
+    const view = mount(shownId);
+    const from = ORDER.indexOf(shownId);
+    const to = from === 0 ? 1 : from - 1;
+    const x = from * TAB_WIDTH + TAB_WIDTH / 2;
+    const toX = x + (to - from) * TAB_WIDTH;
+
+    fireEvent.mouseDown(view.tab(shownId), { button: 0, clientX: x, clientY: 15 });
+    fireEvent.mouseMove(document, {
+      clientX: x + Math.sign(toX - x) * 10,
+      clientY: 15,
+      buttons: 1,
+    });
+    act(() => {
+      fireEvent.mouseMove(document, { clientX: toX, clientY: 15, buttons: 1 });
+    });
+    act(() => {
+      fireEvent.mouseUp(document, { clientX: toX, clientY: 15 });
+    });
+
+    const expected = [...ORDER];
+    expected.splice(to, 0, ...expected.splice(from, 1));
+    expect(vi.mocked(reorderGroupTabsWithUndo).mock.calls).toEqual([[GROUP, expected]]);
+  });
 });
