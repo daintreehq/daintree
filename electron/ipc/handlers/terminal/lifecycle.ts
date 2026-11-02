@@ -741,6 +741,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       agentSessionId: validatedOptions.agentSessionId,
       projectsRoot: claudePaneStore ?? null,
     }).catch(() => undefined);
+    // A caller resuming one exact conversation would otherwise get an empty
+    // one wearing its id (#16019). Refused before anything is minted or armed.
+    if (untouchedSessionId && validatedOptions.exactResume === true) {
+      throw new Error(
+        `Terminal ${id.slice(0, 8)} has no Claude conversation to resume; refusing a fresh one under its id`
+      );
+    }
 
     // Expand `${settings:*}` templates a plugin agent embedded in its command
     // or args (e.g. `--token=${settings:apiToken}`). The agent's args were

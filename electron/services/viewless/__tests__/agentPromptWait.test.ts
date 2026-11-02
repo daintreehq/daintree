@@ -261,17 +261,30 @@ describe("waitForAgentAtPrompt", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("answers a caller that already gave up, even for an agent at its prompt", async () => {
-    const terminalId = nextTerminal();
-    spawn(terminalId);
-    transition(terminalId, "waiting", "prompt");
-    const controller = new AbortController();
-    controller.abort();
-    await expect(
-      waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000, signal: controller.signal })
-    ).resolves.toMatchObject({ outcome: "aborted" });
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each([
+    ["at its prompt", (id: string) => transition(id, "waiting", "prompt")],
+    ["killed", (id: string) => kill(id)],
+    ["exited", (id: string) => transition(id, "exited")],
+  ] as const)(
+    "answers a caller that already gave up, for an agent %s, whichever wait it asked for",
+    async (_label, before) => {
+      for (const promptOnly of [false, true]) {
+        const terminalId = nextTerminal();
+        spawn(terminalId);
+        before(terminalId);
+        const controller = new AbortController();
+        controller.abort();
+        await expect(
+          waitForAgentAtPrompt(terminalId, {
+            timeoutMs: 60_000,
+            signal: controller.signal,
+            promptOnly,
+          })
+        ).resolves.toMatchObject({ outcome: "aborted" });
+        expect(vi.getTimerCount()).toBe(0);
+      }
+    }
+  );
 
   describe("promptOnly", () => {
     it("waits through idle, an approval and a question for the prompt", async () => {
@@ -307,6 +320,21 @@ describe("waitForAgentAtPrompt", () => {
       const wait = waitForAgentAtPrompt(idle, { timeoutMs: 1_000, promptOnly: true });
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(wait).resolves.toEqual({ terminalId: idle, outcome: "timeout", state: "idle" });
+    });
+
+    it("stops when the caller gives up, releasing its timer", async () => {
+      const terminalId = nextTerminal();
+      spawn(terminalId);
+      const controller = new AbortController();
+      const wait = waitForAgentAtPrompt(terminalId, {
+        timeoutMs: 60_000,
+        signal: controller.signal,
+        promptOnly: true,
+      });
+      transition(terminalId, "waiting", "approval");
+      controller.abort();
+      await expect(wait).resolves.toMatchObject({ outcome: "aborted", waitingReason: "approval" });
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("still reports an exit and a kill", async () => {

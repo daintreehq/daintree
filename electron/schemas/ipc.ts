@@ -433,6 +433,9 @@ export const TerminalSpawnOptionsSchema = z.object({
   // record at spawn. Must be listed here or zod strips it and the id never
   // reaches the pty-host.
   agentSessionId: z.string().optional(),
+  // Listed or zod strips it, and a resume that must be exact would start a
+  // fresh conversation under the id instead (#16019).
+  exactResume: z.boolean().optional(),
   worktreeId: z.string().optional(),
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),

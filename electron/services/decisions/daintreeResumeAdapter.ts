@@ -71,6 +71,8 @@ const LAUNCH_REFUSALS: Record<AgentSessionPaneRefusal, ResumeFailure> = {
   "panel-limit": "resume_panel_limit",
   "missing-cli": "resume_missing_cli",
   "spawn-failed": "resume_spawn_failed",
+  // Only once delivery stopped, which the adapter throws for first.
+  cancelled: "resume_failed",
 };
 
 /**
@@ -131,6 +133,21 @@ function originKey(o: QuestionOrigin): string {
 
 const probeKey = (kind: string, hostId: string) => JSON.stringify([kind, hostId]);
 
+/** One run of a pane: what a later origin names when the library moved a question there. */
+const runKey = (
+  hostId: string,
+  paneId: string,
+  generation: number,
+  principal: string,
+  incarnation: string
+) => JSON.stringify([hostId, paneId, generation, principal, incarnation]);
+
+const originRun = (o: QuestionOrigin) =>
+  runKey(o.host_id, o.pane_id, o.terminal_generation, o.ownership_principal, o.agent_incarnation);
+
+const targetRun = (t: TerminalTarget) =>
+  runKey(t.hostId, t.paneId, t.terminalGeneration, t.ownershipPrincipal, t.agentIncarnation);
+
 function abortError(): Error {
   const error = new Error("Delivery stopped while a session was being resumed");
   error.name = "AbortError";
@@ -169,14 +186,15 @@ function sessionOf(origin: QuestionOrigin): string | null {
  * Questions from one run share one resume in a delivery pass (`endPass`
  * forgets it), so a timeout is waited out once. A run this resumed into that
  * then goes away isn't resumed again in the same lifetime: whoever closed it
- * would only see it come back.
+ * would only see it come back. Only that run: another question from the run
+ * that first asked still resumes, and finds the same pane.
  */
 export class DaintreeResume {
   readonly adapters: AgentResumeAdapter[];
   private readonly attempts = new Map<string, Promise<Attempt>>();
   private readonly refusals = new Map<string, ResumeFailure>();
   private readonly probeRefusals = new Map<string, ResumeFailure>();
-  /** Panes a resume handed an answer to, this lifetime. */
+  /** Runs a resume handed an answer to, this lifetime. */
   private readonly resumedInto = new Set<string>();
 
   constructor(private readonly deps: DaintreeResumeDeps) {
@@ -256,7 +274,7 @@ export class DaintreeResume {
   private async eligibility(origin: QuestionOrigin): Promise<ResumeFailure | null> {
     const host = this.hostRefusal(origin.host_id);
     if (host !== null) return host;
-    if (this.resumedInto.has(origin.pane_id)) return "resume_ended";
+    if (this.resumedInto.has(originRun(origin))) return "resume_ended";
     const resumeKind = getEffectiveAgentConfig(origin.agent_kind)?.resume?.kind;
     if (resumeKind !== "session-id" && resumeKind !== "named-target") {
       return "resume_unsupported_agent";
@@ -291,7 +309,7 @@ export class DaintreeResume {
       return { target: targetOf(origin), ready: false };
     }
     this.refusals.delete(key);
-    this.resumedInto.add(result.target.paneId);
+    this.resumedInto.add(targetRun(result.target));
     return { target: result.target, ready: true };
   }
 
@@ -317,6 +335,7 @@ export class DaintreeResume {
       agentId: origin.agent_kind,
       sessionId,
       cwd: origin.worktree_root,
+      signal: this.deps.signal,
     });
     this.throwIfStopped();
     if (launched.status === "refused") return { failure: LAUNCH_REFUSALS[launched.reason] };

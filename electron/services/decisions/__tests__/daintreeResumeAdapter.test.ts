@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   pickResumeAdapter,
   targetOf,
@@ -7,8 +7,13 @@ import {
   type QuestionOrigin,
   type QuestionRow,
 } from "@daintreehq/decisions-client";
+import { events } from "../../events.js";
+import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import type { NotifyTerminalInfo } from "../../mcp-server/terminalNotify.js";
-import type { AgentPromptWaitResult } from "../../viewless/agentPromptWait.js";
+import {
+  waitForAgentAtPrompt,
+  type AgentPromptWaitResult,
+} from "../../viewless/agentPromptWait.js";
 import type {
   AgentSessionPaneRequest,
   AgentSessionPaneResult,
@@ -17,7 +22,23 @@ import {
   DaintreeResume,
   RESUME_PROMPT_TIMEOUT_MS,
   withResumeReasons,
+  type SessionResumeDeps,
 } from "../daintreeResumeAdapter.js";
+
+/** Agents whose registry entry a test has stripped of its by-id resume. */
+const registry = vi.hoisted(() => ({ withoutResume: new Set<string>() }));
+
+vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../shared/config/agentRegistry.js")>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: (id: string) => {
+      const config = actual.getEffectiveAgentConfig(id);
+      return config && registry.withoutResume.has(id) ? { ...config, resume: undefined } : config;
+    },
+  };
+});
 
 const HOST = "host-own-01";
 const NEW_PANE = "terminal-resumed-1";
@@ -36,23 +57,40 @@ const ORIGIN: QuestionOrigin = {
   workflow_gate_id: null,
 };
 
-function runOf(over: Partial<NotifyTerminalInfo> = {}): NotifyTerminalInfo {
+type LaunchRecord = Omit<AgentSessionPaneRequest, "signal">;
+
+/** The run a launch of `request` starts, as the pty host records it. */
+function runFor(
+  request: Pick<AgentSessionPaneRequest, "projectId" | "worktreeId" | "agentId"> & {
+    sessionId: string | null | undefined;
+  },
+  over: Partial<NotifyTerminalInfo> = {}
+): NotifyTerminalInfo {
   return {
-    projectId: "project-1",
+    projectId: request.projectId,
     agentState: "working",
-    launchAgentId: "claude",
+    launchAgentId: request.agentId,
     hasPty: true,
     launchGeneration: 1,
     agentIncarnation: 0,
-    agentSessionId: "session-1",
-    worktreeId: "wt-1",
+    agentSessionId: request.sessionId ?? undefined,
+    worktreeId: request.worktreeId,
     ...over,
   };
 }
 
+interface World {
+  terminals: Map<string, NotifyTerminalInfo>;
+  generations: Map<string, number>;
+  principals: Map<string, string>;
+}
+
 /** A fake #16000 launch: it opens a pane holding the session, or answers as told. */
 class FakeLauncher {
-  readonly requests: AgentSessionPaneRequest[] = [];
+  readonly requests: LaunchRecord[] = [];
+  readonly signals: Array<AbortSignal | undefined> = [];
+  /** Held until a test lets the launch finish. */
+  gate: Promise<void> | null = null;
   answer: (request: AgentSessionPaneRequest) => AgentSessionPaneResult = (request) => ({
     status: "launched",
     projectId: request.projectId,
@@ -65,10 +103,13 @@ class FakeLauncher {
   constructor(private readonly world: World) {}
 
   async resumeSession(request: AgentSessionPaneRequest): Promise<AgentSessionPaneResult> {
-    this.requests.push(request);
+    const { signal, ...rest } = request;
+    this.requests.push(rest);
+    this.signals.push(signal);
+    if (this.gate) await this.gate;
     const result = this.answer(request);
     if (result.status === "launched") {
-      this.world.terminals.set(result.terminalId, runOf({ launchAgentId: request.agentId }));
+      this.world.terminals.set(result.terminalId, runFor(request));
       this.world.generations.set(result.terminalId, 1);
       this.world.principals.set(result.terminalId, "principal-new");
     }
@@ -76,35 +117,34 @@ class FakeLauncher {
   }
 }
 
-interface World {
-  terminals: Map<string, NotifyTerminalInfo>;
-  generations: Map<string, number>;
-  principals: Map<string, string>;
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 function setup(
   options: {
     directories?: string[];
-    wait?: (terminalId: string, signal: AbortSignal) => Promise<AgentPromptWaitResult>;
+    isDirectory?: (path: string) => Promise<boolean>;
+    wait?: SessionResumeDeps["waitForPrompt"];
   } = {}
 ) {
   const world: World = { terminals: new Map(), generations: new Map(), principals: new Map() };
   const launcher = new FakeLauncher(world);
   const controller = new AbortController();
   const host = { id: HOST as string | null, reachable: true };
-  const directories = new Set(options.directories ?? ["/repo/wt-1", "/repo/wt-2"]);
+  const directories = new Set(options.directories ?? ["/repo/wt-1", "/repo/wt-2/sub"]);
   const waits: Array<{ terminalId: string; timeoutMs: number; promptOnly: boolean }> = [];
   const client = {
-    getTerminalAsync: vi.fn(async (id: string) => {
+    getTerminalAsync: async (id: string) => {
       const info = world.terminals.get(id);
       return info === undefined ? null : { ...info };
-    }),
+    },
     getLiveGeneration: (id: string) => world.generations.get(id) ?? null,
     isLiveGeneration: (id: string, generation: number) => world.generations.get(id) === generation,
-  };
-  const settleAtPrompt = (terminalId: string) => {
-    const info = world.terminals.get(terminalId);
-    if (info) world.terminals.set(terminalId, { ...info, agentState: "waiting" });
   };
   const resume = new DaintreeResume({
     hostId: () => host.id,
@@ -117,11 +157,12 @@ function setup(
         timeoutMs: waitOptions.timeoutMs,
         promptOnly: waitOptions.promptOnly,
       });
-      if (options.wait) return options.wait(terminalId, waitOptions.signal);
-      settleAtPrompt(terminalId);
+      if (options.wait) return options.wait(terminalId, waitOptions);
+      const info = world.terminals.get(terminalId);
+      if (info) world.terminals.set(terminalId, { ...info, agentState: "waiting" });
       return { terminalId, outcome: "settled", state: "waiting", waitingReason: "prompt" };
     },
-    isDirectory: async (path) => directories.has(path),
+    isDirectory: options.isDirectory ?? (async (path) => directories.has(path)),
     signal: controller.signal,
   });
   const adapterFor = (origin: QuestionOrigin): AgentResumeAdapter => {
@@ -136,27 +177,73 @@ function setup(
     if (!probe.supported || !(await adapter.canResume(origin))) return null;
     return adapter.resume(origin);
   };
-  return { world, launcher, controller, host, client, waits, resume, adapterFor, tryResume };
+  /** A run already holding the session, which the launch hands back instead of starting one. */
+  const existing = (
+    terminalId: string,
+    generation: number,
+    over: Partial<NotifyTerminalInfo> = {}
+  ) => {
+    world.terminals.set(
+      terminalId,
+      runFor(
+        { projectId: "project-1", worktreeId: "wt-1", agentId: "claude", sessionId: "session-1" },
+        { launchGeneration: generation, ...over }
+      )
+    );
+    world.generations.set(terminalId, generation);
+    world.principals.set(terminalId, `principal-${terminalId}-${generation}`);
+    launcher.answer = (request) => ({
+      status: "existing",
+      projectId: request.projectId,
+      worktreeId: request.worktreeId,
+      terminalId,
+    });
+  };
+  return { world, launcher, controller, host, waits, resume, adapterFor, tryResume, existing };
 }
+
+const settledAtPrompt = (terminalId: string): AgentPromptWaitResult => ({
+  terminalId,
+  outcome: "settled",
+  state: "waiting",
+  waitingReason: "prompt",
+});
+
+beforeEach(() => {
+  registry.withoutResume.clear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("DaintreeResume", () => {
   it.each(["claude", "codex"])(
     "reopens a %s session in its worktree, waits for its prompt and hands back the new run",
     async (kind) => {
       const h = setup();
-      const origin = { ...ORIGIN, agent_kind: kind };
+      const origin: QuestionOrigin = {
+        ...ORIGIN,
+        agent_kind: kind,
+        agent_session_id: "0190f0aa-session-b",
+        project_id: "project-2",
+        worktree_id: "wt-2",
+        worktree_root: "/repo/wt-2/sub",
+      };
 
       const resumed = await h.tryResume(origin);
 
       expect(h.launcher.requests).toEqual([
         {
-          projectId: "project-1",
-          worktreeId: "wt-1",
+          projectId: "project-2",
+          worktreeId: "wt-2",
           agentId: kind,
-          sessionId: "session-1",
-          cwd: "/repo/wt-1",
+          sessionId: "0190f0aa-session-b",
+          cwd: "/repo/wt-2/sub",
         },
       ]);
+      expect(h.launcher.signals).toEqual([h.controller.signal]);
       expect(h.waits).toEqual([
         { terminalId: NEW_PANE, timeoutMs: RESUME_PROMPT_TIMEOUT_MS, promptOnly: true },
       ]);
@@ -168,8 +255,8 @@ describe("DaintreeResume", () => {
           terminalGeneration: 1,
           ownershipPrincipal: "principal-new",
           agentIncarnation: "0",
-          agentSessionId: "session-1",
-          worktreeId: "wt-1",
+          agentSessionId: "0190f0aa-session-b",
+          worktreeId: "wt-2",
         },
       });
       expect(h.resume.reasonFor(origin)).toBeNull();
@@ -186,15 +273,35 @@ describe("DaintreeResume", () => {
     expect(h.launcher.requests).toEqual([]);
   });
 
-  it("never launches once the worktree's directory is gone, and says so", async () => {
-    const h = setup({ directories: [] });
-    expect(await h.tryResume(ORIGIN)).toBeNull();
-    expect(h.resume.reasonFor(ORIGIN)).toBe("resume_worktree_gone");
+  it.each([
+    ["its directory is gone", {}, {}, "resume_worktree_gone"],
+    [
+      "its directory can't be read",
+      {
+        isDirectory: async () => {
+          throw new Error("EACCES");
+        },
+      },
+      {},
+      "resume_worktree_gone",
+    ],
+    ["the pane was in no worktree", {}, { worktree_id: "" }, "resume_no_worktree"],
+    ["no directory was recorded", {}, { worktree_root: " " }, "resume_no_worktree"],
+    ["no project was recorded", {}, { project_id: "" }, "resume_no_worktree"],
+  ] as const)("never launches when %s, and says so", async (_label, options, over, reason) => {
+    const h = setup({ directories: [], ...options });
+    const origin = { ...ORIGIN, ...over };
+    expect(await h.tryResume(origin)).toBeNull();
+    expect(h.resume.reasonFor(origin)).toBe(reason);
     expect(h.launcher.requests).toEqual([]);
+  });
 
-    const outside = { ...ORIGIN, worktree_id: "" };
-    expect(await h.tryResume(outside)).toBeNull();
-    expect(h.resume.reasonFor(outside)).toBe("resume_no_worktree");
+  it("reports a supported agent whose registry entry can't reopen by id unsupported", async () => {
+    registry.withoutResume.add("claude");
+    const h = setup();
+    expect(await h.tryResume(ORIGIN)).toBeNull();
+    expect(h.resume.reasonFor(ORIGIN)).toBe("resume_unsupported_agent");
+    expect(h.launcher.requests).toEqual([]);
   });
 
   it("reports a resume that never reaches its prompt in time, leaving its pane running", async () => {
@@ -209,6 +316,51 @@ describe("DaintreeResume", () => {
     expect(h.world.terminals.has(NEW_PANE)).toBe(true);
   });
 
+  it("gives a launched agent a bounded wait for its prompt, and no longer", async () => {
+    vi.useFakeTimers();
+    getAgentAvailabilityStore();
+    const entered = deferred();
+    const h = setup({
+      wait: (terminalId, options) => {
+        const waiting = waitForAgentAtPrompt(terminalId, options);
+        entered.resolve();
+        return waiting;
+      },
+    });
+
+    const resuming = h.tryResume(ORIGIN);
+    await entered.promise;
+    events.emit("agent:spawned", {
+      agentId: "claude",
+      terminalId: NEW_PANE,
+      timestamp: Date.now(),
+    });
+    // A startup approval on screen is not the prompt.
+    events.emit("agent:state-changed", {
+      agentId: "claude",
+      terminalId: NEW_PANE,
+      state: "waiting",
+      previousState: "working",
+      waitingReason: "approval",
+      trigger: "output",
+      confidence: 1,
+      timestamp: Date.now(),
+    });
+    let done = false;
+    void resuming.then(() => {
+      done = true;
+    });
+
+    expect(RESUME_PROMPT_TIMEOUT_MS).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(RESUME_PROMPT_TIMEOUT_MS - 1);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(resuming).resolves.toMatchObject({ ready: false });
+    expect(h.resume.reasonFor(ORIGIN)).toBe("resume_timeout");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([
     ["exited", "resume_exited"],
     ["closed", "resume_closed"],
@@ -218,25 +370,55 @@ describe("DaintreeResume", () => {
     expect(h.resume.reasonFor(ORIGIN)).toBe(reason);
   });
 
+  it("takes a wait that fails as a failed resume", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const h = setup({
+      wait: async () => {
+        throw new Error("no store");
+      },
+    });
+    expect(await h.tryResume(ORIGIN)).toMatchObject({ ready: false });
+    expect(h.resume.reasonFor(ORIGIN)).toBe("resume_failed");
+  });
+
   it("takes a pane already holding the session as it is, without waiting on its turn", async () => {
     const h = setup();
-    h.world.terminals.set("pane-live", runOf({ agentState: "working", launchGeneration: 3 }));
-    h.world.generations.set("pane-live", 3);
-    h.world.principals.set("pane-live", "principal-live");
-    h.launcher.answer = (request) => ({
-      status: "existing",
-      projectId: request.projectId,
-      worktreeId: request.worktreeId,
-      terminalId: "pane-live",
-    });
+    h.existing("pane-live", 3);
 
     const resumed = await h.tryResume(ORIGIN);
 
     expect(h.waits).toEqual([]);
-    expect(resumed).toMatchObject({
+    expect(resumed).toEqual({
       ready: true,
-      target: { paneId: "pane-live", terminalGeneration: 3, ownershipPrincipal: "principal-live" },
+      target: {
+        hostId: HOST,
+        paneId: "pane-live",
+        terminalGeneration: 3,
+        ownershipPrincipal: "principal-pane-live-3",
+        agentIncarnation: "0",
+        agentSessionId: "session-1",
+        worktreeId: "wt-1",
+      },
     });
+  });
+
+  it("hands every question from a restarted pane's earlier run to the run holding its session now", async () => {
+    const h = setup();
+    // The asking pane came back under the same id, at a new generation, with the same session.
+    h.existing(ORIGIN.pane_id, 8);
+
+    const first = await h.tryResume(ORIGIN);
+    const second = await h.tryResume({ ...ORIGIN });
+    h.resume.endPass();
+    const later = await h.tryResume({ ...ORIGIN });
+
+    for (const resumed of [first, second, later]) {
+      expect(resumed).toMatchObject({
+        ready: true,
+        target: { paneId: ORIGIN.pane_id, terminalGeneration: 8 },
+      });
+    }
+    expect(h.resume.reasonFor(ORIGIN)).toBeNull();
   });
 
   it.each([
@@ -244,59 +426,150 @@ describe("DaintreeResume", () => {
       "restarted in the pane",
       (h: ReturnType<typeof setup>) => {
         h.world.generations.set(NEW_PANE, 2);
-        h.world.terminals.set(NEW_PANE, runOf({ launchGeneration: 2, agentState: "waiting" }));
+        h.world.terminals.set(NEW_PANE, {
+          ...h.world.terminals.get(NEW_PANE)!,
+          launchGeneration: 2,
+        });
       },
+    ],
+    [
+      "gained a new owner",
+      (h: ReturnType<typeof setup>) => h.world.principals.set(NEW_PANE, "principal-other"),
+    ],
+    [
+      "started its agent again",
+      (h: ReturnType<typeof setup>) =>
+        h.world.terminals.set(NEW_PANE, {
+          ...h.world.terminals.get(NEW_PANE)!,
+          agentIncarnation: 1,
+        }),
+    ],
+    [
+      "turned out to be another agent",
+      (h: ReturnType<typeof setup>) =>
+        h.world.terminals.set(NEW_PANE, {
+          ...h.world.terminals.get(NEW_PANE)!,
+          detectedAgentId: "codex",
+        }),
     ],
     [
       "moved to another conversation",
       (h: ReturnType<typeof setup>) =>
-        h.world.terminals.set(NEW_PANE, runOf({ agentSessionId: "session-2" })),
-    ],
-    [
-      "taken over by another agent",
-      (h: ReturnType<typeof setup>) =>
-        h.world.terminals.set(NEW_PANE, runOf({ detectedAgentId: "gemini", agentIncarnation: 1 })),
+        h.world.terminals.set(NEW_PANE, {
+          ...h.world.terminals.get(NEW_PANE)!,
+          agentSessionId: "session-2",
+        }),
     ],
   ] as const)("refuses a run that %s while it was waited for", async (_label, change) => {
     const h = setup({
       wait: async (terminalId) => {
         change(h);
-        return { terminalId, outcome: "settled", state: "waiting", waitingReason: "prompt" };
+        return settledAtPrompt(terminalId);
       },
     });
     expect(await h.tryResume(ORIGIN)).toMatchObject({ ready: false });
     expect(h.resume.reasonFor(ORIGIN)).toBe("resume_target_changed");
   });
 
-  it("refuses a resumed pane that holds no bearer, which no answer could be tied to", async () => {
+  it.each([
+    [
+      "isn't the live generation",
+      (h: ReturnType<typeof setup>) => h.world.generations.delete(NEW_PANE),
+      "resume_host_unreadable",
+    ],
+    [
+      "has exited",
+      (h: ReturnType<typeof setup>) =>
+        h.world.terminals.set(NEW_PANE, { ...h.world.terminals.get(NEW_PANE)!, isExited: true }),
+      "resume_closed",
+    ],
+    [
+      "is in the trash",
+      (h: ReturnType<typeof setup>) =>
+        h.world.terminals.set(NEW_PANE, { ...h.world.terminals.get(NEW_PANE)!, isTrashed: true }),
+      "resume_closed",
+    ],
+    [
+      "has no incarnation on record",
+      (h: ReturnType<typeof setup>) =>
+        h.world.terminals.set(NEW_PANE, {
+          ...h.world.terminals.get(NEW_PANE)!,
+          agentIncarnation: undefined,
+        }),
+      "resume_target_changed",
+    ],
+    [
+      "belongs to another project",
+      (h: ReturnType<typeof setup>) =>
+        h.world.terminals.set(NEW_PANE, { ...h.world.terminals.get(NEW_PANE)!, projectId: "p-9" }),
+      "resume_target_changed",
+    ],
+    [
+      "sits in another worktree",
+      (h: ReturnType<typeof setup>) =>
+        h.world.terminals.set(NEW_PANE, {
+          ...h.world.terminals.get(NEW_PANE)!,
+          worktreeId: "wt-9",
+        }),
+      "resume_other_worktree",
+    ],
+    [
+      "holds no bearer",
+      (h: ReturnType<typeof setup>) => h.world.principals.delete(NEW_PANE),
+      "resume_no_bearer",
+    ],
+  ] as const)(
+    "never waits on a launched run that %s when first read",
+    async (_label, change, reason) => {
+      const h = setup();
+      const launch = h.launcher.resumeSession.bind(h.launcher);
+      h.launcher.resumeSession = async (request) => {
+        const result = await launch(request);
+        change(h);
+        return result;
+      };
+      expect(await h.tryResume(ORIGIN)).toMatchObject({ ready: false });
+      expect(h.resume.reasonFor(ORIGIN)).toBe(reason);
+      expect(h.waits).toEqual([]);
+    }
+  );
+
+  it.each([
+    ["another worktree", { worktreeId: "wt-9" }],
+    ["another project", { projectId: "project-9" }],
+  ] as const)("refuses a launch that reports %s", async (_label, over) => {
     const h = setup();
-    const launch = h.launcher.resumeSession.bind(h.launcher);
-    h.launcher.resumeSession = async (request) => {
-      const result = await launch(request);
-      h.world.principals.delete(NEW_PANE);
-      return result;
-    };
+    const answer = h.launcher.answer;
+    h.launcher.answer = (request) => ({ ...answer(request), ...over }) as AgentSessionPaneResult;
     expect(await h.tryResume(ORIGIN)).toMatchObject({ ready: false });
-    expect(h.resume.reasonFor(ORIGIN)).toBe("resume_no_bearer");
+    expect(h.resume.reasonFor(ORIGIN)).toBe("resume_other_worktree");
     expect(h.waits).toEqual([]);
   });
 
   it.each([
-    ["spawn-failed", "resume_spawn_failed"],
+    ["no-session-id", "resume_no_session"],
+    ["unknown-agent", "resume_unsupported_agent"],
+    ["no-resume-support", "resume_unsupported_agent"],
+    ["unknown-project", "resume_unknown_project"],
+    ["history-unavailable", "resume_host_unreadable"],
+    ["worktrees-unavailable", "resume_host_unreadable"],
+    ["terminals-unavailable", "resume_host_unreadable"],
     ["worktree-gone", "resume_worktree_gone"],
     ["other-worktree", "resume_other_worktree"],
-    ["terminals-unavailable", "resume_host_unreadable"],
+    ["panel-limit", "resume_panel_limit"],
     ["missing-cli", "resume_missing_cli"],
+    ["spawn-failed", "resume_spawn_failed"],
   ] as const)("names the launch's refusal %s", async (refusal, reason) => {
     const h = setup();
     h.launcher.answer = () => ({ status: "refused", reason: refusal, message: "refused" });
     expect(await h.tryResume(ORIGIN)).toMatchObject({ ready: false });
     expect(h.resume.reasonFor(ORIGIN)).toBe(reason);
+    expect(h.waits).toEqual([]);
   });
 
   it("takes a launch that throws as a failed resume, never as the pass's error", async () => {
-    const h = setup();
     vi.spyOn(console, "warn").mockImplementation(() => {});
+    const h = setup();
     h.launcher.answer = () => {
       throw new Error("boom");
     };
@@ -346,12 +619,40 @@ describe("DaintreeResume", () => {
     expect(h.launcher.requests).toHaveLength(2);
   });
 
-  it("never resumes again a run it resumed into that has gone since", async () => {
+  it("never shares a resume, or its reason, between different runs of one pane", async () => {
+    const h = setup({
+      wait: async (terminalId) => ({ terminalId, outcome: "timeout", state: "working" }),
+    });
+    const others: QuestionOrigin[] = [
+      { ...ORIGIN, terminal_generation: 8 },
+      { ...ORIGIN, ownership_principal: "principal-other" },
+      { ...ORIGIN, agent_incarnation: "1" },
+      { ...ORIGIN, agent_session_id: "session-2" },
+    ];
+    await h.tryResume(ORIGIN);
+    for (const origin of others) await h.tryResume(origin);
+    expect(h.launcher.requests).toHaveLength(1 + others.length);
+
+    // A run whose resume nothing refused keeps the library's own code.
+    const untried = { ...ORIGIN, terminal_generation: 9 };
+    expect(h.resume.reasonFor(untried)).toBeNull();
+  });
+
+  it("never resumes again a run it resumed into once that run has gone", async () => {
     const h = setup();
     const first = await h.tryResume(ORIGIN);
     h.resume.endPass();
     // The library moved the question to the resumed run, which someone closed.
-    const moved = { ...ORIGIN, pane_id: first!.target.paneId };
+    const target = first!.target;
+    h.world.terminals.delete(target.paneId);
+    h.world.generations.delete(target.paneId);
+    const moved: QuestionOrigin = {
+      ...ORIGIN,
+      pane_id: target.paneId,
+      terminal_generation: target.terminalGeneration,
+      ownership_principal: target.ownershipPrincipal,
+      agent_incarnation: target.agentIncarnation,
+    };
 
     expect(await h.tryResume(moved)).toBeNull();
     expect(h.resume.reasonFor(moved)).toBe("resume_ended");
@@ -359,17 +660,19 @@ describe("DaintreeResume", () => {
   });
 
   it("throws when delivery stops during the wait, so nothing is recorded", async () => {
-    let waitSignal: AbortSignal | undefined;
+    const entered = deferred();
     const h = setup({
-      wait: (terminalId, signal) => {
-        waitSignal = signal;
+      wait: (terminalId, options) => {
+        entered.resolve();
         return new Promise((resolve) =>
-          signal.addEventListener("abort", () => resolve({ terminalId, outcome: "aborted" }))
+          options.signal.addEventListener("abort", () =>
+            resolve({ terminalId, outcome: "aborted" })
+          )
         );
       },
     });
     const resuming = h.tryResume(ORIGIN);
-    await vi.waitFor(() => expect(waitSignal).toBeDefined());
+    await entered.promise;
     h.controller.abort();
 
     await expect(resuming).rejects.toMatchObject({ name: "AbortError" });
@@ -379,6 +682,28 @@ describe("DaintreeResume", () => {
       name: "AbortError",
     });
     expect(h.launcher.requests).toHaveLength(1);
+  });
+
+  it("hands the launch the stop signal, and throws without waiting once it returns after a stop", async () => {
+    const h = setup();
+    const gate = deferred();
+    const entered = deferred();
+    h.launcher.gate = gate.promise;
+    const launch = h.launcher.resumeSession.bind(h.launcher);
+    h.launcher.resumeSession = (request) => {
+      const launching = launch(request);
+      entered.resolve();
+      return launching;
+    };
+    const resuming = h.tryResume(ORIGIN);
+    await entered.promise;
+
+    h.controller.abort();
+    expect(h.launcher.signals[0]?.aborted).toBe(true);
+    gate.resolve();
+
+    await expect(resuming).rejects.toMatchObject({ name: "AbortError" });
+    expect(h.waits).toEqual([]);
   });
 });
 
@@ -398,23 +723,36 @@ describe("withResumeReasons", () => {
 
   const row = (id: string, origin: QuestionOrigin) => ({ question_id: id, origin }) as QuestionRow;
 
-  it("records the resume's own reason in place of the library's generic code, for that run alone", async () => {
+  it.each(["pane_gone", "relaunched", "generation_mismatch", "session_mismatch"])(
+    "records the resume's own reason in place of the library's %s",
+    async (code) => {
+      const h = setup({ directories: [] });
+      const { store, updates } = storeWith([row("q1", ORIGIN)]);
+      await h.tryResume(ORIGIN);
+
+      await withResumeReasons(store, h.resume).updateQuestion("q1", {
+        delivery_status: "needs-attention",
+        error_code: code,
+      });
+
+      expect(updates).toEqual([
+        ["q1", { delivery_status: "needs-attention", error_code: "resume_worktree_gone" }],
+      ]);
+    }
+  );
+
+  it("touches only that run's attention write, and only the library's resumable codes", async () => {
     const h = setup({ directories: [] });
     const other = { ...ORIGIN, pane_id: "pane-other", agent_kind: "codex" };
     const { store, updates } = storeWith([row("q1", ORIGIN), row("q2", other)]);
     const wrapped = withResumeReasons(store, h.resume);
     await h.tryResume(ORIGIN);
 
-    await wrapped.updateQuestion("q1", {
-      delivery_status: "needs-attention",
-      error_code: "pane_gone",
-    });
     // Nothing refused this run's resume, so its generic code stands.
     await wrapped.updateQuestion("q2", {
       delivery_status: "needs-attention",
-      error_code: "relaunched",
+      error_code: "pane_gone",
     });
-    // Codes a resume didn't decide are never touched.
     await wrapped.updateQuestion("q1", {
       delivery_status: "needs-attention",
       error_code: "resume_wrong_worktree",
@@ -425,26 +763,36 @@ describe("withResumeReasons", () => {
     });
 
     expect(updates).toEqual([
-      ["q1", { delivery_status: "needs-attention", error_code: "resume_worktree_gone" }],
-      ["q2", { delivery_status: "needs-attention", error_code: "relaunched" }],
+      ["q2", { delivery_status: "needs-attention", error_code: "pane_gone" }],
       ["q1", { delivery_status: "needs-attention", error_code: "resume_wrong_worktree" }],
       ["q1", { delivery_status: "delivery-uncertain", error_code: "pane_gone" }],
     ]);
   });
 
-  it("forgets a pass's reasons when the pass ends", async () => {
+  it("forgets a pass's reasons, its probes' too, when the pass ends", async () => {
     const h = setup({ directories: [] });
-    const { store, updates } = storeWith([row("q1", ORIGIN)]);
+    const unknown = { ...ORIGIN, pane_id: "pane-unknown", agent_kind: "made-up-agent" };
+    const { store, updates } = storeWith([row("q1", ORIGIN), row("q2", unknown)]);
     const wrapped = withResumeReasons(store, h.resume);
     await h.tryResume(ORIGIN);
+    h.host.reachable = false;
+    await h.tryResume({ ...ORIGIN, agent_kind: "codex" });
     h.resume.endPass();
+    h.host.reachable = true;
 
     await wrapped.updateQuestion("q1", {
       delivery_status: "needs-attention",
       error_code: "pane_gone",
     });
+    expect(h.resume.reasonFor({ ...ORIGIN, agent_kind: "codex" })).toBeNull();
+    // An agent with no adapter at all is unsupported in every pass.
+    await wrapped.updateQuestion("q2", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
     expect(updates).toEqual([
       ["q1", { delivery_status: "needs-attention", error_code: "pane_gone" }],
+      ["q2", { delivery_status: "needs-attention", error_code: "resume_unsupported_agent" }],
     ]);
   });
 });
