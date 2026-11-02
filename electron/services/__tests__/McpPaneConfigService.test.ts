@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +24,7 @@ vi.mock("electron", () => ({
 // preparation for the same pane has since unlinked and rewritten.
 const writeControl = vi.hoisted(() => ({
   error: null as Error | null,
-  hooks: [] as Array<() => Promise<void>>,
+  hooks: [] as Array<(data: string) => Promise<void>>,
   written: [] as Array<{ path: string; data: string }>,
 }));
 
@@ -35,7 +36,7 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.resilientAtomicWriteFile>
     ) => {
       const hook = writeControl.hooks.shift();
-      if (hook) await hook();
+      if (hook) await hook(String(args[1]));
       if (writeControl.error) throw writeControl.error;
       await actual.resilientAtomicWriteFile(...args);
       writeControl.written.push({ path: String(args[0]), data: String(args[1]) });
@@ -53,7 +54,12 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-import { McpPaneConfigService, type PanePluginServer } from "../McpPaneConfigService.js";
+import {
+  McpPaneConfigService,
+  mcpPaneConfigService,
+  type PanePluginServer,
+} from "../McpPaneConfigService.js";
+import { isAuthorized, resolveTokenTier } from "../mcp-server/tierAuth.js";
 import { PluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { pluginMcpRoutePath } from "../pluginAgentMcp/types.js";
 import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../../shared/config/mcpConfirmWindow.js";
@@ -1071,6 +1077,348 @@ describe("McpPaneConfigService", () => {
 
       expect(grants.authenticate(firstBearer)).toBeNull();
       expect(grants.listForTerminal("pane-plugin-restart")).toHaveLength(1);
+    });
+  });
+
+  describe("Decisions server (#16012)", () => {
+    let grants: PluginMcpGrantRegistry;
+
+    beforeEach(() => {
+      grants = new PluginMcpGrantRegistry();
+      service = new McpPaneConfigService(grants);
+    });
+
+    const ledger: PanePluginServer = {
+      pluginInstanceId: "acme.ledger",
+      serverKey: "daintree-ledger",
+      scope: { databases: true, pluginEndpointId: "data" },
+    };
+    const DECISIONS = { workspaceId: PROJECT_A };
+    const CODEX = { format: "codex-config-overrides" } as const;
+
+    async function readServers(configPath: string) {
+      const parsed = JSON.parse(await fs.readFile(configPath, "utf-8"));
+      return parsed.mcpServers as Record<
+        string,
+        { type: string; url: string; headers: { Authorization: string } }
+      >;
+    }
+
+    function codexArgsFor(args: readonly string[], key: string): string[] {
+      return args.filter((arg) => arg.startsWith(`mcp_servers.${key}.`));
+    }
+
+    it('gives a tier "off" Claude launch only the Decisions entry, with a bearer the control surface refuses', async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-dec-off",
+        port: 45454,
+        tier: "off",
+        decisions: DECISIONS,
+      });
+
+      expect(prepared.token).toBeNull();
+      expect(prepared.pluginServerKeys).toEqual([]);
+      const servers = await readServers(prepared.configPath!);
+      expect(Object.keys(servers)).toEqual(["daintree-decisions"]);
+      expect(servers["daintree-decisions"]).toEqual({
+        type: "http",
+        url: "http://127.0.0.1:45454/mcp/decisions",
+        headers: { Authorization: `Bearer ${prepared.decisionsToken}` },
+      });
+
+      const bearer = prepared.decisionsToken!;
+      expect(service.getDecisionsBearerForToken(bearer)).toEqual({
+        paneId: "pane-dec-off",
+        principal: service.getDecisionsPrincipal("pane-dec-off"),
+        workspaceId: PROJECT_A,
+      });
+      expect(service.getDecisionsPrincipal("pane-dec-off")).toMatch(/^[0-9a-f-]{36}$/);
+      // Nothing on the control surface or the orchestration hand-over knows it.
+      expect(service.isValidPaneToken(bearer)).toBe(false);
+      expect(service.getTierForToken(bearer)).toBeUndefined();
+      expect(service.getPaneIdForToken(bearer)).toBeNull();
+      expect(service.getOwnershipPrincipalForToken(bearer)).toBeNull();
+      expect(service.getOrchestratorPane("pane-dec-off")).toBeNull();
+      expect(service.listOrchestratorPanes()).toEqual([]);
+      // Nor does any plugin route.
+      expect(grants.authenticate(bearer)).toBeNull();
+    });
+
+    it('gives a tier "off" Codex launch the Decisions override, its bearer in the env and never in argv', async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-dec-codex-off",
+        port: 45454,
+        tier: "off",
+        decisions: DECISIONS,
+        injection: CODEX,
+      });
+
+      expect(prepared.configPath).toBeNull();
+      expect(prepared.token).toBeNull();
+      expect(prepared.args).toEqual([
+        "-c",
+        'mcp_servers.daintree-decisions.url="http://127.0.0.1:45454/mcp/decisions"',
+        "-c",
+        'mcp_servers.daintree-decisions.bearer_token_env_var="DAINTREE_DECISIONS_MCP_TOKEN"',
+      ]);
+      expect(prepared.env).toEqual({ DAINTREE_DECISIONS_MCP_TOKEN: prepared.decisionsToken });
+      expect(prepared.args.join(" ")).not.toContain(prepared.decisionsToken!);
+    });
+
+    it("gives a tier-on launch both entries, with distinct bearers under one principal", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-dec-core",
+        port: 45454,
+        tier: "core",
+        decisions: DECISIONS,
+      });
+
+      const servers = await readServers(prepared.configPath!);
+      expect(Object.keys(servers)).toEqual(["daintree", "daintree-decisions"]);
+      expect(bearerOf(servers.daintree)).toBe(prepared.token);
+      expect(bearerOf(servers["daintree-decisions"])).toBe(prepared.decisionsToken);
+      expect(prepared.decisionsToken).not.toBe(prepared.token);
+
+      // Each bearer opens its own route and nothing else.
+      expect(service.getTierForToken(prepared.token!)).toBe("core");
+      expect(service.getDecisionsBearerForToken(prepared.token!)).toBeNull();
+      expect(service.isValidPaneToken(prepared.decisionsToken!)).toBe(false);
+      // A question asked through one belongs to the run the other acts for.
+      expect(service.getDecisionsPrincipal("pane-dec-core")).toBe(
+        service.getOwnershipPrincipalForToken(prepared.token!)
+      );
+      expect(service.getOrchestratorPane("pane-dec-core")?.principalId).toBe(
+        service.getDecisionsPrincipal("pane-dec-core")
+      );
+    });
+
+    it("gives a tier-on Codex launch both overrides, the long timeout only on Daintree's own", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-dec-codex-full",
+        port: 45454,
+        tier: "full",
+        decisions: DECISIONS,
+        injection: CODEX,
+      });
+
+      expect(codexArgsFor(prepared.args, "daintree")).toEqual([
+        'mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"',
+        'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
+        `mcp_servers.daintree.tool_timeout_sec=${Math.ceil(MCP_CONFIRMABLE_CALL_MAX_MS / 1_000)}`,
+      ]);
+      expect(codexArgsFor(prepared.args, "daintree-decisions")).toEqual([
+        'mcp_servers.daintree-decisions.url="http://127.0.0.1:45454/mcp/decisions"',
+        'mcp_servers.daintree-decisions.bearer_token_env_var="DAINTREE_DECISIONS_MCP_TOKEN"',
+      ]);
+      expect(prepared.env).toEqual({
+        DAINTREE_MCP_TOKEN: prepared.token,
+        DAINTREE_DECISIONS_MCP_TOKEN: prepared.decisionsToken,
+      });
+    });
+
+    it("gives a plugin-granted pane its plugin entry and the Decisions entry, each bearer for its own route", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-dec-plugin",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger], launchAgentIdHint: "claude" },
+        decisions: DECISIONS,
+      });
+
+      expect(prepared.token).toBeNull();
+      const servers = await readServers(prepared.configPath!);
+      expect(Object.keys(servers)).toEqual(["daintree-ledger", "daintree-decisions"]);
+      const pluginBearer = bearerOf(servers["daintree-ledger"]);
+      const decisionsBearer = bearerOf(servers["daintree-decisions"]);
+      expect(decisionsBearer).toBe(prepared.decisionsToken);
+      expect(decisionsBearer).not.toBe(pluginBearer);
+      expect(grants.authenticate(pluginBearer)?.terminalId).toBe("pane-dec-plugin");
+      expect(service.getDecisionsBearerForToken(pluginBearer)).toBeNull();
+      expect(grants.authenticate(decisionsBearer)).toBeNull();
+      expect(service.getDecisionsBearerForToken(decisionsBearer)?.paneId).toBe("pane-dec-plugin");
+    });
+
+    it("gives a plugin-granted Codex pane the plugin and Decisions overrides with their own env bearers", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-dec-plugin-codex",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger], launchAgentIdHint: "codex" },
+        decisions: DECISIONS,
+        injection: CODEX,
+      });
+
+      const [key] = prepared.pluginServerKeys;
+      expect(prepared.args).toEqual([
+        "-c",
+        `mcp_servers.${key}.url="http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger")}"`,
+        "-c",
+        `mcp_servers.${key}.bearer_token_env_var="DAINTREE_PLUGIN_MCP_TOKEN_1"`,
+        "-c",
+        'mcp_servers.daintree-decisions.url="http://127.0.0.1:45454/mcp/decisions"',
+        "-c",
+        'mcp_servers.daintree-decisions.bearer_token_env_var="DAINTREE_DECISIONS_MCP_TOKEN"',
+      ]);
+      expect(prepared.env.DAINTREE_DECISIONS_MCP_TOKEN).toBe(prepared.decisionsToken);
+      const pluginBearer = prepared.env.DAINTREE_PLUGIN_MCP_TOKEN_1;
+      expect(Object.keys(prepared.env).sort()).toEqual([
+        "DAINTREE_DECISIONS_MCP_TOKEN",
+        "DAINTREE_PLUGIN_MCP_TOKEN_1",
+      ]);
+      expect(grants.authenticate(pluginBearer)?.terminalId).toBe("pane-dec-plugin-codex");
+      expect(grants.authenticate(prepared.decisionsToken!)).toBeNull();
+      expect(service.getDecisionsBearerForToken(pluginBearer)).toBeNull();
+      expect(service.getDecisionsBearerForToken(prepared.decisionsToken!)?.paneId).toBe(
+        "pane-dec-plugin-codex"
+      );
+    });
+
+    it("still prepares the Decisions entry when every plugin grant is refused", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-dec-refused",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger], isEligible: () => false },
+        decisions: DECISIONS,
+      });
+
+      expect(prepared.pluginServerKeys).toEqual([]);
+      expect(Object.keys(await readServers(prepared.configPath!))).toEqual(["daintree-decisions"]);
+    });
+
+    it("leaves a launch without Decisions exactly as it was: no entry, no bearer, no env", async () => {
+      const claude = await service.preparePaneConfig({
+        paneId: "pane-no-dec",
+        port: 45454,
+        tier: "core",
+      });
+      const codex = await service.preparePaneConfig({
+        paneId: "pane-no-dec-codex",
+        port: 45454,
+        tier: "core",
+        injection: CODEX,
+      });
+
+      expect(claude.decisionsToken).toBeNull();
+      expect(codex.decisionsToken).toBeNull();
+      // Exactly what a launch got before Decisions existed.
+      expect(JSON.parse(await fs.readFile(claude.configPath!, "utf-8"))).toEqual({
+        mcpServers: {
+          daintree: {
+            type: "sse",
+            url: "http://127.0.0.1:45454/sse",
+            headers: { Authorization: `Bearer ${claude.token}` },
+          },
+        },
+      });
+      expect(claude.args).toEqual(["--mcp-config", claude.configPath]);
+      expect(claude.env).toEqual({});
+      expect(codex.args).toEqual([
+        "-c",
+        'mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"',
+        "-c",
+        'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
+        "-c",
+        `mcp_servers.daintree.tool_timeout_sec=${Math.ceil(MCP_CONFIRMABLE_CALL_MAX_MS / 1_000)}`,
+      ]);
+      expect(codex.env).toEqual({ DAINTREE_MCP_TOKEN: codex.token });
+      expect(service.getDecisionsPrincipal("pane-no-dec")).toBeNull();
+      await expect(
+        service.preparePaneConfig({ paneId: "pane-none", port: 45454, tier: "off" })
+      ).rejects.toThrow(/should not be called with tier "off"/);
+    });
+
+    it("revokes the Decisions bearer with the pane, telling the listener its principal once", async () => {
+      const revoked: string[] = [];
+      service.setOwnershipPrincipalRevokedListener((principal) => revoked.push(principal));
+      const off = await service.preparePaneConfig({
+        paneId: "pane-dec-revoke-off",
+        port: 45454,
+        tier: "off",
+        decisions: DECISIONS,
+      });
+      const both = await service.preparePaneConfig({
+        paneId: "pane-dec-revoke-both",
+        port: 45454,
+        tier: "core",
+        decisions: DECISIONS,
+      });
+      const offPrincipal = service.getDecisionsPrincipal("pane-dec-revoke-off");
+      const bothPrincipal = service.getDecisionsPrincipal("pane-dec-revoke-both");
+
+      // Gone in the same step the revocation starts, before its file is unlinked.
+      const revokingOff = service.revokePaneConfig("pane-dec-revoke-off");
+      expect(service.getDecisionsBearerForToken(off.decisionsToken!)).toBeNull();
+      expect(revoked).toEqual([offPrincipal]);
+      const revokingBoth = service.revokePaneConfig("pane-dec-revoke-both");
+      expect(service.getDecisionsBearerForToken(both.decisionsToken!)).toBeNull();
+      expect(service.isValidPaneToken(both.token!)).toBe(false);
+      await Promise.all([revokingOff, revokingBoth]);
+
+      expect(revoked).toEqual([offPrincipal, bothPrincipal]);
+      expect(service.getDecisionsBearerForToken(off.decisionsToken!)).toBeNull();
+      expect(service.getDecisionsBearerForToken(both.decisionsToken!)).toBeNull();
+      expect(service.getDecisionsPrincipal("pane-dec-revoke-off")).toBeNull();
+      expect(service.isValidPaneToken(both.token!)).toBe(false);
+      await expect(fs.stat(off.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("rotates the Decisions bearer and principal on a relaunch", async () => {
+      const first = await service.preparePaneConfig({
+        paneId: "pane-dec-relaunch",
+        port: 45454,
+        tier: "off",
+        decisions: DECISIONS,
+      });
+      const firstPrincipal = service.getDecisionsPrincipal("pane-dec-relaunch");
+      const second = await service.preparePaneConfig({
+        paneId: "pane-dec-relaunch",
+        port: 45454,
+        tier: "off",
+        decisions: DECISIONS,
+      });
+
+      expect(service.getDecisionsBearerForToken(first.decisionsToken!)).toBeNull();
+      expect(service.getDecisionsBearerForToken(second.decisionsToken!)?.paneId).toBe(
+        "pane-dec-relaunch"
+      );
+      expect(service.getDecisionsPrincipal("pane-dec-relaunch")).not.toBe(firstPrincipal);
+    });
+
+    it("registers no Decisions bearer when the file can't be written", async () => {
+      let attempted = "";
+      writeControl.hooks.push(async (data) => {
+        attempted = data;
+      });
+      writeControl.error = new Error("EIO");
+      await expect(
+        service.preparePaneConfig({
+          paneId: "pane-dec-write-fail",
+          port: 45454,
+          tier: "off",
+          decisions: DECISIONS,
+        })
+      ).rejects.toThrow("EIO");
+      const bearer = bearerOf(JSON.parse(attempted).mcpServers["daintree-decisions"]);
+      expect(service.getDecisionsBearerForToken(bearer)).toBeNull();
+      expect(service.getDecisionsPrincipal("pane-dec-write-fail")).toBeNull();
+    });
+
+    it("keeps the Decisions bearer off the control surface's authorisation", async () => {
+      const prepared = await mcpPaneConfigService.preparePaneConfig({
+        paneId: "pane-dec-auth",
+        port: 45454,
+        tier: "core",
+        decisions: DECISIONS,
+      });
+      const apiKeyHash = createHash("sha256").update("Bearer api-key").digest();
+      try {
+        expect(isAuthorized(`Bearer ${prepared.token}`, apiKeyHash, null)).toBe(true);
+        expect(isAuthorized(`Bearer ${prepared.decisionsToken}`, apiKeyHash, null)).toBe(false);
+        expect(resolveTokenTier(`Bearer ${prepared.token}`, apiKeyHash, null)).toBe("core");
+      } finally {
+        await mcpPaneConfigService.revokePaneConfig("pane-dec-auth");
+      }
     });
   });
 });

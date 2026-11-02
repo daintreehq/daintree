@@ -194,23 +194,22 @@ function recordRevocation(relay: RelayBinding): void {
   publishStatus();
 }
 
-/** Where `/mcp/decisions` reads a pane's bearer and run from, and holds the listener through. */
+/**
+ * Where `/mcp/decisions` reads a pane's bearer and run from, and holds the
+ * listener through. Only a Decisions bearer (#16012) gets in: a control-surface
+ * bearer, a plugin grant, a help or API-key token is never one.
+ */
 function mcpRouteSources(running: () => DecisionsService | null): DecisionsMcpRouteSources {
   return {
-    bearerFor: (token) => {
-      if (!mcpPaneConfigService.isValidPaneToken(token)) return null;
-      const paneId = mcpPaneConfigService.getPaneIdForToken(token);
-      const principal = mcpPaneConfigService.getOwnershipPrincipalForToken(token);
-      if (paneId === null || principal === null) return null;
-      const workspaceId = mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)?.workspaceId;
-      return { paneId, principal, ...(workspaceId !== undefined ? { workspaceId } : {}) };
-    },
-    principalFor: (paneId) => mcpPaneConfigService.getOrchestratorPane(paneId)?.principalId ?? null,
+    bearerFor: (token) => mcpPaneConfigService.getDecisionsBearerForToken(token),
+    principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
     hostId: () => running()?.getSettings()?.hostId ?? null,
     getPtyClient,
-    holdListener: (id, route) => {
-      const mcp = getMcpServerServiceRef();
-      if (mcp === null) return Promise.reject(new Error("The MCP server service isn't loaded"));
+    holdListener: async (id, route) => {
+      // With the MCP server off nothing else loads its module, and the route
+      // still needs the listener.
+      const mcp =
+        getMcpServerServiceRef() ?? (await import("../McpServerService.js")).mcpServerService;
       return mcp.holdListener(id, route);
     },
   };
@@ -236,7 +235,8 @@ function watchPanes(onPane: (signal: PaneSignal) => void): () => void {
  * only once a lifetime with a relay first delivers.
  */
 const deliveryDeps: DecisionsDeliveryDeps = {
-  principalFor: (paneId) => mcpPaneConfigService.getOrchestratorPane(paneId)?.principalId ?? null,
+  // The principal the pane's questions were asked under, which a tier-off pane holds too (#16012).
+  principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
   getPtyClient: () => getPtyClient(),
   holdWakes: async () => {
     const { mcpServerService } = await import("../McpServerService.js");
@@ -903,6 +903,46 @@ export async function rotateKeys(): Promise<DecisionsRotateKeysResult> {
   const result = await devices.rotate();
   if (result.result === "rotated") publishDevicesChanged();
   return result;
+}
+
+/** How long a launch waits for `/mcp/decisions` before going ahead without it. */
+const LAUNCH_ROUTE_WAIT_MS = 5_000;
+
+/** `promise`'s value, or null once `ms` pass or if it rejects. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The running lifetime once its start has finished. Always behind the switch's
+ * transitions, never on `getSettings()` alone: a start sets the settings
+ * before its store opens and its connection is made, so a launch that came
+ * in between would find nothing pending and miss the route.
+ */
+async function startedLifetime(): Promise<DecisionsService | null> {
+  await startDecisionsIfEnabled();
+  return service?.getSettings() ? service : null;
+}
+
+/**
+ * The listener port an agent launch points `daintree-decisions` at (#16012),
+ * once this lifetime takes questions. Null while off or quitting, with no
+ * relay identity or a connection that stopped, and when the route isn't
+ * there within the wait. Panes restored at startup launch before boot's
+ * deferred start, so this starts the lifetime itself; and it waits a bounded
+ * time, so no launch hangs on a keychain prompt or a setup queued ahead.
+ */
+export async function decisionsLaunchPort(): Promise<number | null> {
+  if (shutDown || !readDecisionsSettings(store).enabled) return null;
+  const deadline = Date.now() + LAUNCH_ROUTE_WAIT_MS;
+  const running = await within(startedLifetime(), LAUNCH_ROUTE_WAIT_MS);
+  const remaining = deadline - Date.now();
+  if (running === null || shutDown || remaining <= 0) return null;
+  return within(running.questionsPort(remaining), remaining);
 }
 
 /** Boot: starts the service only if the saved setting, sanitised, is on. */

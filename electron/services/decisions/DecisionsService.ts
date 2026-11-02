@@ -157,6 +157,13 @@ export class DecisionsService {
   private questions: DecisionsQuestions | null = null;
   /** Routes closed and not yet let go of the listener; a stop waits for them. */
   private questionsClosing: Promise<void> = Promise.resolve();
+  /**
+   * A connection is loading its identity, or is about to be made once the one
+   * before it settles: the route opens, or it stops, soon.
+   */
+  private questionsPending = false;
+  /** Launches waiting on that, woken at every change to look again. */
+  private readonly questionsWaiters = new Set<() => void>();
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
   private offCommit: (() => void) | null = null;
@@ -306,6 +313,32 @@ export class DecisionsService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /**
+   * The listener port agents ask through (#16012), once this lifetime's
+   * connection has opened `/mcp/decisions`. A connection still loading its
+   * identity is waited for, up to `waitMs`. Null at once while stopped, with
+   * no connection, or with one that stopped for the lifetime.
+   */
+  async questionsPort(waitMs: number): Promise<number | null> {
+    const deadline = Date.now() + waitMs;
+    // Woken by every change, since one connection can give way to the next
+    // (a new identity) without the route ever being there in between.
+    while (this.questions === null && this.questionsPending) {
+      const left = deadline - Date.now();
+      if (left <= 0) return null;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          this.questionsWaiters.delete(done);
+          resolve();
+        };
+        const timer = setTimeout(done, left);
+        this.questionsWaiters.add(done);
+      });
+    }
+    return (await this.questions?.listenerPort()) ?? null;
   }
 
   /** A pane's state as last pushed; null while stopped, and for a pane with nothing outstanding. */
@@ -494,6 +527,7 @@ export class DecisionsService {
     const key = wanted ? relayKey : null;
     if (this.connectionKey !== key) this.dropConnection();
     if (wanted === null || key === null) {
+      this.settleQuestions();
       if (this.disposed || settings === null) return;
       if (revoked) this.setStatus({ state: "revoked" });
       else if (relay !== null && this.storeFailed) {
@@ -504,13 +538,18 @@ export class DecisionsService {
     if (this.connection) return;
     const store = this.store;
     const policy = this.policy;
-    if (!store || !policy) return;
+    if (!store || !policy) {
+      this.settleQuestions();
+      return;
+    }
     if (this.stopping.size > 0) {
       // One connection's delivery at a time: a replacement waits for the one
       // stopped before it to settle what it was typing, or its recovery would
-      // take that injection for a crashed one.
+      // take that injection for a crashed one. Launches wait for it meanwhile.
+      this.questionsPending = true;
       void this.settledConnections().then(() => {
         if (!this.disposed && this.store === store) this.reconcileConnection();
+        else if (this.connection === null) this.settleQuestions();
       });
       return;
     }
@@ -533,17 +572,23 @@ export class DecisionsService {
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.
-        if (status.state === "not-connected" || status.state === "revoked") this.closeQuestions();
+        if (status.state === "not-connected" || status.state === "revoked") {
+          this.closeQuestions();
+          this.settleQuestions();
+        }
         this.setStatus(status);
       },
       onQuestionsReady: (source) => {
-        if (this.connection !== connection || this.openQuestions === null) return;
-        this.closeQuestions();
-        try {
-          this.questions = this.openQuestions(source, this.questionsClosing);
-        } catch (error) {
-          console.warn("[Decisions] /mcp/decisions couldn't be opened:", error);
+        if (this.connection !== connection) return;
+        if (this.openQuestions !== null) {
+          this.closeQuestions();
+          try {
+            this.questions = this.openQuestions(source, this.questionsClosing);
+          } catch (error) {
+            console.warn("[Decisions] /mcp/decisions couldn't be opened:", error);
+          }
         }
+        this.settleQuestions();
       },
       onRevoked: () => {
         if (this.connection !== connection) return;
@@ -555,6 +600,7 @@ export class DecisionsService {
     });
     this.connection = connection;
     this.connectionKey = key;
+    this.questionsPending = true;
     connection.start();
   }
 
@@ -573,6 +619,7 @@ export class DecisionsService {
     this.connection = null;
     this.connectionKey = null;
     this.closeQuestions();
+    this.settleQuestions();
     const stopped = connection?.stop();
     if (!(stopped instanceof Promise)) return;
     const settling = stopped.catch(() => {}).finally(() => this.stopping.delete(settling));
@@ -597,6 +644,12 @@ export class DecisionsService {
   /** Resolves once every connection stopped so far has settled. */
   private async settledConnections(): Promise<void> {
     while (this.stopping.size > 0) await Promise.all([...this.stopping]);
+  }
+
+  /** The route opened or won't: launches waiting on it go ahead with what there is. */
+  private settleQuestions(): void {
+    this.questionsPending = false;
+    for (const wake of [...this.questionsWaiters]) wake();
   }
 
   private eraseDeps(keyFilePath: string): LocalEraseDeps {

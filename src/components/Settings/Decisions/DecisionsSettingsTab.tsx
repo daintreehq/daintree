@@ -8,6 +8,7 @@ import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
 import { DecisionsConnectionSection, setupUnfinished } from "./DecisionsConnectionSection";
 import { DecisionsDevicesSection } from "./DecisionsDevicesSection";
+import { DecisionsAgentsSection } from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
 import { DecisionsVoiceSection } from "./DecisionsVoiceSection";
@@ -113,6 +114,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onFinishSetup={askForKit}
           />
           <DecisionsDevicesSection status={status} locked={pending !== null} />
+          <DecisionsAgentsSection />
           <DecisionsQuestionsSection policy={policy} />
           <DecisionsPolicySection policy={policy} />
           <DecisionsVoiceSection />

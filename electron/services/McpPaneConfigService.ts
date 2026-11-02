@@ -31,13 +31,29 @@ const DAINTREE_MCP_TOKEN_ENV = "DAINTREE_MCP_TOKEN";
 // Plugin bearers never share the orchestration bearer's name: that one also
 // marks a help-session launch in the spawn path.
 const PLUGIN_MCP_TOKEN_ENV_PREFIX = "DAINTREE_PLUGIN_MCP_TOKEN_";
+// `/mcp/decisions` (#16011). Its own key, path and bearer name: the Decisions
+// bearer is never one the control surface or a plugin route would accept.
+const DECISIONS_SERVER_KEY = "daintree-decisions";
+const DECISIONS_MCP_PATH = "/mcp/decisions";
+const DECISIONS_MCP_TOKEN_ENV = "DAINTREE_DECISIONS_MCP_TOKEN";
 
 interface PaneRecord {
   /** Null for a format that hands the agent everything through args and env. */
   configPath: string | null;
   /** Null when the tier is "off" and the file carries plugin entries only. */
   token: string | null;
+  /** The pane's Decisions bearer; null when the launch got no Decisions entry. */
+  decisionsToken: string | null;
+  /** The launch's ownership principal, shared by both bearers; null with neither. */
+  principal: string | null;
   tier: DaintreeMcpTier;
+}
+
+/** What a Decisions bearer was minted for: the pane, its launch's principal and project. */
+export interface DecisionsPaneBearer {
+  paneId: string;
+  principal: string;
+  workspaceId: string;
 }
 
 interface TokenRecord {
@@ -84,13 +100,24 @@ export interface PreparePanePluginServers {
   consumer?: "assistant";
 }
 
+/** A launch handed `/mcp/decisions` (#16012), and the project its questions belong to. */
+export interface PreparePaneDecisions {
+  workspaceId: string;
+}
+
 export interface PreparePaneConfigParams {
   paneId: string;
   port: number;
-  /** "off" writes no Daintree entry and registers no pane token; only valid alongside plugin servers. */
+  /** "off" writes no Daintree entry and registers no pane token; only valid alongside plugin or Decisions servers. */
   tier: DaintreeMcpTier;
   /** Plugins with agent access in this project, each given its own grant and server entry. */
   plugin?: PreparePanePluginServers;
+  /**
+   * Adds the `daintree-decisions` entry with a bearer of its own, whatever the
+   * tier. That bearer authorises `/mcp/decisions` alone: the control surface
+   * and the plugin routes never accept it.
+   */
+  decisions?: PreparePaneDecisions;
   /** The launching agent's dialect; Claude's `--mcp-config` file when omitted. */
   injection?: LaunchMcpInjection;
   /** The env the agent will inherit, for formats that must carry an existing value forward. */
@@ -104,6 +131,8 @@ export interface PreparedPaneConfig {
   configPath: string | null;
   /** The Daintree orchestration bearer, or null when no Daintree entry was written. */
   token: string | null;
+  /** The Decisions bearer, or null when no Decisions entry was written. */
+  decisionsToken: string | null;
   /** Server keys of the plugin entries written, one per grant minted. */
   pluginServerKeys: string[];
   /** Args to append to the agent command, unquoted, file path already substituted. */
@@ -120,6 +149,8 @@ export interface PreparedDaintreePaneConfig extends PreparedPaneConfig {
 export class McpPaneConfigService {
   private records = new Map<string, PaneRecord>();
   private tokens = new Map<string, TokenRecord>();
+  // Kept apart from `tokens`, which the control surface's auth reads.
+  private decisionsTokens = new Map<string, DecisionsPaneBearer>();
   // Every pane this service has minted plugin grants for and not yet revoked,
   // including one whose file write failed, so `revokeAll` reaches them all.
   private grantedPanes = new Set<string>();
@@ -156,18 +187,23 @@ export class McpPaneConfigService {
 
   /**
    * Mint the pane's MCP wiring and render it in the launching agent's dialect:
-   * the Daintree orchestration entry (unless the tier is "off") and one
+   * the Daintree orchestration entry (unless the tier is "off"), one
    * Streamable HTTP entry per plugin with agent access, each with its own
-   * freshly minted grant. Formats that need a file get one, written 0600 under
-   * userData; the rest come back as args and env for the spawn.
+   * freshly minted grant, and the Decisions entry when asked for. Formats that
+   * need a file get one, written 0600 under userData; the rest come back as
+   * args and env for the spawn.
    *
-   * Returns null when the tier is "off" and no plugin grant could be minted:
-   * there is nothing to hand the agent, so nothing is written. Any grant minted
-   * here is revoked again before a failure propagates.
+   * Returns null when the tier is "off", Decisions wasn't asked for and no
+   * plugin grant could be minted: there is nothing to hand the agent, so
+   * nothing is written. Any grant minted here is revoked again before a
+   * failure propagates.
    */
   preparePaneConfig(
-    params: PreparePaneConfigParams & { plugin?: undefined }
+    params: PreparePaneConfigParams & { plugin?: undefined; decisions?: undefined }
   ): Promise<PreparedDaintreePaneConfig>;
+  preparePaneConfig(
+    params: PreparePaneConfigParams & { decisions: PreparePaneDecisions }
+  ): Promise<PreparedPaneConfig>;
   preparePaneConfig(params: PreparePaneConfigParams): Promise<PreparedPaneConfig | null>;
   preparePaneConfig(params: PreparePaneConfigParams): Promise<PreparedPaneConfig | null> {
     const prior = this.prepareChains.get(params.paneId) ?? Promise.resolve();
@@ -185,6 +221,7 @@ export class McpPaneConfigService {
     port,
     tier,
     plugin,
+    decisions,
     injection = CLAUDE_INJECTION,
     inheritedEnv = {},
     cwd,
@@ -196,7 +233,7 @@ export class McpPaneConfigService {
       throw new Error(`Invalid MCP port: ${port}`);
     }
     const pluginServerList = plugin?.servers ?? [];
-    if (tier === "off" && pluginServerList.length === 0) {
+    if (tier === "off" && pluginServerList.length === 0 && decisions === undefined) {
       throw new Error(
         'preparePaneConfig should not be called with tier "off" and no plugin servers'
       );
@@ -244,8 +281,9 @@ export class McpPaneConfigService {
     const token = tier === "off" ? null : randomUUID();
     const pluginServers = plugin ? this.mintPluginServers(paneId, port, plugin) : [];
     const pluginServerKeys = pluginServers.map((server) => server.key);
+    const decisionsToken = decisions !== undefined ? randomUUID() : null;
 
-    if (token === null && pluginServerKeys.length === 0) {
+    if (token === null && pluginServerKeys.length === 0 && decisionsToken === null) {
       this.attempts.delete(paneId);
       return null;
     }
@@ -275,6 +313,18 @@ export class McpPaneConfigService {
           ]
         : []),
       ...pluginServers,
+      // Streamable HTTP only, and no long tool timeout: `ask_human` returns
+      // once the question is stored, never waiting on the person.
+      ...(decisionsToken !== null
+        ? [
+            {
+              key: DECISIONS_SERVER_KEY,
+              url: `http://127.0.0.1:${port}${DECISIONS_MCP_PATH}`,
+              bearer: decisionsToken,
+              bearerEnvVar: DECISIONS_MCP_TOKEN_ENV,
+            },
+          ]
+        : []),
     ];
 
     let rendered: ReturnType<typeof renderLaunchMcp>;
@@ -318,12 +368,22 @@ export class McpPaneConfigService {
       this.attempts.set(paneId, attempt);
     }
 
-    this.records.set(paneId, { configPath: writtenPath, token, tier });
-    if (token !== null) {
-      this.tokens.set(token, { paneId, tier, ownershipPrincipal: randomUUID() });
+    // One principal per launch: a question asked through the Decisions bearer
+    // belongs to the same run the control bearer acts for.
+    const principal = token !== null || decisionsToken !== null ? randomUUID() : null;
+    this.records.set(paneId, { configPath: writtenPath, token, decisionsToken, principal, tier });
+    if (token !== null && principal !== null) {
+      this.tokens.set(token, { paneId, tier, ownershipPrincipal: principal });
+    }
+    if (decisions !== undefined && decisionsToken !== null && principal !== null) {
+      this.decisionsTokens.set(decisionsToken, {
+        paneId,
+        principal,
+        workspaceId: decisions.workspaceId,
+      });
     }
 
-    return { configPath: writtenPath, token, pluginServerKeys, args, env };
+    return { configPath: writtenPath, token, decisionsToken, pluginServerKeys, args, env };
   }
 
   /**
@@ -411,16 +471,12 @@ export class McpPaneConfigService {
     }
 
     this.records.delete(paneId);
-    if (record.token !== null) {
-      const tokenRecord = this.tokens.get(record.token);
-      this.tokens.delete(record.token);
-      // Same step as the bearer, before any await: from here the token no
-      // longer authenticates, and nothing it created may still be driven
-      // through the ownership it earned (#12487).
-      if (tokenRecord !== undefined) {
-        this.notifyOwnershipPrincipalRevoked(tokenRecord.ownershipPrincipal);
-      }
-    }
+    if (record.token !== null) this.tokens.delete(record.token);
+    if (record.decisionsToken !== null) this.decisionsTokens.delete(record.decisionsToken);
+    // Same step as the bearers, before any await: from here neither token
+    // authenticates, and nothing they created may still be driven through the
+    // ownership they earned (#12487).
+    if (record.principal !== null) this.notifyOwnershipPrincipalRevoked(record.principal);
 
     try {
       // A launch without a file still clears the pane's path, in case an
@@ -506,6 +562,23 @@ export class McpPaneConfigService {
   getPaneIdForToken(token: string): string | null {
     if (!token) return null;
     return this.tokens.get(token)?.paneId ?? null;
+  }
+
+  /**
+   * The pane a Decisions bearer was minted for, for `/mcp/decisions` alone.
+   * Null for any other token, a control bearer included, and once revoked.
+   */
+  getDecisionsBearerForToken(token: string): DecisionsPaneBearer | null {
+    if (!token) return null;
+    const bearer = this.decisionsTokens.get(token);
+    return bearer === undefined ? null : { ...bearer };
+  }
+
+  /** The principal of the pane's current Decisions bearer; null while it holds none. */
+  getDecisionsPrincipal(paneId: string): string | null {
+    const token = this.records.get(paneId)?.decisionsToken;
+    if (!token) return null;
+    return this.decisionsTokens.get(token)?.principal ?? null;
   }
 
   /**
