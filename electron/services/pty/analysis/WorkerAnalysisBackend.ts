@@ -109,6 +109,8 @@ export interface AnalysisPoolHost {
   ): Promise<AnalysisRequestResult>;
   /** With `backend`, only while it is still the one registered under the id. */
   unregister(terminalId: string, backend?: WorkerAnalysisBackend): void;
+  /** Whether `backend` is the one registered under the id. */
+  owns?(terminalId: string, backend: WorkerAnalysisBackend): boolean;
 }
 
 export class WorkerAnalysisBackend implements AnalysisBackend {
@@ -599,7 +601,9 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     if (this.releaseTimer !== undefined) clearTimeout(this.releaseTimer);
     this.releaseTimer = undefined;
     this.settleCaptures("closed");
-    if (!this.detached) {
+    // A terminal registered under the same id since has replaced this
+    // session with its own, which a `free` would now delete.
+    if (!this.detached && (this.pool.owns?.(this.spec.terminalId, this) ?? true)) {
       this.pool.post(this.spec.terminalId, {
         type: "free",
         terminalId: this.spec.terminalId,

@@ -209,6 +209,10 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     });
   }
 
+  owns(terminalId: string, backend: WorkerAnalysisBackend): boolean {
+    return this.backends.get(terminalId) === backend;
+  }
+
   /**
    * With `backend`, only while it is still the one registered: a terminal
    * replaced under the same id has registered its own.
