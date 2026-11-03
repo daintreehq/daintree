@@ -18,7 +18,7 @@ import {
 import { describeConnectResult } from "./relayIdentityCopy";
 import { DecisionsRelaySetup } from "./DecisionsRelaySetup";
 import { DecisionsDisconnectDialog } from "./DecisionsDisconnectDialog";
-import { DecisionsRelayDeploy } from "./DecisionsRelayDeploy";
+import { DecisionsRelayDeploy, DecisionsRelayDeployOutcome } from "./DecisionsRelayDeploy";
 import { DecisionsRelayUpdate } from "./DecisionsRelayUpdate";
 import { canUpdateRelayAt, useRelayUpdateRun } from "./relayUpdate";
 import { describeRelayUpdateOutcome, relayVersionAfter } from "./relayUpdateCopy";
@@ -173,7 +173,15 @@ export function DecisionsConnectionSection({
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   /** The deployed relay's URL as Daintree put it in the field, until the person edits it. */
   const autoFilled = useRef<string | null>(null);
-  const busy = locked || identity.pending !== null;
+  const deploy = status.relayDeploy;
+  // Main is claiming the relay a guided deploy created (#16200): nothing here starts meanwhile.
+  const deployClaiming = deploy?.claim?.state === "claiming";
+  // Its claim made it this computer's relay, so how that went stays beside it.
+  const deployClaimedHere =
+    deploy !== undefined &&
+    deploy.claim?.state === "claimed" &&
+    deploy.claim.origin === savedOrigin;
+  const busy = locked || identity.pending !== null || deployClaiming;
 
   // The update whose end this mount has checked the relay for; a reset drops that check.
   const recheckedFor = useRef<number | null>(null);
@@ -274,7 +282,7 @@ export function DecisionsConnectionSection({
       : null;
   const announcement = relay.checking
     ? "Checking the relay…"
-    : identity.pending === "claim"
+    : identity.pending === "claim" || deployClaiming
       ? "Claiming the relay…"
       : identity.pending === "restore"
         ? "Restoring the identity…"
@@ -386,6 +394,14 @@ export function DecisionsConnectionSection({
           }
           description={detail}
         />
+        {deployClaimedHere && (
+          <DecisionsRelayDeployOutcome
+            deploy={deploy}
+            disabled={busy}
+            onUseRelay={checkDeployedRelay}
+            onClaimSettled={(next) => onChanged?.(next)}
+          />
+        )}
         {savedOrigin === null ? (
           <SettingsRow
             id="decisions-relay-url"
@@ -546,8 +562,9 @@ export function DecisionsConnectionSection({
         <DecisionsRelayDeploy
           disabled={busy || relay.checking}
           onClose={onClose}
-          deploy={status.relayDeploy}
+          deploy={deploy}
           onUseRelay={checkDeployedRelay}
+          onClaimSettled={(next) => onChanged?.(next)}
         />
       )}
       {(savedOrigin !== null || keysStored || removeTarget !== null) && (

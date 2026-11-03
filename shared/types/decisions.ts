@@ -219,7 +219,27 @@ export interface DecisionsRelayDeploy {
   holdsClaimSecret?: true;
   /** For `failed` or `interrupted`: what went wrong, with no secret in it. */
   error?: string;
+  /**
+   * Daintree's own claim of the relay with the secret the deploy handed over
+   * (#16200), started by main when the deploy completes, or again from
+   * Settings after one that didn't save. Distinct from `claimState`, which is
+   * what the CLI saw before it.
+   */
+  claim?: DecisionsRelayDeployClaim;
 }
+
+/**
+ * Why a claim of a deployed relay didn't save: what the claim observed, or a
+ * message of main's own when it couldn't make the claim at all.
+ */
+export type DecisionsRelayDeployClaimFailure =
+  | Exclude<DecisionsConnectResult, { result: "saved" }>
+  | { result: "error"; message: string };
+
+export type DecisionsRelayDeployClaim =
+  | { state: "claiming" }
+  | { state: "claimed"; origin: string }
+  | { state: "failed"; failure: DecisionsRelayDeployClaimFailure };
 
 /**
  * A guided deploy main is listening for (#16199): the pane runs the CLI with

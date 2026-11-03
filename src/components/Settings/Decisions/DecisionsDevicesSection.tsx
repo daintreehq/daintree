@@ -16,15 +16,10 @@ import { DecisionsRevokeDeviceDialog } from "./DecisionsRevokeDeviceDialog";
 import { deviceRoleLabel } from "./devicesCopy";
 import { useDecisionsDevices } from "./useDecisionsDevices";
 import { useDecisionsKeyActions } from "./useDecisionsKeyActions";
+import { currentPairButton, DEVICES_SECTION_ID, PAIR_BUTTON_ATTR } from "./pairPhoneLanding";
 
-const SECTION_ID = "decisions-devices";
-const PAIR_BUTTON_ATTR = "data-decisions-pair-phone";
+const SECTION_ID = DEVICES_SECTION_ID;
 const ROTATE_BUTTON_ATTR = "data-decisions-rotate-keys";
-
-/** The Pair a phone button on screen now: the empty row's, or the header's once a device is listed. */
-function currentPairButton(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`#${SECTION_ID} [${PAIR_BUTTON_ATTR}]`);
-}
 
 /** Where focus goes after a revocation: the device's row may be gone, the key row stays. */
 function currentRotateButton(): HTMLElement | null {

@@ -1,12 +1,27 @@
-import type { DecisionsRelayDeploy } from "@shared/types/decisions";
+import type { DecisionsRelayDeploy, DecisionsRelayDeployClaim } from "@shared/types/decisions";
+import { hostOf } from "./relayCheckCopy";
+import { describeConnectResult } from "./relayIdentityCopy";
+
+/**
+ * What the outcome row offers next: checking a relay the deploy left
+ * unclaimed, finishing a claim main started with the secret it still holds
+ * (with weaker key storage, when that is all there was), or pairing a phone
+ * once the relay is this computer's.
+ */
+export type RelayDeployNext = "use" | "finish-claim" | "accept-weak" | "pair";
 
 export interface RelayDeployDescription {
   label: string;
   detail: string;
   severity?: "warning" | "error";
-  /** The relay to check and claim, when the deploy reported one. */
+  /** The relay to check and claim, when the deploy reported one and nothing claimed it here. */
   url?: string;
+  next?: RelayDeployNext;
 }
+
+/** What agents get once the relay is claimed, true of launches only (#16012). */
+export const AGENTS_AFTER_CLAIM =
+  "Agents launched from now on get ask_human. Agents already running get it at their next launch.";
 
 /** A reason from the CLI or main as one sentence, however it ended. */
 function sentence(text: string): string {
@@ -24,13 +39,62 @@ function claimNote(deploy: DecisionsRelayDeploy): string {
   return "Daintree received no claim secret for it.";
 }
 
+/** Main's claim of a completed deploy's relay (#16200), from start to end. */
+function describeClaim(
+  deploy: DecisionsRelayDeploy,
+  url: string,
+  claim: DecisionsRelayDeployClaim
+): RelayDeployDescription {
+  const host = hostOf(url);
+  switch (claim.state) {
+    case "claiming":
+      return {
+        label: "Claiming the deployed relay",
+        detail: `Daintree is checking ${host} and claiming it with this computer's Decisions identity.`,
+      };
+    case "claimed":
+      return {
+        label: "Relay deployed and claimed",
+        detail: `${hostOf(claim.origin)} is this computer's relay now. ${AGENTS_AFTER_CLAIM} Pair a phone to answer their questions.`,
+        next: "pair",
+      };
+    case "failed": {
+      const { failure } = claim;
+      const observed =
+        failure.result === "error"
+          ? {
+              severity: "error" as const,
+              label: "Couldn't claim the deployed relay",
+              detail: sentence(failure.message),
+            }
+          : describeConnectResult(failure);
+      const label = observed?.label ?? "Couldn't claim the deployed relay";
+      const severity = observed?.severity === "error" ? "error" : "warning";
+      const reason = observed ? `${observed.detail} ` : "";
+      if (!deploy.holdsClaimSecret) {
+        return { label, detail: `${reason}${claimNote(deploy)}`, severity, url, next: "use" };
+      }
+      const weak = failure.result === "key-storage" && failure.kind === "weak-storage-unconfirmed";
+      return {
+        label,
+        detail: weak
+          ? `${reason}A fixed key keeps the keys only from someone who can't read this computer's files. Daintree holds the deploy's claim secret in memory until you quit, so the claim can finish with it.`
+          : `${reason}Daintree holds the deploy's claim secret in memory until you quit, so the claim can be finished with it.`,
+        severity,
+        next: weak ? "accept-weak" : "finish-claim",
+      };
+    }
+  }
+}
+
 /**
- * The guided deploy, as its CLI reported it (#16199). Only what was observed:
- * a URL is offered for checking whatever the outcome, since a deploy that
+ * The guided deploy, as its CLI reported it (#16199), and main's claim of the
+ * relay it completed (#16200). Only what was observed: a URL nothing claimed
+ * here is offered for checking whatever the outcome, since a deploy that
  * stopped late may still have created the Worker.
  */
 export function describeRelayDeploy(deploy: DecisionsRelayDeploy): RelayDeployDescription {
-  const url = deploy.url !== undefined ? { url: deploy.url } : {};
+  const url = deploy.url !== undefined ? { url: deploy.url, next: "use" as const } : {};
   switch (deploy.state) {
     case "waiting":
       return {
@@ -45,27 +109,33 @@ export function describeRelayDeploy(deploy: DecisionsRelayDeploy): RelayDeployDe
           "Answer its questions in its terminal. Nothing is created in Cloudflare until you confirm the summary there.",
       };
     case "completed":
-      return deploy.url !== undefined
-        ? { label: "Relay deployed", detail: `${deploy.url}. ${claimNote(deploy)}`, ...url }
-        : { label: "Deploy finished", detail: "The CLI reported no Worker URL." };
-    case "cancelled":
+      if (deploy.url === undefined) {
+        return { label: "Deploy finished", detail: "The CLI reported no Worker URL." };
+      }
+      return deploy.claim
+        ? describeClaim(deploy, deploy.url, deploy.claim)
+        : { label: "Relay deployed", detail: `${deploy.url}. ${claimNote(deploy)}`, ...url };
+    case "cancelled": {
+      // Connection stays as it was: nothing is claimed for a deploy that didn't finish.
+      const reason = deploy.error !== undefined ? `${sentence(deploy.error)} ` : "";
       return deploy.url !== undefined
         ? {
             label: "Deploy cancelled",
-            detail: `It stopped after creating ${deploy.url}. ${claimNote(deploy)}`,
+            detail: `${reason}It stopped after creating ${deploy.url}, so Daintree didn't claim it. ${claimNote(deploy)}`,
             severity: "warning",
             ...url,
           }
         : {
             label: "Deploy cancelled",
-            detail: "It stopped before creating the Worker.",
+            detail: `${reason}It stopped before creating the Worker.`,
           };
+    }
     case "failed": {
       const reason = sentence(deploy.error ?? "The CLI gave no reason");
       return deploy.url !== undefined
         ? {
             label: "Deploy failed",
-            detail: `${reason} It had created ${deploy.url}. ${claimNote(deploy)}`,
+            detail: `${reason} It had created ${deploy.url}, so Daintree didn't claim it. ${claimNote(deploy)}`,
             severity: "error",
             ...url,
           }
