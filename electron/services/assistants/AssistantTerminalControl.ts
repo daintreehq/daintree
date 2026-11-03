@@ -487,6 +487,17 @@ export class AssistantTerminalControl {
   }> {
     this.requireGeneration(caller, target, request.generation);
     const inputOwner = inputOwnerOf(caller);
+    const readScreen = async (lines: number) => {
+      const snapshot = await readTailSnapshot(
+        (options) => this.deps.serializedState(target.terminalId, options),
+        lines
+      );
+      return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
+    };
+    // The window read after the keys, read before them too (#16209), and
+    // ahead of the record, so the checks below see it as it is after the read.
+    const before = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
+    this.requireGeneration(caller, target, request.generation);
     let record = await this.deps.getTerminal(target.terminalId);
     if (!record) {
       throw new AssistantTargetError(
@@ -495,15 +506,6 @@ export class AssistantTerminalControl {
       );
     }
     this.requireKeysAdmitted(target, record, inputOwner);
-    const readScreen = async (lines: number) => {
-      const snapshot = await readTailSnapshot(
-        (options) => this.deps.serializedState(target.terminalId, options),
-        lines
-      );
-      return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
-    };
-    // The window read after the keys, read before them too (#16209).
-    const before = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
     let keys = request.keys;
     if (request.choose !== undefined) {
       const plan = planChoice((await readScreen(CHOOSE_SCREEN_LINES)) ?? "", request.choose);
@@ -521,16 +523,18 @@ export class AssistantTerminalControl {
     // The reads were async: the run must still be the one the caller named,
     // and nobody may have typed since, or the Enter would submit their draft.
     this.requireGeneration(caller, target, request.generation);
-    const fresh = await this.deps.getTerminal(target.terminalId);
-    if (!fresh) {
-      throw new AssistantTargetError(
-        ASSISTANT_TARGET_REFUSALS.notFound,
-        `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was pressed.`
-      );
+    if (request.choose !== undefined) {
+      const fresh = await this.deps.getTerminal(target.terminalId);
+      if (!fresh) {
+        throw new AssistantTargetError(
+          ASSISTANT_TARGET_REFUSALS.notFound,
+          `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was pressed.`
+        );
+      }
+      this.requireKeysAdmitted(target, fresh, inputOwner);
+      this.requireGeneration(caller, target, request.generation);
+      record = fresh;
     }
-    this.requireKeysAdmitted(target, fresh, inputOwner);
-    this.requireGeneration(caller, target, request.generation);
-    record = fresh;
     // Read before the first key, never after one: anyone else's input since
     // stops the rest, which our own keys stamping the record no longer hide.
     const foreignBefore = foreignTypedInputAt(record, inputOwner);

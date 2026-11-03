@@ -223,6 +223,30 @@ describe("ActivityMonitor waiting-reason re-read (#16093)", () => {
     expect(reasonUpdates(onStateChange)).toEqual(["prompt"]);
   });
 
+  it("reads a select dialog drawn after the settle, with no input row in view (#16209)", () => {
+    const { monitor, onStateChange, show } = settleOn("reread-dialog", PROMPT_SCREEN, "prompt");
+
+    monitor.onData("dialog");
+    show([
+      "● Refactoring the parser.",
+      "",
+      "Want to autocompact at 400k tokens instead? Your model doesn't change. Switch back any",
+      "time with /autocompact.",
+      "",
+      "❯ Keep auto (1m tokens)",
+      "  Autocompact at ‹ 400k › tokens",
+      "↑/↓ choose · ←/→ change size · enter confirm · esc not now",
+    ]);
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+
+    // Dismissed, the empty input row is back and the wait is a prompt again.
+    monitor.onData("\x1b[2J redraw");
+    show(PROMPT_SCREEN);
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual(["approval", "prompt"]);
+  });
+
   it("changes nothing while the input row holds a draft, and reads it once emptied", () => {
     const { monitor, onStateChange, show } = settleOn("reread-draft", LIMIT_SCREEN, "error");
 

@@ -694,6 +694,9 @@ describe("viewless actions", () => {
         "t-1",
         "ls",
         receipt.submissionToken,
+        undefined,
+        undefined,
+        "no-choice-dialog",
       ]);
     });
 

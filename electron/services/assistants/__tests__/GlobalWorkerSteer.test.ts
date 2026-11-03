@@ -794,8 +794,9 @@ describe("GlobalWorkerSteer (#14551)", () => {
   it("quotes no screen when the run was replaced while it was being read", async () => {
     fake.record = atPrompt({ waitingReason: "approval" });
     fake.screen = "a successor's screen";
+    // Only the read after the key: the one before it (#16209) is still this run's.
     duringRead = () => {
-      fake.generation = 5;
+      if (writes.length > 0) fake.generation = 5;
     };
 
     const result = await steer.keys(target(), { keys: ["Enter"] });

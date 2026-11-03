@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  endsOnFooteredChoice,
   listChoices,
   parseChoiceList,
   planChoice,
@@ -496,5 +497,58 @@ describe("the question a list asks", () => {
     expect(questionOf(planChoice(trust(true, "~/web"), "Yes, I trust this folder"))).not.toBe(
       before
     );
+  });
+});
+
+describe("endsOnFooteredChoice (#16209)", () => {
+  const FOOTER = [/^\s*↑\/↓\s.*\benter\s+confirm\b/i];
+  const DIALOG = [
+    "Want to autocompact at 400k tokens instead? Your model doesn't change. Switch back any",
+    "time with /autocompact.",
+    "",
+    "❯ Keep auto (1m tokens)",
+    "  Autocompact at ‹ 400k › tokens",
+    "↑/↓ choose · ←/→ change size · enter confirm · esc not now",
+  ];
+
+  it("reads an unnumbered list closed by its CLI's footer as a dialog", () => {
+    expect(endsOnFooteredChoice(DIALOG, FOOTER)).toBe(true);
+    expect(endsOnFooteredChoice([...DIALOG, "", ""], FOOTER)).toBe(true);
+  });
+
+  it("needs a footer pattern to match at all", () => {
+    expect(endsOnFooteredChoice(DIALOG, [])).toBe(false);
+  });
+
+  it("leaves the numbered parser as strict as it was", () => {
+    expect(parseChoiceList(DIALOG.join("\n"))).toBeNull();
+  });
+
+  it("needs a highlighted row in the block the footer closes", () => {
+    const unhighlighted = DIALOG.map((row) => row.replace("❯", " "));
+    expect(endsOnFooteredChoice(unhighlighted, FOOTER)).toBe(false);
+    // The highlight above a blank row belongs to something else.
+    expect(
+      endsOnFooteredChoice(["❯ Keep auto", "", "↑/↓ choose · enter confirm"], FOOTER)
+    ).toBe(false);
+  });
+
+  it("never counts a footer that isn't the last row drawn", () => {
+    const composer = "─".repeat(40);
+    expect(endsOnFooteredChoice([...DIALOG, "", composer, "❯ ", composer], FOOTER)).toBe(false);
+  });
+
+  it("never counts a block that holds a composer's rule", () => {
+    const rule = "─".repeat(40);
+    expect(endsOnFooteredChoice([rule, "❯ draft", rule, DIALOG[5]!], FOOTER)).toBe(false);
+  });
+
+  it("never counts prose that quotes the footer's words", () => {
+    expect(
+      endsOnFooteredChoice(
+        ["❯ Tell me about it", "The dialog says ↑/↓ choose · enter confirm at the bottom."],
+        FOOTER
+      )
+    ).toBe(false);
   });
 });
