@@ -193,11 +193,9 @@ export const theme: BuiltInThemeSource = {
     "overlay-hover": "rgba(50,46,38,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(50,46,38,0.055)",
-    // The keyboard-current row in palettes and menus (overlay-highlight derives
-    // from this). Those rows sit on white popovers, where there is nothing
-    // lighter to elevate to, so the row steps DOWN into sand. #F6F0E7 was
-    // 1.13:1 against the white and easy to lose mid-list; this is 1.24:1, the
-    // weight light IDE quick-pick rows carry.
+    // Opaque elevate-to-select plane (armed toolbar controls, settings scope).
+    // Over white there is nothing lighter to elevate to, so the plane steps
+    // DOWN into sand, 1.24:1 against the white.
     "overlay-raised": "#EEE6D8",
     // Forge chips and glyphs in resting chrome. The engine defaults are
     // GitHub's brand hexes (#176E31, #CF222E, #7544CC): a fourth green and a

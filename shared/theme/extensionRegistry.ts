@@ -257,9 +257,9 @@ export const EXTENSION_KEY_REGISTRY = {
   "sidebar-card-shadow": OPTIONAL,
   "sidebar-hover-bg": SIDEBAR_HOVER,
   // The row you are on inside the sidebar (the hosts section's current host,
-  // list-detail selections on the chrome). Falls back to overlay-highlight;
-  // a light theme whose highlight plane lands on its own sidebar colour names
-  // the lift its sidebar already selects with.
+  // list-detail selections on the chrome). Falls back to overlay-highlight,
+  // which no built-in theme overrides here: a theme that names it owns the
+  // sidebar's selected-row step itself.
   "sidebar-row-highlight-bg": OPTIONAL,
 
   // Toolbar — toolbar-control-armed-shadow is polarity-conditional. The CSS

@@ -69,10 +69,9 @@ export const LIST_ROW_HOVER_CLASS =
  *
  * An outline, not a fill. The row under a right-click is usually also the row
  * under the pointer and often the selection, so a fill tier would have to sit
- * somewhere on a ladder that already holds hover and selection — and on light
- * themes there is no rung left: `overlay-raised` and `overlay-highlight` are
- * the same colour, so a raised menu target was indistinguishable from the
- * selection. A ring composes with either fill instead of competing with it,
+ * somewhere on a ladder that already holds hover and selection, and a raised
+ * menu target used to be indistinguishable from the selection on light themes,
+ * where the highlight was the raised plane. A ring composes with either fill instead of competing with it,
  * which is also how Finder marks a context-menu target. Neutral, because the
  * accent in a list belongs to keyboard focus.
  *
