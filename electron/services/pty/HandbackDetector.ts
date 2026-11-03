@@ -111,6 +111,11 @@ function isEchoedInstruction(text: string): boolean {
 const HYPHEN_ROW_BREAK_RE =
   /(?<=[A-Za-z0-9])-[ \t\u2500-\u259f|]*\r?\n[ \t\u2500-\u259f\u23bf\u23fa|>›❯•●◦·]*/gu;
 
+/** Rendered rows with every row broken at a hyphen joined back, as the detector reads them. */
+export function rejoinHyphenRowBreaks(text: string): string {
+  return text.replace(HYPHEN_ROW_BREAK_RE, "-");
+}
+
 function capMessage(message: string): HandbackMatch {
   if (message.length === 0) return { message: null, truncated: false };
   if (message.length <= HANDBACK_MESSAGE_MAX_CHARS) return { message, truncated: false };
@@ -140,13 +145,16 @@ interface Opening {
 }
 
 /**
- * Every opening marker for `code` in `text`, in position order. A scheduled
- * run's request (#15982) also looks for the `needs-you` form; the two share
- * the closing marker, and neither can start inside the other.
+ * Every opening marker for `code` in `text`, in position order, of either
+ * form: every request is offered both (#15982, #16190), and the code is fresh,
+ * so either one carrying it is the agent's answer. The two share the closing
+ * marker, and neither can start inside the other.
  */
-function openingsOf(text: string, code: string, offersNeedsYou: boolean): Opening[] {
-  const forms: Array<Omit<Opening, "at">> = [{ marker: handbackStartMarker(code), report: "done" }];
-  if (offersNeedsYou) forms.push({ marker: handbackNeedsYouMarker(code), report: "needs-you" });
+function openingsOf(text: string, code: string): Opening[] {
+  const forms: Array<Omit<Opening, "at">> = [
+    { marker: handbackStartMarker(code), report: "done" },
+    { marker: handbackNeedsYouMarker(code), report: "needs-you" },
+  ];
   const openings: Opening[] = [];
   for (const form of forms) {
     for (
@@ -167,13 +175,12 @@ function openingsOf(text: string, code: string, offersNeedsYou: boolean): Openin
 function scanHandback(
   input: string,
   code: string,
-  rendered: boolean,
-  offersNeedsYou = false
+  rendered: boolean
 ): { match: HandbackMatch | null; report: HandbackReport; statusLine: boolean } {
   if (!input) return { match: null, report: "done", statusLine: false };
-  const text = rendered ? input.replace(HYPHEN_ROW_BREAK_RE, "-") : input;
+  const text = rendered ? rejoinHyphenRowBreaks(input) : input;
   const end = handbackEndMarker(code);
-  const openings = openingsOf(text, code, offersNeedsYou);
+  const openings = openingsOf(text, code);
 
   let statusLine = false;
   const captures: Array<{ body: string; report: HandbackReport }> = [];
@@ -247,11 +254,11 @@ export function rawHandbackText(semanticBuffer: readonly string[]): string {
 export interface HandbackHit {
   handback: TerminalHandback;
   code: string;
-  /** Which marker the agent printed; always `done` for a request that offered no other. */
+  /** Which marker the agent printed, as `handback.report` also says. */
   report: HandbackReport;
   /**
-   * The request carried the instruction that offers `needs-you`: a scheduled
-   * run's launch prompt (#15982) or a prompt to an armed terminal (#16171).
+   * The request reports to Main's run consumers: a scheduled run's launch
+   * prompt (#15982) or a prompt to an armed terminal (#16171).
    */
   run: boolean;
 }
@@ -268,7 +275,13 @@ export function keepFirstObservation(
   next: TerminalHandback
 ): TerminalHandback {
   if (previous === undefined || previous.submissionToken !== next.submissionToken) return next;
-  if (previous.message === next.message && previous.truncated === next.truncated) return previous;
+  if (
+    previous.message === next.message &&
+    previous.truncated === next.truncated &&
+    previous.report === next.report
+  ) {
+    return previous;
+  }
   return { ...next, observedAt: Math.min(previous.observedAt, next.observedAt) };
 }
 
@@ -304,7 +317,7 @@ export function findHandback(
     for (const request of [...requests].reverse()) {
       if (!source.rendered && statusLineOnly.has(request.code)) continue;
       const run = request.instruction === "run";
-      const { match, report, statusLine } = scanHandback(text, request.code, source.rendered, run);
+      const { match, report, statusLine } = scanHandback(text, request.code, source.rendered);
       if (!match) {
         if (source.rendered && statusLine) statusLineOnly.add(request.code);
         continue;
@@ -315,6 +328,7 @@ export function findHandback(
         run,
         handback: {
           message: match.message,
+          report,
           observedAt,
           ...(request.submissionToken !== undefined
             ? { submissionToken: request.submissionToken }

@@ -5,7 +5,11 @@ import {
   LAST_OUTPUT_CHANGE_AT_DESCRIPTION,
   LAST_TYPED_INPUT_AT_DESCRIPTION,
 } from "@shared/types/terminalStatus";
-import { HANDBACK_MESSAGE_DESCRIPTION, LAST_HANDBACK_DESCRIPTION } from "@shared/types/handback";
+import {
+  HANDBACK_MESSAGE_DESCRIPTION,
+  HANDBACK_REPORTS,
+  LAST_HANDBACK_DESCRIPTION,
+} from "@shared/types/handback";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type TerminalLastMessageResult,
@@ -546,6 +550,7 @@ export const TerminalSubmissionRecordSchema = z.object({
 /** Wire shape of `TerminalHandback` (#12488). */
 const TerminalHandbackSchema = z.object({
   message: z.string().nullable().describe(HANDBACK_MESSAGE_DESCRIPTION),
+  report: z.enum(HANDBACK_REPORTS).optional(),
   observedAt: z.number(),
   submissionToken: z.string().optional(),
   truncated: z.boolean(),

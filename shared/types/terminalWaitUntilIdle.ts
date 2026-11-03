@@ -1,6 +1,6 @@
 import type { WaitingReason } from "./agent.js";
 import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "./terminalStatus.js";
-import { LAST_HANDBACK_DESCRIPTION, type TerminalHandback } from "./handback.js";
+import { HANDBACK_REPORTS, LAST_HANDBACK_DESCRIPTION, type TerminalHandback } from "./handback.js";
 
 /**
  * Default wait is a bounded long-poll, not an open-ended block. A tool call
@@ -89,6 +89,7 @@ const LAST_HANDBACK_OUTPUT_SCHEMA: Record<string, unknown> = {
   description: LAST_HANDBACK_DESCRIPTION,
   properties: {
     message: { type: ["string", "null"] },
+    report: { enum: [...HANDBACK_REPORTS] },
     observedAt: { type: "number" },
     submissionToken: { type: "string" },
     truncated: { type: "boolean" },

@@ -476,6 +476,8 @@ describe("agent.launch with no frontend", () => {
     const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
     // The spawn still carries the instruction; only the record goes without it.
     expect(spawned(invoke).command).toContain("DAINTREE-DONE-");
+    // Any handback launch offers needs-you too, not only a scheduled run's (#16190).
+    expect(spawned(invoke).command).toContain("DAINTREE-NEEDS-YOU-");
     // The prompt is the run's first, so none of its sends is offered (#15521).
     expect(spawned(invoke).hasFirstPrompt).toBe(true);
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);

@@ -754,6 +754,7 @@ describe("viewless actions", () => {
       const [, , submitArgs] = invoke.mock.calls[0];
       expect(submitArgs[1]).toMatch(/^go\n\n/);
       expect(submitArgs[3]).toMatch(/^[a-z0-9]{6}$/);
+      expect(submitArgs[1]).toContain(`DAINTREE-NEEDS-YOU-${submitArgs[3]}`);
     });
 
     it("refuses an exited or trashed terminal", async () => {

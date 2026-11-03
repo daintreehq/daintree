@@ -1741,9 +1741,11 @@ describe("terminal.sendCommand handback (#12488)", () => {
       stringField(first, "submissionToken"),
       code,
     ]);
-    expect(String(calls[0]?.[1]).endsWith(`DAINTREE-DONE-${code}: <summary> END-${code}`)).toBe(
-      true
-    );
+    // Both markers are offered, needs-you last (#16190).
+    expect(String(calls[0]?.[1])).toContain(`DAINTREE-DONE-${code}: <summary> END-${code}`);
+    expect(
+      String(calls[0]?.[1]).endsWith(`DAINTREE-NEEDS-YOU-${code}: <summary> END-${code}`)
+    ).toBe(true);
     // A second send mints its own code.
     expect(calls[1]?.[3]).not.toBe(code);
     // The caller never sees the code or the instruction.

@@ -5,6 +5,7 @@ import {
   HOST_WATCH_LOST_REASONS,
   HOST_WATCH_STATUSES,
 } from "../../../shared/types/hostControl.js";
+import { HANDBACK_REPORTS } from "../../../shared/types/handback.js";
 import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
 import { HOST_BRING_BACK_STATUSES, HOST_WAKE_RESULTS } from "../../../shared/types/hostWake.js";
 import {
@@ -77,15 +78,16 @@ function projectLastMessage(result: unknown): Record<string, unknown> {
 }
 
 /**
- * A handback reduced to its shape (#12488): the marker was seen, when, for which
- * submission, and how long the message was — never the message, which is text
- * the agent wrote.
+ * A handback reduced to its shape (#12488): the marker was seen, which form it
+ * took, when, for which submission, and how long the message was — never the
+ * message, which is text the agent wrote.
  */
 function reduceHandback(value: unknown): unknown {
   const handback = asRecord(value);
   if (handback === null) return null;
   return {
     messageChars: typeof handback.message === "string" ? handback.message.length : null,
+    report: HANDBACK_REPORTS.find((report) => report === handback.report),
     observedAt: typeof handback.observedAt === "number" ? handback.observedAt : null,
     submissionToken:
       typeof handback.submissionToken === "string" ? handback.submissionToken : undefined,

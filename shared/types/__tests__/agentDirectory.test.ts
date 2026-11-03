@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentDirectoryLiveEntrySchema,
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_LABEL_MAX,
   cutAgentLabel,
@@ -96,5 +97,27 @@ describe("cutAgentLabel", () => {
     expect(cutAgentLabel("y".repeat(500))?.length).toBe(AGENT_DIRECTORY_LABEL_MAX);
     expect(cutAgentLabel("   ")).toBeNull();
     expect(cutAgentLabel(undefined)).toBeNull();
+  });
+});
+
+describe("AgentDirectoryLiveEntrySchema handback (#16190)", () => {
+  it("takes the marker's report beside its time, and an older host's entry without one", () => {
+    const withReport = { ...entry(0), handback: { observedAt: 5, report: "needs-you" } };
+    expect(AgentDirectoryLiveEntrySchema.parse(withReport).handback).toEqual({
+      observedAt: 5,
+      report: "needs-you",
+    });
+    const older = { ...entry(0), handback: { observedAt: 5 } };
+    expect(AgentDirectoryLiveEntrySchema.parse(older).handback).toEqual({ observedAt: 5 });
+  });
+
+  it("refuses a report that is neither marker, and drops a summary a host sent", () => {
+    const unknown = { ...entry(0), handback: { observedAt: 5, report: "approve" } };
+    expect(AgentDirectoryLiveEntrySchema.safeParse(unknown).success).toBe(false);
+    const withText = { ...entry(0), handback: { observedAt: 5, report: "done", message: "x" } };
+    expect(AgentDirectoryLiveEntrySchema.parse(withText).handback).toEqual({
+      observedAt: 5,
+      report: "done",
+    });
   });
 });

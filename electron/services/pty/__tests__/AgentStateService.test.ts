@@ -1405,11 +1405,36 @@ describe("AgentStateService handback detection (#12488)", () => {
 
     const expected = {
       message: "fixed the race in the retry loop",
+      report: "done",
       observedAt: terminal.lastStateChange,
       truncated: false,
     };
     expect(payloads[0]?.lastHandback).toEqual(expected);
     expect(terminal.lastHandback).toEqual(expected);
+  });
+
+  it("publishes a needs-you marker on an ordinary request, with no report to the runs (#16190)", () => {
+    const service = new AgentStateService();
+    const terminal = askedTerminal([
+      "⏺ Pushed.",
+      `  DAINTREE-NEEDS-YOU-${CODE}: approve the deployment END-${CODE}`,
+      "> ",
+    ]);
+    const payloads = capturePayloads();
+    const reports: unknown[] = [];
+    events.on("agent:run-handback-observed", (payload) => reports.push(payload));
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    const expected = {
+      message: "approve the deployment",
+      report: "needs-you",
+      observedAt: terminal.lastStateChange,
+      truncated: false,
+    };
+    expect(payloads[0]?.lastHandback).toEqual(expected);
+    expect(terminal.lastHandback).toEqual(expected);
+    expect(reports).toEqual([]);
   });
 
   it("reports a scheduled run's launch marker to Main with its incarnation (#15982)", () => {
@@ -1493,7 +1518,12 @@ describe("AgentStateService handback detection (#12488)", () => {
 
   it("keeps the first observation of a capture already seen mid-turn (#13128)", () => {
     const service = new AgentStateService();
-    const early = { message: "fixed the race in the retry loop", observedAt: 1, truncated: false };
+    const early = {
+      message: "fixed the race in the retry loop",
+      report: "done" as const,
+      observedAt: 1,
+      truncated: false,
+    };
     const terminal = askedTerminal([MARKER], {
       lastHandback: early,
       lastHandbackUnpublished: true,
@@ -1509,7 +1539,12 @@ describe("AgentStateService handback detection (#12488)", () => {
 
   it("keeps the first observation when the capture changed since mid-turn", () => {
     const service = new AgentStateService();
-    const early = { message: "fixed the race", observedAt: 1, truncated: false };
+    const early = {
+      message: "fixed the race",
+      report: "done" as const,
+      observedAt: 1,
+      truncated: false,
+    };
     const terminal = askedTerminal([MARKER], {
       lastHandback: early,
       lastHandbackUnpublished: true,
@@ -1519,9 +1554,28 @@ describe("AgentStateService handback detection (#12488)", () => {
 
     expect(terminal.lastHandback).toEqual({
       message: "fixed the race in the retry loop",
+      report: "done",
       observedAt: 1,
       truncated: false,
     });
+  });
+
+  it("takes a report that changed since mid-turn, keeping the first observation", () => {
+    const service = new AgentStateService();
+    const early = {
+      message: "fixed the race in the retry loop",
+      report: "done" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    const terminal = askedTerminal(
+      [`DAINTREE-NEEDS-YOU-${CODE}: fixed the race in the retry loop END-${CODE}`],
+      { lastHandback: early, lastHandbackUnpublished: true }
+    );
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.lastHandback).toEqual({ ...early, report: "needs-you" });
   });
 
   it("publishes nothing for the echoed instruction and keeps waiting", () => {

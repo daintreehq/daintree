@@ -469,7 +469,7 @@ async function runTerminalSendCommand(
       const handbackCode = mintHandbackCode();
       await deps.invoke<void>(project.id, CHANNELS.TERMINAL_SUBMIT, [
         terminalId,
-        appendHandbackInstruction(command, handbackCode),
+        appendHandbackInstruction(command, handbackCode, "run"),
         submissionToken,
         handbackCode,
       ]);

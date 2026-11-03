@@ -17,6 +17,11 @@ export interface TerminalHandback {
    * can put a space inside a long token.
    */
   message: string | null;
+  /**
+   * Which marker the agent printed (#16190): the agent's own claim, like
+   * `message`. Absent from an older host's observation.
+   */
+  report?: HandbackReport;
   /** Epoch ms of the settle at which the marker was seen. */
   observedAt: number;
   /** The submission that asked for it, when that submission carried a token (#12337). */
@@ -47,33 +52,39 @@ export const HANDBACK_SUMMARY_PLACEHOLDER = "<summary>";
 export const HANDBACK_CODE_TOKEN = "{code}";
 
 /**
- * The one instruction sentence appended to a prompt that asks for a handback.
- * Daintree owns the wording so every orchestrator sends identical text and the
- * format can change in one place. Both markers start with a letter on purpose:
- * a leading `-`, `#` or `>` is rendered as a bullet, heading or quote by the
- * agent TUIs and would break a literal match.
+ * The done-only instruction every handback request carried before #16190.
+ * Nothing appends it now; it stays so a prompt carrying it is still
+ * recognised. Daintree owns the wording so every orchestrator sends identical
+ * text and the format can change in one place. Both markers start with a
+ * letter on purpose: a leading `-`, `#` or `>` is rendered as a bullet,
+ * heading or quote by the agent TUIs and would break a literal match.
  */
 export const HANDBACK_INSTRUCTION_TEMPLATE = `When you have finished and are handing this work back, end your final message with this line exactly, replacing ${HANDBACK_SUMMARY_PLACEHOLDER} with a one-line plain-text summary (it may be empty): DAINTREE-DONE-${HANDBACK_CODE_TOKEN}: ${HANDBACK_SUMMARY_PLACEHOLDER} END-${HANDBACK_CODE_TOKEN}`;
 
 /**
- * What a handback marker reports. Only a scheduled run's instruction offers
- * `needs-you` (#15982); every other request is asked for `done` alone.
+ * What a handback marker reports: the work is done, or the agent needs the
+ * user to look, decide or act before it can go on (#15982, #16190).
  */
-export type HandbackReport = "done" | "needs-you";
+export const HANDBACK_REPORTS = ["done", "needs-you"] as const;
+export type HandbackReport = (typeof HANDBACK_REPORTS)[number];
 
 /**
- * The instruction a handback code was minted with. `run` is a scheduled run's
- * (#15982), which offers a second marker so the agent can say the user should
- * look; `handback` is everyone else's.
+ * The instruction a handback code was minted with. `run` offers a second
+ * marker so the agent can say the user should look: a scheduled run's launch
+ * (#15982) and, since #16190, every request. `handback` is the done-only form
+ * an older prompt carries.
  */
 export type HandbackInstruction = "handback" | "run";
 
 /**
- * The instruction a scheduled run's launch prompt ends with (#15982). Nobody
- * is watching the run, so the agent says whether it finished or needs the
- * user. The `done` line comes first and keeps the ordinary marker's shape, so
- * everything that recognises Daintree's instruction by its first marker still
- * does; each line keeps the placeholder that marks an echoed instruction.
+ * The instruction every handback request ends with: a scheduled run's launch
+ * prompt (#15982), and an orchestrator's prompt since #16190, so a worker that
+ * needs the user to act outside its terminal can say so in a way the
+ * orchestrator reads without its screen. The agent says whether it finished
+ * or needs the user. The `done` line comes first and keeps the done-only
+ * marker's shape, so everything that recognises Daintree's instruction by its
+ * first marker still does; each line keeps the placeholder that marks an
+ * echoed instruction.
  */
 export const HANDBACK_RUN_INSTRUCTION_TEMPLATE = `When you have finished and are handing this work back, end your final message with exactly one of these two lines, replacing ${HANDBACK_SUMMARY_PLACEHOLDER} with a one-line plain-text summary (it may be empty). If the work is done: DAINTREE-DONE-${HANDBACK_CODE_TOKEN}: ${HANDBACK_SUMMARY_PLACEHOLDER} END-${HANDBACK_CODE_TOKEN} If you need the user to look at something or decide before the work can go on: DAINTREE-NEEDS-YOU-${HANDBACK_CODE_TOKEN}: ${HANDBACK_SUMMARY_PLACEHOLDER} END-${HANDBACK_CODE_TOKEN}`;
 
@@ -88,7 +99,7 @@ export const HANDBACK_INSTRUCTION_TEMPLATES: readonly string[] = [
  * output schemas so the copies cannot drift apart.
  */
 export const LAST_HANDBACK_DESCRIPTION =
-  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.";
+  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.";
 
 /**
  * Model-facing description of `lastHandback.message`. Carried on the status

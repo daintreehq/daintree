@@ -35,7 +35,12 @@ function sources(overrides: Partial<AgentDirectorySources> = {}): AgentDirectory
       waitingReason: "approval",
       lastStateChange: 500,
       title: "  fix   the bug ",
-      lastHandback: { message: "private text", observedAt: 700, truncated: false },
+      lastHandback: {
+        message: "private text",
+        report: "needs-you",
+        observedAt: 700,
+        truncated: false,
+      },
       spawnedAt: 1,
     }),
     // Assistants run ordinary agents, stamped or bound to a lane.
@@ -178,12 +183,65 @@ describe("collectAgentDirectory (#14160)", () => {
       since: 500,
       label: "fix the bug",
       attached: null,
-      handback: { observedAt: 700 },
+      // Which marker the agent printed, never what it said (#16190).
+      handback: { observedAt: 700, report: "needs-you" },
       subject: { hostId: "local", scope: { kind: "project", projectId: "p1" }, incarnation: 4 },
     });
     const text = JSON.stringify(directory);
     expect(text).not.toContain("/secret/path");
     expect(text).not.toContain("private text");
+  });
+
+  it("tells a finished worker from one that needs the owner, by the marker each printed (#16190)", async () => {
+    const handback = (report?: "done" | "needs-you") => ({
+      message: "summary",
+      ...(report !== undefined ? { report } : {}),
+      observedAt: 700,
+      truncated: false,
+    });
+    const directory = await collectAgentDirectory(
+      sources({
+        getLiveGeneration: () => 1,
+        readTerminals: async () => ({
+          terminals: [
+            terminal({
+              id: "done",
+              projectId: "p1",
+              detectedAgentId: "claude",
+              lastHandback: handback("done"),
+            }),
+            terminal({
+              id: "asks",
+              projectId: "p1",
+              detectedAgentId: "claude",
+              lastHandback: handback("needs-you"),
+            }),
+            terminal({
+              id: "older",
+              projectId: "p1",
+              detectedAgentId: "claude",
+              lastHandback: handback(),
+            }),
+            terminal({ id: "none", projectId: "p1", detectedAgentId: "claude" }),
+          ],
+          degraded: false,
+        }),
+      })
+    );
+    const handbacks = Object.fromEntries(
+      directory.entries.flatMap((entry) =>
+        entry.state === "live" && entry.role === "worker"
+          ? [[entry.subject.terminalId, entry.handback]]
+          : []
+      )
+    );
+    expect(handbacks).toEqual({
+      done: { observedAt: 700, report: "done" },
+      asks: { observedAt: 700, report: "needs-you" },
+      older: { observedAt: 700 },
+      none: null,
+    });
+    expect(AgentDirectorySchema.safeParse(directory).success).toBe(true);
   });
 
   it("reports attachment for assistants", async () => {

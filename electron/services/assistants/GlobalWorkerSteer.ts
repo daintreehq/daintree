@@ -259,7 +259,7 @@ export class GlobalWorkerSteer {
         const handbackCode = mintHandbackCode();
         this.deps.submit(
           target.terminalId,
-          appendHandbackInstruction(stamped, handbackCode),
+          appendHandbackInstruction(stamped, handbackCode, "run"),
           submissionToken,
           handbackCode,
           request.command

@@ -325,7 +325,7 @@ export interface GeneratedIpcInvokeMap {
             since: number | null;
             label: string | null;
             attached: boolean | null;
-            handback: { observedAt: number } | null;
+            handback: { observedAt: number; report?: "done" | "needs-you" | undefined } | null;
             confirmations?:
               | {
                   waiting: { actionId: string; since: number; expiresAt: number }[];

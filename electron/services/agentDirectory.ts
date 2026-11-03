@@ -241,7 +241,9 @@ function liveEntry(input: {
         : null,
     label: cutAgentLabel(terminal?.title ?? terminal?.lastObservedTitle),
     attached: input.attached,
-    handback: terminal?.lastHandback ? { observedAt: terminal.lastHandback.observedAt } : null,
+    handback: terminal?.lastHandback
+      ? { observedAt: terminal.lastHandback.observedAt, report: terminal.lastHandback.report }
+      : null,
   };
 }
 

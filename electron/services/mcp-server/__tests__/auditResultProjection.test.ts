@@ -92,12 +92,15 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
   const HANDBACK_TEXT = "HANDBACK-SENTINEL fixed the auth bug";
   const handback = {
     message: HANDBACK_TEXT,
+    report: "needs-you",
     observedAt: 1_700_000_000_000,
     submissionToken: "tok-1",
     truncated: false,
   };
   const reduced = {
     messageChars: HANDBACK_TEXT.length,
+    // Which marker the agent printed is its shape, not its words (#16190).
+    report: "needs-you",
     observedAt: 1_700_000_000_000,
     submissionToken: "tok-1",
     truncated: false,
@@ -144,6 +147,25 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
     expect(single).toMatchObject({ terminalId: "t1", lastHandback: reduced });
     expect(batch).toMatchObject({ results: [{ terminalId: "t1", lastHandback: reduced }] });
     expect(JSON.stringify([single, batch])).not.toContain("SENTINEL");
+  });
+
+  it("keeps a done report as done", () => {
+    const projected = projectAuditResult("terminal.waitUntilIdle", {
+      terminalId: "t1",
+      lastHandback: { ...handback, report: "done" },
+    });
+
+    expect(projected).toMatchObject({ lastHandback: { ...reduced, report: "done" } });
+  });
+
+  it("records no report it doesn't recognise", () => {
+    const projected = projectAuditResult("terminal.waitUntilIdle", {
+      terminalId: "t1",
+      lastHandback: { message: null, report: "HANDBACK-SENTINEL", observedAt: 5, truncated: false },
+    });
+
+    expect(projected).toMatchObject({ lastHandback: { report: undefined } });
+    expect(JSON.stringify(projected)).not.toContain("SENTINEL");
   });
 
   it("records a bare handback as having no message", () => {

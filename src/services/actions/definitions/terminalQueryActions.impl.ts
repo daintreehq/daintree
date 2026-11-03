@@ -507,7 +507,7 @@ export const terminalQueryActionRuns = {
       const handbackCode = mintHandbackCode();
       await terminalClient.submit(
         terminalId,
-        appendHandbackInstruction(command, handbackCode),
+        appendHandbackInstruction(command, handbackCode, "run"),
         submissionToken,
         handbackCode
       );

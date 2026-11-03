@@ -181,6 +181,46 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(parsed.terminals[0]?.recentOutputTruncated).toBe(true);
   });
 
+  it("terminal.getStatus keeps which marker the agent printed, and the waits accept it (#16190)", () => {
+    const handback = {
+      message: "approve the deploy",
+      report: "needs-you",
+      observedAt: 1,
+      truncated: false,
+    };
+    // Dispatch strips undeclared keys, so the report has to be declared to arrive.
+    const parsed = TerminalStatusResultSchema.parse({
+      terminals: [
+        { terminalId: "t1", agentId: null, agentState: "waiting", lastHandback: handback },
+      ],
+      source: "renderer",
+      unavailableFields: [],
+    });
+    expect(parsed.terminals[0]?.lastHandback?.report).toBe("needs-you");
+
+    const service = registerAll();
+    const ajv = new Ajv2020({ strict: false });
+    const single = ajv.compile(outputSchema(service, "terminal.waitUntilIdle")!);
+    const batch = ajv.compile(outputSchema(service, "terminal.waitUntilIdleBatch")!);
+    const wait = { terminalId: "t1", busyState: "idle", trackingState: "tracked", timedOut: false };
+    const row = { terminalId: "t1", busyState: "idle", trackingState: "tracked", settled: true };
+    const accepts = (lastHandback: Record<string, unknown>) => [
+      single({ ...wait, lastHandback }),
+      batch({
+        mode: "first",
+        results: [{ ...row, lastHandback }],
+        settledTerminalIds: ["t1"],
+        timedOut: false,
+      }),
+    ];
+    const { report: _report, ...older } = handback;
+    expect(accepts(handback)).toEqual([true, true]);
+    expect(accepts({ ...handback, report: "done" })).toEqual([true, true]);
+    // An older host's observation has no report.
+    expect(accepts(older)).toEqual([true, true]);
+    expect(accepts({ ...handback, report: "approve" })).toEqual([false, false]);
+  });
+
   it("terminal.getOutput exposes content/lineCount/truncated properties", () => {
     const props =
       (outputSchema(registerAll(), "terminal.getOutput")!.properties as Record<string, unknown>) ??
