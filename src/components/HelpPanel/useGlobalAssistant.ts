@@ -20,6 +20,17 @@ export interface GlobalAssistantHandle {
   discard: (generation: number) => Promise<boolean>;
 }
 
+/**
+ * This view's own attachments, oldest first: input one of them holds is still
+ * this window's, wherever in it the person now types.
+ */
+const viewAttachments = new Set<string>();
+
+/** Whether the attachment is one of this view's own. */
+export function isViewGlobalAttachment(attachmentId: string | null): boolean {
+  return attachmentId !== null && viewAttachments.has(attachmentId);
+}
+
 function messageOf(error: unknown, fallback: string): string {
   if (
     typeof error === "object" &&
@@ -47,7 +58,14 @@ function messageOf(error: unknown, fallback: string): string {
  */
 export function useGlobalAssistant(
   active: boolean,
-  canType: (view: GlobalAssistantView | null) => boolean = () => true
+  canType: (view: GlobalAssistantView | null) => boolean = () => true,
+  /**
+   * Input another surface of this same view holds comes here, and goes back
+   * to it when this lets go: it moves within the window and never to another.
+   * For a surface shown over the one that holds it (Canopy over the
+   * Assistant panel), whose holder can't type meanwhile.
+   */
+  keepsViewInput = false
 ): GlobalAssistantHandle {
   const [view, setView] = useState<GlobalAssistantView | null>(null);
   const [attachmentId, setAttachmentId] = useState<string | null>(null);
@@ -61,6 +79,11 @@ export function useGlobalAssistant(
   }, [canType]);
   /** What main was last told of an attachment's eligibility. */
   const reportedRef = useRef<{ attachmentId: string; eligible: boolean } | null>(null);
+  // Who holds input as last heard, for the attachment's own teardown.
+  const inputOwnerRef = useRef<string | null>(null);
+  useEffect(() => {
+    inputOwnerRef.current = view?.inputOwner ?? null;
+  }, [view]);
 
   useEffect(() => {
     if (!active) return;
@@ -81,6 +104,7 @@ export function useGlobalAssistant(
           return;
         }
         attached = attachment.attachmentId;
+        viewAttachments.add(attachment.attachmentId);
         reportedRef.current = { attachmentId: attachment.attachmentId, eligible: asked };
         setAttachmentId(attachment.attachmentId);
         setView(attachment.state);
@@ -95,11 +119,18 @@ export function useGlobalAssistant(
       disposed = true;
       off();
       if (attached !== null) {
+        viewAttachments.delete(attached);
+        // Handed back before letting go, so main never passes it to another window.
+        const heir =
+          keepsViewInput && inputOwnerRef.current === attached
+            ? [...viewAttachments].at(-1)
+            : undefined;
+        if (heir !== undefined) void help.claimGlobalAssistantInput(heir).catch(() => {});
         void help.detachGlobalAssistant(attached).catch(() => {});
       }
       setAttachmentId(null);
     };
-  }, [active]);
+  }, [active, keepsViewInput]);
 
   // A change while the attach was on its way is told once it has answered;
   // an attachment being let go in this same commit is told nothing.
@@ -165,6 +196,16 @@ export function useGlobalAssistant(
       ),
     [run]
   );
+
+  // Held by another surface of this view, it is this window's already: taken
+  // without asking, as typing here is all the person can do in it now.
+  const inputOwner = view?.inputOwner ?? null;
+  useEffect(() => {
+    if (!keepsViewInput || !active || attachmentId === null) return;
+    if (inputOwner === null || inputOwner === attachmentId) return;
+    if (!isViewGlobalAttachment(inputOwner)) return;
+    void claimInput();
+  }, [keepsViewInput, active, attachmentId, inputOwner, claimInput]);
 
   const clearError = useCallback(() => setError(null), []);
 
