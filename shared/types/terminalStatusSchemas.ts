@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { QueuedSendRecordSchema } from "./queuedSend.js";
 import {
   HANDBACK_MESSAGE_DESCRIPTION,
   HANDBACK_REPORTS,
@@ -152,4 +153,7 @@ export const TerminalStatusResultSchema = z.object({
     .describe(
       "Fields this surface cannot observe: absent from every entry, unknown rather than false."
     ),
+  queuedSend: QueuedSendRecordSchema.nullable()
+    .optional()
+    .describe("The held send `queuedSendToken` named; null when unknown here."),
 });

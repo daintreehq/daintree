@@ -182,6 +182,10 @@ interface TerminalInfoResponse {
   lastOwnedInput?: OwnedTypedInput;
   /** The last of that input anyone but `lastOwnedInput`'s owner wrote: all of it while none is owned. */
   lastForeignInputAt?: number;
+  /** The last input the agent could have taken as a prompt written for an assistant, and whose (#16187). */
+  lastOwnedPromptInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;
@@ -1636,6 +1640,9 @@ export class PtyClient extends EventEmitter {
    *
    * `handbackInstruction` is `run` when `text` already carries the instruction
    * that offers `needs-you`; such a submission is never decorated again.
+   *
+   * `promptOwner` names the assistant whose prompt a guarded line carries
+   * (#16187); the host files it as that assistant's prompt input once written.
    */
   submit(
     id: string,
@@ -1645,7 +1652,8 @@ export class PtyClient extends EventEmitter {
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
     promptAsWritten?: string | null,
-    handbackInstruction?: "run"
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void {
     if (handbackInstruction === undefined && this.submitDecorator !== null) {
       const armed = this.submitDecorator(id, text, handbackCode);
@@ -1674,6 +1682,7 @@ export class PtyClient extends EventEmitter {
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
       ...(firstPrompt !== undefined ? { firstPrompt } : {}),
+      ...(promptOwner !== undefined ? { promptOwner } : {}),
     });
     // A guarded submission is Daintree waking an idle agent, not anyone
     // answering it, and the host may yet refuse it.

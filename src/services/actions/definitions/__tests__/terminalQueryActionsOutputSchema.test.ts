@@ -56,6 +56,18 @@ function registerAll(): ActionService {
   return service;
 }
 
+function propertiesOf(schema: Record<string, unknown>): Record<string, unknown> {
+  const { properties } = schema;
+  return typeof properties === "object" && properties !== null ? { ...properties } : {};
+}
+
+function requiredOf(schema: Record<string, unknown>): string[] {
+  const { required } = schema;
+  return Array.isArray(required)
+    ? required.filter((name): name is string => typeof name === "string")
+    : [];
+}
+
 function outputSchema(service: ActionService, id: string): Record<string, unknown> | undefined {
   return service.get(id as ActionId)?.outputSchema as Record<string, unknown> | undefined;
 }
@@ -267,11 +279,53 @@ describe("terminal.sendCommandOwned (#12407)", () => {
     return factory();
   }
 
-  it("advertises the same output schema as the submission it delegates to", () => {
+  // A steer send may be held instead of sent (#16187), so the owned receipt
+  // is the delegate's with its token optional and the held fields added.
+  it("advertises the delegate's receipt, widened only by a held send's fields (#16187)", () => {
     const service = registerAll();
-    const owned = outputSchema(service, "terminal.sendCommandOwned");
-    expect(owned?.type).toBe("object");
-    expect(owned).toEqual(outputSchema(service, "terminal.sendCommand"));
+    const owned = outputSchema(service, "terminal.sendCommandOwned")!;
+    const delegate = outputSchema(service, "terminal.sendCommand")!;
+    expect(owned.type).toBe("object");
+    const ownedProps = propertiesOf(owned);
+    const delegateProps = propertiesOf(delegate);
+    for (const [name, schema] of Object.entries(delegateProps)) {
+      if (name === "submissionToken") continue;
+      expect(ownedProps[name], name).toEqual(schema);
+    }
+    expect(
+      Object.keys(ownedProps)
+        .filter((name) => !(name in delegateProps))
+        .sort()
+    ).toEqual(["expiresAt", "queued", "queuedSendToken", "supersededToken"]);
+    expect(requiredOf(owned)).toEqual(
+      requiredOf(delegate).filter((name) => name !== "submissionToken")
+    );
+  });
+
+  it("validates both a sent and a held receipt (#16187)", () => {
+    const service = registerAll();
+    const validate = new Ajv2020({ strict: false }).compile(
+      outputSchema(service, "terminal.sendCommandOwned")!
+    );
+    const sent = {
+      sent: true,
+      terminalId: "t-1",
+      command: "ls",
+      submissionToken: "tok",
+      message: "m",
+    };
+    const held = {
+      sent: false,
+      queued: true,
+      terminalId: "t-1",
+      command: "ls",
+      queuedSendToken: "q-1",
+      expiresAt: 1,
+      supersededToken: "q-0",
+      message: "m",
+    };
+    expect(validate(sent), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate(held), JSON.stringify(validate.errors)).toBe(true);
   });
 
   it("requires both the target and the text", () => {

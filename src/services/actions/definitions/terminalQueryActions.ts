@@ -6,6 +6,7 @@ import {
   TerminalSummarySchema,
   TerminalStatusResultSchema,
   TerminalSendCommandResultSchema,
+  TerminalSendCommandOwnedResultSchema,
   TerminalLastMessageResultSchema,
   PanelLimitSnapshotSchema,
 } from "./schemas";
@@ -26,6 +27,11 @@ import {
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
+import {
+  QueueTtlSecondsArgSchema,
+  QueuedSendTokenArgSchema,
+  WhenBusyArgSchema,
+} from "@shared/types/queuedSend";
 import {
   TerminalCloseManyArgsSchema,
   TerminalSendCommandManyArgsSchema,
@@ -287,6 +293,9 @@ export function registerTerminalQueryActions(
           .describe(
             "Token from a send; adds its delivery record to each entry. Needs `terminalIds`."
           ),
+        queuedSendToken: QueuedSendTokenArgSchema.optional().describe(
+          "A held send's token; adds `queuedSend`."
+        ),
         // `true` is what a model reaches for first; it reads as the defaults.
         includeOutput: z
           .union([
@@ -569,8 +578,10 @@ export function registerTerminalQueryActions(
       replyLines: NotifyReplyLinesSchema,
       waitForReply: WaitForReplySchema,
       waitSeconds: WaitSecondsSchema,
+      whenBusy: WhenBusyArgSchema,
+      queueTtlSeconds: QueueTtlSecondsArgSchema,
     }),
-    resultSchema: TerminalSendCommandResultSchema,
+    resultSchema: TerminalSendCommandOwnedResultSchema,
     mcpOutputSchema: true,
     run: async () => {
       throw new Error(

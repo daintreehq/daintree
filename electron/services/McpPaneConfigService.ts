@@ -574,6 +574,14 @@ export class McpPaneConfigService {
     return bearer === undefined ? null : { ...bearer };
   }
 
+  /**
+   * The launch's ownership principal, whichever bearers it holds (#16187):
+   * the key its notices are held under. Null with neither.
+   */
+  getLaunchPrincipal(paneId: string): string | null {
+    return this.records.get(paneId)?.principal ?? null;
+  }
+
   /** The principal of the pane's current Decisions bearer; null while it holds none. */
   getDecisionsPrincipal(paneId: string): string | null {
     const token = this.records.get(paneId)?.decisionsToken;

@@ -2540,6 +2540,7 @@ export class HelpSessionService {
       steer: liveGlobalWorkerSteer({
         pty: () => getPtyClient(),
         isAssistantTerminal: (terminalId) => this.isHelpTerminal(terminalId),
+        queue: () => mcpServerService.getWorkerSteerQueue(),
       }),
       sessionProject: (sessionId) => this.getSessionLane(sessionId)?.projectId ?? null,
       sessionAgent: (sessionId) => this.getSessionAgent(sessionId),

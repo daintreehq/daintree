@@ -589,7 +589,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // once, that it answers as each project's own status read would, that screen
   // tails are redacted, and that it is the read to make before steering an
   // agent. Assistant-only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 25_650;
+  // 25_650 → 25_780 for `terminal.cancelQueuedSend` (#16187), measured at
+  // 25_765 B (+142 over develop's 25_623): withdrawing a send held for a busy
+  // worker. The prose has to say a line already going in isn't taken back, and
+  // that the answer says which. Assistant-only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 25_780;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1601,8 +1605,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // take terminalIds or a watchId; plugin.reloadPanel a panelId;
     // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
     // pluginId and a flag; agentSettings.set an agentId and settings;
-    // worktree.retireOwned a worktreeId; schedules.runNow a scheduleId). Schemas
-    // are non-strict, so the union satisfies every denied action.
+    // worktree.retireOwned a worktreeId; schedules.runNow a scheduleId;
+    // terminal.cancelQueuedSend a queuedSendToken). Schemas are non-strict, so
+    // the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       panelId: "p-placeholder",
@@ -1618,6 +1623,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       silenced: true,
       worktreeId: "/wt/placeholder",
       scheduleId: "s-placeholder",
+      queuedSendToken: "q-placeholder",
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never

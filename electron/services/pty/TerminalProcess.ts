@@ -81,6 +81,7 @@ import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgent
 import { offerAgentRunArgvSession } from "./agentRunArgv.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
+import { stampPromptInput } from "../../../shared/utils/terminalInputProvenance.js";
 import {
   createVisibleContentSnapshot,
   type VisibleContentSnapshot,
@@ -1005,6 +1006,8 @@ export class TerminalProcess {
       lastTypedInputAt: t.lastTypedInputAt,
       lastOwnedInput: t.lastOwnedInput,
       lastForeignInputAt: t.lastForeignInputAt,
+      lastOwnedPromptInput: t.lastOwnedPromptInput,
+      lastForeignPromptInputAt: t.lastForeignPromptInputAt,
       lastOutputTime: t.lastOutputTime,
       lastCheckTime: t.lastCheckTime,
       detectedAgentId: t.detectedAgentId,
@@ -1158,7 +1161,8 @@ export class TerminalProcess {
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
     firstPrompt?: FirstPromptCandidate,
-    handbackInstruction?: "run"
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
@@ -1166,6 +1170,11 @@ export class TerminalProcess {
     const onPtyWritten = (): void => {
       this.terminalInfo.lastHandback = undefined;
       this.terminalInfo.lastHandbackUnpublished = false;
+      // An assistant's prompt, as written (#16187): what another held for
+      // this worker before it is overtaken.
+      if (promptOwner !== undefined) {
+        stampPromptInput(this.terminalInfo, Date.now(), promptOwner);
+      }
       onTrackerWritten?.();
       if (firstPrompt !== undefined && this.isAgentLive) {
         this.callbacks.onFirstPromptWritten?.(this.id, {

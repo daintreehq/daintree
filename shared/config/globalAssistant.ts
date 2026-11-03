@@ -122,6 +122,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.notifyWhenIdle",
+  "terminal.cancelQueuedSend",
   "slashCommands.list",
   "workflow.startWorkOnIssue",
   "workflow.prepBranchForReview",

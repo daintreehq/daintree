@@ -22,6 +22,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- terminalNotifyActions --
   "terminal.notifyWhenIdle",
+  "terminal.cancelQueuedSend",
 
   // -- terminalMetaActions --
   "terminal.setClientMetadata",
@@ -705,6 +706,9 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
+  // Main-process only, keyed on the principal that held the message (#16187):
+  // a plugin dispatch held none.
+  "terminal.cancelQueuedSend",
   // Main-process only, keyed on what the caller's MCP credential closed (#15728):
   // a plugin dispatch closed nothing to wait for.
   "terminal.waitForExit",

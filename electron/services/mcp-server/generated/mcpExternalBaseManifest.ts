@@ -1548,6 +1548,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
           maxLength: 128,
         },
+        queuedSendToken: {
+          description: "A held send's token; adds `queuedSend`.",
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+        },
         includeOutput: {
           description:
             "`true` or options: adds `recentOutput` (last N lines) and `inputLine`, plus `lastOutputChangeAt` and `lastTypedInputAt` when observed.",
@@ -1787,6 +1793,64 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
           description:
             "Fields this surface cannot observe: absent from every entry, unknown rather than false.",
+        },
+        queuedSend: {
+          description: "The held send `queuedSendToken` named; null when unknown here.",
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                status: {
+                  type: "string",
+                  enum: [
+                    "queued",
+                    "delivered",
+                    "superseded",
+                    "dropped",
+                    "cancelled",
+                    "unconfirmed",
+                  ],
+                  description:
+                    "`delivered` was written, not acted on; `unconfirmed` may have been, and is never resent.",
+                },
+                queuedAt: {
+                  type: "number",
+                },
+                expiresAt: {
+                  type: "number",
+                },
+                waitingOn: {
+                  type: "string",
+                },
+                submissionToken: {
+                  type: "string",
+                },
+                supersededBy: {
+                  type: "string",
+                },
+                reason: {
+                  type: "string",
+                  enum: [
+                    "typed",
+                    "restarted",
+                    "target-gone",
+                    "session-gone",
+                    "not-allowed",
+                    "expired",
+                    "stopped",
+                  ],
+                },
+                endedAt: {
+                  type: "number",
+                },
+              },
+              required: ["status", "queuedAt", "expiresAt"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
         },
       },
       required: ["terminals", "source", "unavailableFields"],
@@ -2514,6 +2578,18 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minimum: 1,
           maximum: 1800,
         },
+        whenBusy: {
+          description:
+            "An agent you didn't launch and isn't at its prompt: `refuse` (default) sends nothing; `queue` holds the text for its next prompt.",
+          type: "string",
+          enum: ["refuse", "queue"],
+        },
+        queueTtlSeconds: {
+          description: "Seconds held text waits before it is dropped (60-3600, default 1800).",
+          type: "integer",
+          minimum: 60,
+          maximum: 3600,
+        },
       },
       required: ["terminalId", "command"],
     },
@@ -2536,9 +2612,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "The submitted text, cut past 1024 characters: an echo, not a receipt.",
         },
         submissionToken: {
-          type: "string",
           description:
-            "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart.",
+            "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart. Absent when held.",
+          type: "string",
         },
         message: {
           type: "string",
@@ -2584,8 +2660,22 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           required: ["terminalId", "outcome"],
           additionalProperties: false,
         },
+        queued: {
+          type: "boolean",
+        },
+        queuedSendToken: {
+          description: "Set when held: read it by this.",
+          type: "string",
+        },
+        expiresAt: {
+          type: "number",
+        },
+        supersededToken: {
+          description: "Your held text this replaces, now unsent.",
+          type: "string",
+        },
       },
-      required: ["sent", "terminalId", "command", "submissionToken", "message"],
+      required: ["sent", "terminalId", "command", "message"],
       additionalProperties: false,
     },
     requiresArgs: true,

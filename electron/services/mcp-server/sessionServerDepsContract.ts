@@ -279,6 +279,14 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   terminalNotify?: TerminalNotifyHandlers;
   /**
+   * The global Assistant's prompts held for busy workers (#16187), for a
+   * status read and a cancel. Absent, neither finds any.
+   */
+  workerSteerQueue?: Pick<
+    import("../assistants/WorkerSteerQueue.js").WorkerSteerQueue,
+    "status" | "cancel"
+  >;
+  /**
    * The assistant's reach to this Shell's hosts (#13493), bound to this
    * session's help-session bearer. Absent for every other bearer; then
    * `host.list` and `host.call` are neither listed nor run.

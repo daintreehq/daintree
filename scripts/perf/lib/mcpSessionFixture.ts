@@ -840,6 +840,10 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   // perf session has. Their admit/refuse grading lives in
   // `sessionServer.notices.test.ts` rather than PERF-283.
   "terminal.notifyWhenIdle",
+  // Withdraws a message only the session that held it can name (#16187): an
+  // argument-free probe names none, and its refusal is not a miss. Its
+  // admit/refuse grading lives in `sessionServer.globalSteer.test.ts`.
+  "terminal.cancelQueuedSend",
   // Batch tools validate and expand their arguments in main and run each item
   // as its single call, so a battery of argument-free probes only reads their
   // refusal. The items are the calls above; `sessionServer.notices.test.ts` grades the

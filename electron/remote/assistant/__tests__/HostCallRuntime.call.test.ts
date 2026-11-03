@@ -101,6 +101,41 @@ describe("HostCallRuntime host.call (#13493)", () => {
     });
   });
 
+  it("tells each host it asked to hold a message that its session ended, once (#16187)", async () => {
+    const throwawayRelease = vi.fn(async () => {});
+    runtime = new HostCallRuntime({
+      getSessionLane: (id) => lanes.get(id) ?? null,
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => ({ relayCall, throwawayRelease }) as never,
+      hosts: () => [host(), host({ hostId: "laptop", name: "laptop" })],
+      inLocalView: (id) => localViews.has(id),
+      controlEnabled: () => true,
+      newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
+    });
+    const send = (hostId: string, args: Record<string, unknown>) =>
+      runtime.call(
+        "a",
+        {
+          hostId,
+          projectId: "proj-2",
+          tool: "terminal.sendCommandOwned",
+          args: { terminalId: "t-1", command: "go", generation: 1, ...args },
+        },
+        { tier: "core" }
+      );
+    await send("studio", { whenBusy: "queue" });
+    await send("studio", { whenBusy: "queue" });
+    // A send that holds nothing leaves its host nothing to drop.
+    await send("laptop", {});
+
+    runtime.endHelpSession("a");
+    expect(throwawayRelease).toHaveBeenCalledTimes(1);
+    expect(throwawayRelease).toHaveBeenCalledWith("studio", { helpSessionId: "a" });
+
+    runtime.endHelpSession("a");
+    expect(throwawayRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("sends the call with a fresh callId, the caller's help session and tier, and returns the host's result", async () => {
     const settled = await runtime.call("a", CALL, { tier: "full" });
 

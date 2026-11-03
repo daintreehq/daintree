@@ -69,9 +69,11 @@ import {
   helpNotifyKey,
   paneNotifyKey,
   relayNotifyKey,
+  workerNotifyKey,
   type LaneWake,
   type OwnPane,
 } from "./mcp-server/terminalNotify.js";
+import { WorkerSteerQueue } from "./assistants/WorkerSteerQueue.js";
 import type { ListenerRoute } from "./mcp-server/listenerHold.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import { createApprovalWake } from "./mcp-server/approvalWake.js";
@@ -217,6 +219,10 @@ export class McpServerService {
   private readonly httpLifecycle: HttpLifecycle;
   /** Notices an orchestrating pane asked for, and the lines that deliver them. */
   private readonly terminalNotify: TerminalNotifyService;
+  /** Prompts the global Assistant held for a busy worker's next prompt (#16187), on its notice line. */
+  private readonly workerSteerQueue: WorkerSteerQueue;
+  /** A pane's launch principal, whichever bearers it holds: the key its notices are held under. */
+  private workerPrincipalResolver: ((paneId: string) => string | null) | null = null;
   private readonly replyWaiter: ReplyWaiterService;
   /**
    * Resolver injected by `HelpSessionService` after construction. Returns
@@ -392,6 +398,23 @@ export class McpServerService {
           name: "terminal:notify-state",
           payload: state,
         }),
+    });
+
+    this.workerSteerQueue = new WorkerSteerQueue({
+      enqueueWake: (pane, projectId, wake) =>
+        this.terminalNotify.enqueueWake(pane, projectId, wake),
+      // The worker's own line, so a notice it arms later joins this one
+      // rather than replacing it.
+      paneFor: (terminalId) => {
+        const principal = this.workerPrincipalResolver?.(terminalId) ?? null;
+        return {
+          key: principal !== null ? paneNotifyKey(principal) : workerNotifyKey(terminalId),
+          terminalId,
+        };
+      },
+      getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
+      getTerminalProjectId: (terminalId) =>
+        getPtyClient()?.getTerminalProjectId(terminalId) ?? null,
     });
 
     this.replyWaiter = new ReplyWaiterService({
@@ -583,6 +606,7 @@ export class McpServerService {
       isAgentPaneInWorkspace: (terminalId, workspaceId) =>
         isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
       terminalNotify: this.terminalNotify,
+      workerSteerQueue: this.workerSteerQueue,
       replyWaiter: this.replyWaiter,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
@@ -711,6 +735,15 @@ export class McpServerService {
 
   setPaneTerminalResolver(resolver: PaneTerminalResolver | null): void {
     this.httpLifecycle.setPaneTerminalResolver(resolver);
+  }
+
+  setWorkerPrincipalResolver(resolver: ((paneId: string) => string | null) | null): void {
+    this.workerPrincipalResolver = resolver;
+  }
+
+  /** Where the global Assistant's prompts for busy workers are held (#16187). */
+  getWorkerSteerQueue(): WorkerSteerQueue {
+    return this.workerSteerQueue;
   }
 
   setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
@@ -1224,6 +1257,7 @@ export class McpServerService {
     for (const endWakes of [...this.heldWakeScopes]) endWakes();
     this.heldWakeScopes.clear();
     // Nothing could read the observations a wake would point at.
+    this.workerSteerQueue.dispose();
     this.terminalNotify.disposeAll();
     // Open waits return what they have rather than hang on a server going away.
     this.replyWaiter.dispose();
@@ -1644,6 +1678,22 @@ export class McpServerService {
     this.sessionStore.resourceOwnership.revokePrincipal(principal);
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
     this.terminalNotify.revokeOwner(relayNotifyKey(principal));
+    // Held for a worker by the session that ended, never typed for its successor
+    // (#14161), under the owner key its calls held them by.
+    this.workerSteerQueue.revokePrincipal(principalOwnerKey(principal));
+  }
+
+  /**
+   * Remote Hosts: another machine's assistant session ended (#16187). Its
+   * held prompts go now, rather than when its hold here lapses, so none is
+   * typed after the session that wrote it is gone.
+   */
+  endRelayHeldSends(senderId: string, helpSessionId: string): void {
+    // Fenced: a call of that session still being admitted holds nothing after this.
+    this.workerSteerQueue.revokePrincipal(
+      principalOwnerKey(relayOwnershipPrincipal(senderId, helpSessionId)),
+      { fence: true }
+    );
   }
 
   /**

@@ -320,6 +320,12 @@ export type PtyHostRequest =
        * written (#15521), already capped. Present only while the run has none.
        */
       firstPrompt?: FirstPromptCandidate;
+      /**
+       * The assistant whose prompt this guarded line carries (#16187), filed
+       * as its prompt-capable input once the Enter is written. Absent, a
+       * guarded line is nobody's prompt.
+       */
+      promptOwner?: string;
     }
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
@@ -1305,6 +1311,10 @@ export interface PtyHostTerminalInfo {
   lastOwnedInput?: OwnedTypedInput;
   /** The last of that input anyone but `lastOwnedInput`'s owner wrote: all of it while none is owned. */
   lastForeignInputAt?: number;
+  /** The last input the agent could have taken as a prompt written for an assistant, and whose (#16187). */
+  lastOwnedPromptInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;

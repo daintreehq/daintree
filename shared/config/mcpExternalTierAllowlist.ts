@@ -287,12 +287,21 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
  * into the caller's own prompt, and an api-key client has none: it is refused
  * if it sends one anyway, and `replyLines` only shapes that notice. `generation`
  * names another assistant's run, or a worker the global Assistant steers or
- * shows, which only an assistant may address (#13496, #14551, #16096).
+ * shows, which only an assistant may address (#13496, #14551, #16096);
+ * `whenBusy`, `queueTtlSeconds` and `queuedSendToken` hold a message for such
+ * a worker and read it back, which only the global Assistant can (#16187).
  * Left off the listing so every such client does not pay for an argument it can
  * never use on every turn.
  */
 export const MCP_EXTERNAL_OMITTED_ARGS: Readonly<Record<string, readonly string[] | undefined>> = {
-  "terminal.sendCommandOwned": ["notify", "replyLines", "generation"],
+  "terminal.sendCommandOwned": [
+    "notify",
+    "replyLines",
+    "generation",
+    "whenBusy",
+    "queueTtlSeconds",
+  ],
+  "terminal.getStatus": ["queuedSendToken"],
   "terminal.sendKeysOwned": ["generation"],
   "terminal.interruptOwned": ["generation"],
   "terminal.revealOwned": ["generation"],

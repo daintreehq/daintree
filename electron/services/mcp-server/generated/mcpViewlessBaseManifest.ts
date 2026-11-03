@@ -2299,6 +2299,99 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
+      'Withdraw text held for a busy agent with `whenBusy: "queue"` before it is typed. Text already going in stays; the answer says which.',
+    enabled: true,
+    id: "terminal.cancelQueuedSend",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          description: "The terminal it was held for.",
+        },
+        queuedSendToken: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "A held send's `queuedSendToken`.",
+        },
+      },
+      required: ["terminalId", "queuedSendToken"],
+    },
+    keywords: ["cancel", "queued", "held", "send", "withdraw"],
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: true,
+      destructiveHint: false,
+    },
+    name: "terminal.cancelQueuedSend",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        cancelled: {
+          type: "boolean",
+          description: "False once it ended or went to the terminal.",
+        },
+        queuedSend: {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              enum: ["queued", "delivered", "superseded", "dropped", "cancelled", "unconfirmed"],
+              description:
+                "`delivered` was written, not acted on; `unconfirmed` may have been, and is never resent.",
+            },
+            queuedAt: {
+              type: "number",
+            },
+            expiresAt: {
+              type: "number",
+            },
+            waitingOn: {
+              type: "string",
+            },
+            submissionToken: {
+              type: "string",
+            },
+            supersededBy: {
+              type: "string",
+            },
+            reason: {
+              type: "string",
+              enum: [
+                "typed",
+                "restarted",
+                "target-gone",
+                "session-gone",
+                "not-allowed",
+                "expired",
+                "stopped",
+              ],
+            },
+            endedAt: {
+              type: "number",
+            },
+          },
+          required: ["status", "queuedAt", "expiresAt"],
+          additionalProperties: false,
+        },
+      },
+      required: ["cancelled", "queuedSend"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Cancel held terminal message",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
       "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
     enabled: true,
     id: "terminal.close",

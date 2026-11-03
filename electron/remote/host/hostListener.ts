@@ -208,6 +208,13 @@ async function buildHostListener(
     acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
     hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
     throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
+    endHeldSends: (senderId, helpSessionId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) => mcpServerService.endRelayHeldSends(senderId, helpSessionId))
+        .catch((error: unknown) => {
+          logger.warn("Couldn't drop an ended session's held messages", { error });
+        });
+    },
     // Loaded on the first read: a host no Shell's assistant lists reads none.
     readAgents: async (options) => {
       const { getLocalAgentDirectory } =

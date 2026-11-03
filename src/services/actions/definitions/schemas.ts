@@ -534,6 +534,24 @@ export const TerminalSendCommandResultSchema = z.object({
   reply: AwaitedReplySchema.optional(),
 });
 
+/**
+ * An owned send's receipt (#16187): the delegate's exactly, or, for an agent
+ * the global Assistant neither launched nor was handed and asked to hold the
+ * text for, a held message with no submission yet.
+ */
+export const TerminalSendCommandOwnedResultSchema = TerminalSendCommandResultSchema.extend({
+  submissionToken: z
+    .string()
+    .optional()
+    .describe(
+      "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart. Absent when held."
+    ),
+  queued: z.boolean().optional(),
+  queuedSendToken: z.string().optional().describe("Set when held: read it by this."),
+  expiresAt: z.number().optional(),
+  supersededToken: z.string().optional().describe("Your held text this replaces, now unsent."),
+});
+
 const AgentLastMessageSchema = z.object({
   id: z.string().nullable(),
   text: z

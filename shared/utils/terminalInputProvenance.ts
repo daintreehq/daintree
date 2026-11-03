@@ -74,3 +74,63 @@ export function foreignInputMoved(
   const now = foreignTypedInputAt(record, owner);
   return now !== undefined && (before === undefined || now > before);
 }
+
+/**
+ * Input the agent could have taken as a prompt (#16187), with whose it was:
+ * keys typed anywhere but an approval dialog, and a submission someone made
+ * through the lane. Recorded when the input arrives, from the state the host
+ * held then, so a later approval key can't hide an earlier prompt.
+ */
+export interface PromptInputProvenance {
+  /** The last such input an assistant wrote, and whose. */
+  lastOwnedPromptInput?: { owner: string; at: number };
+  /** The last such input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
+}
+
+/** Whether keys arriving now reach the agent's prompt rather than an approval dialog's selector. */
+export function keysReachPrompt(state: { agentState?: string; waitingReason?: string }): boolean {
+  return !(state.agentState === "waiting" && state.waitingReason === "approval");
+}
+
+/** As {@link stampTypedInput}, for {@link PromptInputProvenance}. */
+export function stampPromptInput(
+  record: PromptInputProvenance,
+  at: number,
+  inputOwner?: string
+): void {
+  if (inputOwner === undefined) {
+    record.lastForeignPromptInputAt = at;
+    return;
+  }
+  const previous = record.lastOwnedPromptInput;
+  if (previous !== undefined && previous.owner !== inputOwner) {
+    record.lastForeignPromptInputAt = Math.max(
+      record.lastForeignPromptInputAt ?? previous.at,
+      previous.at
+    );
+  }
+  record.lastOwnedPromptInput = { owner: inputOwner, at };
+}
+
+/** The last prompt-capable input anyone but `owner` wrote. */
+export function foreignPromptInputAt(
+  record: PromptInputProvenance,
+  owner: string
+): number | undefined {
+  const owned = record.lastOwnedPromptInput;
+  const other = owned !== undefined && owned.owner !== owner ? owned.at : undefined;
+  const foreign = record.lastForeignPromptInputAt;
+  if (other === undefined) return foreign;
+  return foreign === undefined ? other : Math.max(foreign, other);
+}
+
+/** Whether someone other than `owner` wrote prompt-capable input after the `before` reading of {@link foreignPromptInputAt}. */
+export function foreignPromptInputMoved(
+  record: PromptInputProvenance,
+  owner: string,
+  before: number | undefined
+): boolean {
+  const now = foreignPromptInputAt(record, owner);
+  return now !== undefined && (before === undefined || now > before);
+}

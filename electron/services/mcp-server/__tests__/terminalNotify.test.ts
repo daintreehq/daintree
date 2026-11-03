@@ -12,6 +12,7 @@ import {
   createNoticeHold,
   formatAssistantApprovalLine,
   formatRetiredExchangesLine,
+  LANE_WAKE_LONGEST_PENDING_MS,
   LANE_WAKE_MAX_PENDING_MS,
   LANE_WAKE_RECHECK_MS,
   MAX_QUEUED_WAKES_PER_PANE,
@@ -54,8 +55,10 @@ interface Submitted {
   id: string;
   text: string;
   token?: string;
+  handback?: string;
   guard?: TerminalSubmitGuard;
   promptAsWritten?: string | null;
+  promptOwner?: string;
 }
 
 class FakePtyClient implements TerminalNotifyPtyClient {
@@ -82,12 +85,22 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     id: string,
     text: string,
     token?: string,
-    _handback?: string,
+    handback?: string,
     guard?: TerminalSubmitGuard,
     _imagePaths?: readonly string[],
-    promptAsWritten?: string | null
+    promptAsWritten?: string | null,
+    _handbackInstruction?: "run",
+    promptOwner?: string
   ) {
-    this.submitted.push({ id, text, token, guard, promptAsWritten });
+    this.submitted.push({
+      id,
+      text,
+      token,
+      ...(handback !== undefined ? { handback } : {}),
+      guard,
+      promptAsWritten,
+      ...(promptOwner !== undefined ? { promptOwner } : {}),
+    });
   }
 
   withdrawGuardedSubmission(id: string, token: string) {
@@ -3122,5 +3135,169 @@ describe("decision wakes (#16015)", () => {
     expect(decision.outcomes).toEqual([
       { outcome: { kind: "ambiguous", reason: "unconfirmed" }, evidence: undefined },
     ]);
+  });
+});
+
+describe("held prompts on a worker's line (#16187)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-03T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const flushWake = () => vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 600);
+
+  function steerWake(
+    id: string,
+    fields: { text: string; promptAsWritten: string; handbackCode?: string },
+    maxPendingMs?: number
+  ) {
+    const steer = { principal: "principal-assistant", ...fields };
+    const outcomes: Array<{ outcome: LaneWakeOutcome; evidence?: LaneWakeEvidence }> = [];
+    let check: LaneWakeCheck = { kind: "ready" };
+    let reservations = 0;
+    const wake: LaneWake = {
+      id,
+      kind: "steer",
+      steer,
+      ...(maxPendingMs !== undefined ? { maxPendingMs } : {}),
+      recheck: () => check,
+      beforeType: () => {
+        reservations++;
+        return true;
+      },
+      report: (outcome, evidence) => outcomes.push({ outcome, evidence }),
+    };
+    return {
+      wake,
+      outcomes,
+      reservations: () => reservations,
+      setCheck: (next: LaneWakeCheck) => {
+        check = next;
+      },
+    };
+  }
+
+  const atWorkerPrompt = (h: ReturnType<typeof setup>) =>
+    h.client.terminals.set(OWN, {
+      ...atPrompt(Date.now() - 60_000),
+      agentIncarnation: 3,
+      agentSessionId: "session-9",
+    });
+
+  it("types it last on the pane's line, past the exact guard, with its handback and first-prompt text", async () => {
+    const h = setup();
+    atWorkerPrompt(h);
+    const notice = fakeWake("retired-1");
+    const held = steerWake("held-1", {
+      text: "[From the Assistant] Rebase onto develop",
+      promptAsWritten: "Rebase onto develop",
+      handbackCode: "hb-1",
+    });
+    h.service.enqueueWake(PANE, PROJECT, held.wake);
+    h.service.enqueueWake(PANE, PROJECT, notice.wake);
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      {
+        id: OWN,
+        text: `${RETIRED_LINE}\n\n[From the Assistant] Rebase onto develop`,
+        token: expect.any(String),
+        handback: "hb-1",
+        guard: { kind: "settled-prompt-exact", agentIncarnation: 3, agentSessionId: "session-9" },
+        promptAsWritten: "Rebase onto develop",
+        // Filed as the Assistant's prompt once written, so another's held prompt drops on it.
+        promptOwner: "principal-assistant",
+      },
+    ]);
+    expect(held.outcomes).toEqual([
+      {
+        outcome: { kind: "delivered" },
+        evidence: { phase: "pty_written", submissionToken: h.client.submitted[0].token },
+      },
+    ]);
+    expect(notice.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("puts one held prompt on a line, leaving another for a later one", async () => {
+    const h = setup();
+    atWorkerPrompt(h);
+    const first = steerWake("held-1", { text: "first", promptAsWritten: "first" });
+    const second = steerWake("held-2", { text: "second", promptAsWritten: "second" });
+    h.service.enqueueWake(PANE, PROJECT, first.wake);
+    h.service.enqueueWake(PANE, PROJECT, second.wake);
+
+    await flushWake();
+    expect(h.client.submitted.map((line) => line.text)).toEqual(["first"]);
+    expect(first.outcomes.map(({ outcome }) => outcome.kind)).toEqual(["delivered"]);
+    // Never reserved: it can still be cancelled or superseded before its own line.
+    expect(first.reservations()).toBe(1);
+    expect(second.reservations()).toBe(0);
+    expect(second.outcomes).toEqual([]);
+    expect(h.service.getPaneState(OWN)?.readyCount).toBe(1);
+  });
+
+  it("keeps the pane's own lines out of a turn while a held prompt waits for its prompt", async () => {
+    // A CLI that queues mid-turn input takes a notice line while working.
+    const baseline = setup();
+    baseline.client.terminals.set(OWN, {
+      ...working(),
+      lastStateChange: Date.now() - 60_000,
+    });
+    const alone = fakeWake("retired-1");
+    baseline.service.enqueueWake(PANE, PROJECT, alone.wake);
+    await flushWake();
+    expect(baseline.client.submitted).toHaveLength(1);
+
+    const h = setup();
+    h.client.terminals.set(OWN, { ...working(), lastStateChange: Date.now() - 60_000 });
+    const notice = fakeWake("retired-1");
+    const held = steerWake("held-1", { text: "held", promptAsWritten: "held" });
+    held.setCheck({ kind: "held", reason: "working" });
+    h.service.enqueueWake(PANE, PROJECT, held.wake);
+    h.service.enqueueWake(PANE, PROJECT, notice.wake);
+
+    await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MIN_MS + 1_000);
+    expect(h.client.submitted).toEqual([]);
+    expect(notice.outcomes).toEqual([{ kind: "held", reason: "working" }]);
+
+    // At its prompt both go, on one line.
+    atWorkerPrompt(h);
+    held.setCheck({ kind: "ready" });
+    h.settle(OWN);
+    await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MAX_MS);
+    expect(h.client.submitted.map((line) => line.text)).toEqual([`${RETIRED_LINE}\n\nheld`]);
+  });
+
+  it("waits as long as it asked, up to the longest a wake may", async () => {
+    const h = setup();
+    h.client.terminals.set(OWN, working());
+    const held = steerWake(
+      "held-1",
+      { text: "held", promptAsWritten: "held" },
+      LANE_WAKE_MAX_PENDING_MS * 3
+    );
+    held.setCheck({ kind: "held", reason: "working" });
+    const greedy = steerWake(
+      "held-2",
+      { text: "held", promptAsWritten: "held" },
+      LANE_WAKE_LONGEST_PENDING_MS * 2
+    );
+    greedy.setCheck({ kind: "held", reason: "working" });
+    h.service.enqueueWake(PANE, PROJECT, held.wake);
+    h.service.enqueueWake(PANE, PROJECT, greedy.wake);
+
+    await vi.advanceTimersByTimeAsync(LANE_WAKE_MAX_PENDING_MS + LANE_WAKE_RECHECK_MS);
+    expect(held.outcomes.map(({ outcome }) => outcome.kind)).toEqual(["held"]);
+
+    await vi.advanceTimersByTimeAsync(LANE_WAKE_MAX_PENDING_MS * 2);
+    expect(held.outcomes.at(-1)?.outcome).toEqual({ kind: "unavailable", reason: "expired" });
+    expect(greedy.outcomes.at(-1)?.outcome.kind).toBe("held");
+
+    await vi.advanceTimersByTimeAsync(LANE_WAKE_LONGEST_PENDING_MS - LANE_WAKE_MAX_PENDING_MS * 3);
+    expect(greedy.outcomes.at(-1)?.outcome).toEqual({ kind: "unavailable", reason: "expired" });
   });
 });

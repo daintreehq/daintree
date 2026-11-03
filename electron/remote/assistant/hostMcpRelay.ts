@@ -1,4 +1,5 @@
 import { AppError } from "../../utils/errorTypes.js";
+import { createLogger } from "../../utils/logger.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionContext, MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import {
@@ -38,11 +39,15 @@ export {
   type RelayMcpSessionSpec,
 } from "./mcpRelayExecutor.js";
 
+const logger = createLogger("main:hostMcpRelay");
+
 export interface HostMcpRelayDeps extends Omit<McpRelayExecutorDeps, "waitingNoticeCalls"> {
   /** Read at each call: the sender host registers it with the authenticate call. */
   senders(): Pick<SenderSessions, "senderOf" | "senderOfSessionId"> | undefined;
   /** This host's throwaway runs (#14445), read at each call; absent or null, they are off. */
   throwawayRuns?(): HostThrowawayExecutor | null;
+  /** A Shell's assistant session ended: the messages it held for workers here go (#16187). */
+  endHeldSends?(senderId: string, helpSessionId: string): void;
   /**
    * This host's own agent directory (#14455), the one its own `host.list`
    * reads; absent, a Shell asking for it is told this host can't say.
@@ -225,6 +230,12 @@ export function installHostMcpRelay(
         deps
           .throwawayRuns?.()
           ?.endOwner({ senderId, helpSessionId: payload.helpSessionId }, "session-ended");
+        // Sent when the session ends, so what it held for a worker goes with it.
+        try {
+          deps.endHeldSends?.(senderId, payload.helpSessionId);
+        } catch (error) {
+          logger.warn("Couldn't drop an ended session's held messages", { error });
+        }
         return {};
       }
     );

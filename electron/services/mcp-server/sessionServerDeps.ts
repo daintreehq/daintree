@@ -281,6 +281,8 @@ export interface SessionServerDepsSource {
   isAgentPaneInWorkspace?: (terminalId: string, workspaceId: string) => Promise<boolean>;
   /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
   terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
+  /** Prompts held for busy workers (#16187). */
+  workerSteerQueue?: import("./sessionServer.js").SessionServerDeps["workerSteerQueue"];
   replyWaiter?: Pick<import("./replyWaiter.js").ReplyWaiterService, "wait">;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
@@ -1125,6 +1127,10 @@ export function createSessionServerDeps(
     isTerminalInPinnedWorkspace,
     ...(deps.replyWaiter !== undefined ? { replyWaiter: deps.replyWaiter } : {}),
     ...(deps.terminalNotify !== undefined ? { terminalNotify: deps.terminalNotify } : {}),
+    // Only a session relayed for a Shell's global Assistant holds any (#16187).
+    ...(deps.workerSteerQueue !== undefined && relay?.global === true
+      ? { workerSteerQueue: deps.workerSteerQueue }
+      : {}),
     // A relayed session is never this machine's assistant: no lane, and no
     // hosts of its own to reach, so a call never chains (#13493).
     ...(relay

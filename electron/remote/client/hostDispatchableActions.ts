@@ -34,6 +34,7 @@
  * them in its own main process — the batches (`*Many`, expanded there into
  * single calls this list already carries) and `agent.launchInNewWorktree`
  * (run there as the same create, wait and launch), `terminal.notifyWhenIdle`,
+ * `terminal.cancelQueuedSend`,
  * `mcp.surface`, `help.displayImage`, `skills.*`, `project.runCommand`,
  * `terminal.waitForExit` (the exits and closes it reads are the host's),
  * `assistant.list`, `assistant.start` and `agent.readQuota` (a Shell's
@@ -97,6 +98,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "skills.search",
   "slashCommands.list",
   "terminal.cancelWatch",
+  "terminal.cancelQueuedSend",
   "terminal.close",
   "terminal.closeMany",
   "terminal.closeOwned",

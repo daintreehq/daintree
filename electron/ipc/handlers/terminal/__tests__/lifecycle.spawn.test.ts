@@ -201,6 +201,8 @@ const {
   mockSetOwnershipPrincipalRevokedListener,
   mockSetPaneTerminalResolver,
   mockGetPaneIdForToken,
+  mockSetWorkerPrincipalResolver,
+  mockGetLaunchPrincipal,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "core" | "full" | false>(),
@@ -219,6 +221,9 @@ const {
   mockSetPaneTerminalResolver:
     vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
   mockGetPaneIdForToken: vi.fn<(token: string) => string | null>(),
+  mockSetWorkerPrincipalResolver:
+    vi.fn<(resolver: ((paneId: string) => string | null) | null) => void>(),
+  mockGetLaunchPrincipal: vi.fn<(paneId: string) => string | null>(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -292,6 +297,8 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetPaneOwnershipPrincipalResolver(resolver),
     setPaneTerminalResolver: (resolver: ((token: string) => string | null) | null) =>
       mockSetPaneTerminalResolver(resolver),
+    setWorkerPrincipalResolver: (resolver: ((paneId: string) => string | null) | null) =>
+      mockSetWorkerPrincipalResolver(resolver),
     revokePaneBearer: (principal: string) => mockRevokePaneBearer(principal),
   },
 }));
@@ -304,6 +311,7 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
       mockRegisterPaneWorkspaceBinding(token, binding),
     getOwnershipPrincipalForToken: (token: string) => mockGetOwnershipPrincipalForToken(token),
     getPaneIdForToken: (token: string) => mockGetPaneIdForToken(token),
+    getLaunchPrincipal: (paneId: string) => mockGetLaunchPrincipal(paneId),
     setOwnershipPrincipalRevokedListener: (listener: ((principal: string) => void) | null) =>
       mockSetOwnershipPrincipalRevokedListener(listener),
   },
@@ -2784,6 +2792,16 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     mockGetPaneIdForToken.mockReturnValueOnce("pane-7");
     expect(resolver!("pane-token")).toBe("pane-7");
     expect(mockGetPaneIdForToken).toHaveBeenCalledWith("pane-token");
+  });
+
+  it("wires the launch principal a held prompt finds the pane's notice line by (#16187)", async () => {
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    const resolver = mockSetWorkerPrincipalResolver.mock.calls.at(-1)?.[0];
+    expect(resolver).toBeTypeOf("function");
+    mockGetLaunchPrincipal.mockReturnValueOnce("principal-7");
+    expect(resolver!("pane-7")).toBe("principal-7");
+    expect(mockGetLaunchPrincipal).toHaveBeenCalledWith("pane-7");
   });
 
   it("binds to the pane's own project even when another project is globally current", async () => {

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   foreignInputMoved,
+  foreignPromptInputAt,
+  foreignPromptInputMoved,
   foreignTypedInputAt,
+  keysReachPrompt,
+  stampPromptInput,
   stampTypedInput,
   typedSinceSettle,
+  type PromptInputProvenance,
   type TypedInputProvenance,
 } from "../terminalInputProvenance.js";
 
@@ -85,5 +90,57 @@ describe("typed-input provenance (#16094)", () => {
     expect(foreignInputMoved(record, A, before)).toBe(true);
     expect(foreignInputMoved(written([A]), A, undefined)).toBe(false);
     expect(foreignInputMoved(written([B]), A, undefined)).toBe(true);
+  });
+});
+
+describe("prompt-capable input provenance (#16187)", () => {
+  /** A record of prompt-capable writes, in order, one per millisecond from 1. */
+  const prompted = (writes: ReadonlyArray<string | undefined>): PromptInputProvenance => {
+    const record: PromptInputProvenance = {};
+    writes.forEach((owner, index) => stampPromptInput(record, index + 1, owner));
+    return record;
+  };
+
+  it("reads keys at an approval dialog as no prompt, and every other state as one", () => {
+    expect(keysReachPrompt({ agentState: "waiting", waitingReason: "approval" })).toBe(false);
+    for (const state of [
+      { agentState: "working" },
+      { agentState: "waiting", waitingReason: "prompt" },
+      { agentState: "waiting", waitingReason: "question" },
+      { agentState: "waiting", waitingReason: "error" },
+      { agentState: "idle" },
+      {},
+    ]) {
+      expect(keysReachPrompt(state), JSON.stringify(state)).toBe(true);
+    }
+  });
+
+  it.each([
+    [[A], A, undefined],
+    [[undefined], A, 1],
+    [[B], A, 1],
+    [[A, undefined, A], A, 2],
+    [[B, A], A, 1],
+    [[undefined, B, A], B, 3],
+  ] as const)("after %j, someone other than %s last prompted at %s", (writes, owner, expected) => {
+    expect(foreignPromptInputAt(prompted(writes), owner)).toBe(expected);
+  });
+
+  it("moves only on someone else's prompt-capable input after the baseline", () => {
+    const record = prompted([undefined]);
+    const baseline = foreignPromptInputAt(record, A);
+
+    stampPromptInput(record, 5, A);
+    expect(foreignPromptInputMoved(record, A, baseline)).toBe(false);
+
+    stampPromptInput(record, 6, B);
+    expect(foreignPromptInputMoved(record, A, baseline)).toBe(true);
+  });
+
+  it("moves from nothing at all on the first foreign prompt", () => {
+    const record: PromptInputProvenance = {};
+    expect(foreignPromptInputMoved(record, A, undefined)).toBe(false);
+    stampPromptInput(record, 1);
+    expect(foreignPromptInputMoved(record, A, undefined)).toBe(true);
   });
 });

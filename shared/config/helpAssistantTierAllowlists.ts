@@ -141,6 +141,9 @@ export const CORE_TIER_TOOLS = [
   // into the caller's own prompt when the terminal stops working. The send
   // tools' `notify` flag does the same for the prompt they carry.
   "terminal.notifyWhenIdle",
+  // Withdraws a message held for a busy worker (#16187). Only the global
+  // Assistant's relayed sessions ever hold one; for any other it finds none.
+  "terminal.cancelQueuedSend",
   // Stop a turn without losing the conversation (#12338).
   "terminal.interruptOwned",
   // Answers a CLI's own dialog (trust, permission, a selection) that a
