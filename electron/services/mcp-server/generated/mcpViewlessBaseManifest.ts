@@ -2299,7 +2299,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      'Withdraw text you held for a busy agent with `whenBusy: "queue"`, before it is typed. One already on its way into the terminal can\'t be withdrawn; the answer says what became of it.',
+      'Withdraw text held for a busy agent with `whenBusy: "queue"` before it is typed. Text already going in stays; the answer says which.',
     enabled: true,
     id: "terminal.cancelQueuedSend",
     inputSchema: {
@@ -2310,13 +2310,13 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           maxLength: 512,
-          description: "The terminal the message was held for.",
+          description: "The terminal it was held for.",
         },
         queuedSendToken: {
           type: "string",
           minLength: 1,
           maxLength: 128,
-          description: "The `queuedSendToken` a held send answered with.",
+          description: "A held send's `queuedSendToken`.",
         },
       },
       required: ["terminalId", "queuedSendToken"],
@@ -2333,31 +2333,18 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
-        terminalId: {
-          type: "string",
-        },
-        queuedSendToken: {
-          type: "string",
-        },
         cancelled: {
           type: "boolean",
-          description:
-            "False when it had already ended, or was already on its way into the terminal: `queuedSend` says which.",
+          description: "False once it ended or went to the terminal.",
         },
         queuedSend: {
           type: "object",
           properties: {
-            queuedSendToken: {
-              type: "string",
-            },
-            terminalId: {
-              type: "string",
-            },
             status: {
               type: "string",
               enum: ["queued", "delivered", "superseded", "dropped", "cancelled", "unconfirmed"],
               description:
-                "`queued` still waits. `delivered` was written to the terminal, which says nothing of what the agent did with it. `unconfirmed` went to the terminal but was never confirmed written, and is never sent again.",
+                "`delivered` was written, not acted on; `unconfirmed` may have been, and is never resent.",
             },
             queuedAt: {
               type: "number",
@@ -2366,23 +2353,15 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               type: "number",
             },
             waitingOn: {
-              description:
-                "While queued: what it was last seen waiting on, such as `working` or `approval`.",
               type: "string",
             },
             submissionToken: {
-              description:
-                "Once delivered: the line's token, which a status read with `submissionToken` also takes.",
               type: "string",
-            },
-            deliveredAt: {
-              type: "number",
             },
             supersededBy: {
               type: "string",
             },
             reason: {
-              description: "Why it was dropped unwritten.",
               type: "string",
               enum: [
                 "typed",
@@ -2398,11 +2377,11 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               type: "number",
             },
           },
-          required: ["queuedSendToken", "terminalId", "status", "queuedAt", "expiresAt"],
+          required: ["status", "queuedAt", "expiresAt"],
           additionalProperties: false,
         },
       },
-      required: ["terminalId", "queuedSendToken", "cancelled", "queuedSend"],
+      required: ["cancelled", "queuedSend"],
       additionalProperties: false,
     },
     requiresArgs: true,

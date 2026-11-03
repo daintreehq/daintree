@@ -294,7 +294,7 @@ export function registerTerminalQueryActions(
             "Token from a send; adds its delivery record to each entry. Needs `terminalIds`."
           ),
         queuedSendToken: QueuedSendTokenArgSchema.optional().describe(
-          "Token from a held send; adds `queuedSend`, what became of it."
+          "A held send's token; adds `queuedSend`."
         ),
         // `true` is what a model reaches for first; it reads as the defaults.
         includeOutput: z

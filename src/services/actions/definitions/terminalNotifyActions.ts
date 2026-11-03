@@ -57,7 +57,7 @@ export function registerTerminalNotifyActions(
     id: "terminal.cancelQueuedSend",
     title: "Cancel held terminal message",
     description:
-      'Withdraw text you held for a busy agent with `whenBusy: "queue"`, before it is typed. One already on its way into the terminal can\'t be withdrawn; the answer says what became of it.',
+      'Withdraw text held for a busy agent with `whenBusy: "queue"` before it is typed. Text already going in stays; the answer says which.',
     category: "terminal",
     kind: "command",
     danger: "safe",

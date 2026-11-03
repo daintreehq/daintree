@@ -544,23 +544,12 @@ export const TerminalSendCommandOwnedResultSchema = TerminalSendCommandResultSch
     .string()
     .optional()
     .describe(
-      "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart. Absent when the text was held instead."
+      "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart. Absent when held."
     ),
-  queued: z
-    .boolean()
-    .optional()
-    .describe("True when nothing was sent yet: the text is held for the agent's next prompt."),
-  queuedSendToken: z
-    .string()
-    .optional()
-    .describe("Pass to a status read as `queuedSendToken` to see what became of the held text."),
-  expiresAt: z.number().optional().describe("When the held text is dropped unsent, epoch ms."),
-  supersededToken: z
-    .string()
-    .optional()
-    .describe(
-      "Your earlier held text for this agent, which this replaces and which won't be sent."
-    ),
+  queued: z.boolean().optional(),
+  queuedSendToken: z.string().optional().describe("Set when held: read it by this."),
+  expiresAt: z.number().optional(),
+  supersededToken: z.string().optional().describe("Your held text this replaces, now unsent."),
 });
 
 const AgentLastMessageSchema = z.object({

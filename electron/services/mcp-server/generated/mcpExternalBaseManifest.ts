@@ -1549,7 +1549,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           maxLength: 128,
         },
         queuedSendToken: {
-          description: "Token from a held send; adds `queuedSend`, what became of it.",
+          description: "A held send's token; adds `queuedSend`.",
           type: "string",
           minLength: 1,
           maxLength: 128,
@@ -1795,18 +1795,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Fields this surface cannot observe: absent from every entry, unknown rather than false.",
         },
         queuedSend: {
-          description:
-            "What became of the held text `queuedSendToken` named; null when this host holds no record of it, as after a restart.",
+          description: "The held send `queuedSendToken` named; null when unknown here.",
           anyOf: [
             {
               type: "object",
               properties: {
-                queuedSendToken: {
-                  type: "string",
-                },
-                terminalId: {
-                  type: "string",
-                },
                 status: {
                   type: "string",
                   enum: [
@@ -1818,7 +1811,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     "unconfirmed",
                   ],
                   description:
-                    "`queued` still waits. `delivered` was written to the terminal, which says nothing of what the agent did with it. `unconfirmed` went to the terminal but was never confirmed written, and is never sent again.",
+                    "`delivered` was written, not acted on; `unconfirmed` may have been, and is never resent.",
                 },
                 queuedAt: {
                   type: "number",
@@ -1827,23 +1820,15 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   type: "number",
                 },
                 waitingOn: {
-                  description:
-                    "While queued: what it was last seen waiting on, such as `working` or `approval`.",
                   type: "string",
                 },
                 submissionToken: {
-                  description:
-                    "Once delivered: the line's token, which a status read with `submissionToken` also takes.",
                   type: "string",
-                },
-                deliveredAt: {
-                  type: "number",
                 },
                 supersededBy: {
                   type: "string",
                 },
                 reason: {
-                  description: "Why it was dropped unwritten.",
                   type: "string",
                   enum: [
                     "typed",
@@ -1859,7 +1844,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   type: "number",
                 },
               },
-              required: ["queuedSendToken", "terminalId", "status", "queuedAt", "expiresAt"],
+              required: ["status", "queuedAt", "expiresAt"],
               additionalProperties: false,
             },
             {
@@ -2595,13 +2580,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         whenBusy: {
           description:
-            "For an agent you neither launched nor were handed, when it isn't waiting at its prompt: `refuse` (default) sends nothing; `queue` holds the text and types it the next time it waits at its own prompt with nothing typed there, dropping it if someone else sends it input or its run changes first. One held message per agent: a newer one replaces it. Not with `waitForReply`, and not for a slash command.",
+            "An agent you didn't launch and isn't at its prompt: `refuse` (default) sends nothing; `queue` holds the text for its next prompt.",
           type: "string",
           enum: ["refuse", "queue"],
         },
         queueTtlSeconds: {
-          description:
-            "How long a held message waits before it is dropped, in seconds (60-3600, default 1800).",
+          description: "Seconds held text waits before it is dropped (60-3600, default 1800).",
           type: "integer",
           minimum: 60,
           maximum: 3600,
@@ -2629,7 +2613,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         submissionToken: {
           description:
-            "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart. Absent when the text was held instead.",
+            "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart. Absent when held.",
           type: "string",
         },
         message: {
@@ -2677,22 +2661,17 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           additionalProperties: false,
         },
         queued: {
-          description:
-            "True when nothing was sent yet: the text is held for the agent's next prompt.",
           type: "boolean",
         },
         queuedSendToken: {
-          description:
-            "Pass to a status read as `queuedSendToken` to see what became of the held text.",
+          description: "Set when held: read it by this.",
           type: "string",
         },
         expiresAt: {
-          description: "When the held text is dropped unsent, epoch ms.",
           type: "number",
         },
         supersededToken: {
-          description:
-            "Your earlier held text for this agent, which this replaces and which won't be sent.",
+          description: "Your held text this replaces, now unsent.",
           type: "string",
         },
       },

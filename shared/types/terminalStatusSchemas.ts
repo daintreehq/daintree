@@ -155,7 +155,5 @@ export const TerminalStatusResultSchema = z.object({
     ),
   queuedSend: QueuedSendRecordSchema.nullable()
     .optional()
-    .describe(
-      "What became of the held text `queuedSendToken` named; null when this host holds no record of it, as after a restart."
-    ),
+    .describe("The held send `queuedSendToken` named; null when unknown here."),
 });

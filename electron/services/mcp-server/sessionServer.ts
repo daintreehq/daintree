@@ -2469,23 +2469,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               "Pass the `terminalId` and the `queuedSendToken` a held send answered with."
             );
           }
-          const held = workerSteerQueue?.status(ownershipOwner, token) ?? null;
-          const answer =
-            held !== null && held.terminalId === terminalId
-              ? workerSteerQueue!.cancel(ownershipOwner, token)
-              : null;
+          const answer = workerSteerQueue?.cancel(ownershipOwner, terminalId, token) ?? null;
           if (answer === null) {
             return refuse(
               "NOT_FOUND",
               `This host holds no message of yours for terminal '${terminalId}' under that token. Held messages are kept in memory, so a restart forgets them.`
             );
           }
-          const result = {
-            terminalId,
-            queuedSendToken: token,
-            cancelled: answer.cancelled,
-            queuedSend: answer.record,
-          };
+          const result = { cancelled: answer.cancelled, queuedSend: answer.record };
           outcome = { kind: "result", value: { ok: true, result } };
           return buildToolCallResult(result, {
             structuredContent: result as unknown as Record<string, unknown>,

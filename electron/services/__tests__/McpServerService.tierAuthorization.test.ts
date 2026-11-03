@@ -1398,6 +1398,12 @@ describe("McpServerService", () => {
         title: "Notify When Terminal Is Idle",
         description: "Notify When Terminal Is Idle for this pane.",
       }),
+      // Withdraws a message held for a busy worker (#16187), beside the notices.
+      createManifestEntry({
+        id: "terminal.cancelQueuedSend" as ActionId,
+        title: "Cancel Held Terminal Message",
+        description: "Cancel a held terminal message.",
+      }),
       // Session continuity + recipe-editor handoffs from #11908. The resume is
       // on the full set; the bookmark and recipe-editor handoffs are on neither
       // set now, which the off-MCP loop below pins. The coverage loops iterate

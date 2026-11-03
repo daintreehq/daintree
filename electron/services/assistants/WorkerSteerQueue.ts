@@ -83,6 +83,8 @@ export class HoldRefusedError extends Error {
 }
 
 interface Entry {
+  readonly token: string;
+  readonly terminalId: string;
   readonly record: QueuedSendRecord;
   readonly principal: string;
   readonly projectId: string;
@@ -135,9 +137,9 @@ export class WorkerSteerQueue {
     const token = this.deps.newToken?.() ?? randomUUID();
     const expiresAt = now + clampTtlSeconds(request.ttlSeconds) * 1_000;
     const entry: Entry = {
+      token,
+      terminalId: request.terminalId,
       record: {
-        queuedSendToken: token,
-        terminalId: request.terminalId,
         status: "queued",
         queuedAt: now,
         expiresAt,
@@ -191,7 +193,7 @@ export class WorkerSteerQueue {
     const previous = previousToken === undefined ? undefined : this.entries.get(previousToken);
     let supersededToken: string | undefined;
     if (previous !== undefined && previous.record.status === "queued") {
-      supersededToken = previous.record.queuedSendToken;
+      supersededToken = previous.token;
       // Already on a line, it is no longer this one's to replace.
       if (!previous.reserved) this.end(previous, "superseded", { supersededBy: token });
       else supersededToken = undefined;
@@ -213,10 +215,13 @@ export class WorkerSteerQueue {
    */
   cancel(
     principal: string,
+    terminalId: string,
     token: string
   ): { cancelled: boolean; record: QueuedSendRecord } | null {
     const entry = this.entries.get(token);
-    if (entry === undefined || entry.principal !== principal) return null;
+    if (entry === undefined || entry.principal !== principal || entry.terminalId !== terminalId) {
+      return null;
+    }
     this.expireIfDue(entry);
     if (entry.record.status !== "queued" || entry.reserved) {
       return { cancelled: false, record: { ...entry.record } };
@@ -245,7 +250,7 @@ export class WorkerSteerQueue {
   }
 
   private recheck(entry: Entry, info?: NotifyTerminalInfo): LaneWakeCheck {
-    const { terminalId } = entry.record;
+    const { terminalId } = entry;
     if (entry.record.status !== "queued")
       return { kind: "unavailable", reason: entry.record.status };
     const drop = (reason: QueuedSendDropReason): LaneWakeCheck => {
@@ -320,7 +325,7 @@ export class WorkerSteerQueue {
       }
       const notice = entry.notice;
       entry.notice = undefined;
-      this.end(entry, "delivered", { submissionToken, deliveredAt: this.now() });
+      this.end(entry, "delivered", { submissionToken });
       notice?.complete({ submissionToken });
       return;
     }
@@ -353,15 +358,15 @@ export class WorkerSteerQueue {
     if (entry.record.status !== "queued") return;
     Object.assign(entry.record, fields, { status, endedAt: this.now() });
     delete entry.record.waitingOn;
-    const key = pendingKey(entry.principal, entry.record.terminalId);
-    if (this.pending.get(key) === entry.record.queuedSendToken) this.pending.delete(key);
+    const key = pendingKey(entry.principal, entry.terminalId);
+    if (this.pending.get(key) === entry.token) this.pending.delete(key);
     // The notice follows the line, so one with no line written has nothing to follow.
     if (status !== "delivered") {
       const notice = entry.notice;
       entry.notice = undefined;
       notice?.cancel();
     }
-    this.ended.push(entry.record.queuedSendToken);
+    this.ended.push(entry.token);
     while (this.ended.length > MAX_ENDED_RECORDS) {
       const oldest = this.ended.shift()!;
       this.entries.delete(oldest);

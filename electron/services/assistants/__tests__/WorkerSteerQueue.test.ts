@@ -87,7 +87,6 @@ describe("WorkerSteerQueue (#16187)", () => {
     });
     expect(queue.status(OWNER, "tok-1")).toMatchObject({
       status: "queued",
-      terminalId: WORKER,
       queuedAt: 1_000,
       expiresAt: 601_000,
       waitingOn: "working",
@@ -195,7 +194,6 @@ describe("WorkerSteerQueue (#16187)", () => {
     expect(queue.status(OWNER, "tok-1")).toMatchObject({
       status: "delivered",
       submissionToken: "line-1",
-      deliveredAt: 9_000,
       endedAt: 9_000,
     });
     expect(notice.complete).toHaveBeenCalledWith({ submissionToken: "line-1" });
@@ -277,9 +275,10 @@ describe("WorkerSteerQueue (#16187)", () => {
     const notice: PendingNotify = { complete: vi.fn(), cancel: vi.fn() };
     queue.hold(request({ takeNotice: () => notice }));
 
-    expect(queue.cancel(OTHER, "tok-1")).toBeNull();
+    expect(queue.cancel(OTHER, WORKER, "tok-1")).toBeNull();
+    expect(queue.cancel(OWNER, "term-other", "tok-1")).toBeNull();
     expect(queue.status(OTHER, "tok-1")).toBeNull();
-    expect(queue.cancel(OWNER, "tok-1")).toMatchObject({
+    expect(queue.cancel(OWNER, WORKER, "tok-1")).toMatchObject({
       cancelled: true,
       record: { status: "cancelled" },
     });
@@ -288,7 +287,7 @@ describe("WorkerSteerQueue (#16187)", () => {
 
     queue.hold(request());
     lastWake().beforeType();
-    expect(queue.cancel(OWNER, "tok-2")).toMatchObject({
+    expect(queue.cancel(OWNER, WORKER, "tok-2")).toMatchObject({
       cancelled: false,
       record: { status: "queued" },
     });
@@ -318,8 +317,6 @@ describe("WorkerSteerQueue (#16187)", () => {
 
   it("clamps the time a caller asks for to the bounds", () => {
     expect(queue.hold(request({ ttlSeconds: 5 })).expiresAt).toBe(61_000);
-    expect(queue.hold(request({ ttlSeconds: 99_999, principal: OTHER })).expiresAt).toBe(
-      3_601_000
-    );
+    expect(queue.hold(request({ ttlSeconds: 99_999, principal: OTHER })).expiresAt).toBe(3_601_000);
   });
 });

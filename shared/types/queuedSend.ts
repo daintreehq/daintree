@@ -33,10 +33,11 @@ export type QueuedSendStatus =
 export type QueuedSendDropReason =
   "typed" | "restarted" | "target-gone" | "session-gone" | "not-allowed" | "expired" | "stopped";
 
-/** What became of a held prompt, as a status read reports it: observations only. */
+/**
+ * What became of a held prompt, as a status read reports it: observations
+ * only. The token and terminal it is read by aren't repeated.
+ */
 export interface QueuedSendRecord {
-  queuedSendToken: string;
-  terminalId: string;
   status: QueuedSendStatus;
   /** Epoch ms. */
   queuedAt: number;
@@ -45,12 +46,11 @@ export interface QueuedSendRecord {
   waitingOn?: string;
   /** Set once `delivered`: the line's own token, which the terminal's status read also takes. */
   submissionToken?: string;
-  deliveredAt?: number;
   /** Set once `superseded`. */
   supersededBy?: string;
   /** Set once `dropped`. */
   reason?: QueuedSendDropReason;
-  /** When it stopped waiting, whatever it ended as. */
+  /** When it stopped waiting, whatever it ended as: for `delivered`, when the host wrote it. */
   endedAt?: number;
 }
 
@@ -94,7 +94,7 @@ export const WhenBusyArgSchema = z
   .enum(["refuse", "queue"])
   .optional()
   .describe(
-    "For an agent you neither launched nor were handed, when it isn't waiting at its prompt: `refuse` (default) sends nothing; `queue` holds the text and types it the next time it waits at its own prompt with nothing typed there, dropping it if someone else sends it input or its run changes first. One held message per agent: a newer one replaces it. Not with `waitForReply`, and not for a slash command."
+    "An agent you didn't launch and isn't at its prompt: `refuse` (default) sends nothing; `queue` holds the text for its next prompt."
   );
 
 export const QueueTtlSecondsArgSchema = z
@@ -103,33 +103,20 @@ export const QueueTtlSecondsArgSchema = z
   .min(QUEUED_SEND_TTL_MIN_SECONDS)
   .max(QUEUED_SEND_TTL_MAX_SECONDS)
   .optional()
-  .describe(
-    "How long a held message waits before it is dropped, in seconds (60-3600, default 1800)."
-  );
+  .describe("Seconds held text waits before it is dropped (60-3600, default 1800).");
 
 export const QueuedSendRecordSchema = z.object({
-  queuedSendToken: z.string(),
-  terminalId: z.string(),
   status: z
     .enum(QUEUED_SEND_STATUSES)
     .describe(
-      "`queued` still waits. `delivered` was written to the terminal, which says nothing of what the agent did with it. `unconfirmed` went to the terminal but was never confirmed written, and is never sent again."
+      "`delivered` was written, not acted on; `unconfirmed` may have been, and is never resent."
     ),
   queuedAt: z.number(),
   expiresAt: z.number(),
-  waitingOn: z
-    .string()
-    .optional()
-    .describe("While queued: what it was last seen waiting on, such as `working` or `approval`."),
-  submissionToken: z
-    .string()
-    .optional()
-    .describe(
-      "Once delivered: the line's token, which a status read with `submissionToken` also takes."
-    ),
-  deliveredAt: z.number().optional(),
+  waitingOn: z.string().optional(),
+  submissionToken: z.string().optional(),
   supersededBy: z.string().optional(),
-  reason: z.enum(QUEUED_SEND_DROP_REASONS).optional().describe("Why it was dropped unwritten."),
+  reason: z.enum(QUEUED_SEND_DROP_REASONS).optional(),
   endedAt: z.number().optional(),
 });
 
@@ -137,20 +124,14 @@ export const QueuedSendTokenArgSchema = z
   .string()
   .min(1)
   .max(128)
-  .describe("The `queuedSendToken` a held send answered with.");
+  .describe("A held send's `queuedSendToken`.");
 
 export const TerminalCancelQueuedSendArgsSchema = z.object({
-  terminalId: z.string().min(1).max(512).describe("The terminal the message was held for."),
+  terminalId: z.string().min(1).max(512).describe("The terminal it was held for."),
   queuedSendToken: QueuedSendTokenArgSchema,
 });
 
 export const TerminalCancelQueuedSendResultSchema = z.object({
-  terminalId: z.string(),
-  queuedSendToken: z.string(),
-  cancelled: z
-    .boolean()
-    .describe(
-      "False when it had already ended, or was already on its way into the terminal: `queuedSend` says which."
-    ),
+  cancelled: z.boolean().describe("False once it ended or went to the terminal."),
   queuedSend: QueuedSendRecordSchema,
 });
