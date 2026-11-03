@@ -568,6 +568,18 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
 
   release(): void {
     if (this.released) return;
+    // A capture still open gets its last frame first (#16210): the hold goes
+    // to the worker, the close behind it, and the session is freed once the
+    // final comes back, since freeing would close it on whatever had parsed.
+    const awaitFinal =
+      this.captures.size > 0 &&
+      !this.detached &&
+      !this.sessionCreatePending &&
+      this.flushHeldFeed() &&
+      this.pool.post(this.spec.terminalId, {
+        type: "submission-capture-close",
+        terminalId: this.spec.terminalId,
+      });
     this.released = true;
     this.stopProcessStatePush();
     this.monitorSpec = null;
@@ -575,19 +587,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     // to flush it once the slot is freed.
     this.heldFeed = null;
     this.outstandingFeedBytes = 0;
-    if (!this.detached) {
-      this.pool.post(this.spec.terminalId, {
-        type: "free",
-        terminalId: this.spec.terminalId,
-      });
-    }
-    if (this.captures.size === 0 || this.detached) {
+    if (!awaitFinal) {
       this.finishRelease();
       return;
     }
-    // The worker sends a capture's final as it frees the session, after any
-    // close already posted, so its last frame is listened for a little while
-    // longer rather than settled on what was published up to 250 ms before.
     this.releaseTimer = setTimeout(() => this.finishRelease(), CAPTURE_FINAL_GRACE_MS);
     this.releaseTimer.unref?.();
   }
@@ -596,6 +599,12 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     if (this.releaseTimer !== undefined) clearTimeout(this.releaseTimer);
     this.releaseTimer = undefined;
     this.settleCaptures("closed");
+    if (!this.detached) {
+      this.pool.post(this.spec.terminalId, {
+        type: "free",
+        terminalId: this.spec.terminalId,
+      });
+    }
     this.pool.unregister(this.spec.terminalId, this);
   }
 
@@ -759,7 +768,15 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
 
   /** No workers left to host this terminal — degrade to inert analysis. */
   handleDetached(): void {
-    if (this.released) return;
+    if (this.released) {
+      // No worker is left to send a capture's final.
+      if (this.releaseTimer !== undefined) {
+        this.detached = true;
+        this.settleCaptures("lost");
+        this.finishRelease();
+      }
+      return;
+    }
     this.detached = true;
     this.settleCaptures("lost");
     this.stopProcessStatePush();

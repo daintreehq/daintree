@@ -155,8 +155,8 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
   private submissionCaptures: SubmissionCaptureHost | undefined;
   private capturePublish: SubmissionCapturePublish | undefined;
   private readonly parseBarrier = new ParseBarrier();
-  /** A capture asked for whose start is still waiting on the parse barrier. */
-  private pendingCaptureStart: number | undefined;
+  /** Captures asked for whose start is still waiting on the parse barrier. */
+  private readonly pendingCaptureStarts = new Set<number>();
 
   constructor(private readonly deps: InThreadAnalysisDeps) {
     this.id = deps.terminalId;
@@ -520,9 +520,9 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     ));
     // Behind every slice still queued for this mirror, so the rows on screen
     // at the write are the ones the capture treats as already there.
-    this.pendingCaptureStart = captureId;
+    this.pendingCaptureStarts.add(captureId);
     this.parseBarrier.after(() => {
-      if (this.pendingCaptureStart === captureId) this.pendingCaptureStart = undefined;
+      this.pendingCaptureStarts.delete(captureId);
       if (this.terminalInfo.headlessTerminal === mirror) {
         captures.start(mirror, captureId, submittedText);
       }
@@ -541,15 +541,11 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     // Before the mirror goes, so the open capture keeps the rows on screen.
     this.submissionCaptures?.dispose();
     this.submissionCaptures = undefined;
-    // Its start never reached the mirror, so nothing was observed for it.
-    if (this.pendingCaptureStart !== undefined) {
-      this.capturePublish?.(this.pendingCaptureStart, {
-        text: "",
-        truncated: false,
-        state: "closed",
-      });
-      this.pendingCaptureStart = undefined;
+    // Their start never reached the mirror, so nothing was observed for them.
+    for (const captureId of this.pendingCaptureStarts) {
+      this.capturePublish?.(captureId, { text: "", truncated: false, state: "closed" });
     }
+    this.pendingCaptureStarts.clear();
     // Queued parse callbacks are dropped with the mirror, so the count goes too.
     this.parseBarrier.reset();
     this.agentOutputTemperature.reset();

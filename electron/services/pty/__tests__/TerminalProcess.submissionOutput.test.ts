@@ -254,26 +254,31 @@ describe("TerminalProcess submission output (#16210), worker mirror", () => {
     expect(nextBody).toBeGreaterThan(close);
   });
 
-  it("closes the capture ahead of the exit's final snapshot and the slot's release", async () => {
+  it("closes the capture at exit, ahead of the exit's final snapshot", async () => {
     const { terminal } = createWorkerTerminal();
     await sendAndWait(terminal, "ask\n", "tok-1");
     timeline = [];
     onPtyExit!({ exitCode: 0 });
-    await vi.waitFor(() => expect(timeline).toContain("post:submission-capture-close"));
-    terminal.dispose();
-    const close = timeline.indexOf("post:submission-capture-close");
-    const free = timeline.indexOf("post:free");
-    expect(free).toBeGreaterThan(close);
+    expect(timeline[0]).toBe("post:submission-capture-close");
     const request = timeline.indexOf("post:request");
-    if (request !== -1) expect(request).toBeGreaterThan(close);
+    if (request !== -1) expect(request).toBeGreaterThan(0);
+    // Not freed while the final is still owed.
+    expect(timeline).not.toContain("post:free");
   });
 
-  it("takes the worker's final after the slot is released at exit", async () => {
+  it("frees the worker's session only after the capture's final, which it then takes", async () => {
     const { terminal, worker } = createWorkerTerminal();
     await sendAndWait(terminal, "ask\n", "tok-1");
     const start = startMessage(worker)!;
-    onPtyExit!({ exitCode: 1 });
-    await vi.waitFor(() => expect(timeline).toContain("post:free"));
+    onPtyData!("ask\r\nthe last words");
+    timeline = [];
+    (terminal as unknown as { analysis: { release(): void } }).analysis.release();
+
+    const close = timeline.indexOf("post:submission-capture-close");
+    expect(close).toBeGreaterThanOrEqual(0);
+    const lastData = timeline.lastIndexOf("post:data");
+    if (lastData !== -1) expect(lastData).toBeLessThan(close);
+    expect(timeline).not.toContain("post:free");
 
     worker.emit({
       type: "submission-capture",
@@ -281,11 +286,24 @@ describe("TerminalProcess submission output (#16210), worker mirror", () => {
       captureId: start.captureId,
       output: { text: "$ ask\nthe last words", truncated: false, state: "closed" },
     });
+    expect(timeline.indexOf("post:free")).toBeGreaterThan(close);
     expect(terminal.getSubmission("tok-1")?.output).toEqual({
       text: "$ ask\nthe last words",
       truncated: false,
       state: "closed",
     });
+  });
+
+  it("settles a capture lost when the worker is gone while its final is awaited", async () => {
+    const { terminal } = createWorkerTerminal();
+    await sendAndWait(terminal, "ask\n", "tok-1");
+    const analysis = (
+      terminal as unknown as { analysis: { release(): void; handleDetached(): void } }
+    ).analysis;
+    analysis.release();
+    expect(terminal.getSubmission("tok-1")?.output?.state).toBe("capturing");
+    analysis.handleDetached();
+    expect(terminal.getSubmission("tok-1")?.output?.state).toBe("lost");
   });
 
   it("settles an open capture as lost when no worker is left to host the terminal", async () => {

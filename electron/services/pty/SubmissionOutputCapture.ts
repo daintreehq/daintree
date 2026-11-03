@@ -424,7 +424,14 @@ export class SubmissionOutputCapture {
     // it inserts and deletes, so the true boundary is the match nearest it;
     // without it, read lines are the ones that scrolled off.
     const marker = this.marker;
-    const expected = marker !== undefined && !marker.isDisposed ? marker.line + 1 : undefined;
+    let expected: number | undefined;
+    if (marker !== undefined && !marker.isDisposed) {
+      // A narrowing inserts a line's new rows after its first, so the marked
+      // line now ends further down: measure from that end.
+      let end = marker.line;
+      while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped === true) end += 1;
+      expected = end + 1;
+    }
     let from = Math.max(0, Math.min(expected ?? buffer.baseY, buffer.baseY) - REALIGN_SCAN_ROWS);
     while (from > 0 && buffer.getLine(from)?.isWrapped === true) from -= 1;
     let nearest: number | undefined;

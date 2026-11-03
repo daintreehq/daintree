@@ -679,6 +679,23 @@ describe("SubmissionOutputCapture, third review (#16210)", () => {
     expect(lines.at(-1)).toBe("end");
   });
 
+  it("does not read a repeated line again when a narrowing spreads it over more rows", async () => {
+    const terminal = mirror(80, 6);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    const line = "r".repeat(60);
+    await write(
+      terminal,
+      "go\r\n" + Array.from({ length: 30 }, () => `${line}\r\n`).join(""),
+      capture
+    );
+    terminal.resize(20, 6);
+    await write(terminal, "end\r\n", capture);
+
+    const lines = capture.close().text.split("\n");
+    expect(lines.filter((entry) => entry === line)).toHaveLength(30);
+  });
+
   it("stays closed when a column change commits a replay that reached the cap", async () => {
     const terminal = mirror(60, 10);
     const question = "please list the permissions you still need";
