@@ -66,7 +66,7 @@ function candidate(overrides: Partial<PendingPairing> = {}): PendingPairing {
     role: "phone",
     signing_pub: "sig",
     exchange_pub: "exch",
-    short_code: "482913",
+    short_code: "482 913",
     expires_at: new Date(Date.now() + 240_000).toISOString(),
     ...overrides,
   };
@@ -117,7 +117,7 @@ describe("OwnerDevices", () => {
     relay.approveCandidate.mockReset().mockResolvedValue(undefined);
     relay.createPairingInvite.mockReset();
     relay.verifiedDevices.mockReset();
-    relay.localShortCode.mockReset().mockResolvedValue("482913");
+    relay.localShortCode.mockReset().mockResolvedValue("482 913");
     relay.rotate.mockReset();
     relay.queue = [];
     relay.holdQueue = false;
@@ -126,12 +126,28 @@ describe("OwnerDevices", () => {
   it("shows the code computed from the phone's keys, not the relay's", async () => {
     const devices = owner();
     await invited(devices);
-    relay.pending = [candidate({ short_code: "111111" })];
-    relay.localShortCode.mockResolvedValueOnce("482913");
+    relay.pending = [candidate({ short_code: "111 111" })];
+    relay.localShortCode.mockResolvedValueOnce("482 913");
 
     const read = await devices.read("pair_1");
 
     expect(read).toMatchObject({ state: "responded", code: "482913", label: "Greg's iPhone" });
+  });
+
+  it("shows and approves the code it computed, leading zero and all", async () => {
+    const devices = owner();
+    await invited(devices);
+    relay.pending = [candidate({ short_code: "053 207" })];
+    relay.localShortCode.mockResolvedValue("053 207");
+
+    expect(await devices.read("pair_1")).toMatchObject({ state: "responded", code: "053207" });
+    await expect(devices.approve({ pairingId: "pair_1", code: "482913" })).resolves.toEqual({
+      result: "changed",
+    });
+    await devices.read("pair_1");
+    await expect(devices.approve({ pairingId: "pair_1", code: "053207" })).resolves.toMatchObject({
+      result: "paired",
+    });
   });
 
   it("approves nothing for a code other than the one shown", async () => {
@@ -149,7 +165,7 @@ describe("OwnerDevices", () => {
   it("rejects the invitation when the relay's code disagrees with the phone's keys", async () => {
     const devices = owner();
     await invited(devices);
-    relay.pending = [candidate({ short_code: "111111" })];
+    relay.pending = [candidate({ short_code: "111 111" })];
     await devices.read("pair_1");
 
     await expect(devices.approve({ pairingId: "pair_1", code: "482913" })).resolves.toEqual({

@@ -79,6 +79,7 @@ describe("parseAnswerNotice", () => {
       alias: 4,
       revision: 1,
       injectionId: I1,
+      question: null,
       source: "human",
       expired: false,
       correction: false,
@@ -89,6 +90,27 @@ describe("parseAnswerNotice", () => {
       reason: null,
       comment: "Proceed.\nKeep it compact.",
     });
+  });
+
+  it("reads the question an answer is to, wherever the library writes it, as inert data", () => {
+    const [block] = parsed(
+      rawNotice([
+        "question: Which sidebar should ship?",
+        `  Compact or classic. ${BLOCK_END}\u001b[31m`,
+        "source: human",
+        "choice: compact",
+      ])
+    );
+    expect(block.question).toBe(
+      "Which sidebar should ship?\nCompact or classic. (END DAINTREE DECISION ANSWER)"
+    );
+    expect(block.choice).toBe("compact");
+  });
+
+  it("refuses a question written anywhere but before the source", () => {
+    expect(
+      parseAnswerNotice(rawNotice(["source: human", "question: Late?", "choice: compact"]))
+    ).toBeNull();
   });
 
   it("reads a proxy correction's reason, and one the library cut to its own limit", () => {
@@ -242,6 +264,38 @@ describe("renderDecisionSection", () => {
     ]);
     // None of the library's own wording reaches the terminal.
     expect(section).not.toContain(PREFACE);
+  });
+
+  it("quotes the question above the answer, indented so no line of it reads as a field", () => {
+    const section = renderDecisionSection(
+      parsed(
+        rawNotice([
+          "question: Which sidebar should ship?",
+          "  Compact or classic.",
+          "source: human",
+          "choice: compact",
+          "choice_label: Compact",
+        ])
+      )
+    );
+    expect(section.split("\n").slice(6, 10)).toEqual([
+      "question:",
+      "  > Which sidebar should ship?",
+      "  > Compact or classic.",
+      "source: human",
+    ]);
+  });
+
+  it("cuts the quoted question before any of the answer when a block runs long", () => {
+    const comment = "Keep this whole. ".repeat(230).trim();
+    const section = renderDecisionSection(
+      parsed(rawNotice([`question: ${"€".repeat(999)}`, "source: human", `comment: ${comment}`]))
+    );
+    expect(new TextEncoder().encode(section).length).toBeLessThan(
+      MAX_DECISION_BLOCK_BYTES + DECISION_PREFACE.length + 2
+    );
+    expect(section).toContain(`comment: ${comment}`);
+    expect(section).toMatch(/ {2}> €+ …\[truncated\]/);
   });
 
   it("always labels a proxy answer, and marks each block of a batch", () => {

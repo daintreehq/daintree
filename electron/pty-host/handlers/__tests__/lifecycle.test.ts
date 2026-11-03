@@ -23,6 +23,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     getSerializedStateAsync: vi.fn(async () => STATE_PAYLOAD),
     getSerializedState: vi.fn(() => STATE_PAYLOAD),
     isInTrash: vi.fn(() => false),
+    isClosing: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
     setAnalysisEnabled: vi.fn(),
     setSabMode: vi.fn(),

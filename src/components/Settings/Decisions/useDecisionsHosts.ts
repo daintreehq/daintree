@@ -18,7 +18,8 @@ export interface UseDecisionsHostsResult {
   /** Hosts whose Enroll is in flight from this window. */
   enrolling: ReadonlySet<string>;
   setAutoEnroll(enabled: boolean): void;
-  enroll(hostId: string): void;
+  /** `allowWeakStorage`: the person accepted the fixed-key storage for this Host, which has no keychain. */
+  enroll(hostId: string, allowWeakStorage?: boolean): void;
   reload(): void;
 }
 
@@ -102,14 +103,14 @@ export function useDecisionsHosts(enabled: boolean, revision: number): UseDecisi
     );
   };
 
-  const enroll = (hostId: string) => {
+  const enroll = (hostId: string, allowWeakStorage = false) => {
     if (enrolling.has(hostId)) return;
     setEnrolling((held) => new Set(held).add(hostId));
     setActionFailure(null);
-    const retry = () => enroll(hostId);
+    const retry = () => enroll(hostId, allowWeakStorage);
     safeFireAndForget(
       window.electron.decisions
-        .enrollHost({ hostId })
+        .enrollHost(allowWeakStorage ? { hostId, allowWeakStorage: true } : { hostId })
         .then(
           (outcome) => {
             if (outcome.result === "not-connected") {

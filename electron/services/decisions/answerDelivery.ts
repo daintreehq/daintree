@@ -59,9 +59,10 @@ export interface DecisionWakeHold {
 
 /**
  * Something happened to a pane that may let it take an answer now: it settled
- * waiting (`settled`), or its run appeared or came back (`appeared`).
+ * waiting (`settled`), its run appeared or came back (`appeared`), or main
+ * learned the conversation its run is in (`session`).
  */
-export type PaneSignal = "settled" | "appeared";
+export type PaneSignal = "settled" | "appeared" | "session";
 
 /**
  * The terminals that aren't agents' panes: the setup check's diagnostic
@@ -104,6 +105,7 @@ export interface AttentionTerminal {
   hasPty?: boolean;
   isExited?: boolean;
   isTrashed?: boolean;
+  isClosing?: boolean;
   detectedAgentId?: string;
   launchAgentId?: string;
   agentIncarnation?: number;
@@ -186,6 +188,17 @@ function routedSink(
   };
 }
 
+function sameRun(a: QuestionOrigin, b: QuestionOrigin): boolean {
+  return (
+    a.host_id === b.host_id &&
+    a.pane_id === b.pane_id &&
+    a.terminal_generation === b.terminal_generation &&
+    a.agent_incarnation === b.agent_incarnation &&
+    a.ownership_principal === b.ownership_principal &&
+    a.agent_kind === b.agent_kind
+  );
+}
+
 function runKey(o: QuestionOrigin): string {
   return JSON.stringify([
     o.host_id,
@@ -233,6 +246,8 @@ export class AnswerDelivery {
   private holding: Promise<DecisionWakeHold | null> | null = null;
   private started = false;
   private stopped = false;
+  /** A pane signalled since sessions were last looked for; see `learnSessions`. */
+  private sessionsToLearn = false;
   /** No more writes: set once a stop has settled, or at once when the keys failed. */
   private retired = false;
   private recovered = false;
@@ -580,7 +595,12 @@ export class AnswerDelivery {
     agentId: string;
   } | null {
     if (terminal.isAssistantTerminal === true) return null;
-    if (terminal.isExited === true || terminal.hasPty === false || terminal.isTrashed === true) {
+    if (
+      terminal.isExited === true ||
+      terminal.hasPty === false ||
+      terminal.isTrashed === true ||
+      terminal.isClosing === true
+    ) {
       return null;
     }
     const agentId = terminal.detectedAgentId ?? terminal.launchAgentId;
@@ -646,8 +666,12 @@ export class AnswerDelivery {
   start(): void {
     if (this.started || this.stopped) return;
     this.started = true;
+    // A session learned while Decisions was off is picked up on the first pass.
+    this.sessionsToLearn = true;
     this.offPanes = this.o.deps.watchPanes((signal) => {
-      if (signal === "appeared") this.request();
+      // Any of them may follow Daintree learning a session for a run that has already asked.
+      this.sessionsToLearn = true;
+      if (signal === "appeared" || signal === "session") this.request();
       else this.requestAfterSettle();
     });
     this.timer = setInterval(
@@ -760,11 +784,64 @@ export class AnswerDelivery {
       // Questions with an injection still unreconciled wait; the rest go on.
     }
     if (this.stopped) return;
+    if (this.sessionsToLearn) {
+      this.sessionsToLearn = false;
+      await this.learnSessions();
+    }
     if (this.store.hasPendingDelivery && !(await this.store.hasPendingDelivery())) return;
     try {
       await this.engine.drain();
     } finally {
       this.resume?.endPass();
+    }
+  }
+
+  /**
+   * Records the conversation a run is in on the questions it asked before
+   * Daintree knew it. A Codex run's is learned only after its turn starts
+   * (#15268), often after it has called `ask_human`, and a question whose
+   * origin names no session can't be resumed once its pane is gone. Only the
+   * exact run that asked counts: same pane, launch, agent incarnation and
+   * principal, still running here. A session already recorded is never
+   * replaced. A delivered question counts too, since a correction can make it
+   * deliverable again after its pane is gone. Only at start and after a pane
+   * signal, so the minute's check still reads nothing but the pending index.
+   */
+  private async learnSessions(): Promise<void> {
+    const hostId = this.o.deps.hostId();
+    const rows = (await this.store.listQuestions()).filter(
+      (row) =>
+        !row.origin.agent_session_id &&
+        row.origin.host_id === hostId &&
+        RESUMABLE_AGENTS.has(row.origin.agent_kind)
+    );
+    if (rows.length === 0) return;
+    const terminals = await this.terminals();
+    for (const row of rows) {
+      if (this.stopped) return;
+      const { origin } = row;
+      const terminal = terminals.find((t) => t.id === origin.pane_id);
+      const sessionId = terminal?.agentSessionId?.trim();
+      if (terminal === undefined || !sessionId) continue;
+      const run = this.runOf(terminal);
+      if (
+        run === null ||
+        run.generation !== origin.terminal_generation ||
+        run.incarnation !== origin.agent_incarnation ||
+        run.principal !== origin.ownership_principal ||
+        run.agentId !== origin.agent_kind
+      ) {
+        continue;
+      }
+      await this.lock.run(async () => {
+        const current = await this.store.getQuestion(row.question_id);
+        if (current === null || current.origin.agent_session_id) return;
+        // Reassigned while the panes were being read: the session is of the run it left.
+        if (!sameRun(current.origin, origin)) return;
+        await this.store.updateQuestion(row.question_id, {
+          origin: { ...current.origin, agent_session_id: sessionId },
+        });
+      });
     }
   }
 

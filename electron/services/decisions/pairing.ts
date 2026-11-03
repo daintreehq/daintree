@@ -58,11 +58,19 @@ interface OwnerSession {
   requests: RelayRequests;
 }
 
+/**
+ * The library spells a code as two groups (`482 913`), as the phone shows it;
+ * the renderer and the approval it sends back carry the six digits alone.
+ */
+function codeDigits(code: string): string {
+  return code.replace(/\D/g, "");
+}
+
 /** An invitation this computer made, and the phone that answered it, as last shown. */
 interface HeldInvitation {
   expiresAt: number;
   candidate: PendingPairing | null;
-  /** The code computed here from `candidate`'s keys: what the person was shown. */
+  /** The code computed here from `candidate`'s keys, as the library spells it: what the person was shown. */
   code: string | null;
   /**
    * An approval was sent for `candidate`. The relay may have taken it even
@@ -245,7 +253,7 @@ export class OwnerDevices {
     return {
       state: "responded",
       expiresAt: held.expiresAt,
-      code,
+      code: codeDigits(code),
       label: candidate.label,
       role: candidate.role,
     };
@@ -273,7 +281,9 @@ export class OwnerDevices {
     payload: ApproveDecisionsPairingPayload
   ): { result: "changed" } | { result: "expired" } | null {
     const held = this.invitations.get(payload.pairingId);
-    if (!held?.candidate || held.code !== payload.code) return { result: "changed" };
+    if (!held?.candidate || held.code === null || codeDigits(held.code) !== payload.code) {
+      return { result: "changed" };
+    }
     if (held.expiresAt <= this.now()) {
       this.invitations.delete(payload.pairingId);
       return { result: "expired" };

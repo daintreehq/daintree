@@ -13,7 +13,7 @@ import type {
 } from "../../../shared/types/decisions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { normalizeRelayOrigin } from "./decisionsSettings.js";
+import { isLoopbackHttp, normalizeRelayOrigin } from "./decisionsSettings.js";
 
 /**
  * Daintree's side of the comparison. The relay's worker and the libraries are
@@ -72,7 +72,8 @@ type Answer =
 /**
  * A typed relay address as its origin, or why it can't be used. A bare host
  * gets `https://`; a path, query or fragment is dropped. Only https is
- * accepted, and never a user name or password, which would also let
+ * accepted, or plain http to this computer for a relay run locally (`wrangler
+ * dev`), and never a user name or password, which would also let
  * `https://good.example@other.example` read as the first host.
  */
 export function relayOriginFromInput(
@@ -93,7 +94,9 @@ export function relayOriginFromInput(
   const candidate = explicit ? trimmed : `https://${trimmed}`;
   const url = URL.parse(candidate);
   if (!url || url.hostname === "") return { result: "invalid-url", reason: "unparsable" };
-  if (url.protocol !== "https:") return { result: "invalid-url", reason: "not-https" };
+  if (url.protocol !== "https:" && !isLoopbackHttp(url)) {
+    return { result: "invalid-url", reason: "not-https" };
+  }
   if (url.username !== "" || url.password !== "") {
     return { result: "invalid-url", reason: "credentials" };
   }

@@ -186,12 +186,15 @@ export class HostEnroller {
   }
 
   /** Enroll, from Settings: one attempt now, after any already running for that Host. */
-  async enroll(hostId: string): Promise<DecisionsHostEnrollResult> {
+  async enroll(
+    hostId: string,
+    options: { allowWeakStorage?: boolean } = {}
+  ): Promise<DecisionsHostEnrollResult> {
     const owner = this.options.owner();
     if (owner === null || !this.active) return { result: "not-set-up" };
     const link = this.port?.linkFor(hostId) ?? null;
     if (link === null) return { result: "not-connected" };
-    await this.queueRun(hostId, link, "manual");
+    await this.queueRun(hostId, link, "manual", options.allowWeakStorage === true);
     const after = this.options.owner();
     if (after === null) return { result: "not-set-up" };
     let record: HostRecord | null;
@@ -265,7 +268,12 @@ export class HostEnroller {
   }
 
   /** Runs after whatever already runs for the Host, so one Host never runs two at once. */
-  private queueRun(hostId: string, link: DecisionsHostLink, mode: Mode): Promise<void> {
+  private queueRun(
+    hostId: string,
+    link: DecisionsHostLink,
+    mode: Mode,
+    allowWeakStorage = false
+  ): Promise<void> {
     const before = this.runs.get(hostId) ?? Promise.resolve();
     // Asked for this lifetime and owner: a stop, a forget or another identity
     // while it waits its turn drops it unrun.
@@ -274,7 +282,7 @@ export class HostEnroller {
     const run = before
       .then(() => {
         if (generation !== this.generation || this.options.owner()?.key !== ownerKey) return;
-        return this.run(hostId, link, mode);
+        return this.run(hostId, link, mode, allowWeakStorage);
       })
       .catch((error: unknown) => {
         if (!(error instanceof Superseded)) {
@@ -289,7 +297,16 @@ export class HostEnroller {
     return run;
   }
 
-  private async run(hostId: string, link: DecisionsHostLink, mode: Mode): Promise<void> {
+  /**
+   * `allowWeakStorage`: the person accepted, from Enroll, the fixed-key
+   * storage for this Host, which has no keychain. Automatic enrollment never does.
+   */
+  private async run(
+    hostId: string,
+    link: DecisionsHostLink,
+    mode: Mode,
+    allowWeakStorage = false
+  ): Promise<void> {
     const owner = this.options.owner();
     if (owner === null || !this.active || !link.isOpen) return;
     const generation = this.generation;
@@ -408,6 +425,7 @@ export class HostEnroller {
         attempt,
         label: this.labelFor(hostId),
         ...(replace !== undefined ? { replace } : {}),
+        ...(allowWeakStorage && mode === "manual" ? { allowWeakStorage: true } : {}),
       });
       check();
       if (!requested.ok) return show(this.callFailure(requested));
@@ -521,6 +539,8 @@ export class HostEnroller {
         return { state: "own-setup" };
       case "no-keychain":
         return failure("no-keychain", this.now(), refused.detail);
+      case "weak-storage-only":
+        return failure("weak-storage-only", this.now(), refused.detail);
       case "unreadable":
         return failure("host-keys-unreadable", this.now(), refused.detail);
       case "enrolled":

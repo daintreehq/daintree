@@ -493,6 +493,7 @@ describe("resumeAgentSessionAsPane", () => {
 
   it.each([
     ["trashed", { isTrashed: true }],
+    ["being closed", { isClosing: true }],
     ["exited", { isExited: true }],
     ["back at its shell", { agentState: "exited" }],
     ["an assistant", { isAssistantTerminal: true }],

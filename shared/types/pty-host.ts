@@ -1316,6 +1316,8 @@ export interface PtyHostTerminalInfo {
   outputObservedSince?: number;
   spawnedAt: number;
   isTrashed?: boolean;
+  /** A graceful shutdown is quitting its agent: the PTY runs, but the run is ending. Absent from older hosts. */
+  isClosing?: boolean;
   trashExpiresAt?: number;
   /** Current activity tier: "active" (foreground) or "background" (project switched away) */
   activityTier?: "active" | "background";

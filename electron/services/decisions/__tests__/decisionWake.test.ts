@@ -83,6 +83,7 @@ describe("identityMismatch", () => {
     ["no worktree, for a question asked in one", {}, { worktreeId: undefined }, "gone"],
     ["an exited terminal", {}, { isExited: true }, "gone"],
     ["a trashed pane", {}, { isTrashed: true }, "gone"],
+    ["a pane whose agent is being quit", {}, { isClosing: true }, "gone"],
   ] as const)("reports %s", (_label, source, info, expected) => {
     const { value } = sources(source);
     expect(identityMismatch(value, TARGET, info === undefined ? undefined : record(info))).toBe(

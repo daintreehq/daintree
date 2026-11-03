@@ -1037,6 +1037,14 @@ export class TerminalProcess {
   }
 
   /** True when an agent is currently observed running in this PTY. */
+  /**
+   * A graceful shutdown is quitting its agent now: the PTY still runs, but
+   * nothing new should be typed in, since the run is on its way out.
+   */
+  isGracefullyClosing(): boolean {
+    return this.gracefulShutdownInFlight !== null;
+  }
+
   isAgentCurrentlyLive(): boolean {
     return this.isAgentLive;
   }

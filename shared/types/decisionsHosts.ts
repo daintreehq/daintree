@@ -13,6 +13,9 @@ import type { DecisionsConnectionProblem } from "./decisions.js";
  * - `no-keychain`: the Host has no keychain that could seal its keys (a Linux
  *   Host with no keyring, a locked or refused keychain). Nothing was sent to
  *   the relay.
+ * - `weak-storage-only`: the Host has no keychain, only the fixed-key storage
+ *   (a Linux Host with no keyring, as WSL usually is). Enroll can use it once
+ *   the person accepts that for this Host; nothing was sent to the relay.
  * - `host-keys-unreadable`: the Host has a Decisions key file it couldn't read.
  * - `host-refused`: the Host refused the enrollment (`detail` says why).
  * - `relay-unreachable` / `relay-refused`: the relay didn't answer, or refused
@@ -30,6 +33,7 @@ import type { DecisionsConnectionProblem } from "./decisions.js";
  */
 export type DecisionsHostFailureReason =
   | "no-keychain"
+  | "weak-storage-only"
   | "host-keys-unreadable"
   | "host-refused"
   | "relay-unreachable"
@@ -161,6 +165,8 @@ export type DecisionsHostsResult =
 
 export interface EnrollDecisionsHostPayload {
   hostId: string;
+  /** The person accepted the fixed-key storage for this Host, which has no keychain. */
+  allowWeakStorage?: boolean;
 }
 
 /** Enroll on one Host: what became of it, or why it couldn't start. */

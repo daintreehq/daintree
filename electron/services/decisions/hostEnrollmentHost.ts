@@ -18,7 +18,8 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { DecisionsKeyStoreError, decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
 
 /** What enrollment needs of this machine's sealed key store. */
-export type HostKeys = Pick<SealedKeyStore, "load" | "saveIf" | "check" | "close">;
+export type HostKeys = Pick<SealedKeyStore, "load" | "saveIf" | "check" | "close"> &
+  Partial<Pick<SealedKeyStore, "confirmWeakStorage">>;
 
 export interface HostEnrollmentsOptions {
   /** A key store for one step, closed after it: this machine's sealed one unless a test says otherwise. */
@@ -37,6 +38,8 @@ interface PendingAttempt {
   pending: MemoryPendingHostStore;
   /** The Host identity this attempt may replace, by device id; null when there was none. */
   replace: string | null;
+  /** The owner accepted the fixed-key storage for this attempt, and there is no keychain. */
+  weak: boolean;
 }
 
 function isHostIdentity(stored: StoredIdentity): boolean {
@@ -116,7 +119,7 @@ export class HostEnrollments {
 
   request(
     link: object,
-    input: { attempt: string; label: string; replace?: string }
+    input: { attempt: string; label: string; replace?: string; allowWeakStorage?: boolean }
   ): Promise<HostRequestResult> {
     return this.step(async (keys): Promise<HostRequestResult> => {
       let stored: StoredIdentity | null;
@@ -135,7 +138,14 @@ export class HostEnrollments {
       } catch (error) {
         return refused("no-keychain", formatErrorMessage(error, "The keychain didn't answer"));
       }
-      if (check.kind !== "keychain") return refused("no-keychain", check.reason);
+      // With no keychain at all (a Linux Host with no keyring, as WSL usually is), the keys can
+      // be sealed only under the fixed key, and only when the owner said so for this Host.
+      if (check.kind === "weak" && input.allowWeakStorage !== true) {
+        return refused("weak-storage-only", check.reason);
+      }
+      if (check.kind !== "keychain" && check.kind !== "weak") {
+        return refused("no-keychain", check.reason);
+      }
       const pending = new MemoryPendingHostStore();
       const { request } = await createHostRequest({ pending, label: input.label, fresh: true });
       if (this.disposed) throw new Error("This Host stopped serving Shells");
@@ -150,6 +160,7 @@ export class HostEnrollments {
         attempt: input.attempt,
         pending,
         replace: stored === null ? null : stored.config.deviceId,
+        weak: check.kind === "weak",
       });
       return { step: "requested", request };
     });
@@ -191,6 +202,8 @@ export class HostEnrollments {
           }, identity),
         clear: () => Promise.reject(new Error("Enrollment never removes an identity")),
       };
+      // Only the attempt the owner accepted it for, and only for this step's store.
+      if (held.weak) keys.confirmWeakStorage?.();
       let identity;
       try {
         identity = await acceptHostEnrollment({

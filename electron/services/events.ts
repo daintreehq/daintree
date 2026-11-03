@@ -376,6 +376,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "A run's own argv named the session it resumes; Main must record it on the pane",
   },
+  "agent-session:attributed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: false,
+    description: "Main learned the conversation a live run is in",
+  },
   "agent-session:recorded": {
     category: "agent",
     requiresContext: false,
@@ -1119,6 +1125,16 @@ export type DaintreeEventMap = {
     projectId: string;
     sessionId: string;
     run: import("../../shared/types/pty-host.js").AgentRunToken;
+  };
+
+  /**
+   * Main learned the conversation a live run is in, after the run started
+   * (#15268), and told the pty host. Never carries the id: it is a resume
+   * credential, read off the pane record by whoever needs it.
+   */
+  "agent-session:attributed": {
+    terminalId: string;
+    launchGeneration: number;
   };
 
   /**

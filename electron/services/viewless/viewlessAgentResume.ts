@@ -424,6 +424,8 @@ async function findPaneHoldingSession(
       terminal.isTrashed !== true &&
       terminal.isExited !== true &&
       terminal.hasPty !== false &&
+      // A pane being closed is quitting the conversation, not holding it.
+      terminal.isClosing !== true &&
       // A pane whose agent quit to its shell no longer runs the conversation.
       terminal.agentState !== "exited" &&
       terminal.isAssistantTerminal !== true &&

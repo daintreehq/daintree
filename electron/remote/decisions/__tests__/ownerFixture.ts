@@ -108,6 +108,8 @@ export function memoryKeys(initial: StoredIdentity | null = null) {
     saves: 0,
     opened: 0,
     closed: 0,
+    /** Saves made after the fixed-key storage was confirmed for them. */
+    weakSaves: 0,
   };
   return {
     state,
@@ -118,7 +120,11 @@ export function memoryKeys(initial: StoredIdentity | null = null) {
     },
     open: () => {
       state.opened += 1;
+      let weakConfirmed = false;
       return {
+        confirmWeakStorage: () => {
+          weakConfirmed = true;
+        },
         load: async () => (value ? structuredClone(value) : null),
         saveIf: async (
           refusal: (current: StoredIdentity | null) => string | null,
@@ -126,6 +132,11 @@ export function memoryKeys(initial: StoredIdentity | null = null) {
         ) => {
           const refused = refusal(value ? structuredClone(value) : null);
           if (refused !== null) throw new Error(refused);
+          // As the sealed store does: with no keychain, nothing is saved unless the weak storage was confirmed.
+          if (state.keychain.kind === "weak" && !weakConfirmed) {
+            throw new Error("The weaker storage wasn't confirmed");
+          }
+          if (weakConfirmed) state.weakSaves += 1;
           state.saves += 1;
           value = structuredClone(identity);
         },

@@ -99,7 +99,6 @@ describe("HostEnrollments", () => {
   });
 
   it.each([
-    ["weak", { kind: "weak", reason: "No keyring is available" }],
     ["locked", { kind: "locked", reason: "The keychain is locked" }],
     ["unavailable", { kind: "unavailable", reason: "Secure storage is unavailable" }],
     ["timeout", { kind: "timeout", reason: "The keychain didn't answer" }],
@@ -121,6 +120,68 @@ describe("HostEnrollments", () => {
       expect(made.requests).toBe(1);
     }
   );
+
+  it("with no keychain, says the fixed-key storage is all there is, and makes no key unless the owner accepted it", async () => {
+    const keys = memoryKeys();
+    keys.state.keychain = { kind: "weak", reason: "No keyring is available" };
+    const enrollment = new HostEnrollments({ openKeys: keys.open });
+    expect(await enrollment.request({}, { attempt: "attempt_0000000001", label: "wsl" })).toEqual({
+      step: "refused",
+      reason: "weak-storage-only",
+      detail: "No keyring is available",
+    });
+    expect(made.requests).toBe(0);
+  });
+
+  it("seals under the fixed key only for an attempt the owner accepted it for", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    safeStorageMock.getSelectedStorageBackend.mockReturnValue("basic_text");
+    try {
+      const file = join(dir, "decisions", "keys.bin");
+      const enrollment = new HostEnrollments({ openKeys: () => new SealedKeyStore(file) });
+      const owner = await makeOwner();
+      const link = {};
+      const requested = await enrollment.request(link, {
+        attempt: "attempt_0000000001",
+        label: "wsl",
+        allowWeakStorage: true,
+      });
+      if (requested.step !== "requested") throw new Error(JSON.stringify(requested));
+      const { response } = await enrollHost(owner.client, requested.request);
+      expect(
+        await enrollment.accept(link, { attempt: "attempt_0000000001", response })
+      ).toMatchObject({ step: "accepted" });
+      expect(JSON.parse(await readFile(file, "utf8")).protection).toBe("basic");
+      expect((await new SealedKeyStore(file).load())?.role).toBe("desktop-host");
+    } finally {
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("keychain");
+    }
+  });
+
+  it("never seals under the fixed key for an attempt that started with a keychain", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
+    try {
+      const file = join(dir, "decisions", "keys.bin");
+      const enrollment = new HostEnrollments({ openKeys: () => new SealedKeyStore(file) });
+      const owner = await makeOwner();
+      const link = {};
+      const requested = await enrollment.request(link, {
+        attempt: "attempt_0000000001",
+        label: "wsl",
+      });
+      if (requested.step !== "requested") throw new Error(JSON.stringify(requested));
+      const { response } = await enrollHost(owner.client, requested.request);
+      // The keyring went away between the request and the owner's answer: nobody accepted the downgrade.
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("basic_text");
+      expect(
+        await enrollment.accept(link, { attempt: "attempt_0000000001", response })
+      ).not.toMatchObject({ step: "accepted" });
+      await expect(readFile(file, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("keychain");
+    }
+  });
 
   it("refuses when the keychain itself fails, making no key", async () => {
     const keys = memoryKeys();

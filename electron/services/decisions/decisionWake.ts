@@ -32,6 +32,7 @@ export type DecisionTerminalInfo = Pick<
   NotifyTerminalInfo,
   | "hasPty"
   | "isTrashed"
+  | "isClosing"
   | "isExited"
   | "launchGeneration"
   | "agentIncarnation"
@@ -63,7 +64,10 @@ export function identityMismatch(
   if (hostId === null || hostId !== target.hostId) return "host-offline";
   if (
     info !== undefined &&
-    (info.isExited === true || info.hasPty === false || info.isTrashed === true)
+    (info.isExited === true ||
+      info.hasPty === false ||
+      info.isTrashed === true ||
+      info.isClosing === true)
   ) {
     return "gone";
   }

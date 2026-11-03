@@ -38,7 +38,12 @@ type Step<T> = () => Promise<HostCallOutcome<T>>;
 class FakeLink implements DecisionsHostLink {
   isOpen = true;
   readonly asked: string[] = [];
-  readonly requests: Array<{ attempt: string; label: string; replace?: string }> = [];
+  readonly requests: Array<{
+    attempt: string;
+    label: string;
+    replace?: string;
+    allowWeakStorage?: boolean;
+  }> = [];
   readonly accepts: Array<{ attempt: string; response: string }> = [];
   private readonly closeListeners = new Set<() => void>();
   holds = 0;
@@ -79,7 +84,7 @@ class FakeLink implements DecisionsHostLink {
     return this.onStatus();
   }
 
-  request(input: { attempt: string; label: string; replace?: string }) {
+  request(input: { attempt: string; label: string; replace?: string; allowWeakStorage?: boolean }) {
     this.asked.push("request");
     this.requests.push(input);
     return this.onRequest();
@@ -389,6 +394,34 @@ describe("HostEnroller", () => {
     slowStatus.resolve({ ok: true, value: { kind: "none" } });
     await settle();
     expect(await stateOf("slow")).toMatchObject({ state: "enrolled" });
+  });
+
+  it("offers a Host with no keychain the fixed-key storage only through Enroll, never automatically", async () => {
+    enroller.start();
+    const link = new FakeLink();
+    link.onRequest = async () =>
+      link.requests.at(-1)?.allowWeakStorage === true
+        ? { ok: true, value: { step: "requested", request: "decisions-host-request.v1.fake" } }
+        : {
+            ok: true,
+            value: { step: "refused", reason: "weak-storage-only", detail: "No keyring" },
+          };
+    port.connect("wsl", link);
+    await settle();
+
+    expect(link.requests).toHaveLength(1);
+    expect(link.requests[0].allowWeakStorage).toBeUndefined();
+    expect(await stateOf("wsl")).toMatchObject({
+      state: "failed",
+      failure: { reason: "weak-storage-only" },
+    });
+
+    // Plain Enroll still doesn't use it; only Enroll with the person's confirmation does.
+    await enroller.enroll("wsl");
+    expect(link.requests[1].allowWeakStorage).toBeUndefined();
+    const done = await enroller.enroll("wsl", { allowWeakStorage: true });
+    expect(link.requests[2].allowWeakStorage).toBe(true);
+    expect(done).toMatchObject({ result: "done", host: { enrollment: { state: "enrolled" } } });
   });
 
   it("tries a failed Host again only on its next connection, never on its own", async () => {

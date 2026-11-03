@@ -1,6 +1,6 @@
 # Daintree Decisions
 
-Decisions lets an agent ask you a question it shouldn't answer alone, end its turn, and get your answer later from your phone. The agent calls one MCP tool, `ask_human`, and is told at once that the question was queued. Minutes or days later you answer on your phone, and Daintree types your answer into the terminal that asked, once it sees that agent at its prompt. If that terminal is gone, Daintree can reopen a Claude or Codex session to deliver it, and otherwise lists the answer for you to deal with.
+Decisions lets an agent ask you a question it shouldn't answer alone and get your answer later from your phone. The agent calls one MCP tool, `ask_human`, and is told at once that the question was queued; nothing waits on you, so it carries on with whatever doesn't depend on the answer and ends its turn when it can't go further without it. Minutes or days later you answer on your phone, and Daintree types your answer into the terminal that asked, once it sees that agent at its prompt. If that terminal is gone, Daintree can reopen a Claude or Codex session to deliver it, and otherwise lists the answer for you to deal with.
 
 Everything runs through a relay you deploy into your own Cloudflare account. Daintree runs no server for it. Questions, answers and screenshots are end-to-end encrypted between this computer and your phones. The relay, the phone app and the `decisions` CLI live in [daintreehq/decisions](https://github.com/daintreehq/decisions); this page covers the Daintree side. How it's built is in [architecture/decisions.md](./architecture/decisions.md).
 
@@ -23,7 +23,7 @@ With it on, the page shows Connection, Devices, Questions, Policy, Voice and Dat
 
 ### 2. Deploy or enter a relay
 
-If you already have a relay, enter its address in **Relay URL** (for example `https://decisions.example.workers.dev`) and press **Check**. Daintree reads the relay's `/health` and `/api/v1/info` and reports what it found: `<host> is ready to claim`, `<host> is claimed`, `<host> has no claim secret set`, `<host> speaks a protocol Daintree doesn't`, `<host> isn't a Decisions relay`, `Couldn't reach <host>` or `<host> answered with an error`. The check accepts only `https://` addresses. It compares the relay's protocol and version with Daintree's, reports them incompatible when their protocol ranges don't overlap, and says which side to update when it can tell. Daintree never updates a deployed relay.
+If you already have a relay, enter its address in **Relay URL** (for example `https://decisions.example.workers.dev`) and press **Check**. Daintree reads the relay's `/health` and `/api/v1/info` and reports what it found: `<host> is ready to claim`, `<host> is claimed`, `<host> has no claim secret set`, `<host> speaks a protocol Daintree doesn't`, `<host> isn't a Decisions relay`, `Couldn't reach <host>` or `<host> answered with an error`. The check accepts only `https://` addresses, apart from plain `http://` to `localhost` or `127.0.0.1` for a relay you run on this computer with `wrangler dev`. It compares the relay's protocol and version with Daintree's, reports them incompatible when their protocol ranges don't overlap, and says which side to update when it can tell. Daintree never updates a deployed relay.
 
 If you don't have one, **Don't have a relay yet?** offers two ways to deploy one:
 
@@ -100,7 +100,7 @@ When a launch can't reach Decisions within five seconds (no relay set up yet, a 
 
 ### Asking
 
-An agent asks with `ask_human`: a self-contained question, optional context, up to 12 options, and up to 8 screenshots. It gets back `Asked as q-N. End your turn now (or continue with unrelated work); the answer will arrive as a message in this terminal.` The question is saved on this computer before anything is sent, so one asked while the relay is out of reach goes out when it's back. A terminal can have at most 10 open questions.
+An agent asks with `ask_human`: a self-contained question, optional context, up to 12 options, and up to 8 screenshots. It gets back `Asked as q-N. Carry on with anything that does not depend on the answer; once you cannot go further without it, end your turn. The answer arrives as a new message in this terminal, with your question quoted.` The question is saved on this computer before anything is sent, so one asked while the relay is out of reach goes out when it's back. A terminal can have at most 10 open questions.
 
 Screenshots are given as paths relative to the folder the agent's terminal was launched in, and must stay inside it once symlinks are followed. Each must be a PNG, JPEG or WebP image of up to 20 MiB, 64 MiB in total per question; SVG is refused.
 
@@ -123,6 +123,8 @@ question_id: 0190f0aa11112222333344440000ffff (q-4)
 revision: 1
 injection_id: 0190f0aa55556666777788880000ffff
 [decision-injection 0190f0aa55556666777788880000ffff]
+question:
+  > Ship the compact sidebar, or keep the current one?
 source: human
 choice: approve
 choice_label: Approve
@@ -131,6 +133,7 @@ comment: Proceed with the compact sidebar.
 [END DAINTREE DECISION ANSWER]
 ```
 
+- `question` quotes what the agent asked, so the answer reads on its own however long ago it was asked. It's cut first, at 1,000 characters or sooner to fit, since `get_decision` has it whole; a library older than 0.2.1 doesn't send it.
 - `choice` and `choice_label` appear when you picked an option, and `comment` when you wrote something; later lines of a comment are indented.
 - `injection_id` and the `[decision-injection …]` line are how Daintree recognises its own typing if it stops partway through.
 - A correction you send from the phone arrives as a new revision with `note: This corrects an earlier answer. Reassess any work that depended on the earlier one.`, and the reason you gave as `reason:`, after the choice and before any comment.
@@ -179,7 +182,7 @@ A workflow uses the gate from your own skill, command or runbook. Daintree insta
    - `question`: what changed and what you're asking to approve.
    - `workflow_gate_id`: `"design-review/final"`.
    - `attachments`: `[{ "local_resource_id": ".tmp/review-before.png", "role": "before" }, { "local_resource_id": ".tmp/review-after.png", "role": "after" }]`.
-3. End your turn. The answer is typed into this terminal later.
+3. Carry on with anything that doesn't depend on the answer, then end your turn. The answer is typed into this terminal later.
 4. When it arrives, call `get_decision` with its `question_id`. Continue only if `status` is `human-answered`, `provenance` is `human`, `choice` is `approve` and `reviewed_digests_match` is `true`. On `reject`, make the requested changes and ask again. On `expired`, stop and report.
 5. If the screenshots change, ask again: an approval covers only the images it was given.
 ```
@@ -188,7 +191,7 @@ A workflow uses the gate from your own skill, command or runbook. Daintree insta
 
 ## Remote Hosts
 
-An agent running on a Remote Host asks and gets its answers on that Host, so it keeps working while this computer sleeps. Setup still happens once, here: while Decisions is connected, Daintree enrolls each Remote Host you connect to as a device of yours, with keys the Host makes itself and seals with its own keychain. A Host with a Decisions setup of its own, or one enrolled with another relay, is left as it is. Enrolled Hosts are listed under **Devices → Remote Hosts**, which also shows an enrollment that failed. Turn off **Enroll Remote Hosts automatically** to enroll them one at a time with **Enroll**, for example when you connect to machines you don't own.
+An agent running on a Remote Host asks and gets its answers on that Host, so it keeps working while this computer sleeps. Setup still happens once, here: while Decisions is connected, Daintree enrolls each Remote Host you connect to as a device of yours, with keys the Host makes itself and seals with its own keychain. A Host with a Decisions setup of its own, or one enrolled with another relay, is left as it is. Enrolled Hosts are listed under **Devices → Remote Hosts**, which also shows an enrollment that failed. A Host with no keychain, as a WSL distribution or a headless Linux machine usually is, isn't enrolled automatically: its row says so and offers **Enroll with weaker storage…**, which asks **Use the weaker key storage on <Host>?** before it keeps that Host's keys under a fixed key. That protects them only from someone who can't read the Host's files, and it applies to that Host alone. Turn off **Enroll Remote Hosts automatically** to enroll them one at a time with **Enroll**, for example when you connect to machines you don't own.
 
 Each enrolled Host can read your agents' questions and answers, as every paired device can. Revoking a Host works like revoking a phone, and a revoked Host isn't enrolled automatically again. Turning Decisions off here turns it off on each connected Host straight away, and on any other Host when this computer next connects to it. A Host's answers that need attention stay on that Host: the chip in a Remote Hosts window doesn't offer **Review answers**.
 
@@ -211,7 +214,7 @@ The Decisions repository's [security claims](https://github.com/daintreehq/decis
 
 Only to the relay in your own Cloudflare account, and from there to your devices:
 
-- **End-to-end encrypted:** each question, its context, options and screenshots, and your answers. Each question also carries, inside the encryption, where it was asked: the agent, the worktree's folder path, and identifiers for the project and this computer. Your paired phones and enrolled Remote Hosts can read all of it; the relay and Cloudflare can't.
+- **End-to-end encrypted:** each question, its context, options and screenshots, and your answers. Each question also carries, inside the encryption, where it was asked: the agent, the worktree's folder path, the project's name and this computer's (or the Remote Host's) host name, which head the question on your phone, and identifiers for both. Your paired phones and enrolled Remote Hosts can read all of it; the relay and Cloudflare can't.
 - **Readable by the relay:** routing details such as ids, timestamps, sizes, how many screenshots, and each question's requirement level, which says who may answer it. The Cloudflare network sees ordinary request metadata, such as IP addresses and when each device connects.
 - **Push endpoints:** each phone registers one with the relay. A push says only that a question needs you.
 

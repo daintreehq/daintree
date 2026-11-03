@@ -44,6 +44,12 @@ export interface PaneAccessSources {
   /** This machine's Decisions host id; null before a relay identity exists. */
   hostId(): string | null;
   getPtyClient(): PaneTerminalReader | null;
+  /**
+   * What the phone heads a question with, sealed inside its content. Without
+   * them the library falls back to the project and host ids.
+   */
+  projectName?(projectId: string): Promise<string | null>;
+  machineName?(): string;
 }
 
 export interface PaneAccess {
@@ -87,7 +93,16 @@ export function createPaneAccess(sources: PaneAccessSources): PaneAccess {
     // The pane may have exited, relaunched or lost its bearer while it was read.
     const after = sources.bearerFor(token);
     if (after?.paneId !== bearer.paneId || after.principal !== bearer.principal) return null;
-    return isCurrent(origin) ? { origin } : null;
+    if (!isCurrent(origin)) return null;
+    const projectLabel = await sources.projectName?.(origin.project_id).catch(() => null);
+    const machineLabel = sources.machineName?.();
+    return {
+      origin: {
+        ...origin,
+        ...(projectLabel ? { project_label: projectLabel } : {}),
+        ...(machineLabel ? { machine_label: machineLabel } : {}),
+      },
+    };
   };
 
   return { authenticator: { authenticate }, isCurrent };

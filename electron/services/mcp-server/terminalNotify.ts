@@ -144,6 +144,8 @@ export interface NotifyTerminalInfo {
   everDetectedAgent?: boolean;
   hasPty?: boolean;
   isTrashed?: boolean;
+  /** Its agent is being quit by a graceful shutdown. */
+  isClosing?: boolean;
   isExited?: boolean;
   submission?: TerminalSubmissionRecord;
   /** The run identity a decision wake checks before it is typed (#16015). */

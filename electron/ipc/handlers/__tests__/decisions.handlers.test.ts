@@ -953,8 +953,11 @@ describe("decisions IPC", () => {
     await expect(setAutoEnrollHosts(false)).resolves.toMatchObject({ autoEnroll: false });
 
     expect(decisionsEntry.listHosts).toHaveBeenCalledOnce();
-    expect(decisionsEntry.enrollDecisionsHost).toHaveBeenCalledExactlyOnceWith("studio");
+    expect(decisionsEntry.enrollDecisionsHost).toHaveBeenCalledExactlyOnceWith("studio", false);
     expect(decisionsEntry.setAutoEnrollHosts).toHaveBeenCalledExactlyOnceWith(false);
+    // The fixed-key storage only when Enroll's confirmation said so.
+    await enrollHost({ hostId: "wsl", allowWeakStorage: true });
+    expect(decisionsEntry.enrollDecisionsHost).toHaveBeenLastCalledWith("wsl", true);
     expect(store.set).not.toHaveBeenCalled();
   });
 

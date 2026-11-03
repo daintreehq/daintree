@@ -16,6 +16,8 @@ export interface AnswerBlock {
   alias: number | null;
   revision: number;
   injectionId: string;
+  /** The question as asked, quoted for the agent; null from a library that doesn't send it (0.2.0). */
+  question: string | null;
   source: "human" | "proxy" | "system";
   /** A `system` block: the question expired without an answer. */
   expired: boolean;
@@ -51,6 +53,8 @@ const LIBRARY_EXPIRED_NOTE =
 /** Question and injection ids as the library mints them: hex, never free text. */
 const ID = /^[A-Za-z0-9_-]{8,80}$/;
 const MAX_COMMENT_CHARS = 4_000;
+/** The library's own cap on the quoted question. */
+const MAX_QUESTION_CHARS = 1_000;
 /** The library's own cap on a correction's reason. */
 const MAX_REASON_CHARS = 1_000;
 const MAX_CHOICE_CHARS = 1_000;
@@ -155,18 +159,20 @@ function takeText(cursor: Cursor, key: string, maxChars: number): string | null 
 
 function parseBlock(cursor: Cursor): AnswerBlock | null {
   if (!cursor.takeExact(BLOCK_START)) return null;
-  const question = /^(\S+)(?: \(q-(\d{1,9})\))?$/.exec(cursor.take("question_id") ?? "");
-  if (question === null || !ID.test(question[1])) return null;
+  const asked = /^(\S+)(?: \(q-(\d{1,9})\))?$/.exec(cursor.take("question_id") ?? "");
+  if (asked === null || !ID.test(asked[1])) return null;
   const revisionText = cursor.take("revision");
   if (revisionText === null || !/^\d{1,9}$/.test(revisionText)) return null;
   const injectionId = cursor.take("injection_id");
   if (injectionId === null || !ID.test(injectionId)) return null;
+  const question = takeText(cursor, "question", MAX_QUESTION_CHARS);
   const source = cursor.take("source");
   const block: AnswerBlock = {
-    questionId: question[1],
-    alias: question[2] === undefined ? null : Number(question[2]),
+    questionId: asked[1],
+    alias: asked[2] === undefined ? null : Number(asked[2]),
     revision: Number(revisionText),
     injectionId,
+    question,
     source: "human",
     expired: false,
     correction: false,
@@ -265,6 +271,10 @@ function renderBlock(block: AnswerBlock, marked = true): string {
     `revision: ${block.revision}`,
   ];
   if (marked) lines.push(`injection_id: ${block.injectionId}`, markerFor(block.injectionId));
+  // Quoted and indented, so the agent sees what the answer is to and no line of it reads as a field.
+  if (block.question !== null && block.question.length > 0) {
+    lines.push("question:", ...block.question.split("\n").map((line) => `  > ${line}`));
+  }
   if (block.expired) {
     lines.push("source: system", "status: expired", "authorised: no", EXPIRED_NOTE);
   } else {
@@ -289,8 +299,11 @@ function renderBlock(block: AnswerBlock, marked = true): string {
   return lines.join("\n");
 }
 
-/** Answer text that may be cut to fit, in the order it is cut: the library's own order first. */
-const CUTTABLE = ["comment", "reason", "choiceLabel", "choice"] as const;
+/**
+ * Text that may be cut to fit, in the order it is cut: the quoted question
+ * first (the agent can read it whole with get_decision), then the library's own order.
+ */
+const CUTTABLE = ["question", "comment", "reason", "choiceLabel", "choice"] as const;
 
 /**
  * One block within {@link MAX_DECISION_BLOCK_BYTES}. Only answer text is cut,
