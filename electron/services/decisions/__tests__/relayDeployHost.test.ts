@@ -260,7 +260,8 @@ describe("openRelayDeployHost", () => {
 
   it.each([
     ["still unterminated", "x".repeat(64 * 1024 + 1)],
-    ["terminated", `${"x".repeat(64 * 1024 + 1)}\n`],
+    // A valid result but for its size, so only the length limit refuses it.
+    ["terminated", line({ ...RESULT, padding: "x".repeat(64 * 1024) })],
   ])("ends the channel on a line longer than the contract allows, %s", async (_label, text) => {
     const events = recorder();
     const host = await open(events);

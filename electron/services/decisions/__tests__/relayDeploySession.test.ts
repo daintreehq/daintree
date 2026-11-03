@@ -125,9 +125,10 @@ describe("RelayDeploySessions", () => {
     hosts[0]!.events.onResult(COMPLETED);
     const claimRelay = vi.fn(async (_claim: ClaimDecisionsRelayPayload) => SAVED);
 
-    await expect(sessions.claim({ deployId: "another-deploy" }, claimRelay)).rejects.toThrow(
-      /no longer holds the claim secret/
-    );
+    await expect(sessions.claim({ deployId: "another-deploy" }, claimRelay)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringMatching(/no longer holds the claim secret/),
+    });
 
     expect(claimRelay).not.toHaveBeenCalled();
     expect(sessions.claimable(id)).not.toBeNull();
