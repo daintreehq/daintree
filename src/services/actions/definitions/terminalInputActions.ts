@@ -29,10 +29,7 @@ import {
 } from "@/services/contextInjectionGuard";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
-import {
-  getTerminalInputBlock,
-  getTerminalInputBlockMessage,
-} from "@/services/terminal/inputGate";
+import { getTerminalInputBlock, getTerminalInputBlockMessage } from "@/services/terminal/inputGate";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 
 /**

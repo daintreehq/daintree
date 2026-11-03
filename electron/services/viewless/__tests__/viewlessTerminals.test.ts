@@ -770,7 +770,10 @@ describe("terminal.sendKeys with no frontend", () => {
     const pty = makePty({ "t-1": { kind: "terminal" } }, screens);
     const { deps, send } = makeDeps({ getPtyReader: () => pty });
     const press = () =>
-      executeViewlessAction(request("terminal.sendKeys", { terminalId: "t-1", keys: ["Escape"] }), deps);
+      executeViewlessAction(
+        request("terminal.sendKeys", { terminalId: "t-1", keys: ["Escape"] }),
+        deps
+      );
 
     await expect(press()).resolves.toMatchObject({ result: { screenChanged: false } });
 

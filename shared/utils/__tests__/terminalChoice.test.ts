@@ -528,9 +528,9 @@ describe("endsOnFooteredChoice (#16209)", () => {
     const unhighlighted = DIALOG.map((row) => row.replace("❯", " "));
     expect(endsOnFooteredChoice(unhighlighted, FOOTER)).toBe(false);
     // The highlight above a blank row belongs to something else.
-    expect(
-      endsOnFooteredChoice(["❯ Keep auto", "", "↑/↓ choose · enter confirm"], FOOTER)
-    ).toBe(false);
+    expect(endsOnFooteredChoice(["❯ Keep auto", "", "↑/↓ choose · enter confirm"], FOOTER)).toBe(
+      false
+    );
   });
 
   it("never counts a footer that isn't the last row drawn", () => {

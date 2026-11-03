@@ -1549,10 +1549,7 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  * as before.
  */
 export type TerminalSubmitGuard =
-  | "settled-prompt"
-  | "settled-prompt-strict"
-  | "no-choice-dialog"
-  | ExactPromptGuard;
+  "settled-prompt" | "settled-prompt-strict" | "no-choice-dialog" | ExactPromptGuard;
 
 /**
  * `settled-prompt-exact` (#16015): only an agent waiting at its own prompt,
