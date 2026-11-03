@@ -472,15 +472,24 @@ async function runTerminalSendCommand(
         appendHandbackInstruction(command, handbackCode, "run"),
         submissionToken,
         handbackCode,
+        undefined,
+        "no-choice-dialog",
       ]);
     } else {
       await deps.invoke<void>(project.id, CHANNELS.TERMINAL_SUBMIT, [
         terminalId,
         command,
         submissionToken,
+        undefined,
+        undefined,
+        "no-choice-dialog",
       ]);
     }
   } catch (err) {
+    // The view's action reports a send into a choice dialog under its own code (#16209).
+    if (err instanceof Error && (err as { code?: unknown }).code === "TERMINAL_CHOICE_DIALOG") {
+      return failure("TERMINAL_CHOICE_DIALOG", err.message);
+    }
     return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to submit to terminal"));
   }
 

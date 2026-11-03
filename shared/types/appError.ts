@@ -116,6 +116,9 @@ export type AppErrorCode =
   | "HOST_BUILD_SKEW"
   // Another frontend holds the drive lease for this project.
   | "DRIVEN_ELSEWHERE"
+  // A send meant for an agent's prompt was refused: the agent was observed
+  // waiting on a choice dialog, which would take the text (#16209).
+  | "TERMINAL_CHOICE_DIALOG"
   // An agent launch that requires a plugin's agent tools was refused because
   // they couldn't be handed over; the per-plugin states travel as details.
   | "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE"

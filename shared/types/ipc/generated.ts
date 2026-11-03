@@ -4535,6 +4535,7 @@ export interface GeneratedIpcInvokeMap {
       submissionToken?: string | undefined,
       handbackCode?: string | undefined,
       imagePaths?: string[] | undefined,
+      guard?: "no-choice-dialog" | undefined,
     ];
     result: void;
   };

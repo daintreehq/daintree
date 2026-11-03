@@ -150,6 +150,10 @@ export const config: AgentConfig = {
     ],
     promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
     promptHintPatterns: ["bypass permissions", "^\\s*>\\s+Try\\b"],
+    // Its generic select footer ("↑/↓ choose · ←/→ change size · enter
+    // confirm · esc not now"), drawn under every unnumbered option list, such
+    // as the autocompact choice, whatever the dialog asks (#16209).
+    choiceDialogFooterPatterns: ["^\\s*↑/↓\\s.*\\benter\\s+(?:to\\s+)?confirm\\b"],
     completionPatterns: [
       // @generated:claude:completionPatterns:start
       "[✢✳✶✻✽●]\\s+\\w+\\s+for\\s+\\d",

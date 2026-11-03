@@ -77,6 +77,12 @@ interface SubmitJob {
    */
   admit?: () => boolean;
   imagePaths?: readonly string[];
+  /**
+   * Checked when the job takes the lane, beside `admit` but without making it
+   * a guarded line (#16209): true drops the job as `cancelled` with nothing
+   * written, and false leaves it an ordinary submission in every other way.
+   */
+  refuse?: () => boolean;
 }
 
 /**
@@ -214,7 +220,8 @@ export class WriteQueue {
     token?: string,
     onPtyWritten?: () => void,
     admit?: () => boolean,
-    imagePaths?: readonly string[]
+    imagePaths?: readonly string[],
+    refuse?: () => boolean
   ): void {
     if (this.disposed) {
       // A tracked submit into a disposed queue is answered rather than
@@ -238,7 +245,15 @@ export class WriteQueue {
     if (token !== undefined && !this.pendingSubmissions.has(token)) {
       this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
     }
-    this.enqueue({ kind: "submit", text, token, onPtyWritten, admit, imagePaths });
+    this.enqueue({
+      kind: "submit",
+      text,
+      token,
+      onPtyWritten,
+      admit,
+      imagePaths,
+      ...(refuse !== undefined ? { refuse } : {}),
+    });
   }
 
   /**
@@ -527,7 +542,10 @@ export class WriteQueue {
         }
         this.submitStatusReported = false;
         const token = next.token;
-        if (next.admit !== undefined && !admitJob(next.admit)) {
+        if (
+          (next.refuse !== undefined && !admitJob(() => !next.refuse!())) ||
+          (next.admit !== undefined && !admitJob(next.admit))
+        ) {
           if (token !== undefined) this.finalizeIfPending(token, "cancelled");
           continue;
         }

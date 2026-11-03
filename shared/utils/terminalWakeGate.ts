@@ -69,6 +69,27 @@ export function wakeGateOptionsFor(agentId: string | undefined): WakeGateOptions
 }
 
 /**
+ * Whether the terminal's agent was last observed waiting on a choice dialog
+ * (#16209): a selector, not its prompt, so a line typed there picks an option
+ * or is lost. Only a live agent pane can be; a shell, or a pane whose agent
+ * has gone, takes a send as it always has.
+ */
+export function isAtChoiceDialog(snapshot: WakeGateSnapshot): boolean {
+  return (
+    snapshot.detectedAgentId !== undefined &&
+    snapshot.isExited !== true &&
+    snapshot.hasPty !== false &&
+    snapshot.agentState === "waiting" &&
+    snapshot.waitingReason === "approval"
+  );
+}
+
+/** What a refused send says, wherever it was refused. */
+export function choiceDialogRefusalMessage(terminalId: string): string {
+  return `Terminal '${terminalId}' was observed waiting on a choice dialog, which would take the text. Nothing was sent. Read its screen and answer it with keys, or send once it is gone.`;
+}
+
+/**
  * Whether a server-authored line may be submitted to this terminal now.
  *
  * Fails closed. Only an agent observed waiting at a `prompt` qualifies, and

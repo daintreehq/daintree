@@ -201,8 +201,9 @@ export interface ActivityStateMetadata {
   /**
    * Set only on a reason-only update (#16093): an idle agent's screen changed
    * and settled without it going busy, and this is when the settled screen
-   * was read for `waitingReason`, with its input row in view and empty. No
-   * state transition goes with it.
+   * was read for `waitingReason`, with its input row in view and empty, or
+   * with a choice dialog in its place (#16209). No state transition goes with
+   * it.
    */
   rereadAt?: number;
 }
@@ -310,6 +311,9 @@ export class ActivityMonitor {
 
   // Prompt/completion config
   private readonly promptDetectorConfig: PromptDetectorConfig;
+  // The agent whose screen this is, for dialog shapes only its own config
+  // knows (#16209). Follows `reconfigure`.
+  private agentId: string | undefined;
   private readonly completionPatterns: RegExp[];
   private readonly completionConfidence: number;
 
@@ -420,6 +424,7 @@ export class ActivityMonitor {
     if (options?.patternConfig || options?.agentId) {
       this.patternDetector = new AgentPatternDetector(options.agentId, options.patternConfig);
     }
+    this.agentId = options?.agentId;
     this.getVisibleLines = options?.getVisibleLines;
     this.getLastTextLines = options?.getLastTextLines;
     this.getVisibleContentSnapshot = options?.getVisibleContentSnapshot;
@@ -1011,7 +1016,7 @@ export class ActivityMonitor {
       this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
     const composerRow = findEmptyComposerRow(read, this.promptDetectorConfig.promptPatterns);
     return {
-      reason: classifyWaitingReason(read, isPromptDetected, rows, composerRow),
+      reason: classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId),
       composerRow,
     };
   }
@@ -1021,9 +1026,11 @@ export class ActivityMonitor {
   // a limit wait) never reached the classifier again, so a reason computed at
   // that settle held for as long as the agent stayed idle. Once the change has
   // settled the screen is read again, and only a screen showing the agent's
-  // input row, empty, can change the reason: the update carries a new settle
-  // for the send gate, which must never land over a draft. Time alone never
-  // re-reads anything.
+  // input row, empty, can change the reason to one a send is admitted at: the
+  // update carries a new settle for the send gate, which must never land over
+  // a draft. A dialog drawn after the settle takes that row's place, so a
+  // choice the screen positively shows is published without it (#16209); no
+  // send is admitted at one. Time alone never re-reads anything.
   private rereadWaitingReason(now: number): void {
     if (this.state !== "idle" || this.completionTimer.emitted || !this.getVisibleLines) return;
     const changedAt = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
@@ -1050,7 +1057,8 @@ export class ActivityMonitor {
       { allowHistoryScan: true }
     );
     const { reason, composerRow } = this.readWaitingScreen(lines, promptResult.isPrompt);
-    if (composerRow === undefined || reason === this.idleWaitingReason) return;
+    if (reason === this.idleWaitingReason) return;
+    if (composerRow === undefined && reason !== "approval") return;
     this.idleWaitingReason = reason;
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "pattern",
@@ -1243,6 +1251,7 @@ export class ActivityMonitor {
   reconfigure(agentId?: string, patternConfig?: PatternDetectionConfig): void {
     if (this.isDisposed) return;
 
+    this.agentId = agentId;
     this.patternDetector =
       agentId || patternConfig ? new AgentPatternDetector(agentId, patternConfig) : undefined;
 

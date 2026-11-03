@@ -15,6 +15,7 @@ import {
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
   keySequence,
+  screenChangedField,
 } from "../../../shared/utils/terminalKeys.js";
 import {
   buildTerminalSendCommandReceipt,
@@ -428,11 +429,14 @@ export class GlobalWorkerSteer {
     terminalId: string;
     keys: string[];
     screen?: string;
+    screenChanged?: boolean;
     inputSinceSettle?: InputSinceSettle;
   }> {
     return this.exclusive(target, async () => {
       const { terminalId, inputOwner } = target;
       let record = await this.requireWorker(target);
+      // The window read after the keys, read before them too (#16209).
+      const before = await this.readScreen(terminalId, SEND_KEYS_SCREEN_LINES).catch(() => null);
       let keys = request.keys ? [...request.keys] : undefined;
       if (request.choose !== undefined) {
         const plan = planChoice(
@@ -441,11 +445,12 @@ export class GlobalWorkerSteer {
         );
         if (!plan.ok) refuse("VALIDATION_ERROR", `${plan.reason} Nothing was pressed.`);
         keys = plan.keys;
-        record = await this.requireWorker(target);
       }
       if (keys === undefined || keys.length === 0) {
         refuse("VALIDATION_ERROR", "Pass `choose` or `keys`. Nothing was pressed.");
       }
+      // The reads were async: the checks below must see the worker as it is now.
+      record = await this.requireWorker(target);
       const pressed: string[] = [];
       const stop = (code: string, why: string): never =>
         refuse(
@@ -496,7 +501,13 @@ export class GlobalWorkerSteer {
         : null;
       // Asked after the read as well: a successor's screen is never what these keys did.
       const screen = this.isSameRun(target) ? read : null;
-      return { terminalId, keys: pressed, ...(screen ? { screen } : {}), ...admittedOver };
+      return {
+        terminalId,
+        keys: pressed,
+        ...(screen ? { screen } : {}),
+        ...screenChangedField(before, screen),
+        ...admittedOver,
+      };
     });
   }
 

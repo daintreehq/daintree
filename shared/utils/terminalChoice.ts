@@ -163,6 +163,8 @@ const NUMBERED_OPTION = /^\s*(?:[❯›>▶➜→●]\s*)?(\d+)[.)]\s+/;
 const DIALOG_HIGHLIGHT = /^\s*[❯›▶➜→●]\s*\d+[.)]\s+/;
 /** A composer sits between full-width rules; a dialog's options never touch one. */
 const HORIZONTAL_RULE = /^\s*[─━]{8,}\s*$/;
+/** A highlighted row with text after its marker, numbered or not. */
+const DIALOG_HIGHLIGHT_ROW = /^\s*[❯›▶➜→●]\s*\S/;
 /** The key hint a dialog draws under its options ("Esc to cancel", "Press enter to confirm"). */
 const KEY_HINT = /\b(?:enter|esc)\b/i;
 const HINT_VERB = /\b(?:confirm|cancel|select)\b/i;
@@ -223,6 +225,33 @@ export function parseChoiceList(screen: string): ChoiceList | null {
  */
 export function endsOnChoiceDialog(lines: readonly string[]): boolean {
   return readChoiceList(lines, false) !== null;
+}
+
+/**
+ * Whether the bottom of a screen is a select dialog its CLI marks with a
+ * footer of its own (#16209), for options that carry no numbers
+ * (`❯ Keep auto (1m tokens)`), which `endsOnChoiceDialog` can't tell from a
+ * composer or a quote. The footer must be the last row drawn, and the block
+ * of rows it closes must hold a highlighted row and no rule, so a footer
+ * quoted in prose or left above a newer composer never counts.
+ */
+export function endsOnFooteredChoice(
+  rawLines: readonly string[],
+  footers: readonly RegExp[]
+): boolean {
+  if (footers.length === 0) return false;
+  const lines = rawLines.map(unframe);
+  let bottom = lines.length - 1;
+  while (bottom >= 0 && lines[bottom]!.trim() === "") bottom--;
+  if (bottom < 1 || !footers.some((footer) => footer.test(lines[bottom]!))) return false;
+  let top = bottom;
+  while (top > 0 && lines[top - 1]!.trim() !== "") top--;
+  let highlighted = false;
+  for (let i = top; i < bottom; i++) {
+    if (HORIZONTAL_RULE.test(lines[i]!)) return false;
+    if (DIALOG_HIGHLIGHT_ROW.test(lines[i]!)) highlighted = true;
+  }
+  return highlighted;
 }
 
 function readChoiceList(rawLines: readonly string[], requireHint: boolean): ChoiceList | null {

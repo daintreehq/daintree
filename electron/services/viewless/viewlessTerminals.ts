@@ -32,6 +32,7 @@ import { formatNoPanelMessage } from "../../../shared/utils/terminalInOtherProje
 import {
   CHOOSE_SCREEN_LINES,
   keySequence,
+  screenChangedField,
   SEND_KEYS_GAP_MS,
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
@@ -599,6 +600,8 @@ export async function runTerminalSendKeys(
   if (keys === undefined) {
     return failure("VALIDATION_ERROR", "Pass `choose` or `keys`. Nothing was pressed.");
   }
+  // The window read after the keys, read before them too (#16209).
+  const before = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
   // One write per key, spaced out, as the view's action writes them.
   for (const [index, key] of keys.entries()) {
     if (index > 0) await deps.sleep(SEND_KEYS_GAP_MS);
@@ -606,5 +609,10 @@ export async function runTerminalSendKeys(
   }
   await deps.sleep(SEND_KEYS_SETTLE_MS);
   const screen = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
-  return success({ terminalId, keys, ...(screen ? { screen } : {}) });
+  return success({
+    terminalId,
+    keys,
+    ...(screen ? { screen } : {}),
+    ...screenChangedField(before, screen),
+  });
 }

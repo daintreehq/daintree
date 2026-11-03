@@ -1692,8 +1692,9 @@ export class PtyClient extends EventEmitter {
       ...(promptOwner !== undefined ? { promptOwner } : {}),
     });
     // A guarded submission is Daintree waking an idle agent, not anyone
-    // answering it, and the host may yet refuse it.
-    if (guard === undefined) {
+    // answering it, and the host may yet refuse it. A line guarded only
+    // against a choice dialog is still its caller's own (#16209).
+    if (guard === undefined || guard === "no-choice-dialog") {
       this.emit("terminal-input", id, { answer: "submit" } satisfies TerminalInputNotice);
     }
   }

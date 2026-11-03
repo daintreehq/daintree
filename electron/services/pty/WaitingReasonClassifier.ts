@@ -1,6 +1,7 @@
 import type { WaitingReason } from "../../../shared/types/agent.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
-import { endsOnChoiceDialog } from "../../../shared/utils/terminalChoice.js";
+import { endsOnChoiceDialog, endsOnFooteredChoice } from "../../../shared/utils/terminalChoice.js";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { UNIVERSAL_APPROVAL_HINT_PATTERNS } from "./terminalActivityPatterns.js";
 
 /**
@@ -197,6 +198,31 @@ const PROMPT_CHROME_LINE = /^[\s>❯›⟩$%#│╭╰─╮╯]*$/;
 const APPROVAL_SCAN_LINES = 10;
 const ERROR_SCAN_LINES = 4;
 
+const choiceFooterCache = new Map<string, readonly RegExp[]>();
+
+/**
+ * The select-dialog footers `agentId`'s own config names (#16209). Kept to
+ * the agent that draws them: another CLI's prose or output can carry the same
+ * words without meaning a dialog is open.
+ */
+function choiceDialogFootersFor(agentId: string | undefined): readonly RegExp[] {
+  if (agentId === undefined) return [];
+  const patterns = getEffectiveAgentConfig(agentId)?.detection?.choiceDialogFooterPatterns ?? [];
+  const key = `${agentId}\0${patterns.join("\0")}`;
+  let compiled = choiceFooterCache.get(key);
+  if (compiled === undefined) {
+    compiled = patterns.flatMap((pattern) => {
+      try {
+        return [new RegExp(pattern, "i")];
+      } catch {
+        return [];
+      }
+    });
+    choiceFooterCache.set(key, compiled);
+  }
+  return compiled;
+}
+
 /**
  * Why an agent that went idle is waiting, from the bottom `rows` of its screen
  * once a trailing task checklist is set aside; `lines` may carry the checklist's
@@ -204,13 +230,15 @@ const ERROR_SCAN_LINES = 4;
  * the caller found the agent's input row in `lines`, keeps what is drawn below
  * it out of the error window (#16093): a status footer such as "Usage limit
  * reached · …" can outlive the limit it reported, and only the transcript above
- * the input row says how the turn ended.
+ * the input row says how the turn ended. `agentId` is the agent the screen
+ * belongs to, for the dialog shapes only its own config knows.
  */
 export function classifyWaitingReason(
   lines: string[],
   isPromptDetected: boolean,
   rows = WAITING_REASON_SCAN_LINE_COUNT,
-  composerRow?: number
+  composerRow?: number,
+  agentId?: string
 ): WaitingReason {
   const strippedLines = withoutTrailingChecklist(
     lines.map((l) => stripAnsi(l)),
@@ -231,6 +259,11 @@ export function classifyWaitingReason(
   // "❯ 1. React" / "  2. Vue") takes a specific choice, not free text, so it
   // is an approval wait however its question reads (#14475).
   if (endsOnChoiceDialog(strippedLines)) {
+    return "approval";
+  }
+  // An unnumbered list ("❯ Keep auto (1m tokens)") is only told from a
+  // composer by the footer its own CLI draws under it (#16209).
+  if (endsOnFooteredChoice(strippedLines, choiceDialogFootersFor(agentId))) {
     return "approval";
   }
 
