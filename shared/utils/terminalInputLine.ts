@@ -21,15 +21,24 @@ const ALT_SCREEN_ENTER = "\x1b[?1049h";
 // eslint-disable-next-line no-control-regex -- the serializer's own SGR sequences
 const SGR = /\x1b\[([0-9;:]*)m/g;
 
-// eslint-disable-next-line no-control-regex -- walks the serializer's own escape sequences
 const TOKEN =
+  // eslint-disable-next-line no-control-regex -- walks the serializer's own escape sequences
   /\x1b\[([0-9;:]*)m|\x1b\[(\d*)C|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;:?<=>]*[ -/]*[@-~]|\x1b[^[\]]|[^\x1b]/gu;
 
 /** The rows the generic drop treats as an input box: any prompt glyph, then a gap. */
 const GENERIC_PROMPT_ROW = /^\s*(?:❯|›|>)\s/;
 
-/** Rows past the top edge a box may run to before it is taken as unbounded. */
+/** Rows below the prompt row a box may run to before its bottom edge. */
 const MAX_BOX_ROWS = 40;
+
+/**
+ * Characters of `inputLine.text` kept. The status answer splits one response
+ * budget across a fleet, and its tails are what shrink: a fleet of long drafts
+ * would otherwise overrun it on this field alone.
+ */
+export const INPUT_LINE_TEXT_MAX_CHARS = 200;
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Cap on CUF expansion, matching the plain-text read's own. */
 const MAX_CURSOR_FORWARD = 1000;
@@ -201,45 +210,54 @@ interface BoxRow {
 
 /**
  * The input box: the last row that opens with the prompt glyph directly under
- * the box's top edge, down to the next edge. Rows that open with the glyph
- * anywhere else are echoes of messages already sent.
+ * the box's top edge, down to its bottom edge, every row between indented or
+ * blank as the box draws them. Rows that open with the glyph anywhere else are
+ * echoes of messages already sent; an echo that happens to sit under a rule
+ * runs into unindented transcript or a dialog before any edge, so it is no box.
  */
 function findBox(screen: ScreenRows, rule: CompiledRule): BoxRow[] | null {
-  for (let i = screen.rows.length - 1; i > 0; i--) {
+  candidates: for (let i = screen.rows.length - 1; i > 0; i--) {
     const match = rule.promptRow.exec(screen.plain(i));
     if (match === null || !rule.border.test(screen.plain(i - 1))) continue;
-    let last = i;
     for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
-      if (rule.border.test(screen.plain(r))) {
-        last = r - 1;
-        break;
-      }
+      const row = screen.plain(r);
+      if (rule.border.test(row)) return boxRows(screen, i, r - 1, Array.from(match[0]).length);
+      if (row.trim() !== "" && !/^\s/u.test(row)) continue candidates;
     }
-    // With no bottom edge in view only the prompt row can be vouched for.
-    const cells = cellsOf(screen, i, last);
-    const skip = Array.from(match[0]).length;
-    return cells.map((row, index) => {
-      if (index === 0) return { row: i, cells: row.slice(skip) };
-      const indent = row.findIndex((cell) => !isBlank(cell));
-      return { row: i + index, cells: indent === -1 ? [] : row.slice(indent) };
-    });
   }
   return null;
+}
+
+function boxRows(screen: ScreenRows, from: number, to: number, skip: number): BoxRow[] {
+  return cellsOf(screen, from, to).map((row, index) => {
+    if (index === 0) return { row: from, cells: row.slice(skip) };
+    const indent = row.findIndex((cell) => !isBlank(cell));
+    return { row: from + index, cells: indent === -1 ? [] : row.slice(indent) };
+  });
 }
 
 /**
  * The cells drawn as suggestion. A CLI that paints its own cursor in a focused
  * pane inverts the first character and dims only the rest (`ESC[7mm ESC[27;2m
- * erge #2079`), so an inverse cell opening the box counts with the dim run it
- * leads into.
+ * erge #2079`), so an inverse grapheme opening the box counts with the dim run
+ * it leads into. The serializer writes a dim space after it as a bare cursor
+ * move, so blanks are passed over on the way to that run.
  */
 function suggestionCells(box: readonly BoxRow[]): Set<Cell> {
   const dim = new Set(box.flatMap((row) => row.cells.filter((cell) => cell.dim)));
-  const first = box.flatMap((row) => row.cells).find((cell) => !isBlank(cell) || cell.inverse);
-  if (first !== undefined && first.inverse && !first.dim) {
-    const row = box.find((r) => r.cells.includes(first))!;
-    const next = row.cells[row.cells.indexOf(first) + 1];
-    if (next !== undefined && next.dim) dim.add(first);
+  const cells = box[0]!.cells;
+  const start = cells.findIndex((cell) => !isBlank(cell) || cell.inverse);
+  if (start === -1) return dim;
+  let end = start;
+  while (end < cells.length && cells[end]!.inverse && !cells[end]!.dim) end++;
+  const cursor = cells.slice(start, end);
+  const next = cells.slice(end).find((cell) => !isBlank(cell));
+  if (
+    cursor.length > 0 &&
+    next?.dim === true &&
+    Array.from(graphemes.segment(plainOf(cursor))).length === 1
+  ) {
+    for (const cell of cursor) dim.add(cell);
   }
   return dim;
 }
@@ -257,6 +275,8 @@ interface Reading {
   box: BoxRow[] | null;
   /** The cells the box draws as suggestion or placeholder. */
   styled: Set<Cell>;
+  /** The whole suggestion, before `inputLine.text` is bounded. */
+  suggestion?: string;
 }
 
 function read(serialized: string, rule: AgentInputSuggestionConfig | undefined): Reading {
@@ -280,13 +300,23 @@ function read(serialized: string, rule: AgentInputSuggestionConfig | undefined):
     if (compiledRule.placeholders.some((pattern) => pattern.test(text))) {
       return { ...base, inputLine: { state: "empty", text: "" } };
     }
-    return { ...base, inputLine: { state: "suggestion", text } };
+    return { ...base, inputLine: bounded("suggestion", text), suggestion: text };
   }
   // A dim hint beside typed text (a slash command's argument hint) is not typed.
   return {
     ...base,
-    inputLine: { state: "typed", text: boxText(box, (cell) => !styled.has(cell)) },
+    inputLine: bounded(
+      "typed",
+      boxText(box, (cell) => !styled.has(cell))
+    ),
   };
+}
+
+function bounded(state: "typed" | "suggestion", text: string): TerminalInputLine {
+  const chars = Array.from(text);
+  return chars.length <= INPUT_LINE_TEXT_MAX_CHARS
+    ? { state, text }
+    : { state, text: chars.slice(0, INPUT_LINE_TEXT_MAX_CHARS).join(""), truncated: true };
 }
 
 function rebuild(screen: ScreenRows, rows: readonly string[]): string {
@@ -313,17 +343,24 @@ export function observeInputLine(
   if (reading.inputLine.state !== "suggestion" || reading.screen === null || rule === undefined) {
     return { inputLine: reading.inputLine, marked: serialized };
   }
-  const cells = reading.box!.flatMap((row) => row.cells.map((cell) => ({ row: row.row, cell })));
-  const marked = cells.filter(({ cell }) => reading.styled.has(cell) && !isBlank(cell));
-  const first = marked[0]!;
-  const last = marked[marked.length - 1]!;
+  // The whole mark goes on the prompt row and the rows the suggestion wrapped
+  // onto are emptied, so no cut of the tail can keep its words without it.
+  const box = reading.box!;
   const rows = [...reading.screen.rows];
-  const insert = (row: number, at: number, text: string) => {
-    rows[row] = rows[row]!.slice(0, at) + text + rows[row]!.slice(at);
-  };
-  // The closing bracket first, so the opening one's offset still holds on a shared row.
-  insert(last.row, last.cell.end, "]");
-  insert(first.row, first.cell.start, `[suggested by ${rule.label}: `);
+  for (const row of box.slice(1)) {
+    rows[row.row] = removeCells(
+      rows[row.row]!,
+      row.cells.filter((cell) => reading.styled.has(cell))
+    );
+  }
+  const first = box[0]!;
+  const styled = first.cells.filter((cell) => reading.styled.has(cell));
+  // Every cell taken out sits at or after the first, so its offset holds.
+  const row = rows[first.row]!;
+  const at = styled[0]?.start ?? row.replace(/\r$/, "").length;
+  const mark = `[suggested by ${rule.label}: ${reading.suggestion!.replace(/\n/g, " ")}]`;
+  const kept = removeCells(row, styled);
+  rows[first.row] = kept.slice(0, at) + mark + kept.slice(at);
   return { inputLine: reading.inputLine, marked: rebuild(reading.screen, rows) };
 }
 

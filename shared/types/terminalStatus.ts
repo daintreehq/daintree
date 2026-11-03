@@ -59,11 +59,16 @@ export interface TerminalInputLine {
   state: TerminalInputLineState;
   /** The box's text after the prompt glyph; the suggested text for `suggestion`, `""` for `empty` and `unknown`. */
   text: string;
+  /** `text` was cut to its first `INPUT_LINE_TEXT_MAX_CHARS` characters; never sent as `false`. */
+  truncated?: true;
 }
 
 /** Model-facing description of `inputLine`, shared by the status and output schemas. */
 export const INPUT_LINE_DESCRIPTION =
   "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.";
+
+/** Model-facing description of `inputLine.truncated`. */
+export const INPUT_LINE_TRUNCATED_DESCRIPTION = "`text` was cut to its first 200 characters.";
 
 /** Model-facing description of `inputLine.text`. */
 export const INPUT_LINE_TEXT_DESCRIPTION =

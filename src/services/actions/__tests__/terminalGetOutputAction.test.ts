@@ -190,16 +190,17 @@ describe("terminal.getOutput action", () => {
     usePanelStore.setState({ panelsById: { "t-claude": panel } } as never);
     const action = actions.get("terminal.getOutput")!();
 
-    const result = (await action.run({ terminalId: "t-claude" }, {})) as TerminalOutputResult & {
-      inputLine?: unknown;
-    };
+    // Read through the published result schema, which strips any key it does not declare.
+    const read = async (terminalId: string) =>
+      action.resultSchema!.parse(await action.run({ terminalId }, {})) as TerminalOutputResult & {
+        inputLine?: unknown;
+      };
+    const result = await read("t-claude");
     expect(result.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
     expect(result.content).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
 
     // An id the view holds no panel for reads no agent, so its box is unknown.
-    const other = (await action.run({ terminalId: "t-other" }, {})) as TerminalOutputResult & {
-      inputLine?: unknown;
-    };
+    const other = await read("t-other");
     expect(other.inputLine).toEqual({ state: "unknown", text: "" });
     expect(other.content).toContain("\n❯ open the PR\n");
   });

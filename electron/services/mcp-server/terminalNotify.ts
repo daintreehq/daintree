@@ -37,10 +37,6 @@ import {
   type NoticeObservation,
 } from "./noticeFormat.js";
 import { REPLY_SEARCH_ROWS, extractReply, type ObservedMarker } from "./noticeReply.js";
-import {
-  inputSuggestionRuleFor,
-  observeInputLine,
-} from "../../../shared/utils/terminalInputLine.js";
 
 export {
   formatAssistantApprovalLine,
@@ -2168,11 +2164,13 @@ export class TerminalNotifyService {
               message: observed.message,
               ...(entry.observedCode !== undefined ? { code: entry.observedCode } : {}),
             };
-      const { marked } = observeInputLine(
+      const { reply, reachedHandback } = extractReply(
         snapshot.data,
-        inputSuggestionRuleFor(info?.detectedAgentId ?? info?.launchAgentId)
+        lines,
+        endAt,
+        undefined,
+        info?.detectedAgentId ?? info?.launchAgentId
       );
-      const { reply, reachedHandback } = extractReply(marked, lines, endAt);
       if (reply === null) return;
       // A read that no longer finds the marker (scrolled off, or another turn
       // on screen) keeps the quote that did, flagged when it ends at a capture

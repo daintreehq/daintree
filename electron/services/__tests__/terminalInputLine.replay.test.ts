@@ -6,7 +6,7 @@ import {
   inputSuggestionRuleFor,
 } from "../../../shared/utils/terminalInputLine.js";
 import { expandCursorForward, stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
-import { serializeCastAt } from "./replay/serializedScreen.js";
+import { serializeCastAt, serializeOutput } from "./replay/serializedScreen.js";
 
 /**
  * Real Claude Code screens (#16189). `claude-suggestion.cast` is a capture of
@@ -94,6 +94,25 @@ describe("input line on captured Claude Code screens", () => {
     expect(lastLines(dropped.trimEnd(), 3)[0]!.trimEnd()).toBe("❯");
     expect(dropped).not.toContain("pen the PR");
   });
+
+  it.each([
+    // Claude Code moves the cursor over a gap rather than writing a space, and
+    // the serializer keeps it as a bare cursor move outside the dim run.
+    ["a one-letter first word", "a", "\x1b[1Ctest", "a test"],
+    // The cursor cell holds a whole grapheme, here `e` and a combining acute.
+    ["a combining mark", "e\u0301", "cho done", "e\u0301cho done"],
+  ])(
+    "reads a painted cursor over %s as the suggestion's first cell",
+    async (_, cursor, rest, text) => {
+      const screen = await serializeOutput(
+        `⏺ Done.\r\n────────\r\n❯\u00a0\x1b[7m${cursor}\x1b[27m\x1b[2m${rest}\x1b[22m\r\n────────`
+      );
+      const tail = captureTerminalTail(screen, 20, true, "claude");
+      expect(tail.inputLine).toEqual({ state: "suggestion", text });
+      expect(spaced(tail.content)).toContain(`❯ [suggested by Claude Code: ${text}]`);
+      expect(plain(dropInputSuggestion(screen, claude))).not.toContain(cursor);
+    }
+  );
 
   it("keeps the typed draft for Canopy", async () => {
     const screen = await serializeCastAt(CAPTURE, "typed");

@@ -17,19 +17,28 @@ export async function serializeCastAt(
   const stop = events.findIndex(([, kind, data]) => kind === "m" && data === marker);
   if (stop === -1) throw new Error(`No marker "${marker}" in ${path}`);
 
+  const output = events
+    .slice(0, stop)
+    .filter(([, kind]) => kind === "o")
+    .map(([, , data]) => data);
+  return serializeOutput(output, header.width, header.height, scrollback);
+}
+
+/** Write `output` to a headless xterm of this size and serialize it, as {@link serializeCastAt} does. */
+export async function serializeOutput(
+  output: string | readonly string[],
+  cols = 80,
+  rows = 10,
+  scrollback?: number
+): Promise<string> {
   const { Terminal } = await import("@xterm/headless");
   const { SerializeAddon } = (await import("@xterm/addon-serialize")).default;
-  const terminal = new Terminal({
-    cols: header.width,
-    rows: header.height,
-    scrollback: 1000,
-    allowProposedApi: true,
-  });
+  const terminal = new Terminal({ cols, rows, scrollback: 1000, allowProposedApi: true });
   const addon = new SerializeAddon();
   try {
     terminal.loadAddon(addon);
-    for (const [, kind, data] of events.slice(0, stop)) {
-      if (kind === "o") await new Promise<void>((resolve) => terminal.write(data, resolve));
+    for (const data of typeof output === "string" ? [output] : output) {
+      await new Promise<void>((resolve) => terminal.write(data, resolve));
     }
     return addon.serialize(scrollback === undefined ? undefined : { scrollback });
   } finally {

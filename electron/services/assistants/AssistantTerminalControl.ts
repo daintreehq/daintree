@@ -129,7 +129,9 @@ export interface AssistantTerminalControlDeps {
     lines: number,
     endAt: { message: string | null } | false,
     /** A first cut in characters; the read fits the result to its byte budget after. */
-    maxChars: number
+    maxChars: number,
+    /** The agent whose suggested next prompt the reply marks (#16189). */
+    agentId?: string | null
   ): { reply: { text: string; truncated: boolean } | null; reachedHandback: boolean };
 }
 
@@ -672,7 +674,8 @@ export class AssistantTerminalControl {
           snapshot.data,
           REPLY_READ_LINES,
           handback !== undefined ? { message: handback.message } : false,
-          maxBytes
+          maxBytes,
+          record?.detectedAgentId ?? record?.launchAgentId
         )
       : { reply: null, reachedHandback: false };
     let text = extracted.reply?.text ?? "";

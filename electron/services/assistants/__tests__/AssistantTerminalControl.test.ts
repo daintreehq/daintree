@@ -607,7 +607,9 @@ describe("AssistantTerminalControl (#13496)", () => {
         "screen",
         expect.any(Number),
         { message: "Suite passed" },
-        24_000
+        24_000,
+        // The agent the quote marks a suggested next prompt for (#16189).
+        "codex"
       );
       expect(read).toEqual({
         status: "observed",
@@ -643,7 +645,13 @@ describe("AssistantTerminalControl (#13496)", () => {
         reachedHandback: false,
       });
       const read = await control.readReply(control.require(LOCAL, "t-one"), 5);
-      expect(mocks.extractReply).toHaveBeenCalledWith("screen", expect.any(Number), false, 5);
+      expect(mocks.extractReply).toHaveBeenCalledWith(
+        "screen",
+        expect.any(Number),
+        false,
+        5,
+        "claude"
+      );
       expect(read).toEqual({
         status: "observed",
         source: "screen",

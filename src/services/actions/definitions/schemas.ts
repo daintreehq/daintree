@@ -4,6 +4,7 @@ import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agen
 import {
   INPUT_LINE_DESCRIPTION,
   INPUT_LINE_TEXT_DESCRIPTION,
+  INPUT_LINE_TRUNCATED_DESCRIPTION,
   LAST_OUTPUT_CHANGE_AT_DESCRIPTION,
   LAST_TYPED_INPUT_AT_DESCRIPTION,
 } from "@shared/types/terminalStatus";
@@ -563,6 +564,7 @@ export const TerminalInputLineSchema = z
   .object({
     state: z.enum(["empty", "typed", "suggestion", "unknown"]),
     text: z.string().describe(INPUT_LINE_TEXT_DESCRIPTION),
+    truncated: z.literal(true).optional().describe(INPUT_LINE_TRUNCATED_DESCRIPTION),
   })
   .describe(INPUT_LINE_DESCRIPTION);
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   captureTerminalTail,
   dropInputSuggestion,
+  INPUT_LINE_TEXT_MAX_CHARS,
   inputSuggestionRuleFor,
   observeInputLine,
 } from "../terminalInputLine.js";
@@ -70,33 +71,47 @@ describe("observeInputLine", () => {
   });
 
   it("carries SGR state in from the rows above", () => {
-    // The serializer opens a dim run on one row and lets it run on.
-    const serialized = `⏺ Done.\r\n${EDGE}\r\n❯ \x1b[2mopen the PR\r\n${EDGE}\r\n\x1b[0m  ? for shortcuts`;
-    expect(observeInputLine(serialized, claude).inputLine.state).toBe("suggestion");
+    // The serializer opens a dim run on one row and lets it run on into the box.
+    const carried = `⏺ Done.\r\n\x1b[2m${EDGE}\r\n❯ open the PR\r\n\x1b[22m${EDGE}`;
+    expect(observeInputLine(carried, claude).inputLine.state).toBe("suggestion");
     const resetAbove = `\x1b[2m⏺ Done.\x1b[22m\r\n${EDGE}\r\n❯ open the PR\r\n${EDGE}`;
     expect(observeInputLine(resetAbove, claude).inputLine.state).toBe("typed");
   });
 
-  it("takes a sent message's echo for nothing: only the framed row is the box", () => {
-    // A permission dialog has replaced the box; the last `❯` rows are an echo
-    // and the dialog's own pointer.
-    const serialized =
-      "❯ \x1b[2mfix the rounding\x1b[22m\r\n⏺ Bash command\r\n  Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No";
+  it.each([
+    // A permission dialog has replaced the box: the last `❯` rows are an echo
+    // of a sent message and the dialog's own pointer.
+    ["an echo with nothing above it", "⏺ Done.\r\n❯ \x1b[2mfix the rounding\x1b[22m\r\n ❯ 1. Yes"],
+    [
+      "an echo under a rule from the transcript",
+      `⏺ Reply.\r\n${EDGE}\r\n\x1b[48;5;236m❯ fix the rounding\x1b[0m\r\n⏺ Bash command\r\n  Do you want to proceed?\r\n ❯ 1. Yes\r\n${EDGE}`,
+    ],
+    [
+      "a box with no bottom edge in view",
+      `⏺ Done.\r\n${EDGE}\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n  more`,
+    ],
+  ])("reads %s as no box at all", (_, serialized) => {
     expect(observeInputLine(serialized, claude)).toEqual({
       inputLine: { state: "unknown", text: "" },
       marked: serialized,
     });
   });
 
-  it("vouches only for the prompt row when no bottom edge is in view", () => {
-    const serialized = `⏺ Done.\r\n${EDGE}\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n  more`;
-    expect(observeInputLine(serialized, claude).inputLine).toEqual({
-      state: "suggestion",
-      text: "open the PR",
+  it("keeps the first characters of a long draft and says it cut them", () => {
+    const draft = "x".repeat(INPUT_LINE_TEXT_MAX_CHARS + 50);
+    expect(observeInputLine(screen(`❯ ${draft}`), claude).inputLine).toEqual({
+      state: "typed",
+      text: "x".repeat(INPUT_LINE_TEXT_MAX_CHARS),
+      truncated: true,
+    });
+    const whole = "y".repeat(INPUT_LINE_TEXT_MAX_CHARS);
+    expect(observeInputLine(screen(`❯ ${whole}`), claude).inputLine).toEqual({
+      state: "typed",
+      text: whole,
     });
   });
 
-  it("brackets a suggestion that wraps across box rows as one", () => {
+  it("marks a suggestion that wraps across box rows whole on its prompt row", () => {
     const box = "❯ \x1b[2mopen the PR and tell me\x1b[22m\r\n  \x1b[2mwhat is left\x1b[22m";
     const { inputLine, marked } = observeInputLine(screen(box), claude);
     expect(inputLine).toEqual({
@@ -104,8 +119,11 @@ describe("observeInputLine", () => {
       text: "open the PR and tell me\nwhat is left",
     });
     expect(plain(marked)).toContain(
-      "❯ [suggested by Claude Code: open the PR and tell me\r\n  what is left]\r\n"
+      "❯ [suggested by Claude Code: open the PR and tell me what is left]\r\n  \r\n"
     );
+    // A tail cut below the prompt row keeps none of the suggestion's words.
+    const cut = captureTerminalTail(screen(box), 3, true, "claude").content;
+    expect(cut).not.toContain("what is left");
   });
 
   it("keeps a cursor-forward gap inside the suggestion", () => {

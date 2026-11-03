@@ -247,24 +247,34 @@ export class ReplyWaiterService {
     const client = this.deps.getPtyClient();
     let finalState = state;
     let finalReason = reason;
+    let info: NotifyTerminalInfo | null | undefined;
     if (outcome === "timeout" && client !== null) {
-      const info = await client.getTerminalAsync(terminalId).catch(() => null);
+      info = await client.getTerminalAsync(terminalId).catch(() => null);
       finalState = info?.agentState;
       finalReason = info?.waitingReason;
     }
     let reply: NoticeReply | null = null;
     if (outcome !== "closed" && lines > 0 && client?.getSerializedStateAsync) {
       const getState = client.getSerializedStateAsync.bind(client);
-      const snapshot = await readTailSnapshot(
-        (options) => getState(terminalId, options),
-        REPLY_SEARCH_ROWS
-      ).catch(() => null);
+      // The record names the agent whose suggested prompt the reply marks (#16189).
+      const [snapshot, record] = await Promise.all([
+        readTailSnapshot((options) => getState(terminalId, options), REPLY_SEARCH_ROWS).catch(
+          () => null
+        ),
+        info !== undefined ? info : client.getTerminalAsync(terminalId).catch(() => null),
+      ]);
       if (snapshot !== null) {
         const endAt =
           handback === undefined
             ? outcome === "handback"
             : { message: handback.message, ...(code !== undefined ? { code } : {}) };
-        reply = extractReply(snapshot.data, lines, endAt).reply;
+        reply = extractReply(
+          snapshot.data,
+          lines,
+          endAt,
+          undefined,
+          record?.detectedAgentId ?? record?.launchAgentId
+        ).reply;
       }
     }
     return {

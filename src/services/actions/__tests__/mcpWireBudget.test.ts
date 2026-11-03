@@ -587,12 +587,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 57_694): `agent.launch` takes `accountId`, so a caller can launch on one of
   // the agent's accounts, chosen apart from its preset, or explicitly on the
   // CLI's default login.
-  // 57_850 → 58_800 for #16189, measured at 58_752 B (+924 over develop's
+  // 57_850 → 59_000 for #16189, measured at 58_960 B (+1_132 over develop's
   // 57_828): `inputLine` on `terminal.getStatus` and `terminal.getOutput`
   // results, so a caller can tell the CLI's own suggested prompt from text
-  // someone typed. Both result schemas are closed, so the field must be
-  // advertised on each; its descriptions were trimmed first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 58_800;
+  // someone typed, with the `truncated` flag its bounded text needs. Both
+  // result schemas are closed, so the field must be advertised on each; its
+  // descriptions were trimmed first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 59_000;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
