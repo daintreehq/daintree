@@ -3,6 +3,7 @@ import type { ActivityStateMetadata } from "../ActivityMonitor.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import type { PowerPolicyLevel } from "../../../shared/types/powerPolicy.js";
+import type { TerminalSubmissionOutput } from "../../../shared/types/terminalSubmission.js";
 
 // Typed message protocol between the pty-host main thread and the analysis
 // worker_threads pool. All payloads must be structured-clone-safe.
@@ -65,6 +66,8 @@ export type HostToWorkerMessage =
   | { type: "input"; terminalId: string; data: string }
   | { type: "focus"; terminalId: string }
   | { type: "submission"; terminalId: string }
+  | { type: "submission-capture-start"; terminalId: string; captureId: number; text: string }
+  | { type: "submission-capture-close"; terminalId: string }
   | ({ type: "monitor-start"; terminalId: string } & AnalysisMonitorStartSpec)
   | { type: "monitor-stop"; terminalId: string }
   | { type: "monitor-reconfigure"; terminalId: string; agentId: string }
@@ -194,6 +197,13 @@ export type WorkerToHostMessage =
   | { type: "waiting-timeout"; terminalId: string; spawnedAt: number }
   | { type: "boot-complete"; terminalId: string; spawnedAt: number; timestamp: number }
   | { type: "pty-response"; terminalId: string; data: string }
+  | {
+      /** A submission capture's output, as it grows and when it ends (#16210). */
+      type: "submission-capture";
+      terminalId: string;
+      captureId: number;
+      output: TerminalSubmissionOutput;
+    }
   | {
       type: "viewport";
       terminalId: string;

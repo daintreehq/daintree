@@ -241,6 +241,12 @@ export class AnalysisWorkerRuntime {
       case "submission":
         this.sessions.get(msg.terminalId)?.notifySubmission();
         return;
+      case "submission-capture-start":
+        this.sessions.get(msg.terminalId)?.startSubmissionCapture(msg.captureId, msg.text);
+        return;
+      case "submission-capture-close":
+        this.sessions.get(msg.terminalId)?.closeSubmissionCapture();
+        return;
       case "monitor-start":
         this.sessions.get(msg.terminalId)?.startMonitor(msg);
         return;

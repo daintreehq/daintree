@@ -35,6 +35,7 @@ import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSub
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
+import { SubmissionOutputLedger } from "./SubmissionOutputLedger.js";
 import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
 import { reportRunHandback } from "./runHandback.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
@@ -201,6 +202,8 @@ export class TerminalProcess {
   private gracefulShutdownInFlight: Promise<string | null> | null = null;
   private gracefulCaptureLease: GracefulCaptureLease | null = null;
   private writeQueue!: WriteQueue;
+  /** Output after each tokened submission's Enter, by token (#16210). */
+  private readonly submissionOutputs = new SubmissionOutputLedger();
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
   private preservedSnapshotCapture!: PreservedSnapshotCapture;
@@ -857,6 +860,8 @@ export class TerminalProcess {
       this.samplingFinalFrame = false;
     }
     this.analysis.release();
+    // A capture whose start never reached the mirror has nothing more coming.
+    this.submissionOutputs.settleOpen("closed");
   }
 
   private snapshotAndDisposePreserved(): void {
@@ -1176,6 +1181,8 @@ export class TerminalProcess {
         stampPromptInput(this.terminalInfo, Date.now(), promptOwner);
       }
       onTrackerWritten?.();
+      // Only a tokened send can ever be read back, so only one is captured.
+      if (token !== undefined) this.startSubmissionCapture(token, text);
       if (firstPrompt !== undefined && this.isAgentLive) {
         this.callbacks.onFirstPromptWritten?.(this.id, {
           ...firstPrompt,
@@ -1185,6 +1192,16 @@ export class TerminalProcess {
       }
     };
     this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
+  }
+
+  private startSubmissionCapture(token: string, text: string): void {
+    const ledger = this.submissionOutputs;
+    const captureId = ledger.begin(token);
+    const started = this.analysis.startSubmissionCapture(captureId, text, (id, output) =>
+      ledger.publish(id, output)
+    );
+    // No mirror reads this terminal's output, so nothing was observed.
+    if (!started) ledger.forget(token);
   }
 
   private ensureHandbackTracker(): HandbackTracker {
@@ -1209,7 +1226,10 @@ export class TerminalProcess {
   }
 
   getSubmission(token: string): TerminalSubmissionRecord | undefined {
-    return this.writeQueue.getSubmission(token);
+    const record = this.writeQueue.getSubmission(token);
+    if (record?.phase !== "pty_written") return record;
+    const output = this.submissionOutputs.read(token);
+    return output === undefined ? record : { ...record, output };
   }
 
   hasPendingSubmission(): boolean {
@@ -1241,6 +1261,9 @@ export class TerminalProcess {
   }
 
   private async performSubmit(text: string, ctx: SubmitExecutionContext): Promise<void> {
+    // What this terminal shows from here answers this submission, not the one
+    // before it.
+    this.analysis.closeSubmissionCapture();
     await this.inputController.performSubmit(text, ctx);
   }
 
@@ -1797,6 +1820,7 @@ export class TerminalProcess {
     const wonTeardown = this.teardown("dispose");
     this.semanticBufferManager.dispose();
     this.disposeHeadless();
+    this.submissionOutputs.dispose();
 
     // The root-inclusive kill signals the shell PID, which is only safe while
     // that PID still belongs to our shell. After a *natural* exit it does not:

@@ -365,7 +365,14 @@ export const terminalQueryActionRuns = {
         } else if (submissions !== null) {
           const lookup = submissions[terminal.id] ?? { status: "unreadable" as const };
           if (lookup.status === "found") {
-            entry.submission = lookup.record;
+            // The captured output is terminal text (#16210), held back from
+            // plugins for the same reason `includeOutput` is.
+            if (ctx?.dispatchSource === "plugin" && lookup.record.output !== undefined) {
+              const { output: _withheld, ...record } = lookup.record;
+              entry.submission = record;
+            } else {
+              entry.submission = lookup.record;
+            }
           } else if (lookup.status === "absent") {
             // The terminal WAS read and holds nothing, so absence is
             // evidence and `unknown` is a claim we can make.

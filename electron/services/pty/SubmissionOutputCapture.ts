@@ -449,6 +449,85 @@ export class SubmissionOutputCapture {
   }
 }
 
+/** Receives a capture's output as it grows, and once more, final, when it ends. */
+export type SubmissionCapturePublish = (captureId: number, output: TerminalSubmissionOutput) => void;
+
+/**
+ * How often a growing capture is published. A read between publishes sees
+ * output up to this old; the mirror's own viewport digest runs at a similar
+ * cadence.
+ */
+export const SUBMISSION_CAPTURE_PUBLISH_MS = 250;
+
+/**
+ * The one open capture beside a mirror (#16210). A terminal has a single
+ * submit lane, so a new capture always ends the one before it, and a mirror
+ * holds at most one at a time whatever the traffic.
+ *
+ * The owner calls `start`/`close` once everything fed before them has parsed,
+ * and `sync` after every parse. Nothing here runs while no capture is open.
+ */
+export class SubmissionCaptureHost {
+  private open:
+    | { id: number; capture: SubmissionOutputCapture; published: string | undefined }
+    | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly publish: SubmissionCapturePublish) {}
+
+  start(terminal: HeadlessTerminal, captureId: number, submittedText: string): void {
+    this.close();
+    const capture = new SubmissionOutputCapture(terminal, submittedText);
+    this.open = { id: captureId, capture, published: undefined };
+    this.publishOpen();
+  }
+
+  sync(): void {
+    const open = this.open;
+    if (open === undefined) return;
+    open.capture.sync();
+    if (!open.capture.isOpen) {
+      // The cap, or lost rows, ended it.
+      this.clearTimer();
+      this.open = undefined;
+      this.publish(open.id, open.capture.snapshot());
+      return;
+    }
+    this.timer ??= setTimeout(() => {
+      this.timer = undefined;
+      this.publishOpen();
+    }, SUBMISSION_CAPTURE_PUBLISH_MS);
+  }
+
+  close(): void {
+    const open = this.open;
+    if (open === undefined) return;
+    this.clearTimer();
+    this.open = undefined;
+    this.publish(open.id, open.capture.close());
+  }
+
+  dispose(): void {
+    this.close();
+  }
+
+  private publishOpen(): void {
+    const open = this.open;
+    if (open === undefined) return;
+    const output = open.capture.snapshot();
+    const key = `${output.state}\u0000${output.truncated}\u0000${output.text}`;
+    if (key === open.published) return;
+    open.published = key;
+    this.publish(open.id, output);
+  }
+
+  private clearTimer(): void {
+    if (this.timer === undefined) return;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}
+
 /** The longest start of `text` within `maxBytes` UTF-8 bytes, never splitting a code point. */
 export function cutToBytes(text: string, maxBytes: number): string {
   const encoded = Buffer.from(text, "utf8");

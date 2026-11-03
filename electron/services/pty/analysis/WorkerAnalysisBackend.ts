@@ -1,6 +1,8 @@
 import type { AgentState } from "../../../../shared/types/agent.js";
 import type { ActivityStateMetadata } from "../../ActivityMonitor.js";
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
+import type { SubmissionCapturePublish } from "../SubmissionOutputCapture.js";
+import type { TerminalSubmissionOutput } from "../../../../shared/types/terminalSubmission.js";
 import type {
   AnalysisBackend,
   AnalysisFinalCapture,
@@ -105,6 +107,15 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   readonly kind = "worker" as const;
 
   private released = false;
+  /**
+   * Submission captures the worker has yet to send a final for (#16210): the
+   * open one, and one it has been told to end. Each keeps what it last
+   * published, so a slot lost under it can settle it on what was read.
+   */
+  private readonly captures = new Map<
+    number,
+    { publish: SubmissionCapturePublish; last: TerminalSubmissionOutput }
+  >();
   private detached = false;
   // After a worker respawn the fresh empty buffer must not clobber previously
   // persisted scrollback: persistence-oriented serialization returns null
@@ -226,6 +237,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       // is a hole in the mirror no later snapshot can be fenced across.
       this.continuityLost = true;
       this.continuousSince = Date.now();
+      this.settleCaptures("lost");
     }
     return sent;
   }
@@ -367,6 +379,45 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     this.pool.post(this.spec.terminalId, { type: "focus", terminalId: this.spec.terminalId });
   }
 
+  startSubmissionCapture(
+    captureId: number,
+    submittedText: string,
+    publish: SubmissionCapturePublish
+  ): boolean {
+    if (this.inactive()) return false;
+    // The worker orders messages per terminal, so with the hold posted first
+    // the start lands behind every byte fed before the write.
+    if (!this.flushHeldFeed()) return false;
+    const sent = this.pool.post(this.spec.terminalId, {
+      type: "submission-capture-start",
+      terminalId: this.spec.terminalId,
+      captureId,
+      text: submittedText,
+    });
+    if (!sent) return false;
+    this.captures.set(captureId, {
+      publish,
+      last: { text: "", truncated: false, state: "capturing" },
+    });
+    return true;
+  }
+
+  closeSubmissionCapture(): void {
+    if (this.captures.size === 0 || this.inactive()) return;
+    if (!this.flushHeldFeed()) return this.settleCaptures("lost");
+    this.pool.post(this.spec.terminalId, {
+      type: "submission-capture-close",
+      terminalId: this.spec.terminalId,
+    });
+  }
+
+  /** End every capture on what it last published: the worker will send no more for them. */
+  private settleCaptures(state: "closed" | "lost"): void {
+    const pending = [...this.captures];
+    this.captures.clear();
+    for (const [id, capture] of pending) capture.publish(id, { ...capture.last, state });
+  }
+
   notifySubmission(): void {
     if (this.inactive() || !this.monitorSpec) return;
     this.pool.post(this.spec.terminalId, {
@@ -494,6 +545,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   release(): void {
     if (this.released) return;
     this.released = true;
+    this.settleCaptures("closed");
     this.stopProcessStatePush();
     this.monitorSpec = null;
     // Drop any host-side hold (up to the hard cap) — no future ack will arrive
@@ -527,6 +579,14 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       case "pty-response":
         this.delegate.onPtyResponse(msg.data);
         return;
+      case "submission-capture": {
+        const capture = this.captures.get(msg.captureId);
+        if (capture === undefined) return;
+        capture.last = msg.output;
+        if (msg.output.state !== "capturing") this.captures.delete(msg.captureId);
+        capture.publish(msg.captureId, msg.output);
+        return;
+      }
       case "viewport":
         this.viewportLines = msg.lines;
         this.cursorLine = msg.cursorLine;
@@ -594,6 +654,8 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // (and the dropped hold) can't debit the new one.
   private rebuildFreshSlot(): void {
     const carriesBracketedPaste = this.bracketedPasteMode || this.bracketedPasteSeedPending;
+    // The fresh slot starts with an empty mirror, so the capture lost its rows.
+    this.settleCaptures("lost");
     this.continuityLost = true;
     this.continuousSince = Date.now();
     this.feedEpoch++;

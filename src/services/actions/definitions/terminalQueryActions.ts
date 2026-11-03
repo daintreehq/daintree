@@ -291,7 +291,7 @@ export function registerTerminalQueryActions(
           .max(128)
           .optional()
           .describe(
-            "Token from a send; adds its delivery record to each entry. Needs `terminalIds`."
+            "Token from a send; adds its delivery record, and the output after it, to each entry. Needs `terminalIds`."
           ),
         queuedSendToken: QueuedSendTokenArgSchema.optional().describe(
           "A held send's token; adds `queuedSend`."
