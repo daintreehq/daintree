@@ -331,7 +331,11 @@ export class SubmissionOutputCapture {
     const anchor = source.slice(-ANCHOR_MAX_CHARS).trimStart();
     this.skip = undefined;
     if (anchor.length === 0) return this.finish("lost");
-    this.replay = { matcher: new AnchorMatcher(anchor), keptRows: this.rows.length, aligned: false };
+    this.replay = {
+      matcher: new AnchorMatcher(anchor),
+      keptRows: this.rows.length,
+      aligned: false,
+    };
   }
 
   private take(row: Row): void {
@@ -450,7 +454,10 @@ export class SubmissionOutputCapture {
 }
 
 /** Receives a capture's output as it grows, and once more, final, when it ends. */
-export type SubmissionCapturePublish = (captureId: number, output: TerminalSubmissionOutput) => void;
+export type SubmissionCapturePublish = (
+  captureId: number,
+  output: TerminalSubmissionOutput
+) => void;
 
 /**
  * How often a growing capture is published. A read between publishes sees
@@ -469,8 +476,7 @@ export const SUBMISSION_CAPTURE_PUBLISH_MS = 250;
  */
 export class SubmissionCaptureHost {
   private open:
-    | { id: number; capture: SubmissionOutputCapture; published: string | undefined }
-    | undefined;
+    { id: number; capture: SubmissionOutputCapture; published: string | undefined } | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly publish: SubmissionCapturePublish) {}

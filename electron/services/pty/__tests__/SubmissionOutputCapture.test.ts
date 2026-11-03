@@ -227,7 +227,9 @@ describe("SubmissionOutputCapture", () => {
     await write(terminal, "\x1b[H\x1b[2J\x1b[3J" + numbered("unrelated", 20), capture);
     const closed = capture.close();
     expect(closed.state).toBe("lost");
-    expect(closed.text).toBe(before.split("\n").slice(0, closed.text.split("\n").length).join("\n"));
+    expect(closed.text).toBe(
+      before.split("\n").slice(0, closed.text.split("\n").length).join("\n")
+    );
     expect(closed.text).toContain("kept before the purge 1");
     expect(closed.text).not.toContain("unrelated");
   });

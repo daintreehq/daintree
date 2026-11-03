@@ -50,11 +50,11 @@ export const TerminalSubmissionRecordSchema = z.object({
       truncated: z.boolean(),
       state: z
         .enum(["capturing", "closed", "lost"])
-        .describe("`capturing` may still grow. `lost`: history was rewritten under it; text before that is kept."),
+        .describe("`lost`: history was rewritten under it; earlier text is kept."),
     })
     .optional()
     .describe(
-      "For pty_written: what rendered after the Enter, from its start, redacted, max 200 lines/16 KB. Holds whatever followed, not only a reply."
+      "pty_written only: what rendered after the Enter, from the start, redacted, ≤200 lines/16 KB. Not only the reply."
     ),
 });
 

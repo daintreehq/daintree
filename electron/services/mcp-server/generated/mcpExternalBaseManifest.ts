@@ -1758,6 +1758,27 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                       "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen.",
                     type: "number",
                   },
+                  output: {
+                    description:
+                      "pty_written only: what rendered after the Enter, from the start, redacted, ≤200 lines/16 KB. Not only the reply.",
+                    type: "object",
+                    properties: {
+                      text: {
+                        type: "string",
+                      },
+                      truncated: {
+                        type: "boolean",
+                      },
+                      state: {
+                        type: "string",
+                        enum: ["capturing", "closed", "lost"],
+                        description:
+                          "`lost`: history was rewritten under it; earlier text is kept.",
+                      },
+                    },
+                    required: ["text", "truncated", "state"],
+                    additionalProperties: false,
+                  },
                 },
                 required: ["token", "phase"],
                 additionalProperties: false,

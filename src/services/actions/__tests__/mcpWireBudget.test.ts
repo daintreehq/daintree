@@ -600,7 +600,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // validator to accept the answer, though only the global Assistant can hold
   // one; the arguments that hold and read one are withheld from this tier.
   // Descriptions were trimmed to a clause or dropped first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 60_000;
+  // 60_000 → 60_400 for #16210, measured at 60_367 B (+439 over develop's
+  // 59_928): `output` on `terminal.getStatus`'s submission record, what
+  // rendered after the caller's own send, so its answer can be read once the
+  // agent has printed past it. The result schema is closed, so the field must
+  // be advertised; the token argument's description was left as it was and
+  // the field's own were trimmed first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 60_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -1017,7 +1023,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // record. The record is the larger part, listed on the status read and the
   // cancel because both results are closed. The external share is the raise
   // above.
-  const MAX_COHORT_PAYLOAD_BYTES = 188_300;
+  // 188_300 → 188_700 for #16210, measured at 188_651 B (+439 over develop's
+  // 188_212): the same submission `output` field as the external ceiling's
+  // raise, carried in-app for the external⊆in-app subset invariant.
+  const MAX_COHORT_PAYLOAD_BYTES = 188_700;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
