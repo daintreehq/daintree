@@ -227,15 +227,66 @@ describe("relay update terminal", () => {
   });
 
   it.each([
-    ["closed", undefined, { reason: "closed" }],
-    ["restarted", { runtimeStatus: "running", isRestarting: true }, { reason: "closed" }],
-    ["never started", { runtimeStatus: "error" }, { reason: "not-started" }],
-  ])("ends the run when its pane is %s", async (_label, panel, end) => {
+    ["closed", undefined],
+    ["restarted, replacing its process", { runtimeStatus: "running", restartKey: 1 }],
+  ])("ends the run when its pane is %s", async (_label, panel) => {
     const id = await openRunning();
 
     setPanel(id, panel);
 
-    expect(getRelayUpdateRun()).toMatchObject({ state: "ended", end });
+    expect(getRelayUpdateRun()).toMatchObject({ state: "ended", end: { reason: "closed" } });
+  });
+
+  it("keeps following through a restart that was refused", async () => {
+    const id = await openRunning();
+
+    setPanel(id, { runtimeStatus: "running", isRestarting: true });
+    setPanel(id, { runtimeStatus: "running", isRestarting: false });
+    expect(getRelayUpdateRun()?.state).toBe("running");
+
+    setPanel(id, { runtimeStatus: "exited", exitCode: 0 });
+    expect(getRelayUpdateRun()).toMatchObject({ end: { reason: "exited", exitCode: 0 } });
+  });
+
+  it("keeps following through a spawn error the host later takes back", async () => {
+    const id = await openRunning();
+
+    setPanel(id, { runtimeStatus: "error", spawnStatus: "failed" });
+    expect(getRelayUpdateRun()?.state).toBe("running");
+    setPanel(id, { runtimeStatus: undefined });
+
+    setPanel(id, { runtimeStatus: "exited", exitCode: 1 });
+    expect(getRelayUpdateRun()).toMatchObject({ end: { reason: "exited", exitCode: 1 } });
+  });
+
+  it("measures a restart from the pane as it opened", async () => {
+    addPanel.mockImplementation(async (options) => {
+      const id = options.requestedId as string;
+      setPanel(id, { runtimeStatus: "running", restartKey: 3 });
+      return id;
+    });
+    const id = (await openRelayUpdateTerminal(REQUEST))!;
+
+    setPanel(id, { runtimeStatus: "running", restartKey: 3 });
+    expect(getRelayUpdateRun()?.state).toBe("running");
+
+    setPanel(id, { runtimeStatus: "running", restartKey: 4 });
+    expect(getRelayUpdateRun()).toMatchObject({ state: "ended", end: { reason: "closed" } });
+  });
+
+  it("ends at once when the pane had already exited by the time it was added", async () => {
+    addPanel.mockImplementation(async (options) => {
+      const id = options.requestedId as string;
+      setPanel(id, { runtimeStatus: "exited", exitCode: 2 });
+      return id;
+    });
+
+    await openRelayUpdateTerminal(REQUEST);
+
+    expect(getRelayUpdateRun()).toMatchObject({
+      state: "ended",
+      end: { reason: "exited", exitCode: 2 },
+    });
   });
 
   it("lets a new update start once the last has ended, as a newer run", async () => {

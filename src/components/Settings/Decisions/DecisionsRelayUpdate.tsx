@@ -11,7 +11,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { selectViewProject, selectViewScratch } from "@/store/viewWorkspace";
 import type { DecisionsRelayCompatibility } from "@shared/types/decisions";
 import { relayIsBehind, type RelayObservation } from "./relayCheckCopy";
-import { openRelayUpdateTerminal, type RelayUpdateRun } from "./relayUpdate";
+import { openRelayUpdateTerminal } from "./relayUpdate";
 
 /** Where the update's pane would go, or why it can't go anywhere this window shows. */
 function useUpdatePlacement():
@@ -48,7 +48,7 @@ const KEEPS =
 export function DecisionsRelayUpdate({
   origin,
   compatibility,
-  run,
+  running,
   outcome,
   disabled,
   onClose,
@@ -56,8 +56,8 @@ export function DecisionsRelayUpdate({
   origin: string;
   /** From the last check of this relay; without it, the update wouldn't know this Daintree's range. */
   compatibility: DecisionsRelayCompatibility | null;
-  /** The latest update of this relay started from this window. */
-  run: RelayUpdateRun | null;
+  /** An update started from this window is still running, of this relay or another. */
+  running: boolean;
   /** What the check after the latest update saw, once it has. */
   outcome: RelayObservation | null;
   disabled: boolean;
@@ -66,7 +66,6 @@ export function DecisionsRelayUpdate({
 }) {
   const placement = useUpdatePlacement();
   const [starting, setStarting] = useState(false);
-  const running = run?.state === "running";
   const behind = compatibility !== null && relayIsBehind(compatibility);
 
   const disabledReason = running

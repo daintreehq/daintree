@@ -163,9 +163,12 @@ export function DecisionsConnectionSection({
   const urlInput = useRef<HTMLInputElement>(null);
   const busy = locked || identity.pending !== null;
 
+  // The update whose end this mount has checked the relay for; a reset drops that check.
+  const recheckedFor = useRef<number | null>(null);
   const forget = useEffectEvent(() => {
     relay.reset();
     identity.reset();
+    recheckedFor.current = null;
   });
   const checkSaved = useEffectEvent((origin: string) => relay.run(origin));
   useEffect(() => {
@@ -193,21 +196,26 @@ export function DecisionsConnectionSection({
   const latestUpdate = useRelayUpdateRun();
   const update = updateOffered && latestUpdate?.origin === savedOrigin ? latestUpdate : null;
   const endedUpdateId = update?.state === "ended" ? update.id : null;
-  // The update whose end this opening has checked the relay for, so its outcome reads that check.
+  // Any relay's: one update runs at a time in a window.
+  const updateRunning = latestUpdate?.state === "running";
+  // What the outcome reads: set with the check it started, so it reads that check.
   const [recheckedUpdateId, setRecheckedUpdateId] = useState<number | null>(null);
   const recheckAfterUpdate = useEffectEvent((origin: string, updateId: number) => {
-    if (recheckedUpdateId === updateId) return;
+    if (recheckedFor.current === updateId) return;
+    recheckedFor.current = updateId;
     setRecheckedUpdateId(updateId);
     // A claim or restore's own check is older than what the update left.
     identity.reset();
     relay.run(origin);
   });
-  // Connected or not: an update can leave a relay this computer can't reach yet.
+  // Connected or not: an update can leave a relay this computer can't reach
+  // yet. Not while a claim, restore or disconnect is settling, whose result
+  // the reset would drop; it runs once that has.
   useEffect(() => {
-    if (endedUpdateId !== null && savedOrigin && !locked) {
+    if (endedUpdateId !== null && savedOrigin && !busy) {
       recheckAfterUpdate(savedOrigin, endedUpdateId);
     }
-  }, [endedUpdateId, savedOrigin, locked]);
+  }, [endedUpdateId, savedOrigin, busy]);
 
   // A setup reruns the check, and what it saw then is newer than the last one shown.
   const check = identity.recheck ?? relay.check;
@@ -215,7 +223,10 @@ export function DecisionsConnectionSection({
   const compatibility = check && "compatibility" in check ? check.compatibility : null;
   const versions = compatibility ? describeCompatibility(compatibility, updateRoute) : null;
   const updateOutcome =
-    update?.state === "ended" && recheckedUpdateId === update.id && !relay.checking
+    update?.state === "ended" &&
+    recheckedUpdateId === update.id &&
+    !relay.checking &&
+    (relay.check !== null || relay.error !== null)
       ? describeRelayUpdateOutcome(update.end, update.fromVersion, relayVersionAfter(relay.check))
       : null;
   // An address that was never sent, or a check main couldn't make: the row's own error.
@@ -432,7 +443,7 @@ export function DecisionsConnectionSection({
           <DecisionsRelayUpdate
             origin={savedOrigin}
             compatibility={compatibility}
-            run={update}
+            running={updateRunning}
             outcome={updateOutcome}
             disabled={busy || relay.checking}
             onClose={onClose}

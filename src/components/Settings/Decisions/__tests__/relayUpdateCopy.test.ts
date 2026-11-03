@@ -40,6 +40,8 @@ describe("relay update outcome", () => {
     const outcome = describeRelayUpdateOutcome({ reason: "exited", exitCode: 0 }, "0.2.0", "0.2.0");
 
     expect(outcome.severity).toBe("info");
+    // The terminal tells its causes apart; the label states none of them.
+    expect(outcome.label).not.toMatch(/cancel|current|compatible|nothing to/i);
     expect(outcome.detail).toMatch(/still runs 0\.2\.0/);
     expect(outcome.detail).toMatch(/terminal/);
   });
@@ -67,6 +69,7 @@ describe("relay update outcome", () => {
     );
 
     expect(stopped.severity).toBe("warning");
+    expect(stopped.label).toMatch(/stopped/);
     expect(stopped.label).not.toBe(
       describeRelayUpdateOutcome({ reason: "exited", exitCode: 1 }, "0.2.0", "0.2.0").label
     );
@@ -82,12 +85,5 @@ describe("relay update outcome", () => {
       expect(outcome.detail).toMatch(/couldn't read the relay's version/);
       expect(outcome.severity).not.toBe("success");
     }
-  });
-
-  it("says nothing changed when the update's terminal never started", () => {
-    const outcome = describeRelayUpdateOutcome({ reason: "not-started" }, "0.2.0", "0.2.0");
-
-    expect(outcome.severity).toBe("error");
-    expect(outcome.detail).toMatch(/nothing on the relay changed/);
   });
 });

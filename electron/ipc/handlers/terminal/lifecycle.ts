@@ -1305,7 +1305,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // A host's throwaway run (#14445) ends with its agent, so its exit is the
       // agent's. A Decisions relay update (#16201) ends with its CLI, whose exit
       // is how Settings learns it finished, so a shell that can't host the
-      // wrapper (fish, nushell) runs it under sh rather than having it typed in.
+      // wrapper (fish, nushell, Git Bash on Windows) hands it to sh or the
+      // system PowerShell rather than having it typed in.
       const relayUpdate = isDecisionsUpdateTerminalId(id);
       const commandLaunchShell =
         buildCommandLaunchShell(
@@ -1313,8 +1314,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           quotingShell,
           isHostThrowawayWorkspaceId(projectId) || relayUpdate ? "exit" : "keep-open"
         ) ??
-        (relayUpdate && process.platform !== "win32"
-          ? buildCommandLaunchShell(startupCommand, "/bin/sh", "exit")
+        (relayUpdate
+          ? buildCommandLaunchShell(
+              startupCommand,
+              process.platform === "win32" ? windowsSystemTool("powershell.exe") : "/bin/sh",
+              "exit"
+            )
           : null);
       const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
       const spawnShell = commandLaunchShell

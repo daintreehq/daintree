@@ -52,20 +52,28 @@ import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
 import { getRelayUpdateRun, resetRelayUpdateRunForTests } from "../relayUpdate";
 
 const ORIGIN = "https://decisions.example.workers.dev";
-const DAINTREE: DecisionsRelayVersions = { protocolMin: 1, protocolMax: 1, workerVersion: "0.2.0" };
+const OTHER_ORIGIN = "https://other.example.workers.dev";
+const DAINTREE: DecisionsRelayVersions = { protocolMin: 1, protocolMax: 2, workerVersion: "0.2.0" };
 const CONNECTED: DecisionsStatus = { state: "connected", relayOrigin: ORIGIN };
 
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
 
-function claimedAt(workerVersion: string): DecisionsRelayCheck {
-  const relay = { ...DAINTREE, workerVersion };
+function claimedAt(
+  workerVersion: string,
+  protocols: Pick<DecisionsRelayVersions, "protocolMin" | "protocolMax"> = DAINTREE,
+  origin = ORIGIN
+): DecisionsRelayCheck {
+  const relay = { ...protocols, workerVersion };
   return {
     result: "claimed",
-    origin: ORIGIN,
+    origin,
     compatibility: {
       relay,
       daintree: DAINTREE,
-      diverges: workerVersion !== DAINTREE.workerVersion,
+      diverges:
+        workerVersion !== DAINTREE.workerVersion ||
+        relay.protocolMin !== DAINTREE.protocolMin ||
+        relay.protocolMax !== DAINTREE.protocolMax,
     },
   };
 }
@@ -79,20 +87,41 @@ function setPanel(id: string, panel: Record<string, unknown> | undefined): void 
   });
 }
 
-function ui(status: DecisionsStatus, onClose?: SettingsTabClose) {
+const onChanged = vi.fn();
+
+function ui(status: DecisionsStatus, onClose?: SettingsTabClose, locked = false) {
   return (
     <TooltipProvider>
-      <DecisionsConnectionSection status={status} onClose={onClose} />
+      <DecisionsConnectionSection
+        status={status}
+        onClose={onClose}
+        locked={locked}
+        onChanged={onChanged}
+      />
     </TooltipProvider>
   );
 }
 
-async function renderSection(status: DecisionsStatus = CONNECTED, onClose?: SettingsTabClose) {
+async function renderSection(
+  status: DecisionsStatus = CONNECTED,
+  onClose?: SettingsTabClose,
+  locked = false
+) {
   let result!: ReturnType<typeof render>;
   await act(async () => {
-    result = render(ui(status, onClose));
+    result = render(ui(status, onClose, locked));
   });
   return result;
+}
+
+async function rerenderSection(
+  section: ReturnType<typeof render>,
+  status: DecisionsStatus,
+  locked = false
+) {
+  await act(async () => {
+    section.rerender(ui(status, undefined, locked));
+  });
 }
 
 function updateButton(): HTMLButtonElement {
@@ -131,6 +160,7 @@ describe("Decisions relay update", () => {
       return id;
     });
     checkRelay.mockReset();
+    onChanged.mockReset();
     Object.assign(view, {
       remote: false,
       homeDir: "/home/me",
@@ -209,7 +239,8 @@ describe("Decisions relay update", () => {
   });
 
   it("closes Settings, then runs the update for this relay with this Daintree's protocols", async () => {
-    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+    // The relay's own range differs, so only Daintree's can reach the command.
+    checkRelay.mockResolvedValue(claimedAt("0.1.0", { protocolMin: 1, protocolMax: 1 }));
     let afterClose: ((closed: boolean) => void) | undefined;
     const onClose = vi.fn<SettingsTabClose>(async (next) => {
       afterClose = next;
@@ -228,8 +259,10 @@ describe("Decisions relay update", () => {
     });
 
     expect(addPanel).toHaveBeenCalledOnce();
-    const command = addPanel.mock.calls[0]![0].command as string;
-    expect(command).toContain(`update --url ${ORIGIN} --protocol 1`);
+    const argv = (addPanel.mock.calls[0]![0].command as string).split(" ");
+    expect(argv[argv.indexOf("update") + 1]).toBe("--url");
+    expect(argv[argv.indexOf("--url") + 1]).toBe(ORIGIN);
+    expect(argv[argv.indexOf("--protocol") + 1]).toBe("1-2");
     expect(getRelayUpdateRun()).toMatchObject({ state: "running", fromVersion: "0.1.0" });
   });
 
@@ -276,6 +309,8 @@ describe("Decisions relay update", () => {
     expect(within(row).getByText(/still runs 0\.1\.0/)).toBeTruthy();
     const status = document.getElementById("decisions-connection-status")!;
     expect(within(status).getByText(`Connected to ${new URL(ORIGIN).host}`)).toBeTruthy();
+    // Nothing about the relay's record or identity was changed for it.
+    expect(onChanged).not.toHaveBeenCalled();
   });
 
   it("checks again when its pane closes before the update ends, connected or not", async () => {
@@ -328,5 +363,74 @@ describe("Decisions relay update", () => {
     });
 
     expect(within(outcomeRow()!).getByText("Relay updated to 0.3.0")).toBeTruthy();
+  });
+
+  it("checks again on every opening after the update ended, and once per opening", async () => {
+    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+    const first = await renderSection();
+    const pane = await startUpdate();
+    first.unmount();
+    setPanel(pane, { runtimeStatus: "exited", exitCode: 0 });
+    checkRelay.mockReset();
+    checkRelay.mockResolvedValue(claimedAt("0.3.0"));
+
+    const second = await renderSection({ state: "reconnecting", relayOrigin: ORIGIN });
+    await rerenderSection(second, { state: "reconnecting", relayOrigin: ORIGIN });
+    expect(checkRelay).toHaveBeenCalledOnce();
+    second.unmount();
+
+    await renderSection({ state: "reconnecting", relayOrigin: ORIGIN });
+    expect(checkRelay).toHaveBeenCalledTimes(2);
+    expect(within(outcomeRow()!).getByText("Relay updated to 0.3.0")).toBeTruthy();
+  });
+
+  it("waits for the switch to settle before checking after an update", async () => {
+    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+    const first = await renderSection();
+    const pane = await startUpdate();
+    first.unmount();
+    setPanel(pane, { runtimeStatus: "exited", exitCode: 0 });
+    checkRelay.mockReset();
+    checkRelay.mockResolvedValue(claimedAt("0.3.0"));
+    const reconnecting: DecisionsStatus = { state: "reconnecting", relayOrigin: ORIGIN };
+
+    const section = await renderSection(reconnecting, undefined, true);
+    expect(checkRelay).not.toHaveBeenCalled();
+    expect(outcomeRow()).toBeNull();
+
+    await rerenderSection(section, reconnecting, false);
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    expect(within(outcomeRow()!).getByText("Relay updated to 0.3.0")).toBeTruthy();
+  });
+
+  it("checks again when the same relay is saved again after being set aside", async () => {
+    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+    const section = await renderSection();
+    const pane = await startUpdate();
+    checkRelay.mockResolvedValue(claimedAt("0.3.0"));
+    await endPane(pane, { runtimeStatus: "exited", exitCode: 0 });
+    expect(outcomeRow()).not.toBeNull();
+
+    await rerenderSection(section, { state: "not-connected" });
+    expect(outcomeRow()).toBeNull();
+    checkRelay.mockClear();
+
+    await rerenderSection(section, { state: "reconnecting", relayOrigin: ORIGIN });
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    expect(within(outcomeRow()!).getByText("Relay updated to 0.3.0")).toBeTruthy();
+  });
+
+  it("holds every relay's update while one is running in this window", async () => {
+    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+    const section = await renderSection();
+    await startUpdate();
+
+    checkRelay.mockResolvedValue(claimedAt("0.1.0", DAINTREE, OTHER_ORIGIN));
+    await rerenderSection(section, { state: "connected", relayOrigin: OTHER_ORIGIN });
+
+    expect(checkRelay).toHaveBeenLastCalledWith(OTHER_ORIGIN);
+    expect(updateButton().disabled).toBe(true);
+    expect(screen.getByText("An update is running in its terminal")).toBeTruthy();
+    expect(outcomeRow()).toBeNull();
   });
 });

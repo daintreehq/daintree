@@ -57,11 +57,10 @@ export function relayUpdateCommand(
 
 /**
  * How an update's pane ended: its command exited with `exitCode` (the CLI's
- * own, since the pane's shell ends with it), its terminal never started, or
- * it was closed or restarted before the command ended.
+ * own, since the pane's shell ends with it), or the pane was closed or
+ * restarted before the command ended.
  */
-export type RelayUpdateEnd =
-  { reason: "exited"; exitCode: number | null } | { reason: "not-started" } | { reason: "closed" };
+export type RelayUpdateEnd = { reason: "exited"; exitCode: number | null } | { reason: "closed" };
 
 interface RelayUpdateRunBase {
   /** Rises with every update started in this window, so a later one never reads as an earlier one. */
@@ -115,27 +114,37 @@ export function useRelayUpdateRun(): RelayUpdateRun | null {
   return useSyncExternalStore(subscribeRelayUpdateRun, getRelayUpdateRun);
 }
 
-/** What the pane shows of its command's end, or null while it may still be running. */
-function endOf(panel: PanelInstance | undefined): RelayUpdateEnd | null {
-  if (!panel || !isPtyPanel(panel) || panel.isRestarting) return { reason: "closed" };
-  if (panel.runtimeStatus === "exited")
+/**
+ * What the pane shows of its command's end, or null while it may still be
+ * running. A spawn error isn't an end: one reported while the host was slow
+ * to confirm is cleared when the host turns out to have started it. Nor is a
+ * restart being asked for, which can still be refused; only one that went
+ * ahead (its restart key moved on), replacing the process, is.
+ */
+function endOf(panel: PanelInstance | undefined, restarts: number): RelayUpdateEnd | null {
+  if (!panel || !isPtyPanel(panel) || (panel.restartKey ?? 0) !== restarts) {
+    return { reason: "closed" };
+  }
+  if (panel.runtimeStatus === "exited") {
     return { reason: "exited", exitCode: panel.exitCode ?? null };
-  if (panel.runtimeStatus === "error") return { reason: "not-started" };
+  }
   return null;
 }
 
 /**
  * Follows the pane until its command ends. The pane's own record says so:
  * its shell exits with the CLI, so an exit is the update's end, and a pane
- * that's gone or restarting no longer runs it. One run is followed at a time,
+ * that's gone or restarted no longer runs it. One run is followed at a time,
  * and only while it runs.
  */
 function follow(run: RelayUpdateRun & { state: "running" }): void {
   stopWatching?.();
   let unsubscribe: (() => void) | null = null;
+  const opened = usePanelStore.getState().panelsById[run.terminalId];
+  const restarts = opened && isPtyPanel(opened) ? (opened.restartKey ?? 0) : 0;
   const settle = (panel: PanelInstance | undefined) => {
     if (current?.id !== run.id || current.state !== "running") return;
-    const end = endOf(panel);
+    const end = endOf(panel, restarts);
     if (!end) return;
     unsubscribe?.();
     if (stopWatching === unsubscribe) stopWatching = null;

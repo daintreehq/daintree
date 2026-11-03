@@ -29,21 +29,12 @@ export function describeRelayUpdateOutcome(
   fromVersion: string,
   toVersion: string | null
 ): RelayObservation {
-  switch (end.reason) {
-    case "not-started":
-      return {
-        severity: "error",
-        label: "The relay update didn't start",
-        detail: "Its terminal couldn't start, so nothing on the relay changed",
-      };
-    case "closed":
-      return {
-        severity: "warning",
-        label: "The update's terminal closed before the update ended",
-        detail: versionNow(fromVersion, toVersion),
-      };
-    case "exited":
-      break;
+  if (end.reason === "closed") {
+    return {
+      severity: "warning",
+      label: "The update's terminal closed before the update ended",
+      detail: versionNow(fromVersion, toVersion),
+    };
   }
   if (end.exitCode === INTERRUPTED) {
     return {
