@@ -73,8 +73,8 @@ describe("display labels", () => {
     });
     expect(assistantIdentityFor(identities, { kind: "project", projectId: "p2" })).toEqual({});
     // Only a project's own entry: never one Object.prototype lends it.
-    expect(
-      assistantIdentityFor(identities, { kind: "project", projectId: "constructor" })
-    ).toEqual({});
+    expect(assistantIdentityFor(identities, { kind: "project", projectId: "constructor" })).toEqual(
+      {}
+    );
   });
 });

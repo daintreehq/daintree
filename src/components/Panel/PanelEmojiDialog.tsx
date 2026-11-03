@@ -32,6 +32,8 @@ export function PanelEmojiDialog({
       onClose={onClose}
       size="sm"
       restoreFocusTo={restoreFocusTo}
+      // Opened once the menu had gone, so its opener is nothing to go back to.
+      preferRestoreFocusTo
       data-testid="panel-emoji-dialog"
     >
       <AppDialog.Header>

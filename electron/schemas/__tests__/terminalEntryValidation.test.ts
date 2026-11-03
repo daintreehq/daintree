@@ -879,6 +879,7 @@ describe("panel persona emoji (#16213)", () => {
     const parsed = TerminalSnapshotSchema.safeParse({ ...panel, displayEmoji: "👩‍💻" });
     expect(parsed.success && parsed.data.displayEmoji).toBe("👩‍💻");
     const bare = TerminalSnapshotSchema.safeParse(panel);
+    expect(bare.success).toBe(true);
     expect(bare.success && "displayEmoji" in bare.data).toBe(false);
   });
 

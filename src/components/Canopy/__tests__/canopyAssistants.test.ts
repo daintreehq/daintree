@@ -539,6 +539,7 @@ describe("assistant personas (#16213)", () => {
     expect(assistantPlaceLabel(emojiOnly!)).toBe("🐶 Global");
     expect(assistantMatches(named!, ["dwight"])).toBe(true);
     expect(assistantMatches(emojiOnly!, ["dwight"])).toBe(false);
+    expect(assistantMatches(emojiOnly!, ["🐶"])).toBe(true);
   });
 
   it("keeps only what a persona can be from another machine's directory", () => {

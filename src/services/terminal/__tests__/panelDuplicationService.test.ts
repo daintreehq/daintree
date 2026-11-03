@@ -163,6 +163,9 @@ describe("buildPanelSnapshotOptions", () => {
       displayEmoji: "🦊",
     });
     expect(buildPanelSnapshotOptions(agent)?.displayEmoji).toBe("🦊");
+    expect(
+      buildPanelSnapshotOptions(makePanel({ command: "bash", displayEmoji: "🐚" }))?.displayEmoji
+    ).toBe("🐚");
     expect(buildPanelSnapshotOptions(makePanel({ command: "bash" }))).not.toHaveProperty(
       "displayEmoji"
     );

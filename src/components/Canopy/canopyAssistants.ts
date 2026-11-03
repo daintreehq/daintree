@@ -8,10 +8,7 @@ import type {
 } from "@shared/types/agentDirectory";
 import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 import type { DisplayIdentity } from "@shared/types/displayIdentity";
-import {
-  displayIdentityLabel,
-  normalizeDisplayIdentity,
-} from "@shared/utils/displayIdentity";
+import { displayIdentityLabel, normalizeDisplayIdentity } from "@shared/utils/displayIdentity";
 import { pluralize } from "@/lib/pluralize";
 import { agoPhrase } from "@/lib/projectRowStatus";
 

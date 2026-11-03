@@ -46,23 +46,39 @@ function withPersona(name: string | undefined, emoji: string | undefined): Displ
   return { ...(name && { name }), ...(emoji && { emoji }) };
 }
 
+/** The fields a save sets; a key present with `undefined` clears that field. */
+type PersonaChange = { name?: string | undefined; emoji?: string | undefined };
+
+function applyChange(base: DisplayIdentity, change: PersonaChange): DisplayIdentity {
+  return withPersona(
+    "name" in change ? change.name : base.name,
+    "emoji" in change ? change.emoji : base.emoji
+  );
+}
+
 function IdentityRow({ scope, label, description, fallback, identity }: IdentityRowProps) {
   // null shows the saved name; a string is an edit not yet saved.
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const shownName = draft ?? identity.name ?? "";
 
-  // The persona last sent and not yet answered. What the row means now is that,
-  // not the store's copy, so an emoji picked while a name is saving keeps it.
-  const sentRef = useRef<{ identity: DisplayIdentity; seq: number } | null>(null);
+  // The fields this row has sent and main hasn't answered. What the row means
+  // now is the store's persona with those laid over it, so an emoji picked
+  // while a name is saving keeps it, and a field another view changed since
+  // is never sent back as it was.
+  const sentRef = useRef<{ change: PersonaChange; seq: number } | null>(null);
   const seqRef = useRef(0);
-  const intended = (): DisplayIdentity => sentRef.current?.identity ?? identity;
+  const intended = (): DisplayIdentity => applyChange(identity, sentRef.current?.change ?? {});
 
-  const save = async (next: DisplayIdentity): Promise<void> => {
+  const save = async (change: PersonaChange): Promise<void> => {
+    const next = applyChange(intended(), change);
     const seq = ++seqRef.current;
-    sentRef.current = { identity: next, seq };
+    sentRef.current = { change: { ...sentRef.current?.change, ...change }, seq };
     const failure = await saveIdentity(scope, next);
-    if (sentRef.current?.seq === seq) sentRef.current = null;
+    // Only the latest save speaks for the row: an older one answering late
+    // neither forgets what is still out nor overwrites its outcome.
+    if (seqRef.current !== seq) return;
+    sentRef.current = null;
     setError(failure);
     if (failure !== null) return;
     // Only the draft this save carried: anything typed since stays.
@@ -73,13 +89,12 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
 
   const commitName = () => {
     if (draft === null) return;
-    const base = intended();
     const name = normalizeDisplayName(draft);
-    if (name === base.name) {
+    if (name === intended().name) {
       if (sentRef.current === null) setDraft(null);
       return;
     }
-    void save(withPersona(name, base.emoji));
+    void save({ name });
   };
 
   // A name typed and left without a blur (the dialog closed on Escape) still
@@ -94,7 +109,7 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
     return () => {
       const { scope: lastScope, draft: lastDraft, identity: saved } = pending.current;
       if (lastDraft === null) return;
-      const base = sent.current?.identity ?? saved;
+      const base = applyChange(saved, sent.current?.change ?? {});
       const name = normalizeDisplayName(lastDraft);
       if (name === base.name) return;
       void saveIdentity(lastScope, withPersona(name, base.emoji));
@@ -108,7 +123,7 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
       isModified={!isEmptyDisplayIdentity(identity)}
       onReset={() => {
         setDraft(null);
-        void save({});
+        void save({ name: undefined, emoji: undefined });
       }}
       resetAriaLabel={`Reset ${label.toLowerCase()} name and emoji`}
       error={error ?? undefined}
@@ -121,8 +136,8 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
             invalid={error !== null}
             disabled={disabled}
             onEmojiChange={(emoji) => {
-              const name = draft !== null ? normalizeDisplayName(draft) : intended().name;
-              void save(withPersona(name, emoji));
+              // A name typed and not yet saved goes with it.
+              void save(draft !== null ? { name: normalizeDisplayName(draft), emoji } : { emoji });
             }}
           />
           <Input

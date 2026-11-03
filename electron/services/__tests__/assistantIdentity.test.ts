@@ -113,7 +113,10 @@ describe("assistant identities (#16213)", () => {
     );
     fakeStore.reset({ helpAssistant: { identities: { projects } } });
 
-    writeAssistantIdentity({ scope: { kind: "project", projectId: "p0" }, identity: { name: "again" } });
+    writeAssistantIdentity({
+      scope: { kind: "project", projectId: "p0" },
+      identity: { name: "again" },
+    });
     const after = writeAssistantIdentity({
       scope: { kind: "project", projectId: "new" },
       identity: { name: "newest" },
