@@ -190,9 +190,9 @@ A single-knob color input (`overlay-base`) drives the entire opacity ladder.
 | `overlay-selected` | Selected state | tone 4% | base 8% |
 | `overlay-elevated` | Elevated hover | tone 6% | base 10% |
 | `overlay-raised` | Active tab, focused pane, pressed chip | aliases `overlay-selected` | `color-mix(elevated 92%, text-primary)` |
-| `overlay-highlight` | The highlighted row in a list, palette or menu | tone 6% | aliases `overlay-raised` |
+| `overlay-highlight` | The highlighted row in a list, palette or menu | tone 6% | tone 7.5% |
 
-Two things the table can't show. **Dark and light take their tint from different places** for the last five rows: dark composites the neutral polarity tone, light composites the hued `overlay-base`, and the light alphas are roughly doubled — the eye's luminance discrimination is compressed near white, so mirroring dark's alphas left light's fills sub-threshold. **`overlay-raised` is not an alpha at all on light**: it is a real opaque plane mixed toward `text-primary`, an upward lift over the recessed containers rather than an ink wash, which is what makes a selected palette row read on a near-white surface. On dark it aliases `overlay-selected` byte-for-byte.
+Two things the table can't show. **Dark and light take their tint from different places** for the last five rows: dark composites the neutral polarity tone, light composites the hued `overlay-base`, and the light alphas are roughly doubled — the eye's luminance discrimination is compressed near white, so mirroring dark's alphas left light's fills sub-threshold. **`overlay-raised` is not an alpha at all on light**: it is a real opaque plane mixed toward `text-primary`, an upward lift over the recessed containers rather than an ink wash, for the armed toolbar control and the settings scope. On dark it aliases `overlay-selected` byte-for-byte. **`overlay-highlight` is neutral on both polarities**: light used to alias `overlay-raised`, but an opaque plane tuned for white popovers landed on, or lighter than, the tinted sidebars, so light takes pure black at 7.5%, which darkens every light surface by about the same step (1.17–1.19:1, #16184).
 
 **See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns using these overlay tokens.
 
