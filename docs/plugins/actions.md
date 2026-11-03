@@ -464,7 +464,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.disarmAll` | Disarm all | safe | — |
 | `terminal.duplicate` | Duplicate panel | safe | `focusPolicy?`, `spawnedBy?`, `terminalId?` |
 | `terminal.forceResume` | Force resume | safe | `terminalId?` |
-| `terminal.getStatus` | Get terminal status | safe | `includeOutput?`, `location?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
+| `terminal.getStatus` | Get terminal status | safe | `includeOutput?`, `location?`, `queuedSendToken?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
 | `terminal.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
 | `terminal.gridLayout.setValue` | Set grid layout value | safe | `value` |
 | `terminal.info.get` | Get terminal info | safe | `terminalId?` |

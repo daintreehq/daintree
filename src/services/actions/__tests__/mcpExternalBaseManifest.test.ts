@@ -59,6 +59,7 @@ const MAIN_PROCESS_TOOLS = [
   "terminal.readLastMessageOwned",
   "terminal.waitForExit",
   "terminal.notifyWhenIdle",
+  "terminal.cancelQueuedSend",
   "assistant.list",
   "assistant.start",
   "agent.readQuota",
