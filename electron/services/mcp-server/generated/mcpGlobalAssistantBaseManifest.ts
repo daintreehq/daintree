@@ -1567,6 +1567,28 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               recentOutput: {
                 type: ["string", "null"],
               },
+              inputLine: {
+                type: "object",
+                properties: {
+                  state: {
+                    type: "string",
+                    enum: ["empty", "typed", "suggestion", "unknown"],
+                  },
+                  text: {
+                    type: "string",
+                    description: "Text after the prompt glyph; empty for `empty` and `unknown`.",
+                  },
+                  truncated: {
+                    description: "`text` was cut to its first 200 characters.",
+                    type: "boolean",
+                    const: true,
+                  },
+                },
+                required: ["state", "text"],
+                additionalProperties: false,
+                description:
+                  "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.",
+              },
               recentOutputTruncated: {
                 description:
                   "Older output was cut, by `lines` or the shared 50 KiB budget; the newest lines are kept.",

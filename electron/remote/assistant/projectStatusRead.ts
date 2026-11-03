@@ -81,12 +81,16 @@ function agentTerminalIds(directory: AgentDirectory, projectId: string): string[
 
 /**
  * One entry with its words run through `redactSecrets` (#16191): the tail, the
- * handback's message, the parsed check's and an error, which a view's answer
- * can fill from what failed. Everything else is a state, a time or an id.
+ * input box's text (#16189), the handback's message, the parsed check's and an
+ * error, which a view's answer can fill from what failed. Everything else is a
+ * state, a time or an id.
  */
 export function redactStatusEntry<T extends StatusEntry>(entry: T): T {
   const redacted: T = { ...entry };
   if (typeof entry.error === "string") redacted.error = redactSecrets(entry.error);
+  if (entry.inputLine) {
+    redacted.inputLine = { ...entry.inputLine, text: redactSecrets(entry.inputLine.text) };
+  }
   if (typeof entry.recentOutput === "string") {
     redacted.recentOutput = redactSecrets(entry.recentOutput);
   }

@@ -15,6 +15,7 @@ describe("redactStatusEntry (#16191)", () => {
       recentOutputTruncated: true,
       lastHandback: { message: `done, ${TOKEN}`, observedAt: 2, truncated: false },
       error: `read failed: ${TOKEN}`,
+      inputLine: { state: "typed" as const, text: `export TOKEN=${TOKEN}` },
       lastCheckResult: {
         command: `curl -H "Authorization: Bearer ${TOKEN}"`,
         passed: false,
@@ -32,6 +33,7 @@ describe("redactStatusEntry (#16191)", () => {
       recentOutputTruncated: true,
       lastHandback: { observedAt: 2, truncated: false },
       lastCheckResult: { passed: false, ranAt: 1 },
+      inputLine: { state: "typed", text: "export TOKEN=[redacted]" },
     });
     // The entry it was given is left as it was.
     expect(entry.recentOutput).toContain(TOKEN);
