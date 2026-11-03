@@ -229,4 +229,28 @@ describe("DecisionsSettingsTab recovery kit", () => {
     expect(screen.getByText("Kit checked")).toBeTruthy();
     expect(kitPassphraseField()).not.toBeNull();
   });
+
+  it("shows Agents whether launches get ask_human as main pushes the connection (#16203)", async () => {
+    getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1, revision: 1 });
+    // Connection checks a relay once one is set up; this test leaves it unanswered.
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    await renderTab();
+    const notice = () =>
+      document.querySelector("#decisions-agents [data-testid='decisions-agents-not-connected']");
+    expect(notice()?.textContent).toMatch(/No relay is connected/);
+
+    act(() => pushStatus({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN, revision: 2 }));
+    expect(notice()).toBeNull();
+
+    act(() =>
+      pushStatus({
+        state: "not-connected",
+        consentedAt: 1,
+        relayOrigin: ORIGIN,
+        problem: "keys",
+        revision: 3,
+      })
+    );
+    expect(notice()?.textContent).toMatch(/The relay isn't connected/);
+  });
 });
