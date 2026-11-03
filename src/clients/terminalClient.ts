@@ -527,17 +527,31 @@ export const terminalClient = {
    * `handbackCode` rides along when the caller asked for a handback (#12488);
    * its instruction must already be in `text`. Passed only when present, so an
    * ordinary submit crosses the bridge exactly as before.
+   *
+   * `guard: "no-choice-dialog"` refuses the text while the agent is observed
+   * waiting on a choice dialog (#16209), which would take it.
    */
   submit: (
     id: string,
     text: string,
     submissionToken?: string,
-    handbackCode?: string
+    handbackCode?: string,
+    guard?: "no-choice-dialog"
   ): Promise<void> => {
     const blocked = getTerminalInputBlock();
     if (blocked) {
       noteRefusedInput(id);
       return Promise.reject(terminalInputBlockedError(blocked));
+    }
+    if (guard !== undefined) {
+      return window.electron.terminal.submit(
+        id,
+        text,
+        submissionToken,
+        handbackCode,
+        undefined,
+        guard
+      );
     }
     return handbackCode === undefined
       ? window.electron.terminal.submit(id, text, submissionToken)

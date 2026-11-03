@@ -647,3 +647,49 @@ describe("hasRateLimitMessage (#12797)", () => {
     expect(classifyWaitingReason(lines, true)).toBe("approval");
   });
 });
+
+describe("Claude Code's unnumbered select dialogs (#16209)", () => {
+  const AUTOCOMPACT = [
+    "Want to autocompact at 400k tokens instead? Your model doesn't change. Switch back any",
+    "time with /autocompact.",
+    "",
+    "❯ Keep auto (1m tokens)",
+    "  Autocompact at ‹ 400k › tokens",
+    "↑/↓ choose · ←/→ change size · enter confirm · esc not now",
+  ];
+  const classify = (lines: string[], agentId?: string) =>
+    classifyWaitingReason(lines, true, undefined, undefined, agentId);
+
+  it("reads the autocompact choice in a Claude pane as an approval wait", () => {
+    expect(classify(AUTOCOMPACT, "claude")).toBe("approval");
+  });
+
+  it("reads it through colour and trailing blank rows", () => {
+    const coloured = AUTOCOMPACT.map((row) =>
+      row.startsWith("❯") ? `\x1b[36m${row}\x1b[39m` : row
+    );
+    expect(classify([...coloured, "", ""], "claude")).toBe("approval");
+  });
+
+  it("keeps the footer to the agent whose config names it", () => {
+    expect(classify(AUTOCOMPACT, "codex")).toBe("prompt");
+    expect(classify(AUTOCOMPACT, "gemini")).toBe("prompt");
+    expect(classify(AUTOCOMPACT)).toBe("prompt");
+  });
+
+  it("reads prose that mentions the footer's words as a prompt", () => {
+    const prose = [
+      "Claude's select dialogs end with a footer like",
+      "  ↑/↓ choose · enter confirm · esc not now",
+      "which Daintree now reads.",
+      "",
+      "❯ ",
+    ];
+    expect(classify(prose, "claude")).toBe("prompt");
+  });
+
+  it("reads a dismissed dialog with the composer back below it as a prompt", () => {
+    const rule = "─".repeat(40);
+    expect(classify([...AUTOCOMPACT, "", rule, "❯ ", rule], "claude")).toBe("prompt");
+  });
+});

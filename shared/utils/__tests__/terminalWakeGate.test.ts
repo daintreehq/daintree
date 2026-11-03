@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ASSISTANT_SEND_GATE,
   evaluateWakeGate,
+  isAtChoiceDialog,
   type WakeGateSnapshot,
 } from "../terminalWakeGate.js";
 
@@ -98,5 +99,22 @@ describe("evaluateWakeGate (#12491)", () => {
         evaluateWakeGate({ ...AT_QUESTION, agentState: "working" }, ASSISTANT_SEND_GATE)
       ).toEqual({ kind: "hold", reason: "working" });
     });
+  });
+});
+
+describe("isAtChoiceDialog (#16209)", () => {
+  const AT_DIALOG: WakeGateSnapshot = { ...AT_PROMPT, waitingReason: "approval" };
+
+  it("is true only for a live agent waiting on a choice", () => {
+    expect(isAtChoiceDialog(AT_DIALOG)).toBe(true);
+    expect(isAtChoiceDialog(AT_PROMPT)).toBe(false);
+    expect(isAtChoiceDialog({ ...AT_PROMPT, waitingReason: "question" })).toBe(false);
+    expect(isAtChoiceDialog({ ...AT_DIALOG, agentState: "working" })).toBe(false);
+  });
+
+  it("never holds a shell or a pane whose agent has gone", () => {
+    expect(isAtChoiceDialog({ ...AT_DIALOG, detectedAgentId: undefined })).toBe(false);
+    expect(isAtChoiceDialog({ ...AT_DIALOG, isExited: true })).toBe(false);
+    expect(isAtChoiceDialog({ ...AT_DIALOG, hasPty: false })).toBe(false);
   });
 });

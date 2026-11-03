@@ -101,6 +101,14 @@ export interface AgentDetectionConfig {
   promptHintPatterns?: string[];
 
   /**
+   * The key-hint row a CLI draws under a select dialog whose options carry no
+   * numbers (#16209). Matched against the last row of a screen whose bottom
+   * block also holds a highlighted option, it reads the wait as a choice
+   * rather than an empty prompt, whatever the dialog asks. Case-insensitive.
+   */
+  choiceDialogFooterPatterns?: string[];
+
+  /**
    * Number of lines from end of output to scan (default: 10).
    */
   scanLineCount?: number;

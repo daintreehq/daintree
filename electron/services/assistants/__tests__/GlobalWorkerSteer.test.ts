@@ -791,11 +791,38 @@ describe("GlobalWorkerSteer (#14551)", () => {
     expect(writes).toEqual(["\x1b"]);
   });
 
+  it("says whether the screen changed across the keys, only when both reads came back (#16209)", async () => {
+    fake.record = atPrompt({ waitingReason: "approval" });
+    fake.screen = "❯ Keep auto (1m tokens)";
+
+    await expect(steer.keys(target(), { keys: ["Escape"] })).resolves.toMatchObject({
+      screen: "❯ Keep auto (1m tokens)",
+      screenChanged: false,
+    });
+
+    fake.record = atPrompt({ waitingReason: "approval" });
+    duringRead = () => {
+      if (writes.length > 1) fake.screen = "Keeping auto.";
+    };
+    await expect(steer.keys(target(), { keys: ["Escape"] })).resolves.toMatchObject({
+      screen: "Keeping auto.",
+      screenChanged: true,
+    });
+
+    fake.record = atPrompt({ waitingReason: "approval" });
+    duringRead = () => {
+      if (writes.length < 3) throw new Error("unreadable");
+    };
+    const unread = await steer.keys(target(), { keys: ["Escape"] });
+    expect(unread).not.toHaveProperty("screenChanged");
+  });
+
   it("quotes no screen when the run was replaced while it was being read", async () => {
     fake.record = atPrompt({ waitingReason: "approval" });
     fake.screen = "a successor's screen";
+    // Only the read after the key: the one before it (#16209) is still this run's.
     duringRead = () => {
-      fake.generation = 5;
+      if (writes.length > 0) fake.generation = 5;
     };
 
     const result = await steer.keys(target(), { keys: ["Enter"] });

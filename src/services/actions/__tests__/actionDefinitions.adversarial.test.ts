@@ -476,7 +476,7 @@ describe("terminal action hardening", () => {
     // The whole call list, not `toHaveBeenCalledWith` — that matcher passes on
     // a repeated matching call, which is the very thing this test is named for.
     expect(mocks.terminalClient.submit.mock.calls).toEqual([
-      ["term-ok", "git status", submissionToken],
+      ["term-ok", "git status", submissionToken, undefined, "no-choice-dialog"],
     ]);
     expect(result).toMatchObject({
       sent: true,
@@ -507,8 +507,8 @@ describe("terminal action hardening", () => {
     // two submissions and must stay separately answerable.
     expect(second.submissionToken).not.toBe(first.submissionToken);
     expect(mocks.terminalClient.submit.mock.calls).toEqual([
-      ["term-ok", "git status", first.submissionToken],
-      ["term-ok", "git status", second.submissionToken],
+      ["term-ok", "git status", first.submissionToken, undefined, "no-choice-dialog"],
+      ["term-ok", "git status", second.submissionToken, undefined, "no-choice-dialog"],
     ]);
   });
 
@@ -532,7 +532,13 @@ describe("terminal action hardening", () => {
       {} as never
     )) as { command: string; submissionToken: string };
 
-    expect(mocks.terminalClient.submit).toHaveBeenCalledWith("term-ok", huge, expect.any(String));
+    expect(mocks.terminalClient.submit).toHaveBeenCalledWith(
+      "term-ok",
+      huge,
+      expect.any(String),
+      undefined,
+      "no-choice-dialog"
+    );
     expect(result.submissionToken).toEqual(expect.any(String));
     expect(result.command.length).toBeLessThanOrEqual(1024);
     expect(JSON.stringify(result).length).toBeLessThan(50 * 1024);
@@ -1740,6 +1746,7 @@ describe("terminal.sendCommand handback (#12488)", () => {
       expect.stringMatching(/^Fix the bug\n\n/),
       stringField(first, "submissionToken"),
       code,
+      "no-choice-dialog",
     ]);
     // Both markers are offered, needs-you last (#16190).
     expect(String(calls[0]?.[1])).toContain(`DAINTREE-DONE-${code}: <summary> END-${code}`);
@@ -1781,7 +1788,7 @@ describe("terminal.sendCommand handback (#12488)", () => {
     );
 
     expect(mocks.terminalClient.submit.mock.calls).toEqual([
-      ["agent", "status", stringField(result, "submissionToken")],
+      ["agent", "status", stringField(result, "submissionToken"), undefined, "no-choice-dialog"],
     ]);
   });
 });

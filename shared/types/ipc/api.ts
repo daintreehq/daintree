@@ -357,14 +357,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * tracked and retain nothing. `handbackCode` is the code minted for a
      * submission that asked for a handback (#12488), whose instruction is
      * already in `text`. `imagePaths` are the composer's image chips, in
-     * order, each also present in `text` (#12792).
+     * order, each also present in `text` (#12792). `guard: "no-choice-dialog"`
+     * refuses the submission with `TERMINAL_CHOICE_DIALOG` while the agent is
+     * observed waiting on a choice dialog, and again when it reaches the lane
+     * (#16209).
      */
     submit(
       id: string,
       text: string,
       submissionToken?: string,
       handbackCode?: string,
-      imagePaths?: string[]
+      imagePaths?: string[],
+      guard?: "no-choice-dialog"
     ): Promise<void>;
     /**
      * Resolve one submission token across several terminals (#12337). Answers

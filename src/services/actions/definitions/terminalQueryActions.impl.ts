@@ -510,7 +510,11 @@ export const terminalQueryActionRuns = {
     const submissionToken = crypto.randomUUID();
 
     // Send command via submit (handles bracketed paste). Resolving means
-    // queued, not written — which is exactly why the token exists.
+    // queued, not written — which is exactly why the token exists. Refused
+    // while the agent is observed at a choice dialog, which would take the
+    // text (#16209); main reads the host's latest observation, and the host
+    // checks again when the line reaches the lane.
+    // `ActionService` reports that refusal under its own code.
     if (handback === true) {
       // The code never leaves Daintree: the caller reads the marker back as
       // `lastHandback`, so the receipt below still echoes its own text.
@@ -519,10 +523,17 @@ export const terminalQueryActionRuns = {
         terminalId,
         appendHandbackInstruction(command, handbackCode, "run"),
         submissionToken,
-        handbackCode
+        handbackCode,
+        "no-choice-dialog"
       );
     } else {
-      await terminalClient.submit(terminalId, command, submissionToken);
+      await terminalClient.submit(
+        terminalId,
+        command,
+        submissionToken,
+        undefined,
+        "no-choice-dialog"
+      );
     }
 
     // A clear message so the AI model knows not to repeat this action, with

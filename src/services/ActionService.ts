@@ -866,6 +866,9 @@ export class ActionService {
         // `ConfirmationTimeoutError` is a confirm of the action's own that ran
         // out of time behind an agent dispatch (#15648), so it reports what a
         // host confirm nobody answered reports.
+        // `TERMINAL_CHOICE_DIALOG` is main refusing a send into a choice dialog
+        // (#16209): not retriable as sent, and named so a caller can tell it
+        // to answer the dialog with keys.
         // A plugin action's result is checked in main, against the JSON Schema
         // only main holds, and comes back as a decoded AppError: it is the same
         // failure the `resultSchema` gate above reports for a built-in, so it
@@ -883,7 +886,9 @@ export class ActionService {
                     ? "TERMINAL_IN_OTHER_PROJECT"
                     : err instanceof ConfirmationTimeoutError
                       ? "CONFIRMATION_TIMEOUT"
-                      : "EXECUTION_ERROR",
+                      : isClientAppError(err) && err.code === "TERMINAL_CHOICE_DIALOG"
+                        ? "TERMINAL_CHOICE_DIALOG"
+                        : "EXECUTION_ERROR",
         message,
         details: err instanceof TerminalInOtherProjectError ? err.toDetails() : err,
       };

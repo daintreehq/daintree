@@ -31,6 +31,20 @@ export const SEND_KEYS_SCREEN_LINES = 12;
 /** How much of the screen `choose` reads to find the option it names. */
 export const CHOOSE_SCREEN_LINES = 40;
 
+/**
+ * Whether the screen read back after the keys differs from the one read just
+ * before them (#16209), the same window both times. Left out when either read
+ * is missing: an unread screen says nothing either way. It compares text, so
+ * it doesn't say the keys arrived, or that the CLI acted on them.
+ */
+export function screenChangedField(
+  before: string | null | undefined,
+  after: string | null | undefined
+): { screenChanged?: boolean } {
+  if (before === null || before === undefined || after === null || after === undefined) return {};
+  return { screenChanged: before !== after };
+}
+
 export function keySequence(key: string): string {
   return Object.hasOwn(SEND_KEY_NAMES, key)
     ? SEND_KEY_NAMES[key as keyof typeof SEND_KEY_NAMES]

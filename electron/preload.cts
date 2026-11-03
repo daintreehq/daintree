@@ -939,18 +939,29 @@ function buildElectronApi(): ElectronAPI {
         text: string,
         submissionToken?: string,
         handbackCode?: string,
-        imagePaths?: string[]
+        imagePaths?: string[],
+        guard?: "no-choice-dialog"
       ) =>
-        imagePaths === undefined
-          ? _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode)
-          : _unwrappingInvoke(
+        guard !== undefined
+          ? _unwrappingInvoke(
               CHANNELS.TERMINAL_SUBMIT,
               id,
               text,
               submissionToken,
               handbackCode,
-              imagePaths
-            ),
+              imagePaths,
+              guard
+            )
+          : imagePaths === undefined
+            ? _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode)
+            : _unwrappingInvoke(
+                CHANNELS.TERMINAL_SUBMIT,
+                id,
+                text,
+                submissionToken,
+                handbackCode,
+                imagePaths
+              ),
 
       /**
        * Resolve one submission token across several terminals (#12337). A

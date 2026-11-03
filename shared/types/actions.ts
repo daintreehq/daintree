@@ -607,6 +607,12 @@ export type ActionErrorCode =
    * see this code — main collapses it into the ordinary miss for them.
    */
   | "TERMINAL_IN_OTHER_PROJECT"
+  /**
+   * A send was refused because the terminal's agent was last observed waiting
+   * on a choice dialog (#16209): text typed there picks an option or is lost.
+   * Nothing was sent. Answer the dialog with keys, or send once it is gone.
+   */
+  | "TERMINAL_CHOICE_DIALOG"
   | "INVALID_URL"
   /**
    * A plugin on a remote host dispatched an action while no frontend drives

@@ -506,7 +506,9 @@ export class AgentStateService {
    * `waiting → waiting` change carrying the new reason. The monitor sends one
    * only for a screen showing the agent's input row empty, so `observedAt` is
    * a settle at the prompt like any other, and the send gate measures typing
-   * from it; input that landed after it still holds a send. Refused unless the
+   * from it; input that landed after it still holds a send. The exception is
+   * an `approval`, sent with a dialog in that row's place (#16209), at which
+   * no send is admitted. Refused unless the
    * agent is waiting, the reason differs, and nothing has settled it since.
    */
   updateWaitingReason(

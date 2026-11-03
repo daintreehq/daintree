@@ -50,7 +50,9 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       // Only the known guards cross; anything else is dropped rather than
       // trusted to mean "no check".
       const guard =
-        msg.guard === "settled-prompt" || msg.guard === "settled-prompt-strict"
+        msg.guard === "settled-prompt" ||
+        msg.guard === "settled-prompt-strict" ||
+        msg.guard === "no-choice-dialog"
           ? msg.guard
           : exactPromptGuardOf(msg.guard);
       const imagePaths = Array.isArray(msg.imagePaths)

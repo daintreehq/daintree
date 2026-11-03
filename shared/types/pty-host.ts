@@ -1541,8 +1541,15 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  *
  * {@link ExactPromptGuard} is the strict check without that allowance, for
  * the run the line was meant for.
+ *
+ * `no-choice-dialog` (#16209) is a caller's own prompt, sent as an unguarded
+ * line is, refused only while the terminal's agent is observed waiting on a
+ * choice dialog (`isAtChoiceDialog`), when it reaches the lane as well as when
+ * it is handed over. A shell, a working agent, or one at its prompt takes it
+ * as before.
  */
-export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict" | ExactPromptGuard;
+export type TerminalSubmitGuard =
+  "settled-prompt" | "settled-prompt-strict" | "no-choice-dialog" | ExactPromptGuard;
 
 /**
  * `settled-prompt-exact` (#16015): only an agent waiting at its own prompt,

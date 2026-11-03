@@ -35,6 +35,18 @@ describe("submit (#15521)", () => {
     );
   });
 
+  it("passes the choice-dialog guard on, and drops one it doesn't know (#16209)", () => {
+    const { ptyManager, handler } = setup();
+
+    handler({ type: "submit", id: "t1", text: "go", guard: "no-choice-dialog" });
+    handler({ type: "submit", id: "t1", text: "go", guard: "no-dialog" as never });
+
+    expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
+      "no-choice-dialog",
+      undefined,
+    ]);
+  });
+
   it("passes on whose prompt a line carries, only as a string (#16187)", () => {
     const { ptyManager, handler } = setup();
 

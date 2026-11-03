@@ -5,6 +5,7 @@ import {
   ASSISTANT_SEND_GATE,
   EXACT_PROMPT_GATE,
   evaluateWakeGate,
+  isAtChoiceDialog,
   wakeGateOptionsFor,
   type WakeGateOptions,
   type WakeGateSnapshot,
@@ -376,12 +377,21 @@ export class TerminalInputController {
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[]
   ): void {
-    if (this.isInputLocked || this.host.terminalInfo.isExited) {
+    // A choice dialog on screen would take the line (#16209): refused before
+    // the monitor is told of a submission, which would clear the very reading
+    // the check stands on.
+    const atChoice =
+      guard === "no-choice-dialog"
+        ? () => isAtChoiceDialog(wakeGateSnapshot(this.host.terminalInfo))
+        : undefined;
+    if (this.isInputLocked || this.host.terminalInfo.isExited || atChoice?.() === true) {
       // Refused before the lane sees it, so `WriteQueue` never mints a record.
       // Answer the token here instead of leaving the caller to read `unknown`.
       if (token !== undefined) this.host.writeQueue.noteRejectedSubmission(token);
       return;
     }
+    // Someone's prompt like any unguarded line; the guard only refuses it.
+    const ownPrompt = guard === undefined || guard === "no-choice-dialog";
 
     // Immediately notify activity monitor of the submission so the working
     // state transitions before the async write sequence in performSubmit().
@@ -391,12 +401,12 @@ export class TerminalInputController {
     // Not for a guarded submission (#12491): marking the agent working here
     // would fail its own admission check. performSubmit notifies at execution
     // time, which for a guarded line is only once it has been admitted.
-    if (guard === undefined && this.host.analysis.hasMonitor() && text.trim().length > 0) {
+    if (ownPrompt && this.host.analysis.hasMonitor() && text.trim().length > 0) {
       this.host.analysis.notifySubmission();
     }
     // Someone's prompt, by whoever submitted it (#16187). A guarded line is
     // Daintree's own, typed only at a settled prompt, and is nobody's.
-    if (guard === undefined && text.trim().length > 0) {
+    if (ownPrompt && text.trim().length > 0) {
       stampPromptInput(this.host.terminalInfo, Date.now());
     }
 
@@ -410,10 +420,10 @@ export class TerminalInputController {
                 wakeGateSnapshot(this.host.terminalInfo),
                 wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
               ).kind === "ready"
-          : guard !== undefined
+          : guard !== undefined && guard !== "no-choice-dialog"
             ? this.admitExact(guard)
             : undefined;
-    this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
+    this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths, atChoice);
   }
 
   /**

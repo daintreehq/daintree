@@ -692,3 +692,73 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
   });
 });
+
+describe("TerminalProcess no-choice-dialog guard (#16209)", () => {
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-03T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const written = () => ptyWriteMock.mock.calls.map((call) => call[0]).join("");
+
+  it("refuses a line while the agent is observed at a choice dialog, writing nothing", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    info(terminal).waitingReason = "approval";
+
+    terminal.submit("lost words", "tok-1", undefined, "no-choice-dialog");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(written()).not.toContain("lost words");
+  });
+
+  it("refuses a queued line when a choice dialog is observed before it reaches the lane", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    terminal.submit("first", "tok-1");
+    terminal.submit("second", "tok-2", undefined, "no-choice-dialog");
+    // Observed while the first line still holds the lane.
+    info(terminal).agentState = "waiting";
+    info(terminal).waitingReason = "approval";
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "cancelled" });
+    expect(written()).toContain("first");
+    expect(written()).not.toContain("second");
+  });
+
+  it("sends as an unguarded line anywhere else, as someone's prompt", async () => {
+    const terminal = createTerminal();
+    const t = info(terminal);
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    // A draft at the prompt doesn't hold it: this guard refuses dialogs only.
+    t.lastTypedInputAt = Date.now();
+
+    terminal.submit("at prompt", "tok-1", undefined, "no-choice-dialog");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    expect(t.lastForeignPromptInputAt).toBeDefined();
+
+    t.agentState = "working";
+    t.waitingReason = undefined;
+    terminal.submit("mid-turn", "tok-2", undefined, "no-choice-dialog");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "pty_written" });
+
+    // A shell keeps taking sends, whatever reason an earlier agent left behind.
+    t.detectedAgentId = undefined;
+    t.agentState = "waiting";
+    t.waitingReason = "approval";
+    terminal.submit("ls", "tok-3", undefined, "no-choice-dialog");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-3")).toMatchObject({ phase: "pty_written" });
+  });
+});

@@ -20,6 +20,7 @@ import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import {
   CHOOSE_SCREEN_LINES,
   keySequence,
+  screenChangedField,
   SEND_KEYS_GAP_MS,
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
@@ -481,10 +482,22 @@ export class AssistantTerminalControl {
     terminalId: string;
     keys: string[];
     screen?: string;
+    screenChanged?: boolean;
     inputSinceSettle?: "own-keys";
   }> {
     this.requireGeneration(caller, target, request.generation);
     const inputOwner = inputOwnerOf(caller);
+    const readScreen = async (lines: number) => {
+      const snapshot = await readTailSnapshot(
+        (options) => this.deps.serializedState(target.terminalId, options),
+        lines
+      );
+      return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
+    };
+    // The window read after the keys, read before them too (#16209), and
+    // ahead of the record, so the checks below see it as it is after the read.
+    const before = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
+    this.requireGeneration(caller, target, request.generation);
     let record = await this.deps.getTerminal(target.terminalId);
     if (!record) {
       throw new AssistantTargetError(
@@ -493,13 +506,6 @@ export class AssistantTerminalControl {
       );
     }
     this.requireKeysAdmitted(target, record, inputOwner);
-    const readScreen = async (lines: number) => {
-      const snapshot = await readTailSnapshot(
-        (options) => this.deps.serializedState(target.terminalId, options),
-        lines
-      );
-      return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
-    };
     let keys = request.keys;
     if (request.choose !== undefined) {
       const plan = planChoice((await readScreen(CHOOSE_SCREEN_LINES)) ?? "", request.choose);
@@ -577,7 +583,13 @@ export class AssistantTerminalControl {
     }
     await sleep(SEND_KEYS_SETTLE_MS);
     const screen = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
-    return { terminalId: target.terminalId, keys, ...(screen ? { screen } : {}), ...admittedOver };
+    return {
+      terminalId: target.terminalId,
+      keys,
+      ...(screen ? { screen } : {}),
+      ...screenChangedField(before, screen),
+      ...admittedOver,
+    };
   }
 
   private requireKeysAdmitted(
