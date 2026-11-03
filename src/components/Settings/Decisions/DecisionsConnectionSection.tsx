@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { Input } from "@/components/ui/input";
@@ -160,6 +160,8 @@ export function DecisionsConnectionSection({
   const checking = setup.run?.state === "running";
   const [draft, setDraft] = useState("");
   const [disconnectOpen, setDisconnectOpen] = useState(false);
+  /** The deployed relay's URL as Daintree put it in the field, until the person edits it. */
+  const autoFilled = useRef<string | null>(null);
   const busy = locked || identity.pending !== null;
 
   // The update whose end this mount has checked the relay for; a reset drops that check.
@@ -174,11 +176,17 @@ export function DecisionsConnectionSection({
     forget();
   }, [savedOrigin]);
   // A finished guided deploy asks for the URL field (#16023), which exists only now,
-  // filled with the relay it reported when nothing has been typed there (#16199).
+  // filled with the relay it reported unless the person typed something there
+  // (#16199). A URL Daintree filled in for an earlier deploy is replaced, with
+  // whatever was checked for it.
   const landOnRelayUrl = useEffectEvent(() => {
     const deployedUrl = status.relayDeploy?.url;
-    if (savedOrigin === null && deployedUrl !== undefined && draft.trim() === "") {
+    const untouched = draft.trim() === "" || draft === autoFilled.current;
+    if (savedOrigin === null && deployedUrl !== undefined && untouched && draft !== deployedUrl) {
       setDraft(deployedUrl);
+      autoFilled.current = deployedUrl;
+      if (relay.check || relay.checking || relay.error) relay.reset();
+      identity.reset();
     }
     const row = document.getElementById("decisions-relay-url");
     if (row) landOnSettingsElement(row);
@@ -268,6 +276,7 @@ export function DecisionsConnectionSection({
   const checkDeployedRelay = (url: string) => {
     if (busy || relay.checking) return;
     setDraft(url);
+    autoFilled.current = url;
     identity.reset();
     relay.run(url);
   };
@@ -375,6 +384,7 @@ export function DecisionsConnectionSection({
                   value={draft}
                   onChange={(event) => {
                     setDraft(event.target.value);
+                    autoFilled.current = null;
                     // What was checked was the old address; drop it, and any check still out.
                     if (relay.check || relay.checking || relay.error) relay.reset();
                     identity.reset();

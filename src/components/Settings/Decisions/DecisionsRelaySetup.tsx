@@ -71,7 +71,10 @@ export function DecisionsRelaySetup({
     identity.result?.result === "key-storage" &&
     identity.result.kind === "weak-storage-unconfirmed";
   const weakStorage = acceptWeak ? { acceptWeakStorage: true } : {};
-  const deployed = deploy !== undefined && isDeployedRelay(deploy, checkedUrl) ? deploy : null;
+  const deployed =
+    deploy !== undefined && "origin" in check && isDeployedRelay(deploy, check.origin)
+      ? deploy
+      : null;
 
   /** Every secret on the page goes as an attempt starts, whichever form sent it. */
   const clearSecrets = () => {

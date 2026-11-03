@@ -94,6 +94,14 @@ describe("relayDeployPrefill", () => {
     expect(prefill.cleanup).toBeUndefined();
   });
 
+  it("offers a key right at the CLI's 1024-character limit", () => {
+    const key = "k".repeat(1024);
+
+    expect(relayDeployPrefill({ ...UNTOUCHED, anthropicApiKey: key }).keys).toEqual({
+      anthropic: key,
+    });
+  });
+
   it("trims a key held with stray whitespace", () => {
     expect(relayDeployPrefill({ ...UNTOUCHED, openaiApiKey: " sk-openai \n" }).keys).toEqual({
       openai: "sk-openai",

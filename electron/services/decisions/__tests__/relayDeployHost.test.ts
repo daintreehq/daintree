@@ -29,6 +29,13 @@ const RESULT = {
 };
 
 const line = (message: unknown) => `${JSON.stringify(message)}\n`;
+/** The Unix socket's private directory exists only off Windows, where the channel is a named pipe. */
+const UNIX = process.platform !== "win32";
+
+/** Whether the run's socket directory is gone (a pipe has none). */
+function directoryGone(host: RelayDeployHost): boolean {
+  return !UNIX || !existsSync(path.dirname(host.channelPath));
+}
 
 /** The CLI's end: what the host sends, line by line, and when it closes. */
 class Client {
@@ -171,8 +178,10 @@ describe("openRelayDeployHost", () => {
   });
 
   it.each([
-    ["another contract version", { ...HELLO, v: 2, versions: [2] }],
+    ["a message in another contract version", { ...HELLO, v: 2 }],
+    ["a CLI that doesn't speak version 1", { ...HELLO, versions: [2] }],
     ["no version list", { v: 1, type: "hello", cli: "0.3.0" }],
+    ["a hello-shaped message of another type", { ...HELLO, type: "greeting" }],
     ["a message that isn't a hello", RESULT],
   ])("sends no prefill for %s, and ends the channel", async (_label, hello) => {
     const events = recorder();
@@ -199,11 +208,37 @@ describe("openRelayDeployHost", () => {
     expect(events.onInterrupted).toHaveBeenCalledExactlyOnceWith("handshake");
   });
 
+  it("drops a second connection that reached the socket at the same time, unanswered", async () => {
+    const events = recorder();
+    const host = await open(events);
+    const settled = await Promise.allSettled([
+      Client.connect(host.channelPath),
+      Client.connect(host.channelPath),
+    ]);
+    // The one not taken is either refused outright or closed before it hears anything.
+    const connected = settled.flatMap((outcome) =>
+      outcome.status === "fulfilled" ? [outcome.value] : []
+    );
+    clients.push(...connected);
+    for (const client of connected) client.send(line(HELLO));
+
+    await vi.waitFor(() =>
+      expect(connected.filter((client) => client.lines.length > 0)).toHaveLength(1)
+    );
+    const answered = connected.find((client) => client.lines.length > 0)!;
+    for (const dropped of connected.filter((client) => client !== answered)) {
+      await dropped.closed;
+      expect(dropped.lines).toEqual([]);
+    }
+    expect(answered.socket.destroyed).toBe(false);
+    expect(events.readPrefill).toHaveBeenCalledOnce();
+  });
+
   it("takes one connection: the socket is gone for any other", async () => {
     const events = recorder();
     const host = await open(events);
     await connect(host);
-    await vi.waitFor(() => expect(existsSync(host.channelPath)).toBe(false));
+    await vi.waitFor(() => expect(UNIX ? existsSync(host.channelPath) : false).toBe(false));
 
     await expect(Client.connect(host.channelPath)).rejects.toThrow();
     expect(events.onInterrupted).not.toHaveBeenCalled();
@@ -223,14 +258,17 @@ describe("openRelayDeployHost", () => {
     expect(events.onInterrupted).toHaveBeenCalledExactlyOnceWith("protocol");
   });
 
-  it("ends the channel on a line longer than the contract allows", async () => {
+  it.each([
+    ["still unterminated", "x".repeat(64 * 1024 + 1)],
+    ["terminated", `${"x".repeat(64 * 1024 + 1)}\n`],
+  ])("ends the channel on a line longer than the contract allows, %s", async (_label, text) => {
     const events = recorder();
     const host = await open(events);
     const client = await connect(host);
     client.send(line(HELLO));
     await client.next();
 
-    client.send("x".repeat(64 * 1024 + 1));
+    client.send(text);
     await client.closed;
 
     expect(events.onInterrupted).toHaveBeenCalledExactlyOnceWith("protocol");
@@ -254,7 +292,7 @@ describe("openRelayDeployHost", () => {
     const host = await open(events, { launchTimeoutMs: 20 });
 
     await vi.waitFor(() => expect(events.onInterrupted).toHaveBeenCalledWith("not-started"));
-    await vi.waitFor(() => expect(existsSync(path.dirname(host.channelPath))).toBe(false));
+    await vi.waitFor(() => expect(directoryGone(host)).toBe(true));
   });
 
   it("gives a connected CLI the contract's time to say hello, and no more", async () => {
@@ -280,14 +318,16 @@ describe("openRelayDeployHost", () => {
     expect(client.socket.destroyed).toBe(false);
   });
 
-  it("keeps its socket in a directory only this user can open, under the path limit", async () => {
-    const host = await open(recorder());
+  it.skipIf(!UNIX)(
+    "keeps its socket in a directory only this user can open, under the path limit",
+    async () => {
+      const host = await open(recorder());
 
-    expect(Buffer.byteLength(host.channelPath)).toBeLessThanOrEqual(100);
-    expect(host.channelPath).toMatch(/^[A-Za-z0-9._/-]+$/);
-    expect(statSync(path.dirname(host.channelPath)).mode & 0o777).toBe(0o700);
-    expect(statSync(host.channelPath).mode & 0o777).toBe(0o600);
-  });
+      expect(Buffer.byteLength(host.channelPath)).toBeLessThanOrEqual(100);
+      expect(host.channelPath).toMatch(/^[A-Za-z0-9._/-]+$/);
+      expect(statSync(path.dirname(host.channelPath)).mode & 0o777).toBe(0o700);
+    }
+  );
 
   it("tells nobody when it's disposed, and takes its socket with it, however often", async () => {
     const events = recorder();
@@ -301,7 +341,18 @@ describe("openRelayDeployHost", () => {
     await client.closed;
 
     expect(events.onInterrupted).not.toHaveBeenCalled();
-    expect(existsSync(path.dirname(host.channelPath))).toBe(false);
+    expect(directoryGone(host)).toBe(true);
+  });
+
+  it("takes its socket with it when disposed before the CLI connected", async () => {
+    const events = recorder();
+    const host = await open(events);
+    expect(UNIX ? existsSync(host.channelPath) : true).toBe(true);
+
+    host.dispose();
+
+    await vi.waitFor(() => expect(directoryGone(host)).toBe(true));
+    expect(events.onInterrupted).not.toHaveBeenCalled();
   });
 });
 
@@ -317,15 +368,18 @@ describe("relayDeployEndpoint", () => {
     expect(second.listenPath).not.toBe(first.listenPath);
   });
 
-  it("falls back to /tmp when the temp folder's path is too long for a socket", async () => {
-    const endpoint = await relayDeployEndpoint("darwin", `/${"long-folder-name/".repeat(8)}`);
-    try {
-      expect(path.dirname(endpoint.listenPath).startsWith("/tmp/daintree-deploy-")).toBe(true);
-      expect(endpoint.channelPath).toBe(endpoint.listenPath);
-    } finally {
-      await rm(endpoint.directory!, { recursive: true, force: true });
+  it.skipIf(!UNIX)(
+    "falls back to /tmp when the temp folder's path is too long for a socket",
+    async () => {
+      const endpoint = await relayDeployEndpoint("darwin", `/${"long-folder-name/".repeat(8)}`);
+      try {
+        expect(path.dirname(endpoint.listenPath).startsWith("/tmp/daintree-deploy-")).toBe(true);
+        expect(endpoint.channelPath).toBe(endpoint.listenPath);
+      } finally {
+        await rm(endpoint.directory!, { recursive: true, force: true });
+      }
     }
-  });
+  );
 });
 
 describe("parseResult", () => {
@@ -339,6 +393,12 @@ describe("parseResult", () => {
       claimState: "unclaimed",
       error: "e".repeat(4096),
     });
+  });
+
+  it("trims a short error", () => {
+    expect(parseResult({ ...RESULT, status: "failed", error: "  wrangler exited 1 \n" })).toEqual(
+      expect.objectContaining({ error: "wrangler exited 1" })
+    );
   });
 
   it("takes a result with neither a URL nor a secret", () => {

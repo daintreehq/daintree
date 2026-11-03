@@ -13,17 +13,17 @@ export interface RelayDeployPrefill {
   keys: Partial<Record<RelayKeyProvider, string>>;
 }
 
+/** A stored model id is passed on as text: the CLI decides what it offers. */
 type PrefillSettings = Pick<
   VoiceInputSettings,
   | "enabled"
   | "transcriptionProvider"
   | "correctionEnabled"
   | "correctionProvider"
-  | "correctionModel"
   | "xaiApiKey"
   | "openaiApiKey"
   | "anthropicApiKey"
->;
+> & { correctionModel: string };
 
 /**
  * The CLI fails the whole deploy on a field longer than 1024 characters or
@@ -31,6 +31,7 @@ type PrefillSettings = Pick<
  */
 function singleLine(value: string | undefined): string | undefined {
   const text = value?.trim();
+  // eslint-disable-next-line no-control-regex -- refusing control characters is the point
   return text && text.length <= 1024 && !/[\x00-\x1f\x7f]/.test(text) ? text : undefined;
 }
 

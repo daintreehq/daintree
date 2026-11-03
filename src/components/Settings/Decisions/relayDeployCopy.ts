@@ -80,11 +80,18 @@ export function describeRelayDeploy(deploy: DecisionsRelayDeploy): RelayDeployDe
   }
 }
 
-/** Whether `checkedUrl` is the relay the deploy reported, so its held secret may claim it. */
-export function isDeployedRelay(deploy: DecisionsRelayDeploy | undefined, checkedUrl: string) {
+/**
+ * Whether a check found the relay the deploy reported, so its held secret may
+ * claim it. `checkedOrigin` is the origin main checked, already normalized
+ * from whatever was typed (a bare host included).
+ */
+export function isDeployedRelay(
+  deploy: DecisionsRelayDeploy | undefined,
+  checkedOrigin: string
+): boolean {
   if (!deploy?.holdsClaimSecret || deploy.url === undefined) return false;
   try {
-    return new URL(deploy.url).origin === new URL(checkedUrl.trim()).origin;
+    return new URL(deploy.url).origin === new URL(checkedOrigin).origin;
   } catch {
     return false;
   }

@@ -6,7 +6,9 @@ const addPanel = vi.hoisted(() =>
   vi.fn<(options: Record<string, unknown>) => Promise<string | null>>()
 );
 const notify = vi.hoisted(() =>
-  vi.fn<(payload: { action?: { onClick: () => void }; context?: unknown }) => void>()
+  vi.fn<
+    (payload: { message?: string; action?: { onClick: () => void }; context?: unknown }) => void
+  >()
 );
 const windows = vi.hoisted(() => ({ on: false }));
 const decisions = vi.hoisted(() => ({
@@ -80,22 +82,18 @@ describe("relay deploy", () => {
 
   it("runs the pinned deploy under that name against main's channel, with no token, account, claim or key", () => {
     const command = relayDeployCommand("daintree-decisions-0a1b2c3d", false, CHANNEL);
-    const argv = command.split(" ");
 
-    expect(argv.slice(0, 4)).toEqual([
+    expect(command.split(" ")).toEqual([
       "npx",
       "--yes",
       `@daintreehq/decisions-cli@${DECISIONS_CLI_VERSION}`,
       "deploy",
-    ]);
-    expect(flag(command, "--name")).toBe("daintree-decisions-0a1b2c3d");
-    expect(flag(command, "--bucket")).toBe("daintree-decisions-0a1b2c3d");
-    expect(flag(command, "--host-channel")).toBe(CHANNEL);
-    expect(argv.filter((arg) => arg.startsWith("-"))).toEqual([
-      "--yes",
       "--name",
+      "daintree-decisions-0a1b2c3d",
       "--bucket",
+      "daintree-decisions-0a1b2c3d",
       "--host-channel",
+      CHANNEL,
     ]);
   });
 
@@ -191,8 +189,6 @@ describe("relay deploy", () => {
     ).resolves.toBeNull();
     expect(addPanel).not.toHaveBeenCalled();
     expect(decisions.cancelRelayDeploy).not.toHaveBeenCalled();
-    expect((notify.mock.calls[0]![0] as unknown as { message: string }).message).toContain(
-      "local project window"
-    );
+    expect(notify.mock.calls[0]![0].message).toContain("local project window");
   });
 });

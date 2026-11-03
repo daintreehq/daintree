@@ -136,11 +136,14 @@ describe("Decisions relay deploy offer", () => {
     );
   });
 
-  it("lets a deploy whose CLI never connected be replaced by another", () => {
+  it("lets a deploy whose CLI never connected be replaced by another", async () => {
     renderSection(withDeploy({ id: "deploy-1", state: "waiting" }));
 
-    expect(button("Guided deploy").disabled).toBe(false);
     expect(screen.queryByRole("button", { name: "Use this relay" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(button("Guided deploy"));
+    });
+    expect(openRelayDeployTerminal).toHaveBeenCalledOnce();
   });
 
   it("checks the relay a finished deploy reported, from its own row", async () => {
@@ -337,6 +340,55 @@ describe("Decisions relay deploy offer", () => {
     expect(field.value).toBe(DEPLOYED_URL);
     // Filled, not checked: the person checks it.
     expect(checkRelay).not.toHaveBeenCalled();
+  });
+
+  it("keeps what the person typed when the deploy's pane asks for the URL field", () => {
+    renderSection(
+      withDeploy({
+        id: "deploy-1",
+        state: "completed",
+        url: DEPLOYED_URL,
+        claimState: "unclaimed",
+        holdsClaimSecret: true,
+      })
+    );
+    const field = screen.getByPlaceholderText(
+      "https://decisions.example.workers.dev"
+    ) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "https://mine.example.workers.dev" } });
+
+    act(() => requestRelayUrl());
+
+    expect(field.value).toBe("https://mine.example.workers.dev");
+  });
+
+  it("replaces a URL it filled in for a deploy another deploy has since replaced", () => {
+    const first: DecisionsRelayDeploy = {
+      id: "deploy-1",
+      state: "completed",
+      url: DEPLOYED_URL,
+      claimState: "unclaimed",
+      holdsClaimSecret: true,
+    };
+    const { rerender } = renderSection(withDeploy(first));
+    act(() => requestRelayUrl());
+    const field = screen.getByPlaceholderText(
+      "https://decisions.example.workers.dev"
+    ) as HTMLInputElement;
+    expect(field.value).toBe(DEPLOYED_URL);
+
+    const nextUrl = "https://daintree-decisions-9f8e7d6c.me.workers.dev";
+    rerender(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={withDeploy({ ...first, id: "deploy-2", url: nextUrl })}
+          locked={false}
+        />
+      </TooltipProvider>
+    );
+    act(() => requestRelayUrl());
+
+    expect(field.value).toBe(nextUrl);
   });
 
   it("lands on the URL field asked for while Connection is showing", () => {

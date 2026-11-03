@@ -82,12 +82,13 @@ function renderSection(status: DecisionsStatus, onChanged = vi.fn()) {
 
 type ClaimState = "unclaimed" | "claimed" | "claim-not-configured";
 
-function relayCheck(result: ClaimState): DecisionsRelayCheck {
-  return { result, origin: ORIGIN, compatibility: SAME };
+function relayCheck(result: ClaimState, origin = ORIGIN): DecisionsRelayCheck {
+  return { result, origin, compatibility: SAME };
 }
 
-async function checkAddress(result: ClaimState, typed = ORIGIN) {
-  checkRelay.mockResolvedValue(relayCheck(result));
+/** Types an address and checks it; main answers for `origin`, the address it normalized. */
+async function checkAddress(result: ClaimState, typed = ORIGIN, origin = ORIGIN) {
+  checkRelay.mockResolvedValue(relayCheck(result, origin));
   const field = screen.getByPlaceholderText(ORIGIN) as HTMLInputElement;
   fireEvent.change(field, { target: { value: typed } });
   await act(async () => {
@@ -481,9 +482,25 @@ describe("DecisionsConnectionSection claim and restore", () => {
   it("asks for a secret for any relay other than the one the deploy created", async () => {
     renderSection({ state: "not-connected", relayDeploy: DEPLOYED });
 
-    await checkAddress("unclaimed", "https://other.example.workers.dev");
+    await checkAddress(
+      "unclaimed",
+      "https://other.example.workers.dev",
+      "https://other.example.workers.dev"
+    );
 
     expect(secretField()).not.toBeNull();
+    expect(claimDeployedRelay).not.toHaveBeenCalled();
+  });
+
+  it("knows the deployed relay typed as a bare host, by the origin main checked", async () => {
+    renderSection({ state: "not-connected", relayDeploy: DEPLOYED });
+
+    await checkAddress("unclaimed", new URL(ORIGIN).host);
+
+    expect(secretField()).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Claim relay" }).closest("#decisions-claim-secret")
+    ).not.toBeNull();
   });
 
   it("asks for a secret when main no longer holds the deploy's", async () => {

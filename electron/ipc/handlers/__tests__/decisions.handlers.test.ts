@@ -911,8 +911,10 @@ describe("decisions IPC", () => {
     const schema = decisionsNamespace.ops.claimDeployedRelay.schema as SafeParse;
 
     expect(schema.safeParse({ deployId: "deploy-1" }).success).toBe(true);
+    expect(schema.safeParse({ deployId: "deploy-1", acceptWeakStorage: true }).success).toBe(true);
     for (const value of [
       {},
+      { deployId: "deploy-1", acceptWeakStorage: "yes" },
       { deployId: "" },
       { deployId: "x".repeat(129) },
       { deployId: "deploy-1", claimSecret: "claim-secret-0123456789abcdef" },

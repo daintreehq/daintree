@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ClaimDecisionsRelayPayload,
+  ClaimDeployedDecisionsRelayPayload,
+  DecisionsConnectResult,
   DecisionsRelayDeploy,
   PreparedDecisionsRelayDeploy,
 } from "../../../shared/types/decisions.js";
@@ -141,11 +144,32 @@ export class RelayDeploySessions {
     return { url: run.snapshot.url, claimSecret: run.claimSecret };
   }
 
-  /** The relay was claimed with this deploy's secret: nothing of it is needed now. */
-  claimed(id: string): void {
-    if (this.run?.id !== id) return;
-    this.drop();
-    this.deps.onChange();
+  /**
+   * Claims the relay this deploy reported, with the secret it holds, through
+   * `claimRelay`. The secret is dropped once a claim saves an identity, and
+   * kept through anything else, so a refusal can be tried again this session.
+   */
+  async claim(
+    payload: ClaimDeployedDecisionsRelayPayload,
+    claimRelay: (claim: ClaimDecisionsRelayPayload) => Promise<DecisionsConnectResult>
+  ): Promise<DecisionsConnectResult> {
+    const held = this.claimable(payload.deployId);
+    if (held === null) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "Daintree no longer holds the claim secret from that deploy",
+      });
+    }
+    const outcome = await claimRelay({
+      url: held.url,
+      claimSecret: held.claimSecret,
+      ...(payload.acceptWeakStorage === true ? { acceptWeakStorage: true } : {}),
+    });
+    if (outcome.result === "saved" && this.run?.id === payload.deployId) {
+      this.drop();
+      this.deps.onChange();
+    }
+    return outcome;
   }
 
   /** Decisions turned off: the channel closes and the secret goes, but new deploys may follow. */

@@ -251,6 +251,8 @@ export async function openRelayDeployHost(
   const serve = (socket: Socket) => {
     let buffer = Buffer.alloc(0);
     let phase: "hello" | "running" | "done" = "hello";
+    // `handle` moves the phase on, which a check of the variable itself can't see.
+    const done = () => phase === "done";
     helloTimer = setTimeout(
       () => interrupt("handshake"),
       options.helloTimeoutMs ?? HELLO_TIMEOUT_MS
@@ -288,7 +290,7 @@ export async function openRelayDeployHost(
     socket.on("data", (chunk: Buffer) => {
       if (phase === "done") return;
       buffer = Buffer.concat([buffer, chunk]);
-      for (let end = buffer.indexOf(10); end >= 0 && phase !== "done"; end = buffer.indexOf(10)) {
+      for (let end = buffer.indexOf(10); end >= 0 && !done(); end = buffer.indexOf(10)) {
         const line = buffer.subarray(0, end);
         buffer = buffer.subarray(end + 1);
         if (line.length > MAX_MESSAGE_BYTES) return interrupt("protocol");
@@ -301,7 +303,7 @@ export async function openRelayDeployHost(
           return interrupt(phase === "hello" ? "handshake" : "protocol");
         }
         handle(message);
-        if (settled && phase !== "done") return;
+        if (settled && !done()) return;
       }
       if (buffer.length > MAX_MESSAGE_BYTES) interrupt("protocol");
     });
@@ -325,22 +327,21 @@ export async function openRelayDeployHost(
     serve(socket);
   });
 
+  // Nothing is awaited between listening and arming the launch timer, so no
+  // connection can arrive in between; the socket's directory, only this user's,
+  // is what keeps other users out of it.
   try {
     await listen(server, endpoint.listenPath);
-    if (endpoint.directory !== null) await chmod(endpoint.listenPath, 0o600);
   } catch (error) {
-    server.close();
-    removeEndpoint();
+    disposed = true;
+    close();
     throw error;
   }
   server.on("error", () => interrupt(accepted === null ? "not-started" : "closed"));
-  // The CLI may already have connected while the socket's mode was set.
-  if (accepted === null && !settled) {
-    launchTimer = setTimeout(
-      () => interrupt("not-started"),
-      options.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS
-    );
-  }
+  launchTimer = setTimeout(
+    () => interrupt("not-started"),
+    options.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS
+  );
 
   return {
     channelPath: endpoint.channelPath,

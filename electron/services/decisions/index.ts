@@ -761,23 +761,10 @@ export function cancelRelayDeploy(deployId: string): void {
  * handed over, which never leaves main. The secret is kept until a claim
  * saves an identity, so a refusal can be tried again this session.
  */
-export async function claimDeployedRelay(
+export function claimDeployedRelay(
   payload: ClaimDeployedDecisionsRelayPayload
 ): Promise<DecisionsConnectResult> {
-  const held = relayDeploys.claimable(payload.deployId);
-  if (held === null) {
-    throw new AppError({
-      code: "NOT_FOUND",
-      message: "Daintree no longer holds the claim secret from that deploy",
-    });
-  }
-  const outcome = await claimRelay({
-    url: held.url,
-    claimSecret: held.claimSecret,
-    ...(payload.acceptWeakStorage === true ? { acceptWeakStorage: true } : {}),
-  });
-  if (outcome.result === "saved") relayDeploys.claimed(payload.deployId);
-  return outcome;
+  return relayDeploys.claim(payload, claimRelay);
 }
 
 /** Restores the owner identity of a claimed relay from its recovery kit (#16006). */
