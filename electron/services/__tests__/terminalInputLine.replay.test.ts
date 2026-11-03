@@ -114,6 +114,23 @@ describe("input line on captured Claude Code screens", () => {
     }
   );
 
+  it.each([
+    ["a typed character", "y"],
+    ["a typed combining mark", "e\u0301"],
+  ])(
+    "reads the painted cursor on %s with a dim hint past a written space as typed",
+    async (_, typed) => {
+      const screen = await serializeOutput(
+        `⏺ Done.\r\n────────\r\n❯\u00a0\x1b[7m${typed}\x1b[27m \x1b[2m[n]\x1b[22m\r\n────────`
+      );
+      expect(captureTerminalTail(screen, 20, true, "claude").inputLine).toEqual({
+        state: "typed",
+        text: typed,
+      });
+      expect(plain(dropInputSuggestion(screen, claude))).toContain(`❯ ${typed}`);
+    }
+  );
+
   it("keeps the typed draft for Canopy", async () => {
     const screen = await serializeCastAt(CAPTURE, "typed");
     expect(plain(dropInputSuggestion(screen, claude))).toContain("❯ add a test");

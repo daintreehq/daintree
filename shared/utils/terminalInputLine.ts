@@ -240,8 +240,11 @@ function boxRows(screen: ScreenRows, from: number, to: number, skip: number): Bo
  * The cells drawn as suggestion. A CLI that paints its own cursor in a focused
  * pane inverts the first character and dims only the rest (`ESC[7mm ESC[27;2m
  * erge #2079`), so an inverse grapheme opening the box counts with the dim run
- * it leads into. The serializer writes a dim space after it as a bare cursor
- * move, so blanks are passed over on the way to that run.
+ * it leads into. A gap the CLI moved the cursor over rather than wrote is a
+ * bare cursor move to the serializer, outside the dim run, so dim blanks and
+ * those moves are passed over on the way to it; a written plain space is not,
+ * which keeps a typed character the cursor sits on apart from a dim hint
+ * after it. A typed gap written as a cursor move can't be told from one.
  */
 function suggestionCells(box: readonly BoxRow[]): Set<Cell> {
   const dim = new Set(box.flatMap((row) => row.cells.filter((cell) => cell.dim)));
@@ -251,7 +254,8 @@ function suggestionCells(box: readonly BoxRow[]): Set<Cell> {
   let end = start;
   while (end < cells.length && cells[end]!.inverse && !cells[end]!.dim) end++;
   const cursor = cells.slice(start, end);
-  const next = cells.slice(end).find((cell) => !isBlank(cell));
+  const gap = (cell: Cell) => isBlank(cell) && (cell.dim || cell.start === cell.end);
+  const next = cells.slice(end).find((cell) => !gap(cell));
   if (
     cursor.length > 0 &&
     next?.dim === true &&
