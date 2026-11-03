@@ -23,7 +23,7 @@ describe("RelayDeployBanner", () => {
       </TooltipProvider>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect relay…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show in Settings…" }));
 
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(
       "app.settings.openTab",

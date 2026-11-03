@@ -138,6 +138,38 @@ describe("DecisionsSettingsTab recovery kit", () => {
     expect(document.activeElement).not.toBe(kitPassphraseField());
   });
 
+  it("moves on to pairing a phone, not the kit, when a guided deploy's claim records the relay (#16200)", async () => {
+    const deploy = {
+      id: "deploy-1",
+      state: "completed",
+      url: ORIGIN,
+      claimState: "unclaimed",
+      holdsClaimSecret: true,
+      claim: { state: "claiming" },
+    } as const;
+    getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1, relayDeploy: deploy });
+    Object.assign(window.electron.decisions, {
+      listDevices: async () => ({ result: "listed", devices: [] }),
+    });
+    await renderTab();
+
+    await act(async () => {
+      pushStatus({
+        state: "not-connected",
+        consentedAt: 1,
+        relayOrigin: ORIGIN,
+        keysStored: true,
+        relayDeploy: deploy,
+      });
+    });
+
+    expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+    expect(document.activeElement).not.toBe(kitPassphraseField());
+    expect(document.activeElement).toBe(
+      document.querySelector("#decisions-devices [data-decisions-pair-phone]")
+    );
+  });
+
   it("asks for the kit's passphrase even when a status push shows the relay before the claim answers", async () => {
     getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1, revision: 1 });
     checkRelay.mockResolvedValue({

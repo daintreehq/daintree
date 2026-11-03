@@ -193,4 +193,26 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
     expect(listDevices).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("iPad")).toBeNull();
   });
+
+  it("lands on Pair a phone for a request made before the list was read (#16200)", async () => {
+    const read = deferred<DecisionsDevicesResult>();
+    listDevices.mockReturnValue(read.promise);
+    const onPairFocused = vi.fn();
+    render(
+      <TooltipProvider>
+        <DecisionsDevicesSection
+          status={STATUS}
+          pairFocusRequest={1}
+          onPairFocused={onPairFocused}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByRole("button", { name: "Pair a phone" })).toBeNull();
+    expect(onPairFocused).not.toHaveBeenCalled();
+
+    await act(async () => read.resolve({ result: "listed", devices: [PIXEL] }));
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Pair a phone" }));
+    expect(onPairFocused).toHaveBeenCalledOnce();
+  });
 });

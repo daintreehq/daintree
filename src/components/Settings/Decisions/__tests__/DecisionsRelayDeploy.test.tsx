@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { DecisionsRelayDeploy, DecisionsStatus } from "@shared/types/decisions";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type {
+  ClaimDeployedDecisionsRelayPayload,
+  DecisionsConnectResult,
+  DecisionsRelayDeploy,
+  DecisionsStatus,
+} from "@shared/types/decisions";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -43,6 +48,8 @@ import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
 import { requestRelayUrl, takePendingRelayUrlRequest } from "../relayUrlRequest";
 
 const checkRelay = vi.fn<(url: string) => Promise<never>>();
+const claimDeployedRelay =
+  vi.fn<(payload: ClaimDeployedDecisionsRelayPayload) => Promise<DecisionsConnectResult>>();
 const NOT_CONNECTED: DecisionsStatus = { state: "not-connected" };
 const DEPLOYED_URL = "https://daintree-decisions-0a1b2c3d.me.workers.dev";
 
@@ -53,11 +60,17 @@ function withDeploy(relayDeploy: DecisionsRelayDeploy): DecisionsStatus {
 function renderSection(
   status: DecisionsStatus = NOT_CONNECTED,
   onClose?: SettingsTabClose,
-  locked = false
+  locked = false,
+  onChanged?: (status: DecisionsStatus | null) => void
 ) {
   return render(
     <TooltipProvider>
-      <DecisionsConnectionSection status={status} locked={locked} onClose={onClose} />
+      <DecisionsConnectionSection
+        status={status}
+        locked={locked}
+        onClose={onClose}
+        onChanged={onChanged}
+      />
     </TooltipProvider>
   );
 }
@@ -85,6 +98,7 @@ describe("Decisions relay deploy offer", () => {
       value: {
         decisions: {
           checkRelay: checkRelay.mockReset().mockImplementation(() => new Promise(() => {})),
+          claimDeployedRelay: claimDeployedRelay.mockReset(),
           getSetupCheck: () => new Promise(() => {}),
         },
         events: { on: () => () => {} },
@@ -409,5 +423,281 @@ describe("Decisions relay deploy offer", () => {
     renderSection({ state: "not-connected", relayOrigin: "https://relay.example.workers.dev" });
 
     expect(document.activeElement).toBe(button("Check"));
+  });
+
+  describe("main's claim of the deployed relay (#16200)", () => {
+    const DEPLOYED_ORIGIN = DEPLOYED_URL;
+    const COMPLETED: DecisionsRelayDeploy = {
+      id: "deploy-1",
+      state: "completed",
+      url: DEPLOYED_URL,
+      claimState: "unclaimed",
+      holdsClaimSecret: true,
+    };
+    const outcomeRow = () => document.getElementById("decisions-deploy-outcome")!;
+
+    it("starts nothing else while main claims the relay, and asks no URL check or secret", () => {
+      renderSection(withDeploy({ ...COMPLETED, claim: { state: "claiming" } }));
+
+      expect(outcomeRow().textContent).toMatch(/Claiming the deployed relay/);
+      expect(outcomeRow().querySelector("button")).toBeNull();
+      expect(button("Guided deploy").disabled).toBe(true);
+      expect(
+        (screen.getByPlaceholderText("https://decisions.example.workers.dev") as HTMLInputElement)
+          .disabled
+      ).toBe(true);
+      expect(checkRelay).not.toHaveBeenCalled();
+      expect(screen.queryByText(/CLAIM_SECRET/)).toBeNull();
+    });
+
+    it("shows a claimed relay beside the connection, says when agents get ask_human, and moves on to pairing", () => {
+      const devices = document.createElement("section");
+      devices.id = "decisions-devices";
+      const pair = document.createElement("button");
+      pair.setAttribute("data-decisions-pair-phone", "");
+      pair.textContent = "Pair a phone";
+      devices.append(pair);
+      document.body.append(devices);
+      try {
+        renderSection({
+          state: "connected",
+          relayOrigin: DEPLOYED_ORIGIN,
+          relayDeploy: {
+            id: "deploy-1",
+            state: "completed",
+            url: DEPLOYED_URL,
+            claimState: "unclaimed",
+            claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+          },
+        });
+
+        const row = outcomeRow();
+        expect(row.textContent).toMatch(/Relay deployed and claimed/);
+        expect(row.textContent).toMatch(/Supported agents launched from now on get ask_human/);
+        expect(row.textContent).toMatch(/already running get it at their next launch/);
+        expect(screen.queryByRole("group", { name: "Don't have a relay yet?" })).toBeNull();
+
+        fireEvent.click(within(row).getByRole("button", { name: "Pair a phone" }));
+        expect(document.activeElement).toBe(pair);
+      } finally {
+        devices.remove();
+      }
+    });
+
+    it("shows no claimed outcome for a relay other than the one set up here", () => {
+      renderSection({
+        state: "connected",
+        relayOrigin: "https://other.example.workers.dev",
+        relayDeploy: {
+          ...COMPLETED,
+          holdsClaimSecret: undefined,
+          claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+        },
+      });
+
+      expect(document.getElementById("decisions-deploy-outcome")).toBeNull();
+    });
+
+    it("finishes a claim that didn't confirm with the secret main holds, checking nothing first", async () => {
+      const saved: DecisionsStatus = { state: "connecting", relayOrigin: DEPLOYED_ORIGIN };
+      claimDeployedRelay.mockResolvedValue({ result: "saved", status: saved });
+      const onChanged = vi.fn();
+      renderSection(
+        withDeploy({
+          ...COMPLETED,
+          claim: {
+            state: "failed",
+            failure: {
+              result: "unreachable",
+              origin: DEPLOYED_ORIGIN,
+              reason: "timeout",
+              kept: true,
+            },
+          },
+        }),
+        undefined,
+        false,
+        onChanged
+      );
+
+      expect(outcomeRow().textContent).toMatch(/didn't confirm the claim/);
+      expect(outcomeRow().textContent).toMatch(/holds the deploy's claim secret in memory/);
+      expect(screen.queryByRole("button", { name: "Use this relay" })).toBeNull();
+      await act(async () => {
+        fireEvent.click(button("Finish the claim"));
+      });
+
+      expect(claimDeployedRelay).toHaveBeenCalledExactlyOnceWith({ deployId: "deploy-1" });
+      expect(checkRelay).not.toHaveBeenCalled();
+      expect(onChanged).toHaveBeenCalledWith(saved);
+    });
+
+    it("asks before sealing with weaker storage, then claims with it", async () => {
+      claimDeployedRelay.mockReturnValue(new Promise(() => {}));
+      renderSection(
+        withDeploy({
+          ...COMPLETED,
+          claim: {
+            state: "failed",
+            failure: {
+              result: "key-storage",
+              kind: "weak-storage-unconfirmed",
+              reason: "No keyring answered",
+            },
+          },
+        })
+      );
+
+      expect(outcomeRow().textContent).toMatch(/Only weaker key storage is available/);
+      expect(outcomeRow().textContent).toMatch(/fixed key keeps the keys only from someone/);
+      await act(async () => {
+        fireEvent.click(button("Use weaker storage"));
+      });
+
+      expect(claimDeployedRelay).toHaveBeenCalledExactlyOnceWith({
+        deployId: "deploy-1",
+        acceptWeakStorage: true,
+      });
+    });
+
+    it("says a refusal main didn't record on the deploy, once", async () => {
+      claimDeployedRelay.mockRejectedValue(
+        new Error("Daintree no longer holds the claim secret from that deploy")
+      );
+      const failed: DecisionsRelayDeploy = {
+        ...COMPLETED,
+        claim: { state: "failed", failure: { result: "error", message: "Decisions is off" } },
+      };
+      const { rerender } = renderSection(withDeploy(failed));
+
+      await act(async () => {
+        fireEvent.click(button("Finish the claim"));
+      });
+      expect(outcomeRow().textContent).toMatch(/no longer holds the claim secret/);
+
+      // The status read the settled claim asks for brings a copy of the same claim.
+      rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={withDeploy(structuredClone(failed))} locked={false} />
+        </TooltipProvider>
+      );
+      expect(outcomeRow().textContent).toMatch(/no longer holds the claim secret/);
+
+      // Main's own record of a later attempt replaces it.
+      rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection
+            status={withDeploy({
+              ...failed,
+              claim: { state: "failed", failure: { result: "error", message: "Still off" } },
+            })}
+            locked={false}
+          />
+        </TooltipProvider>
+      );
+      expect(outcomeRow().textContent).not.toMatch(/no longer holds the claim secret/);
+      expect(outcomeRow().textContent).toMatch(/Still off\./);
+    });
+
+    it("leaves Connection as it was for a cancelled deploy, with its reason", () => {
+      renderSection(
+        withDeploy({
+          ...COMPLETED,
+          state: "cancelled",
+          error: "Cancelled at the summary",
+        })
+      );
+
+      expect(outcomeRow().textContent).toMatch(
+        /Cancelled at the summary\. It stopped after creating/
+      );
+      expect(outcomeRow().textContent).toMatch(/Daintree didn't claim it/);
+      expect(document.getElementById("decisions-connection-status")!.textContent).toMatch(
+        /Not connected/
+      );
+      expect(button("Use this relay").disabled).toBe(false);
+      expect(claimDeployedRelay).not.toHaveBeenCalled();
+    });
+
+    it("offers nothing more for a claimed relay this computer has since disconnected from", () => {
+      renderSection(
+        withDeploy({
+          ...COMPLETED,
+          holdsClaimSecret: undefined,
+          claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+        })
+      );
+
+      expect(document.getElementById("decisions-deploy-outcome")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Pair a phone" })).toBeNull();
+      expect(button("Guided deploy").disabled).toBe(false);
+    });
+
+    it("promises no ask_human for a claimed relay that has revoked this computer", () => {
+      renderSection({
+        state: "revoked",
+        relayOrigin: DEPLOYED_ORIGIN,
+        relayDeploy: {
+          ...COMPLETED,
+          holdsClaimSecret: undefined,
+          claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+        },
+      });
+
+      expect(document.getElementById("decisions-deploy-outcome")).toBeNull();
+      expect(screen.queryByText(/get ask_human/)).toBeNull();
+    });
+
+    it("says a cancelled deploy's relay is claimed once the person claimed it", () => {
+      renderSection({
+        state: "connecting",
+        relayOrigin: DEPLOYED_ORIGIN,
+        relayDeploy: {
+          ...COMPLETED,
+          state: "cancelled",
+          holdsClaimSecret: undefined,
+          claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+        },
+      });
+
+      expect(outcomeRow().textContent).toMatch(/Relay deployed and claimed/);
+      expect(outcomeRow().textContent).not.toMatch(/didn't claim it/);
+      expect(within(outcomeRow()).getByRole("button", { name: "Pair a phone" })).toBeTruthy();
+    });
+
+    it("announces how main's claim ended", () => {
+      const live = () =>
+        screen
+          .getAllByRole("status")
+          .map((region) => region.textContent)
+          .join(" | ");
+      const { rerender } = renderSection(
+        withDeploy({ ...COMPLETED, claim: { state: "claiming" } })
+      );
+      expect(live()).not.toMatch(/didn't confirm the claim/);
+
+      rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection
+            status={withDeploy({
+              ...COMPLETED,
+              claim: {
+                state: "failed",
+                failure: {
+                  result: "unreachable",
+                  origin: DEPLOYED_ORIGIN,
+                  reason: "timeout",
+                  kept: true,
+                },
+              },
+            })}
+            locked={false}
+          />
+        </TooltipProvider>
+      );
+
+      expect(live()).toMatch(/didn't confirm the claim\./);
+      expect(live()).toMatch(/so the claim can be finished with it/);
+    });
   });
 });

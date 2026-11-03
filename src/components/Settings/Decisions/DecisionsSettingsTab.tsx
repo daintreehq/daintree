@@ -32,25 +32,37 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   // A request for the recovery kit's passphrase field, until Data has focused it.
   const [kitFocusRequest, setKitFocusRequest] = useState(0);
   const askForKit = () => setKitFocusRequest((count) => count + 1);
+  // A request for Devices' Pair a phone, until it has shown and taken focus (#16200).
+  const [pairFocusRequest, setPairFocusRequest] = useState(0);
+  const askForPairing = () => setPairFocusRequest((count) => count + 1);
   const shownBefore = useRef<DecisionsStatus | null>(null);
 
   // A relay newly set up here and not yet verified asks for its recovery kit
   // next, whether the setup's own answer or a status push showed it first.
-  // Opening Settings on an unfinished setup, or turning Decisions on with
-  // one, asks nothing by itself.
+  // One a guided deploy's claim set up moves on to pairing a phone instead
+  // (#16200), with the kit still asked for above Connection. Opening Settings
+  // on an unfinished setup, or turning Decisions on with one, asks nothing by
+  // itself.
   useEffect(() => {
     const before = shownBefore.current;
     shownBefore.current = status;
     // Off unmounts Data, so nothing asked before it carries over to turning on.
-    if (status?.state === "off") setKitFocusRequest(0);
-    else if (
+    if (status?.state === "off") {
+      setKitFocusRequest(0);
+      setPairFocusRequest(0);
+    } else if (
       before !== null &&
       before.state !== "off" &&
       before.relayOrigin === undefined &&
       status !== null &&
       kitUnverified(status)
     ) {
-      setKitFocusRequest((count) => count + 1);
+      const claim = status.relayDeploy?.claim;
+      const deployed =
+        claim?.state === "claiming" ||
+        (claim?.state === "claimed" && claim.origin === status.relayOrigin);
+      if (deployed) setPairFocusRequest((count) => count + 1);
+      else setKitFocusRequest((count) => count + 1);
     }
   }, [status]);
 
@@ -115,8 +127,14 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
             onClose={onClose}
             onFinishSetup={askForKit}
+            onPairPhone={askForPairing}
           />
-          <DecisionsDevicesSection status={status} locked={pending !== null} />
+          <DecisionsDevicesSection
+            status={status}
+            locked={pending !== null}
+            pairFocusRequest={pairFocusRequest}
+            onPairFocused={() => setPairFocusRequest(0)}
+          />
           <DecisionsAgentsSection status={status} />
           <DecisionsQuestionsSection policy={policy} />
           <DecisionsPolicySection policy={policy} />

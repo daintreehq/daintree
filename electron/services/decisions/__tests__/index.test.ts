@@ -40,6 +40,17 @@ vi.mock("../relayIdentity.js", () => ({
   restoreDecisionsIdentity: setupRuns.restore,
 }));
 
+// The guided deploy's channel is relayDeployHost's (#16199); here only what it reports.
+const deployHosts = vi.hoisted(() => ({
+  events: [] as Array<import("../relayDeployHost.js").RelayDeployHostEvents>,
+}));
+vi.mock("../relayDeployHost.js", () => ({
+  openRelayDeployHost: async (events: import("../relayDeployHost.js").RelayDeployHostEvents) => {
+    deployHosts.events.push(events);
+    return { channelPath: `/tmp/deploy-${deployHosts.events.length}/host.sock`, dispose: () => {} };
+  },
+}));
+
 // The #16000 launch and prompt wait are viewless's; here only what delivery hands them (#16019).
 const viewless = vi.hoisted(() => ({ resume: vi.fn(), wait: vi.fn() }));
 vi.mock("../../viewless/index.js", () => ({
@@ -430,6 +441,7 @@ import {
   _resetDecisionsForTesting,
   applyOwnerState,
   checkRelay,
+  claimDeployedRelay,
   claimRelay,
   decisionsHostRuntimeFor,
   decisionsLaunchPort,
@@ -437,6 +449,7 @@ import {
   deleteRelayData,
   disconnectRelay,
   exportData,
+  prepareRelayDeploy,
   exportRecoveryKit,
   getDecisionsPaneState,
   getDecisionsPolicy,
@@ -1418,6 +1431,141 @@ describe("Decisions entry", () => {
 
       expect(signal.aborted).toBe(true);
       await expect(claim).resolves.toEqual(REFUSED);
+    });
+  });
+  describe("guided deploy claim (#16200)", () => {
+    const CLAIMED = {
+      relayOrigin: "https://relay.example.com",
+      installationId: "inst_12345678",
+      deviceId: "dev_12345678",
+      label: "Daintree",
+    };
+    const SECRET = "claim-secret-0123456789abcdef";
+    const COMPLETED = {
+      status: "completed",
+      url: "https://relay.example.com",
+      claimSecret: SECRET,
+      claimState: "unclaimed",
+    } as const;
+    const voice = () => ({}) as never;
+
+    beforeEach(() => {
+      deployHosts.events = [];
+    });
+
+    it("claims a completed deploy's relay with no renderer, and says so on the status", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
+      const { id } = await prepareRelayDeploy(voice);
+
+      deployHosts.events[0]!.onResult(COMPLETED);
+      await vi.waitFor(async () =>
+        expect((await getDecisionsStatus()).relayDeploy?.claim).toEqual({
+          state: "claimed",
+          origin: CLAIMED.relayOrigin,
+        })
+      );
+
+      expect(setupRuns.claim).toHaveBeenCalledExactlyOnceWith(
+        { url: COMPLETED.url, claimSecret: SECRET },
+        expect.anything()
+      );
+      expect(saved.value).toMatchObject({ relayOrigin: CLAIMED.relayOrigin });
+      const status = await getDecisionsStatus();
+      expect(status.relayDeploy).toMatchObject({ id, state: "completed" });
+      expect(status.relayDeploy).not.toHaveProperty("holdsClaimSecret");
+      const pushed = pushedStatuses();
+      expect(pushed.map((push) => (push.relayDeploy as { claim?: unknown })?.claim)).toContainEqual(
+        {
+          state: "claiming",
+        }
+      );
+      expect(JSON.stringify(pushed)).not.toContain(SECRET);
+      expect(JSON.stringify(saved.value)).not.toContain(SECRET);
+      await expect(claimDeployedRelay({ deployId: id })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
+    it("sends nothing for a deploy dropped by a switch change queued ahead of its claim", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
+      await prepareRelayDeploy(voice);
+
+      deployHosts.events[0]!.onResult(COMPLETED);
+      const off = setDecisionsEnabled(false);
+      const on = setDecisionsEnabled(true);
+      await Promise.all([off, on]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(setupRuns.claim).not.toHaveBeenCalled();
+      expect(saved.value).not.toHaveProperty("relayOrigin", CLAIMED.relayOrigin);
+      expect((await getDecisionsStatus()).relayDeploy).toBeUndefined();
+    });
+
+    it("leaves Connection as it was for a cancelled deploy", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      await prepareRelayDeploy(voice);
+
+      deployHosts.events[0]!.onResult({ ...COMPLETED, status: "cancelled", error: "Stopped" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(setupRuns.claim).not.toHaveBeenCalled();
+      expect(saved.value).not.toHaveProperty("relayOrigin", CLAIMED.relayOrigin);
+      expect((await getDecisionsStatus()).relayDeploy).toMatchObject({
+        state: "cancelled",
+        holdsClaimSecret: true,
+        error: "Stopped",
+      });
+    });
+
+    it("finishes a claim that didn't save with the same secret, answering the status after it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      setupRuns.claim.mockResolvedValueOnce({
+        failure: {
+          result: "unreachable",
+          origin: CLAIMED.relayOrigin,
+          reason: "timeout",
+          kept: true,
+        },
+      });
+      const { id } = await prepareRelayDeploy(voice);
+
+      deployHosts.events[0]!.onResult(COMPLETED);
+      await vi.waitFor(async () =>
+        expect((await getDecisionsStatus()).relayDeploy).toMatchObject({
+          holdsClaimSecret: true,
+          claim: {
+            state: "failed",
+            failure: {
+              result: "unreachable",
+              origin: CLAIMED.relayOrigin,
+              reason: "timeout",
+              kept: true,
+            },
+          },
+        })
+      );
+      expect(saved.value).not.toHaveProperty("relayOrigin", CLAIMED.relayOrigin);
+
+      setupRuns.claim.mockResolvedValueOnce({ identity: CLAIMED });
+      const result = await claimDeployedRelay({ deployId: id });
+
+      expect(setupRuns.claim.mock.calls[1]![0]).toEqual({
+        url: COMPLETED.url,
+        claimSecret: SECRET,
+      });
+      expect(result).toMatchObject({
+        result: "saved",
+        status: {
+          relayOrigin: CLAIMED.relayOrigin,
+          relayDeploy: { claim: { state: "claimed", origin: CLAIMED.relayOrigin } },
+        },
+      });
     });
   });
   describe("relay connection", () => {

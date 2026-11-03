@@ -184,7 +184,11 @@ let hostEnroller = makeHostEnroller();
 
 /** The guided relay deploy Settings started, whose result rides on the status push (#16199). */
 function makeRelayDeploys(): RelayDeploySessions {
-  return new RelayDeploySessions({ onChange: () => publishStatus() });
+  return new RelayDeploySessions({
+    onChange: () => publishStatus(),
+    claimRelay: (claim, stillWanted) =>
+      runSetup((options) => claimDecisionsRelay(claim, options), stillWanted),
+  });
 }
 let relayDeploys = makeRelayDeploys();
 /** One record keeper per store and installation, so its writes run one at a time. */
@@ -716,8 +720,12 @@ function recordIdentity(
 
 type SetupRun = (options: Pick<RelaySetupOptions, "keys" | "signal">) => Promise<RelaySetupOutcome>;
 
-function runSetup(run: SetupRun): Promise<DecisionsConnectResult> {
+/** `stillWanted`, when given, is asked as the setup's turn comes, before anything starts. */
+function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<DecisionsConnectResult> {
   return serialize(async () => {
+    if (stillWanted && !stillWanted()) {
+      throw new AppError({ code: "CANCELLED", message: "The guided deploy was dropped" });
+    }
     const { service: running, keys } = await setupKeys();
     const settings = readDecisionsSettings(store);
     if (settings.relayOrigin !== null) {
@@ -767,13 +775,19 @@ export function cancelRelayDeploy(deployId: string): void {
 
 /**
  * Claims the relay a guided deploy created, with the claim secret its CLI
- * handed over, which never leaves main. The secret is kept until a claim
- * saves an identity, so a refusal can be tried again this session.
+ * handed over, which never leaves main: again, after the claim main made when
+ * the deploy completed didn't save (#16200), joining one still in flight. The
+ * secret is kept until a claim saves an identity, so a refusal can be tried
+ * again this session.
  */
-export function claimDeployedRelay(
+export async function claimDeployedRelay(
   payload: ClaimDeployedDecisionsRelayPayload
 ): Promise<DecisionsConnectResult> {
-  return relayDeploys.claim(payload, claimRelay);
+  const outcome = await relayDeploys.claim(payload);
+  // The claim's own status was read before the deploy recorded how it ended.
+  return outcome.result === "saved"
+    ? { result: "saved", status: await getDecisionsStatus() }
+    : outcome;
 }
 
 /** Restores the owner identity of a claimed relay from its recovery kit (#16006). */
