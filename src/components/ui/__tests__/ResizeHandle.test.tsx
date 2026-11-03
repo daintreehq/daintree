@@ -120,9 +120,7 @@ describe("ResizeHandle", () => {
   // panel on light) and over the highlighted row on both panel surfaces, and these
   // misses are on other surfaces. Exact, so a retuned
   // theme that closes a gap has to drop its entry and a new gap fails.
-  const REST_GAPS_UNDER_3: Record<string, SplitterSurface[]> = {
-    hokkaido: ["surface-grid"],
-  };
+  const REST_GAPS_UNDER_3: Record<string, SplitterSurface[]> = {};
   // The surfaces `getPaletteSelectionWarnings` holds `selection-outline` to 3:1 on.
   const promisedSurface = (type: string): SplitterSurface =>
     type === "light" ? "surface-panel-elevated" : "surface-sidebar";

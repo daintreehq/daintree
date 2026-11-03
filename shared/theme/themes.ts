@@ -299,8 +299,7 @@ function createBaseDaintreeTokens(
     // than, the tinted sidebars (#16184), while a wash darkens every light
     // surface by about the same step (1.17-1.19:1). Pure black rather than
     // `overlayBase`, whose hue would tint a fill that must stay neutral.
-    "overlay-highlight":
-      tokens["overlay-highlight"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.075),
+    "overlay-highlight": tokens["overlay-highlight"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.075),
     "filter-selected-bg-soft":
       tokens["filter-selected-bg-soft"] ?? withAlpha(dark ? tint : overlayBase, dark ? 0.08 : 0.08),
     "filter-selected-bg-strong":
