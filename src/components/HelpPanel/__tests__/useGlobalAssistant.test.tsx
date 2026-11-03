@@ -13,6 +13,8 @@ import { useGlobalAssistant, type GlobalAssistantHandle } from "../useGlobalAssi
 const main = {
   owner: null as string | null,
   epoch: 0,
+  /** Bumps with every run, as main's does. */
+  generation: 1,
   eligible: new Map<string, boolean>(),
   /** Attachments of another window: never this view's to hand around. */
   foreign: new Set<string>(),
@@ -29,7 +31,7 @@ let attached = 0;
 function state(): GlobalAssistantView {
   return {
     phase: "running",
-    generation: 1,
+    generation: main.generation,
     agentId: "claude",
     terminalId: "g-1",
     attachments: [],
@@ -63,6 +65,7 @@ function claim(attachmentId: string, from?: string) {
 beforeEach(() => {
   main.owner = null;
   main.epoch = 0;
+  main.generation = 1;
   main.eligible.clear();
   main.foreign.clear();
   main.calls.length = 0;
@@ -118,12 +121,14 @@ function Surface({
   name,
   keepsViewInput,
   canType = true,
+  active = true,
 }: {
   name: string;
   keepsViewInput: boolean;
   canType?: boolean;
+  active?: boolean;
 }) {
-  const handle = useGlobalAssistant(true, () => canType, keepsViewInput);
+  const handle = useGlobalAssistant(active, () => canType, keepsViewInput);
   useEffect(() => {
     handles[name] = handle;
   });
@@ -223,6 +228,56 @@ describe("useGlobalAssistant keeping input in the view (#16214)", () => {
     await flush();
     expect(main.calls).toEqual(["attach a-1", "attach a-2", "detach a-2"]);
     panel.unmount();
+  });
+
+  it("lets the loan go with the run it was taken for", async () => {
+    const panel = render(<Surface name="panel" keepsViewInput={false} canType={false} />);
+    await flush();
+    act(() => setOwner("a-1"));
+    const canopy = render(<Surface name="canopy" keepsViewInput />);
+    await flush();
+    expect(main.owner).toBe("a-2");
+    // A new run, started from Canopy: the panel was pinned to the one that ended.
+    main.generation = 2;
+    act(() => setOwner("a-2"));
+    canopy.unmount();
+    await flush();
+    expect(main.calls.slice(3)).toEqual(["detach a-2"]);
+    panel.unmount();
+  });
+
+  it("forgets a loan once it lets go, taking only what it borrows again", async () => {
+    const panel = render(<Surface name="panel" keepsViewInput={false} canType={false} />);
+    await flush();
+    act(() => setOwner("a-1"));
+    const canopy = render(<Surface name="canopy" keepsViewInput />);
+    await flush();
+    canopy.rerender(<Surface name="canopy" keepsViewInput active={false} />);
+    await flush();
+    expect(main.owner).toBe("a-1");
+    // Another window takes it before Canopy shows the assistant again.
+    main.foreign.add("w-9");
+    act(() => setOwner("w-9"));
+    canopy.rerender(<Surface name="canopy" keepsViewInput />);
+    await flush();
+    canopy.unmount();
+    await flush();
+    expect(main.calls.slice(5)).toEqual(["attach a-3", "detach a-3"]);
+    expect(main.owner).toBe("w-9");
+    panel.unmount();
+  });
+
+  it("hands nothing back to a surface that went first", async () => {
+    const panel = render(<Surface name="panel" keepsViewInput={false} canType={false} />);
+    await flush();
+    act(() => setOwner("a-1"));
+    const canopy = render(<Surface name="canopy" keepsViewInput />);
+    await flush();
+    panel.unmount();
+    await flush();
+    canopy.unmount();
+    await flush();
+    expect(main.calls.slice(3)).toEqual(["detach a-1", "detach a-2"]);
   });
 
   it("takes nothing from the view's other surface unless asked to", async () => {

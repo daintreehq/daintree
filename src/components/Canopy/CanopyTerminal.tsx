@@ -754,6 +754,13 @@ export function CanopyTerminal({
         return;
       }
       if (opened.watchId === null || opened.snapshot === null) {
+        // A stream opened with no screen to start from is let go, not left
+        // running behind a pane that never shows it.
+        if (opened.watchId !== null) {
+          safeFireAndForget(unlessHostDisconnected(api.unwatchTerminal(opened.watchId)), {
+            context: "Ending a canopy terminal stream that opened with no screen",
+          });
+        }
         setStatus("failed");
         return;
       }

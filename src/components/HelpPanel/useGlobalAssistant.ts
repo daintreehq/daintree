@@ -81,8 +81,13 @@ export function useGlobalAssistant(
   }, [canType]);
   /** What main was last told of an attachment's eligibility. */
   const reportedRef = useRef<{ attachmentId: string; eligible: boolean } | null>(null);
-  // The surface of this view input was taken from, to go back to on teardown.
-  const lenderRef = useRef<string | null>(null);
+  // The surface of this view input was taken from, and the run it was taken
+  // for, to go back to on teardown: a loan for a run since replaced is over.
+  const lenderRef = useRef<{ attachmentId: string; generation: number } | null>(null);
+  const generationRef = useRef<number | null>(null);
+  useEffect(() => {
+    generationRef.current = view?.generation ?? null;
+  }, [view]);
 
   useEffect(() => {
     if (!active) return;
@@ -124,8 +129,12 @@ export function useGlobalAssistant(
         // another window. Sent even with a take still unanswered: main moves
         // it only if this one holds it by then.
         const lender = keepsViewInput ? lenderRef.current : null;
-        if (lender !== null && viewAttachments.has(lender)) {
-          void help.claimGlobalAssistantInput(lender, attached).catch(() => {});
+        if (
+          lender !== null &&
+          lender.generation === generationRef.current &&
+          viewAttachments.has(lender.attachmentId)
+        ) {
+          void help.claimGlobalAssistantInput(lender.attachmentId, attached).catch(() => {});
         }
         void help.detachGlobalAssistant(attached).catch(() => {});
       }
@@ -201,16 +210,17 @@ export function useGlobalAssistant(
   // Held by another surface of this view, it is this window's already: taken
   // without asking, as typing here is all the person can do in it now.
   const inputOwner = view?.inputOwner ?? null;
+  const generation = view?.generation ?? null;
   useEffect(() => {
-    if (!keepsViewInput || !active || attachmentId === null) return;
+    if (!keepsViewInput || !active || attachmentId === null || generation === null) return;
     if (inputOwner === null || inputOwner === attachmentId) return;
     if (!isViewGlobalAttachment(inputOwner)) return;
-    lenderRef.current = inputOwner;
+    lenderRef.current = { attachmentId: inputOwner, generation };
     void run(
       () => window.electron.help.claimGlobalAssistantInput(attachmentId, inputOwner),
       "Daintree couldn't take the global assistant's input."
     );
-  }, [keepsViewInput, active, attachmentId, inputOwner, run]);
+  }, [keepsViewInput, active, attachmentId, inputOwner, generation, run]);
 
   const clearError = useCallback(() => setError(null), []);
 

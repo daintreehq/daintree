@@ -798,6 +798,8 @@ describe("CanopyTerminal", () => {
     const { container } = mount(onGoTo);
     await open({ watchId: 7, snapshot: null });
     expect(container.textContent).toContain("Couldn't show this terminal");
+    // The stream main opened for it is let go at once, not left running (#16214).
+    expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[7]]);
     const goTo = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Go to terminal"
     );

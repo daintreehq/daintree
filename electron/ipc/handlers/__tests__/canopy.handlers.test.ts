@@ -2196,11 +2196,15 @@ describe("canopy IPC", () => {
       expect(activeTerminalWatches().get(7)?.watchId).toBe(lane.watchId);
 
       // A pane letting go of its run, then the panel closing as it moves to
-      // another host: neither is the global session's own stream.
+      // another host: each ends the pane's stream, neither the global session's.
       await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, sender);
       expect(activeTerminalWatches().has(7)).toBe(false);
+      expect(activeTerminalWatches("global").get(7)?.watchId).toBe(global.watchId);
       await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+      const reopened = await openAssistant(sender);
+      expect(activeTerminalWatches().get(7)?.watchId).toBe(reopened.watchId);
       await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, false);
+      expect(activeTerminalWatches().has(7)).toBe(false);
       expect(activeTerminalWatches("global").get(7)?.watchId).toBe(global.watchId);
       await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, sender, global.watchId);
       expect(activeTerminalWatches("global").has(7)).toBe(false);
