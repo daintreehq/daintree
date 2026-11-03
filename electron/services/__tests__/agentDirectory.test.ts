@@ -147,6 +147,36 @@ describe("collectAgentDirectory (#14160)", () => {
     expect(JSON.stringify(directory)).not.toContain("orphan");
   });
 
+  it("names each assistant by its scope's persona and no worker by one (#16213)", async () => {
+    const directory = await collectAgentDirectory(
+      sources({
+        listRunningLanes: () => [
+          { projectId: "p1", slot: 0, agentId: "claude", attached: true },
+          { projectId: "daintree:global-assistant", slot: 0, agentId: "claude", attached: false },
+        ],
+        getRunningLaneSession: (projectId, slot) => ({
+          sessionId: `s-${projectId}`,
+          terminalId: projectId === "p1" ? "a0" : "a1",
+          projectViewWebContentsId: 1,
+          ...(slot ? {} : {}),
+        }),
+        assistantIdentity: (scope) =>
+          scope.kind === "global" ? { name: "Assistant to the Regional Manager" } : {},
+      })
+    );
+
+    expect(AgentDirectorySchema.safeParse(directory).success).toBe(true);
+    const identities = directory.entries.map((entry) =>
+      entry.state === "live" ? [entry.role, entry.subject.scope.kind, entry.identity] : null
+    );
+    expect(identities).toEqual([
+      ["assistant", "global", { name: "Assistant to the Regional Manager" }],
+      ["assistant", "project", undefined],
+      ["worker", "project", undefined],
+      ["worker", "project", undefined],
+    ]);
+  });
+
   it("lists no host throwaway run, and still reads as complete (#14445)", async () => {
     const base = sources();
     const { terminals } = await base.readTerminals();

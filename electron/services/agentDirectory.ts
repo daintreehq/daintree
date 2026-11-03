@@ -11,6 +11,11 @@ import {
   type AgentDirectoryResumableEntry,
 } from "../../shared/types/agentDirectory.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
+import type {
+  AssistantIdentityScope,
+  DisplayIdentity,
+} from "../../shared/types/displayIdentity.js";
+import { isEmptyDisplayIdentity } from "../../shared/utils/displayIdentity.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunningLane, RunningLaneSession } from "./HelpSessionService.js";
 import { classifyRun } from "./projectAgentCounts.js";
@@ -48,6 +53,8 @@ export interface AgentDirectorySources {
   ): { waiting: AgentDirectoryConfirmation[]; omitted: number };
   /** The terminal notices a pane holds; null when it holds none, undefined when unknown. */
   paneNotices?(terminalId: string): PaneNotifyState | null | undefined;
+  /** The persona the person gave an assistant scope (#16213); empty when none. */
+  assistantIdentity?(scope: AssistantIdentityScope): DisplayIdentity;
   /**
    * Stored resume pointers, read without claiming or clearing any. `complete`
    * is false when the projects looked in were fewer than the ones that exist.
@@ -114,6 +121,9 @@ export async function collectAgentDirectory(
       attached: lane.attached !== false,
       terminal,
     });
+    // The persona belongs to the scope, not the run, so a replaced run wears it too.
+    const identity = sources.assistantIdentity?.(entry.subject.scope);
+    if (identity && !isEmptyDisplayIdentity(identity)) entry.identity = identity;
     // Read for this session only: a replaced run is a new session, so the
     // old one's waits and notices never attach to it.
     if (!replaced) {

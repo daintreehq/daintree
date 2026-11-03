@@ -3,7 +3,6 @@ import type {
   AssistantIdentityScope,
   DisplayIdentity,
 } from "../types/displayIdentity.js";
-import { displaySafeText } from "./displaySafeText.js";
 
 /** Longest persona name kept, in graphemes; a longer one is cut. */
 export const DISPLAY_NAME_MAX = 80;
@@ -12,11 +11,12 @@ export const DISPLAY_EMOJI_MAX_UNITS = 32;
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-const PICTOGRAPHIC = /\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣/u;
-// Controls and the formatting characters that reorder or hide text; ZWJ
-// (U+200D) is left alone, since family and profession emoji are built with it.
-// eslint-disable-next-line no-control-regex -- refusing control characters is the point
-const UNSAFE_IN_EMOJI = /[\u0000-\u001f\u007f-\u009f؜​‌‎‏‪-‮⁠-⁩﻿]/;
+const PICTOGRAPHIC = /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u;
+// eslint-disable-next-line no-control-regex -- removing control characters is the point
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/g;
+// The formatting characters that reorder or hide text. ZWJ (U+200D) is not one
+// of them here: family and profession emoji are built with it.
+const HIDDEN_FORMATTING = /[\u061c\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
 
 function graphemeList(text: string): string[] {
   return Array.from(graphemes.segment(text), (part) => part.segment);
@@ -25,7 +25,11 @@ function graphemeList(text: string): string[] {
 /** A name as it is kept: one line, no controls or bidi overrides, at most {@link DISPLAY_NAME_MAX} graphemes. */
 export function normalizeDisplayName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const text = displaySafeText(value).replace(/\s+/g, " ").trim();
+  const text = value
+    .replace(CONTROLS, " ")
+    .replace(HIDDEN_FORMATTING, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!text) return undefined;
   const parts = graphemeList(text);
   return parts.length > DISPLAY_NAME_MAX ? parts.slice(0, DISPLAY_NAME_MAX).join("").trimEnd() : text;
@@ -36,7 +40,8 @@ export function normalizeDisplayEmoji(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const text = value.trim();
   if (!text || text.length > DISPLAY_EMOJI_MAX_UNITS) return undefined;
-  if (UNSAFE_IN_EMOJI.test(text) || !PICTOGRAPHIC.test(text)) return undefined;
+  if (text.replace(CONTROLS, "").replace(HIDDEN_FORMATTING, "") !== text) return undefined;
+  if (!PICTOGRAPHIC.test(text)) return undefined;
   return graphemeList(text).length === 1 ? text : undefined;
 }
 
