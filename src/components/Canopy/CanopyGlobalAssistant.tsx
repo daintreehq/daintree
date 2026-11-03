@@ -7,6 +7,8 @@ import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCa
 import { GlobalAssistantTerminal } from "@/components/HelpPanel/GlobalAssistantTerminal";
 import { useAssistantSendFailure } from "@/components/HelpPanel/useAssistantSendFailure";
 import { useGlobalAssistant } from "@/components/HelpPanel/useGlobalAssistant";
+import { useGlobalAssistantIdentity } from "@/store/assistantIdentityStore";
+import { displayIdentityLabel } from "@shared/utils/displayIdentity";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isSameAssistantRun } from "@shared/types/agentDirectory";
 import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
@@ -49,6 +51,7 @@ export function CanopyGlobalAssistant({
   const viewCached = useSyncExternalStore(subscribeViewCache, isProjectViewCached);
   // A window bound to another host reaches that host's assistants, not this one's.
   const boundElsewhere = getViewHostId() !== null;
+  const identity = useGlobalAssistantIdentity();
   const { view, attachmentId, error, start, claimInput } = useGlobalAssistant(
     !viewCached && !boundElsewhere,
     undefined,
@@ -152,7 +155,12 @@ export function CanopyGlobalAssistant({
       ) : (
         // Until the directory lists the run on screen, or while none runs.
         <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">
-          <span className="min-w-0 shrink-0 font-medium text-text-primary">Daintree Assistant</span>
+          <span className="min-w-0 shrink-0 font-medium text-text-primary">
+            {/* The store holds the bound host's personas, not this machine's. */}
+            {boundElsewhere
+              ? "Daintree Assistant"
+              : displayIdentityLabel(identity, "Daintree Assistant")}
+          </span>
           <span className="min-w-0 flex-1 truncate text-text-secondary">Global</span>
         </div>
       )}
