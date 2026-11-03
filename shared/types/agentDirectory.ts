@@ -142,6 +142,10 @@ export const AgentDirectoryLiveEntrySchema = z.object({
     .optional(),
   /** An assistant's terminal notices; null when it holds none, absent where not reported. */
   notices: AgentDirectoryNoticesSchema.nullable().optional(),
+  /** The name the person gave an assistant (#16213); absent when none. Display only. */
+  personaName: z.string().optional(),
+  /** The emoji the person gave an assistant; absent when none. Display only. */
+  personaEmoji: z.string().optional(),
 });
 export type AgentDirectoryLiveEntry = z.infer<typeof AgentDirectoryLiveEntrySchema>;
 

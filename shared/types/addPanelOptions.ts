@@ -30,6 +30,8 @@ export interface AddPanelOptionsBase {
   title?: string;
   /** How the title is owned. Absent defaults to "default". */
   titleMode?: PanelTitleMode;
+  /** The emoji the person gave this panel as a persona (#16213); absent when none. Display only. */
+  displayEmoji?: string;
   worktreeId?: string;
   /**
    * How `worktreeId` was determined: `"explicit"` (caller/user chose it, the

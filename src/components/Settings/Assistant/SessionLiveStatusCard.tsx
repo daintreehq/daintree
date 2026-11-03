@@ -5,6 +5,13 @@ import { getAgentConfig } from "@/config/agents";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import {
+  useGlobalAssistantIdentity,
+  useProjectAssistantIdentity,
+} from "@/store/assistantIdentityStore";
+import { displayIdentityLabel } from "@shared/utils/displayIdentity";
 import { Button } from "@/components/ui/button";
 import { trimSessionTabTitle } from "@/components/HelpPanel/sessionTabTitle";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
@@ -31,14 +38,15 @@ function agentName(agentId: string): string {
 
 /**
  * Which conversation the card describes, in the dock's own words: its scope
- * switch ("Project", "Global"), the lane's tab label, and the agent running it.
+ * switch ("Project", "Global", or the name the person gave that assistant),
+ * the lane's tab label, and the agent running it.
  */
 function SessionIdentity({
   scope,
   name,
   agentId,
 }: {
-  scope: "Project" | "Global";
+  scope: string;
   name?: string;
   agentId: string | null;
 }) {
@@ -90,6 +98,9 @@ function ProjectLaneRow({ configuredTier }: SessionLiveStatusCardProps) {
   });
   const task = trimSessionTabTitle(taskTitle);
   const laneName = task ? `'${task.fullTitle}'` : `Session ${slot + 1}`;
+  const workspaceId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const scratchId = useScratchStore((s) => s.currentScratch?.id ?? null);
+  const projectIdentity = useProjectAssistantIdentity(workspaceId ?? scratchId);
 
   const { connected, tier, activeGrants } = useHelpSessionLiveStatus(sessionId);
   const perToolGrants = activeGrants.filter((g) => g.kind !== "native");
@@ -118,7 +129,11 @@ function ProjectLaneRow({ configuredTier }: SessionLiveStatusCardProps) {
       }
       description={
         <div className="space-y-1">
-          <SessionIdentity scope="Project" name={laneName} agentId={laneAgentId} />
+          <SessionIdentity
+            scope={displayIdentityLabel(projectIdentity, "Project")}
+            name={laneName}
+            agentId={laneAgentId}
+          />
           {connected ? (
             <StatusLine tone="ok">
               Running the{" "}
@@ -181,6 +196,7 @@ function ProjectLaneRow({ configuredTier }: SessionLiveStatusCardProps) {
  */
 function GlobalSessionRow() {
   const target = useHelpPanelStore((s) => s.globalTarget);
+  const globalIdentity = useGlobalAssistantIdentity();
   // A window bound to another host reaches that host's assistants, not this one's.
   const boundElsewhere = getViewHostId() !== null;
   const [view, setView] = useState<GlobalAssistantView | null>(null);
@@ -227,7 +243,10 @@ function GlobalSessionRow() {
       label="Live session"
       description={
         <div className="space-y-1">
-          <SessionIdentity scope="Global" agentId={agentId} />
+          <SessionIdentity
+            scope={displayIdentityLabel(globalIdentity, "Global")}
+            agentId={agentId}
+          />
           {boundElsewhere ? (
             <StatusLine tone="idle">
               This window runs on another host. Open the global assistant from a window on this

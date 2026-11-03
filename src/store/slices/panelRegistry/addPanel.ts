@@ -354,6 +354,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       // agent-detected/exited title rewrites. Conditional spread avoids
       // stamping `undefined`, which would read as an explicit "default".
       ...(options.titleMode && { titleMode: options.titleMode }),
+      ...(options.displayEmoji && { displayEmoji: options.displayEmoji }),
       worktreeId: options.worktreeId,
       cwd: options.cwd ?? "",
       cols: constructionDims?.cols ?? 80,

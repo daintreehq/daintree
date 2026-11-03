@@ -144,6 +144,8 @@ export interface SavedTerminalData {
   title?: string;
   /** Title ownership rung persisted with the snapshot — restoring it is what keeps preset/user titles pinned across restart (#10738). */
   titleMode?: PanelTitleMode;
+  /** The persona emoji the person gave the panel (#16213); main normalized it on read. */
+  displayEmoji?: string;
   cwd?: string;
   worktreeId?: string;
   location?: string;
@@ -462,6 +464,7 @@ export function buildArgsForBackendTerminal(
     launchAgentId,
     title: saved.title ?? backendTerminal.title,
     titleMode: saved.titleMode ?? backendTerminal.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd,
     worktreeId: saved.worktreeId,
     location,
@@ -562,6 +565,7 @@ export function buildArgsForReconnectedFallback(
     launchAgentId,
     title: saved.title ?? reconnectedTerminal.title,
     titleMode: saved.titleMode ?? reconnectedTerminal.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd,
     worktreeId: saved.worktreeId,
     location,
@@ -1126,6 +1130,7 @@ export function buildArgsForRespawn(
     // A stale preset's pinned title was just stripped — drop the pin with it
     // (unless the user locked the title, which the strip above exempts).
     titleMode: presetWasStale && !userLockedTitle ? undefined : saved.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd: coldLaunch?.cwd || saved.cwd || projectRoot || "",
     worktreeId: coldLaunch?.worktreeId ?? saved.worktreeId,
     location,
@@ -1241,6 +1246,7 @@ export function buildArgsForNonPtyRecreation(
     kind,
     title: saved.title,
     titleMode: saved.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
     worktreeId,
     location,

@@ -21,6 +21,8 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
 import { TabStateIndicator } from "./HelpSessionTabs";
 import type { AgentState } from "@/types";
+import type { DisplayIdentity } from "@shared/types/displayIdentity";
+import { displayIdentityLabel, displayIdentityName } from "@shared/utils/displayIdentity";
 
 /** The panel-chrome action button: `icon-xs` (24px target) with a 14px glyph. */
 export const HEADER_ACTION_CLASS = "[&_svg]:size-3.5";
@@ -35,8 +37,8 @@ export type AssistantScope = "project" | "global";
  * reads an assistant.
  */
 const SPOKEN_STATE: Partial<Record<NonNullable<AgentState>, string>> = {
-  working: "Assistant is working",
-  directing: "Assistant is directing",
+  working: "is working",
+  directing: "is directing",
 };
 
 /**
@@ -54,8 +56,15 @@ const SPOKEN_STATE: Partial<Record<NonNullable<AgentState>, string>> = {
  * `role="status"` live region that spoke on every transition. Keeping one here, with
  * no visual presence, preserves that for the lane on screen.
  */
-function AssistantStateAnnouncer({ agentState }: { agentState: AgentState | null | undefined }) {
-  const spoken = agentState ? SPOKEN_STATE[agentState] : undefined;
+function AssistantStateAnnouncer({
+  agentState,
+  name,
+}: {
+  agentState: AgentState | null | undefined;
+  name: string;
+}) {
+  const state = agentState ? SPOKEN_STATE[agentState] : undefined;
+  const spoken = state ? `${name} ${state}` : undefined;
   return (
     <span
       data-testid="assistant-header-state-announcer"
@@ -101,30 +110,49 @@ export function summarizeLaneActivity(
   };
 }
 
+/**
+ * One scope's segment. A persona replaces the scope's word as the label, so
+ * the tooltip and the accessible name keep saying which scope it is.
+ */
+function scopeOption(
+  value: AssistantScope,
+  word: string,
+  description: string,
+  identity: DisplayIdentity | undefined,
+  activity: ScopeActivity | null
+): SegmentedRadioOption<AssistantScope> {
+  const label = displayIdentityLabel(identity, word);
+  const named = label !== word;
+  const scopeName = named ? `${label}, ${word.toLowerCase()} assistant` : word;
+  return {
+    value,
+    label,
+    tooltip: activity ? activity.summary : named ? `${label}: ${description}` : description,
+    ariaLabel: activity ? `${scopeName}, ${activity.summary}` : named ? scopeName : undefined,
+    trailing: activity ? <TabStateIndicator agentState={activity.agentState} /> : undefined,
+  };
+}
+
 function scopeOptions(
   scope: AssistantScope,
   projectActivity: ScopeActivity | null,
-  globalActivity: ScopeActivity | null
+  globalActivity: ScopeActivity | null,
+  projectIdentity: DisplayIdentity | undefined,
+  globalIdentity: DisplayIdentity | undefined
 ): SegmentedRadioOption<AssistantScope>[] {
   // Only the scope NOT on screen carries a mark: the one on screen shows its
   // own state where its conversation is.
   const project = scope === "global" ? projectActivity : null;
   const global = scope === "project" ? globalActivity : null;
   return [
-    {
-      value: "project",
-      label: "Project",
-      tooltip: project ? project.summary : "This project's sessions",
-      ariaLabel: project ? `Project, ${project.summary}` : undefined,
-      trailing: project ? <TabStateIndicator agentState={project.agentState} /> : undefined,
-    },
-    {
-      value: "global",
-      label: "Global",
-      tooltip: global ? global.summary : "One assistant for every project and window",
-      ariaLabel: global ? `Global, ${global.summary}` : undefined,
-      trailing: global ? <TabStateIndicator agentState={global.agentState} /> : undefined,
-    },
+    scopeOption("project", "Project", "This project's sessions", projectIdentity, project),
+    scopeOption(
+      "global",
+      "Global",
+      "One assistant for every project and window",
+      globalIdentity,
+      global
+    ),
   ];
 }
 
@@ -143,6 +171,10 @@ interface HelpPanelHeaderProps {
   projectActivity?: ScopeActivity | null;
   /** The global run's observed activity, marked on the Global option while Project is shown. */
   globalActivity?: ScopeActivity | null;
+  /** The name and emoji the person gave this project's assistant (#16213). */
+  projectIdentity?: DisplayIdentity;
+  /** The name and emoji the person gave the global assistant (#16213). */
+  globalIdentity?: DisplayIdentity;
   canRestartConversation: boolean;
   canEndSession: boolean;
   onRestartConversation: () => void;
@@ -168,6 +200,8 @@ export function HelpPanelHeader({
   globalControlsRef,
   projectActivity = null,
   globalActivity = null,
+  projectIdentity,
+  globalIdentity,
   canRestartConversation,
   canEndSession,
   onRestartConversation,
@@ -214,12 +248,23 @@ export function HelpPanelHeader({
         <SegmentedRadioGroup
           density="compact"
           aria-label="Assistant scope"
-          options={scopeOptions(scope, projectActivity, globalActivity)}
+          options={scopeOptions(
+            scope,
+            projectActivity,
+            globalActivity,
+            projectIdentity,
+            globalIdentity
+          )}
           value={scope}
           onChange={onScopeChange}
           testId="assistant-scope"
+          // A persona's name is as long as the person made it.
+          className="min-w-0 shrink"
         />
-        <AssistantStateAnnouncer agentState={agentState} />
+        <AssistantStateAnnouncer
+          agentState={agentState}
+          name={displayIdentityName(projectIdentity, "Assistant")}
+        />
       </div>
       {/* The header carries panel-level actions only. Anything scoped to ONE
           conversation belongs to the strip, which is where the sessions are.

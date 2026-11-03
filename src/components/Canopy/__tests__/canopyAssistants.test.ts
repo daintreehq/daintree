@@ -8,8 +8,10 @@ import {
   assistantAgePhrase,
   assistantAsk,
   assistantCoverageNote,
+  assistantDisplayName,
   assistantMatches,
   assistantNoticeSummary,
+  assistantPlaceLabel,
   assistantRowNote,
   assistantStateSince,
   assistantStatus,
@@ -500,5 +502,52 @@ describe("isCanopyRoleFilter", () => {
     expect(["all", "workers", "assistants"].every(isCanopyRoleFilter)).toBe(true);
     expect(isCanopyRoleFilter("worker")).toBe(false);
     expect(isCanopyRoleFilter(null)).toBe(false);
+  });
+});
+
+describe("assistant personas (#16213)", () => {
+  it("names an assistant by its persona, and by its role without one", () => {
+    const [named, plain] = buildAssistantItems(
+      directory([
+        live(
+          undefined,
+          { personaName: " Assistant to the Regional Manager ", personaEmoji: "🐻" },
+          null
+        ),
+        live(0),
+      ]),
+      options
+    );
+
+    expect(assistantDisplayName(named!)).toBe("🐻 Assistant to the Regional Manager");
+    // The scope stays the scope: the persona names the assistant, not where it runs.
+    expect(named!.scopeLabel).toBe("Global");
+    expect(assistantPlaceLabel(named!)).toBe("🐻 Assistant to the Regional Manager · Global");
+    expect(assistantDisplayName(plain!)).toBe("Daintree Assistant");
+    expect(assistantPlaceLabel(plain!)).toBe(plain!.scopeLabel);
+  });
+
+  it("leaves the scope alone when the persona is only an emoji, and finds a row by its name", () => {
+    const [emojiOnly, named] = buildAssistantItems(
+      directory([
+        live(undefined, { personaEmoji: "🐶" }, null),
+        live(0, { personaName: "Dwight" }),
+      ]),
+      options
+    );
+
+    expect(assistantPlaceLabel(emojiOnly!)).toBe("🐶 Global");
+    expect(assistantMatches(named!, ["dwight"])).toBe(true);
+    expect(assistantMatches(emojiOnly!, ["dwight"])).toBe(false);
+    expect(assistantMatches(emojiOnly!, ["🐶"])).toBe(true);
+  });
+
+  it("keeps only what a persona can be from another machine's directory", () => {
+    const [item] = buildAssistantItems(
+      directory([live(0, { personaName: "Dot\u202e", personaEmoji: "not an emoji" })]),
+      options
+    );
+
+    expect(item!.identity).toEqual({ name: "Dot" });
   });
 });

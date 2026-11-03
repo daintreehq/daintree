@@ -76,7 +76,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { PluginPanelActivityIndicator } from "@/components/Panel/PluginPanelActivity";
 import { TerminalPluginStatusChips } from "@/components/Terminal/TerminalPluginStatusChips";
-import { BellDot, FolderGit2, NotebookPen } from "@/components/icons";
+import { BellDot, FolderGit2, NotebookPen, SmilePlus } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import {
@@ -101,6 +101,8 @@ import { PopoverAnchor } from "@/components/ui/popover";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
+import { PanelEmojiDialog } from "./PanelEmojiDialog";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
 import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
@@ -513,6 +515,19 @@ function PanelHeaderComponent({
   // The panel's own worktree, not the selected one: a panel can sit in a
   // worktree other than the one the sidebar has active.
   const currentWorktreeId = usePanelStore((state) => state.panelsById[id]?.worktreeId);
+  const displayEmoji = usePanelStore((state) => state.panelsById[id]?.displayEmoji);
+  // Which panel the emoji dialog was opened for, kept and dropped as the move
+  // picker's is below, so a header that goes on to speak for another panel
+  // never retargets an open dialog.
+  const [emojiDialogPanelId, setEmojiDialogPanelId] = useState<string | null>(null);
+  if (emojiDialogPanelId !== null && emojiDialogPanelId !== id) {
+    setEmojiDialogPanelId(null);
+  }
+  // Mounted on first use, so a header that never opens it carries no picker.
+  const [hasOpenedEmojiDialog, setHasOpenedEmojiDialog] = useState(false);
+  // Opened from the menu's close hook, as the move picker is: opened from the
+  // item, the menu's focus return would land behind the dialog.
+  const pendingEmojiDialogRef = useRef<string | null>(null);
   // The kind the panel was created as. A PTY-backed plugin panel renders
   // through TerminalPane, which hands this header "terminal", but only the
   // stored kind says whether Duplicate has a recipe to run.
@@ -621,6 +636,7 @@ function PanelHeaderComponent({
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
+    pendingEmojiDialogRef.current = null;
     pendingMenuDispatchRef.current = null;
   };
   const handleOverflowMenuCloseAutoFocus = (event: Event) => {
@@ -634,6 +650,17 @@ function PanelHeaderComponent({
           source: "menu",
         });
       }, AFTER_MENU_FOCUS_RESTORE_MS);
+      return;
+    }
+    const pendingEmojiPanelId = pendingEmojiDialogRef.current;
+    pendingEmojiDialogRef.current = null;
+    if (pendingEmojiPanelId !== null) {
+      if (pendingEmojiPanelId !== id) return;
+      // The dialog focuses its own search field and hands focus back to the
+      // button when it closes.
+      event.preventDefault();
+      setHasOpenedEmojiDialog(true);
+      setEmojiDialogPanelId(id);
       return;
     }
     const pendingPanelId = pendingMovePickerRef.current;
@@ -743,7 +770,11 @@ function PanelHeaderComponent({
       panelPty?.agentState === "waiting" ||
       panelPty?.agentState === "exited"
     ) {
-      fireWatchNotification(id, panel?.title ?? id, panelPty.agentState);
+      fireWatchNotification(
+        id,
+        withDisplayEmoji(panel?.title ?? id, panel?.displayEmoji),
+        panelPty.agentState
+      );
     } else {
       watchPanel(id);
     }
@@ -1274,6 +1305,17 @@ function PanelHeaderComponent({
                 brandColor={presetColor ?? chrome.color}
               />
             </span>
+            {displayEmoji && (
+              // The persona the person gave the pane; the brand mark beside it
+              // still says which agent runs it.
+              <span
+                aria-hidden="true"
+                data-testid="panel-persona-emoji"
+                className="-ml-1 shrink-0 select-none text-xs leading-6"
+              >
+                {displayEmoji}
+              </span>
+            )}
 
             {isEditingTitle ? (
               // The field takes exactly the box the static title had: an
@@ -1819,6 +1861,18 @@ function PanelHeaderComponent({
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
                   </DropdownMenuItem>
+                  {/* An agent that has exited keeps its emoji, and the way to change it. */}
+                  {(chrome.isAgent || displayEmoji) && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        pendingEmojiDialogRef.current = id;
+                      }}
+                      data-testid="panel-choose-emoji"
+                    >
+                      <SmilePlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      {displayEmoji ? "Change emoji…" : "Choose emoji…"}
+                    </DropdownMenuItem>
+                  )}
                   {(scratchpadState === "hidden" || scratchpadState === "collapsed") && (
                     <DropdownMenuItem
                       onSelect={() => showScratchpad(id)}
@@ -2124,6 +2178,15 @@ function PanelHeaderComponent({
           isOpen={isMovePickerOpen}
           onOpenChange={handleMovePickerOpenChange}
           returnFocusRef={overflowButtonRef}
+        />
+      )}
+      {hasOpenedEmojiDialog && (
+        <PanelEmojiDialog
+          panelId={emojiDialogPanelId ?? id}
+          title={title}
+          isOpen={emojiDialogPanelId !== null}
+          onClose={() => setEmojiDialogPanelId(null)}
+          restoreFocusTo={overflowButtonRef}
         />
       )}
     </AppPalettePopover>

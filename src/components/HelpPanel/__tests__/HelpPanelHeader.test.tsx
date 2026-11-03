@@ -270,6 +270,32 @@ describe("HelpPanelHeader", () => {
     expect(announcer.textContent).toBe("Assistant is working");
   });
 
+  it("labels each scope with its persona and keeps saying which scope it is (#16213)", () => {
+    const { getByTestId } = renderHeader({
+      agentState: "working",
+      projectIdentity: { name: "Dwight", emoji: "🌱" },
+      globalIdentity: { name: "Assistant to the Regional Manager" },
+    });
+
+    const project = getByTestId("assistant-scope-project");
+    const global = getByTestId("assistant-scope-global");
+    expect(project.textContent).toContain("🌱 Dwight");
+    expect(project.getAttribute("aria-label")).toBe("🌱 Dwight, project assistant");
+    expect(global.textContent).toContain("Assistant to the Regional Manager");
+    expect(global.getAttribute("aria-label")).toBe(
+      "Assistant to the Regional Manager, global assistant"
+    );
+    expect(getByTestId("assistant-header-state-announcer").textContent).toBe("Dwight is working");
+  });
+
+  it("keeps today's labels for a scope with only an emoji or nothing at all", () => {
+    const { getByTestId } = renderHeader({ projectIdentity: { emoji: "🐶" }, globalIdentity: {} });
+
+    expect(getByTestId("assistant-scope-project").textContent).toContain("🐶 Project");
+    expect(getByTestId("assistant-scope-global").textContent).toContain("Global");
+    expect(getByTestId("assistant-scope-global").getAttribute("aria-label")).toBeNull();
+  });
+
   it("names the restart item for the conversation it discards", () => {
     const onRestartConversation = vi.fn();
     const { getByText, queryByText } = renderHeader({

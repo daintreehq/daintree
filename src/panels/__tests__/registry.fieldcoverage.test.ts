@@ -47,6 +47,7 @@ const PTY_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -196,6 +197,7 @@ const BROWSER_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -228,6 +230,7 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -276,6 +279,7 @@ const FILE_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -315,6 +319,7 @@ const DIFF_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -352,6 +357,7 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.

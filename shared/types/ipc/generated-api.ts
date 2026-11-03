@@ -777,12 +777,18 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["help:unmark-terminal"]["result"]>;
   };
   helpAssistant: {
+    getIdentities(
+      ...args: IpcInvokeMap["help-assistant:get-identities"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:get-identities"]["result"]>;
     getLiveSessionStatus(
       ...args: IpcInvokeMap["help-assistant:get-live-session-status"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:get-live-session-status"]["result"]>;
     getSettings(
       ...args: IpcInvokeMap["help-assistant:get-settings"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:get-settings"]["result"]>;
+    setIdentity(
+      ...args: IpcInvokeMap["help-assistant:set-identity"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:set-identity"]["result"]>;
     setSettings(
       ...args: IpcInvokeMap["help-assistant:set-settings"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:set-settings"]["result"]>;

@@ -2522,7 +2522,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (state: import("./help.js").GlobalAssistantView) => void
     ): () => void;
   };
-  // helpAssistant is generated — see GeneratedElectronAPI.
+  // helpAssistant's invoke methods are generated; the persona push is hand-wired.
+  helpAssistant: GeneratedElectronAPI["helpAssistant"] & {
+    /** Every assistant persona as stored, after any write from any view (#16213). */
+    onIdentitiesChanged(
+      callback: (identities: import("../displayIdentity.js").AssistantIdentities) => void
+    ): () => void;
+  };
   mcpBridge: {
     /** Listen for manifest requests from main process */
     onGetManifestRequest(callback: (requestId: string) => void): () => void;

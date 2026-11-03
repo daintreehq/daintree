@@ -9,6 +9,7 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { isDevPreviewPanel } from "@shared/types/panel";
+import { normalizeDisplayEmoji } from "@shared/utils/displayIdentity";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import {
   deferPersistToBatchEnd,
@@ -118,6 +119,7 @@ export const createCorePanelActions = (
   | "flushSpawnBatch"
   | "removePanel"
   | "updateTitle"
+  | "setDisplayEmoji"
   | "updateLastObservedTitle"
   | "updateAgentState"
   | "noteAgentObservation"
@@ -353,6 +355,18 @@ export const createCorePanelActions = (
     } catch (error) {
       logWarn("[PanelRegistry] Failed to sync renamed title to the pty host", { error });
     }
+  },
+
+  setDisplayEmoji: (id, emoji) => {
+    set((state) => {
+      const panel = state.panelsById[id];
+      if (!panel) return state;
+      const next = normalizeDisplayEmoji(emoji);
+      if (panel.displayEmoji === next) return state;
+      const newById = { ...state.panelsById, [id]: { ...panel, displayEmoji: next } };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
   },
 
   updateLastObservedTitle: (id, title) => {

@@ -6,7 +6,11 @@ import { useProjectStore } from "@/store/projectStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { assistantStatus, buildAssistantItems } from "@/components/Canopy/canopyAssistants";
+import {
+  assistantPlaceLabel,
+  assistantStatus,
+  buildAssistantItems,
+} from "@/components/Canopy/canopyAssistants";
 import {
   assistantBand,
   canopyAssistantDomId,
@@ -138,7 +142,7 @@ export function AssistantPicker({ open, onClose }: { open: boolean; onClose: () 
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm leading-5 text-text-primary">
-                  {item.scopeLabel}
+                  {assistantPlaceLabel(item)}
                 </span>
                 <span
                   className={cn(

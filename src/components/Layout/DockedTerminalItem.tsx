@@ -68,6 +68,7 @@ import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContex
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { DockChipLabel } from "./DockChipLabel";
 
 import { useRevealDockChipOnOpen } from "./useRevealDockChipOnOpen";
@@ -465,12 +466,14 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                 {showTitleTip ? (
                   <Tooltip open={titleTip.open} onOpenChange={titleTip.onOpenChange}>
                     <TooltipTrigger asChild onPointerEnter={titleTip.onPointerEnter}>
-                      <DockChipLabel title={displayTitle} />
+                      <DockChipLabel
+                        title={withDisplayEmoji(displayTitle, terminal.displayEmoji)}
+                      />
                     </TooltipTrigger>
                     <TooltipContent side="top">{titleTooltip}</TooltipContent>
                   </Tooltip>
                 ) : (
-                  <DockChipLabel title={displayTitle} />
+                  <DockChipLabel title={withDisplayEmoji(displayTitle, terminal.displayEmoji)} />
                 )}
                 {sessionTag && (
                   <span className="shrink-0 text-2xs text-text-secondary tabular-nums">

@@ -15,6 +15,7 @@ import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+import { AssistantIdentitySection } from "./Assistant/AssistantIdentitySection";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { resolveAssistantModelId } from "@shared/config/agentRegistry";
@@ -567,6 +568,8 @@ export function DaintreeAssistantSettingsTab() {
           />
         )}
       </SettingsSection>
+
+      <AssistantIdentitySection />
 
       {/* All three are read once, when the session is provisioned. */}
       <SettingsSection

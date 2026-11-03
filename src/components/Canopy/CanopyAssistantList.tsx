@@ -13,6 +13,7 @@ import { CanopyTerminal } from "./CanopyTerminal";
 import { CanopyRowAge, CanopyWhereLine, MetaDot, OVERDUE_WAIT_MS } from "./CanopyRow";
 import {
   assistantAgePhrase,
+  assistantDisplayName,
   assistantRowNote,
   assistantStateSince,
   assistantStatus,
@@ -64,7 +65,7 @@ export function CanopyAssistantRow({
   const place = item.projectName ?? "Global";
   // Its role and session say which assistant this is, as a worker's task
   // names it; the agent it runs on follows, as a worker's does.
-  const name = ["Daintree Assistant", item.session, item.agentName]
+  const name = [assistantDisplayName(item), item.session, item.agentName]
     .filter((part): part is string => !!part)
     .join(", ");
   const meta = [
@@ -115,7 +116,7 @@ export function CanopyAssistantRow({
             className="flex min-w-0 flex-1 text-sm leading-5 text-text-primary"
           >
             {/* The role gives way first: the session is what tells two apart. */}
-            <span className="min-w-0 truncate">Daintree Assistant</span>
+            <span className="min-w-0 truncate">{assistantDisplayName(item)}</span>
             {item.session !== null && (
               <span className="flex shrink-0 whitespace-nowrap">
                 <MetaDot />
@@ -182,7 +183,9 @@ export function CanopyAssistantPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
       <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">
-        <span className="min-w-0 shrink-0 font-medium text-text-primary">Daintree Assistant</span>
+        <span className="min-w-0 shrink-0 font-medium text-text-primary">
+          {assistantDisplayName(item)}
+        </span>
         <span className="min-w-0 flex-1 truncate text-text-secondary">
           {[item.scopeLabel, item.agentName].filter(Boolean).join(" · ")}
         </span>

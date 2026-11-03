@@ -1,7 +1,10 @@
 import type { PanelSnapshot, ProjectState } from "../../shared/types/project.js";
 
 /** What an agent alert needs to know about the panel it is about. */
-export type PanelRecord = Pick<PanelSnapshot, "location" | "worktreeId" | "title" | "titleMode">;
+export type PanelRecord = Pick<
+  PanelSnapshot,
+  "location" | "worktreeId" | "title" | "titleMode" | "displayEmoji"
+>;
 
 type SavedPanels = Pick<ProjectState, "terminals"> | null;
 
@@ -86,6 +89,7 @@ export class PanelRecordIndex {
           worktreeId: panel.worktreeId,
           title: panel.title,
           titleMode: panel.titleMode,
+          displayEmoji: panel.displayEmoji,
         },
       });
     }
