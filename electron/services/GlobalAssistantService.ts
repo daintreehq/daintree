@@ -406,9 +406,20 @@ export class GlobalAssistantService {
     if (changed) this.emit();
   }
 
-  /** Take input, explicitly. Only the attachment's own view may claim for it. */
-  claimInput(attachmentId: string, webContentsId: number): number {
+  /**
+   * Take input, explicitly. Only the attachment's own view may claim for it.
+   * With `from`, it moves only from that attachment, only while that one
+   * still holds it, and only within the same view: one window's surfaces
+   * passing input between them never take it from another window.
+   */
+  claimInput(attachmentId: string, webContentsId: number, from?: string): number {
     const attachment = this.requireAttachment(attachmentId, webContentsId);
+    if (
+      from !== undefined &&
+      (this.inputOwner !== from || this.attachments.get(from)?.webContentsId !== webContentsId)
+    ) {
+      return this.inputEpoch;
+    }
     this.setInputOwner(attachment.attachmentId);
     this.emit();
     return this.inputEpoch;

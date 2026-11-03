@@ -10,6 +10,7 @@ import {
   type CanopyRoleFilter,
 } from "@/components/Canopy/canopyAssistants";
 import { clampCanopyListWidth } from "@/components/Canopy/canopyListWidth";
+import { clampCanopyDockWidth } from "@/components/Canopy/canopyDockWidth";
 import type { CanopyReplyRow } from "./voiceRecordingStore";
 import {
   readsWithHostedService,
@@ -136,6 +137,19 @@ interface CanopyState {
   listDrag: number | null;
   setListDrag: (width: number | null) => void;
   /**
+   * The global assistant docked beside the selected agent (#16214), as the
+   * user last left it: for every project view and across launches. Off until
+   * turned on.
+   */
+  globalDocked: boolean;
+  setGlobalDocked: (docked: boolean) => void;
+  /** The docked assistant's width in px, as last dragged or stepped; null keeps the default. */
+  dockWidth: number | null;
+  setDockWidth: (width: number | null) => void;
+  /** The width the dock's edge is being dragged to; this view's alone, as {@link listDrag} is. */
+  dockDrag: number | null;
+  setDockDrag: (width: number | null) => void;
+  /**
    * The row a dictation is writing a reply into, asked for from the recording
    * indicator (#14778): the panel opens on its host and selects it with the
    * keyboard in its reply, then settles the request whether or not it could.
@@ -161,6 +175,11 @@ export interface CanopyWorkOf {
 
 export type { CanopyOrder };
 
+/** An edge between Canopy's panes is being dragged: the open terminals hold their size until it lands. */
+export function isCanopyEdgeDragging(state: Pick<CanopyState, "listDrag" | "dockDrag">): boolean {
+  return state.listDrag !== null || state.dockDrag !== null;
+}
+
 /** The panel's "All hosts" scope: not a host, and never a target for anything that writes. */
 export const ALL_HOSTS_ID: HostId = "*";
 
@@ -177,6 +196,8 @@ const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
 const READING_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-reading-offer-dismissed";
 const PANE_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-pane-offer-dismissed";
 const LIST_WIDTH_STORAGE_KEY = "daintree-canopy-list-width";
+const GLOBAL_DOCKED_STORAGE_KEY = "daintree-canopy-global-docked";
+const DOCK_WIDTH_STORAGE_KEY = "daintree-canopy-dock-width";
 /** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
 const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
 
@@ -268,6 +289,41 @@ function saveListWidth(width: number | null): void {
   try {
     if (width === null) window.localStorage.removeItem(LIST_WIDTH_STORAGE_KEY);
     else window.localStorage.setItem(LIST_WIDTH_STORAGE_KEY, String(width));
+  } catch {
+    // Best effort: the width still holds for this session.
+  }
+}
+
+function loadGlobalDocked(): boolean {
+  try {
+    return window.localStorage.getItem(GLOBAL_DOCKED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveGlobalDocked(docked: boolean): void {
+  try {
+    if (docked) window.localStorage.setItem(GLOBAL_DOCKED_STORAGE_KEY, "1");
+    else window.localStorage.removeItem(GLOBAL_DOCKED_STORAGE_KEY);
+  } catch {
+    // Best effort: the choice still holds for this session.
+  }
+}
+
+function loadDockWidth(): number | null {
+  try {
+    const stored = window.localStorage.getItem(DOCK_WIDTH_STORAGE_KEY);
+    return stored === null || stored.trim() === "" ? null : clampCanopyDockWidth(Number(stored));
+  } catch {
+    return null;
+  }
+}
+
+function saveDockWidth(width: number | null): void {
+  try {
+    if (width === null) window.localStorage.removeItem(DOCK_WIDTH_STORAGE_KEY);
+    else window.localStorage.setItem(DOCK_WIDTH_STORAGE_KEY, String(width));
   } catch {
     // Best effort: the width still holds for this session.
   }
@@ -564,6 +620,22 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   },
   listDrag: null,
   setListDrag: (width) => set({ listDrag: width }),
+  globalDocked: loadGlobalDocked(),
+  setGlobalDocked: (docked) => {
+    saveGlobalDocked(docked);
+    set({ globalDocked: docked });
+  },
+  dockWidth: loadDockWidth(),
+  setDockWidth: (width) => {
+    const next = width === null ? null : clampCanopyDockWidth(width);
+    if (width !== null && next === null) return;
+    // Unchanged only if storage agrees, as the list's width is.
+    if (next === get().dockWidth && next === loadDockWidth()) return;
+    saveDockWidth(next);
+    set({ dockWidth: next });
+  },
+  dockDrag: null,
+  setDockDrag: (width) => set({ dockDrag: width }),
   resume: null,
   // Every opening starts on the window's own host, unless the user chose All
   // hosts or is coming back from "Go to terminal".
@@ -661,6 +733,14 @@ if (typeof window !== "undefined") {
     }
     if (event.key === LIST_WIDTH_STORAGE_KEY) {
       useCanopyStore.setState({ listWidth: loadListWidth() });
+      return;
+    }
+    if (event.key === GLOBAL_DOCKED_STORAGE_KEY) {
+      useCanopyStore.setState({ globalDocked: loadGlobalDocked() });
+      return;
+    }
+    if (event.key === DOCK_WIDTH_STORAGE_KEY) {
+      useCanopyStore.setState({ dockWidth: loadDockWidth() });
     }
   });
 }

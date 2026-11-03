@@ -207,11 +207,17 @@ export async function handleDetachGlobalAssistant(
 
 export async function handleClaimGlobalAssistantInput(
   ctx: IpcContext,
-  attachmentId: string
+  attachmentId: string,
+  /** Move it only from this attachment of the same view, while it still holds it. */
+  from?: string
 ): Promise<GlobalAssistantView> {
   const { webContentsId } = requireWindow(ctx);
   const instance = service();
-  instance.claimInput(requireId(attachmentId), webContentsId);
+  instance.claimInput(
+    requireId(attachmentId),
+    webContentsId,
+    from === undefined ? undefined : requireId(from)
+  );
   return globalAssistantView(instance);
 }
 

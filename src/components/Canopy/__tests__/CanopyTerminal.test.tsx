@@ -216,7 +216,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cell.current = null;
-  useCanopyStore.setState({ listDrag: null });
+  useCanopyStore.setState({ listDrag: null, dockDrag: null });
   terminalResize.mockClear();
   xterm.current = null;
 });
@@ -696,6 +696,21 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
     });
 
+    it("holds the PTY while the dock's edge is dragged, until the last edge lands (#16214)", async () => {
+      act(() => useCanopyStore.getState().setDockDrag(500));
+      await openSized();
+      act(() => useCanopyStore.getState().setListDrag(600));
+      expect(terminalResize).not.toHaveBeenCalled();
+      // The list's edge lands while the dock's still moves: nothing yet.
+      act(() => useCanopyStore.getState().setListDrag(null));
+      await settle();
+      expect(terminalResize).not.toHaveBeenCalled();
+      act(() => useCanopyStore.getState().setDockDrag(null));
+      await settle();
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+    });
+
     it("puts its grid back to the PTY's when the size is refused", async () => {
       await openSized(async () => {
         throw new Error("rate limited");
@@ -783,6 +798,8 @@ describe("CanopyTerminal", () => {
     const { container } = mount(onGoTo);
     await open({ watchId: 7, snapshot: null });
     expect(container.textContent).toContain("Couldn't show this terminal");
+    // The stream main opened for it is let go at once, not left running (#16214).
+    expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[7]]);
     const goTo = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Go to terminal"
     );

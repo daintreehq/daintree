@@ -577,9 +577,10 @@ export function useCanopyInboxFocus({
   };
   // Into the assistant's own lane; nothing is launched or resumed, and a
   // refusal is said in its pane.
-  const openAssistant = (item: CanopyAssistantItem) => {
+  // From the docked global assistant, the agent beside it stays selected.
+  const openAssistant = (item: CanopyAssistantItem, keepSelection = false) => {
     if (item.handbackAt !== null) seeAssistantHandback(item.id, item.handbackAt);
-    setAssistantId(item.id);
+    if (!keepSelection) setAssistantId(item.id);
     setAssistantRefusal(null);
     void openAssistantItem(item).then((refused) => {
       if (!mountedRef.current) return;

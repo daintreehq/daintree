@@ -207,6 +207,15 @@ describe("buildAssistantItems", () => {
     expect(items.map((item) => item.projectId)).toEqual(["p2"]);
   });
 
+  it("keeps the global assistant when narrowed to one project", () => {
+    const items = buildAssistantItems(
+      directory([live(0), live(undefined, {}, null), live(0, {}, "p2")]),
+      { ...options, projectId: "p2" }
+    );
+    expect(items.map((item) => item.projectId)).toEqual([null, "p2"]);
+    expect(items[0]!.scopeLabel).toBe("Global");
+  });
+
   it("lists nothing before the directory has answered", () => {
     expect(buildAssistantItems(null, options)).toEqual([]);
   });

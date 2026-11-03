@@ -15,6 +15,28 @@ export interface AssistantWatchBinding {
   mayType(webContentsId: number): boolean;
 }
 
+/**
+ * Which of a view's streams a watch is: the run its Canopy pane selected, or
+ * the global assistant, which Canopy shows beside it (#16214). Each slot holds
+ * one watch, and a new watch replaces only its own slot's.
+ */
+export type CanopyWatchSlot = "detail" | "global";
+
+const SLOTS: readonly CanopyWatchSlot[] = ["detail", "global"];
+
+const watchKey = (viewId: number, slot: CanopyWatchSlot): string => `${viewId}:${slot}`;
+
+/** The slot a watch of this assistant takes: the global session's own, else the pane's. */
+export function assistantWatchSlot(subject: unknown): CanopyWatchSlot {
+  if (typeof subject !== "object" || subject === null) return "detail";
+  const scope = (subject as { scope?: unknown }).scope;
+  return typeof scope === "object" &&
+    scope !== null &&
+    (scope as { kind?: unknown }).kind === "global"
+    ? "global"
+    : "detail";
+}
+
 interface GridSize {
   cols: number;
   rows: number;
@@ -22,6 +44,10 @@ interface GridSize {
 
 interface Watch {
   watchId: number;
+  viewId: number;
+  slot: CanopyWatchSlot;
+  /** Its place in {@link watches}, and what {@link holders} names it by. */
+  key: string;
   runId: string;
   /** The incarnation the stream was opened for; input is only ever for it. */
   spawnedAt: number;
@@ -63,14 +89,15 @@ interface Watch {
   remote: boolean;
 }
 
-/** At most one terminal per view: the one its canopy panel has selected. */
-const watches = new Map<number, Watch>();
+/** At most one terminal per view and slot: the one its canopy panel has selected, and the global assistant. */
+const watches = new Map<string, Watch>();
 /**
- * Which view holds each terminal's size. One at a time: a second window
- * showing the same terminal follows the first's size instead of fighting it,
- * and would otherwise record the first's hold as the size to hand back.
+ * Which watch holds each terminal's size, by its key. One at a time: a second
+ * window showing the same terminal follows the first's size instead of
+ * fighting it, and would otherwise record the first's hold as the size to
+ * hand back.
  */
-const holders = new Map<string, number>();
+const holders = new Map<string, string>();
 const MAX_PENDING_HOLDS = 8;
 let publishedSizeHolds = "[]";
 const sizeHoldListeners = new Set<(terminalIds: string[]) => void>();
@@ -78,22 +105,39 @@ const sizeHoldListeners = new Set<(terminalIds: string[]) => void>();
 const sameSize = (a: GridSize | null, b: GridSize | null): boolean =>
   a !== null && b !== null && a.cols === b.cols && a.rows === b.rows;
 /**
- * Per view, the newest watch request. A request checks it after each await, so
- * one cancelled or overtaken while it was being validated never starts.
+ * Per view and slot, the newest watch request. A request checks it after each
+ * await, so one cancelled or overtaken while it was being validated never starts.
  */
-const requests = new Map<number, number>();
+const requests = new Map<string, number>();
 let nextWatchId = 0;
 let nextRequest = 0;
 
-/** Claim the view's next watch; any request still in flight for it loses. */
-export function beginWatchRequest(webContentsId: number): number {
+/** Claim the slot's next watch; any request still in flight for it loses. */
+export function beginWatchRequest(webContentsId: number, slot: CanopyWatchSlot = "detail"): number {
   const ticket = ++nextRequest;
-  requests.set(webContentsId, ticket);
+  requests.set(watchKey(webContentsId, slot), ticket);
   return ticket;
 }
 
-export function isCurrentWatchRequest(webContentsId: number, ticket: number): boolean {
-  return requests.get(webContentsId) === ticket;
+export function isCurrentWatchRequest(
+  webContentsId: number,
+  ticket: number,
+  slot: CanopyWatchSlot = "detail"
+): boolean {
+  return requests.get(watchKey(webContentsId, slot)) === ticket;
+}
+
+/** The view's stream by the id it was opened under, whichever slot holds it. */
+function findWatch(webContentsId: number, watchId: number): Watch | undefined {
+  for (const slot of SLOTS) {
+    const watch = watches.get(watchKey(webContentsId, slot));
+    if (watch?.watchId === watchId) return watch;
+  }
+  return undefined;
+}
+
+function stopViewWatches(webContentsId: number): void {
+  for (const slot of SLOTS) stopWatch(watchKey(webContentsId, slot));
 }
 
 /**
@@ -128,13 +172,15 @@ export async function watchTerminal(
   launchGeneration: number | null = ptyClient.getLiveGeneration(runId),
   mayResize: () => boolean = () => true,
   binding: AssistantWatchBinding | null = null,
-  remote = false
+  remote = false,
+  slot: CanopyWatchSlot = "detail"
 ): Promise<CanopyTerminalView> {
-  stopWatch(sender.id);
+  const key = watchKey(sender.id, slot);
+  stopWatch(key);
   const watchId = ++nextWatchId;
   const send = (payload: CanopyTerminalData) => {
     if (sender.isDestroyed()) {
-      stopWatch(sender.id);
+      stopViewWatches(sender.id);
       return;
     }
     try {
@@ -198,6 +244,9 @@ export async function watchTerminal(
   let releaseBinding: (() => void) | undefined;
   const watch: Watch = {
     watchId,
+    viewId: sender.id,
+    slot,
+    key,
     runId,
     spawnedAt,
     ownerSize: null,
@@ -220,7 +269,7 @@ export async function watchTerminal(
       if (grid) send({ kind: "resize", watchId, runId, cols: grid.cols, rows: grid.rows });
     },
     stop: (restore) => {
-      const held = holders.get(runId) === sender.id;
+      const held = holders.get(runId) === key;
       if (held) holders.delete(runId);
       // A successor under the same id has a pane size of its own, never this one's.
       if (
@@ -249,10 +298,10 @@ export async function watchTerminal(
     },
   };
   function end() {
-    if (watches.get(sender.id) !== watch) return;
+    if (watches.get(key) !== watch) return;
     send({ kind: "ended", watchId, runId });
     // The terminal is gone: there is no PTY to hand a size back to.
-    stopWatch(sender.id, false);
+    stopWatch(key, false);
   }
   function onExit(id: string) {
     if (id === runId) end();
@@ -265,7 +314,7 @@ export async function watchTerminal(
   }
 
   // Registered before anything is wired, so a throw part-way still unwinds.
-  watches.set(sender.id, watch);
+  watches.set(key, watch);
   try {
     ptyClient.on("data", forward);
     ptyClient.on("data-mirror", forward);
@@ -277,7 +326,7 @@ export async function watchTerminal(
     // A replacement can be silent: the successor may print nothing for a while.
     releaseBinding = binding?.onEnded(end);
   } catch (error) {
-    stopWatch(sender.id);
+    stopWatch(key);
     throw error;
   }
 
@@ -287,17 +336,17 @@ export async function watchTerminal(
     // the view fences the live chunks against.
     snapshot = await ptyClient.getSerializedStateAsync(runId);
   } catch (error) {
-    if (watches.get(sender.id) === watch) stopWatch(sender.id);
+    if (watches.get(key) === watch) stopWatch(key);
     throw error;
   }
-  if (watches.get(sender.id) !== watch || !isCurrentWatchRequest(sender.id, ticket)) {
+  if (watches.get(key) !== watch || !isCurrentWatchRequest(sender.id, ticket, slot)) {
     // Overtaken or cancelled while the snapshot was read; the view has moved on.
-    if (watches.get(sender.id) === watch) stopWatch(sender.id);
+    if (watches.get(key) === watch) stopWatch(key);
     return { watchId: null, snapshot: null };
   }
   // Respawned while the snapshot was read: it may be the successor's screen.
   if (!watch.isCurrent()) {
-    stopWatch(sender.id, false);
+    stopWatch(key, false);
     return { watchId: null, snapshot: null };
   }
   if (snapshot && watch.ownerSize === null) {
@@ -316,10 +365,10 @@ export async function watchTerminal(
   };
 }
 
-function stopWatch(webContentsId: number, restore = true): void {
-  const watch = watches.get(webContentsId);
+function stopWatch(key: string, restore = true): void {
+  const watch = watches.get(key);
   if (!watch) return;
-  watches.delete(webContentsId);
+  watches.delete(key);
   watch.stop(restore);
 }
 
@@ -350,8 +399,8 @@ export function resizeWatchedTerminal(
   ) {
     throw new Error("Invalid terminal size");
   }
-  const watch = watches.get(webContentsId);
-  if (!watch || watch.watchId !== watchId) throw new Error("Terminal stream is not open");
+  const watch = findWatch(webContentsId, watchId);
+  if (!watch) throw new Error("Terminal stream is not open");
   // A size held for the terminal the stream was opened for, never a successor's.
   if (!watch.isCurrent()) {
     watch.end();
@@ -360,11 +409,7 @@ export function resizeWatchedTerminal(
   if (watch.ownerSize === null) return;
   const holder = holders.get(watch.runId);
   // Another view's hold stands unless that view has lost control of the run.
-  if (
-    holder !== undefined &&
-    holder !== webContentsId &&
-    watches.get(holder)?.mayResize() !== false
-  ) {
+  if (holder !== undefined && holder !== watch.key && watches.get(holder)?.mayResize() !== false) {
     return;
   }
   const size = { cols, rows };
@@ -379,7 +424,7 @@ export function resizeWatchedTerminal(
   watch.heldSize = size;
   watch.pendingHolds.push(size);
   if (watch.pendingHolds.length > MAX_PENDING_HOLDS) watch.pendingHolds.shift();
-  holders.set(watch.runId, webContentsId);
+  holders.set(watch.runId, watch.key);
   ptyClient.resize(watch.runId, cols, rows);
   publishSizeHolds();
 }
@@ -416,10 +461,10 @@ export function publishSizeHolds(): void {
  * its own once more.
  */
 export function followDriveLeaseChange(): void {
-  for (const [viewId, watch] of watches) {
+  for (const [key, watch] of watches) {
     if (!watch.remote || !watch.isCurrent()) continue;
     if (!watch.mayResize()) {
-      if (holders.get(watch.runId) === viewId) holders.delete(watch.runId);
+      if (holders.get(watch.runId) === key) holders.delete(watch.runId);
       watch.heldSize = null;
       watch.pendingHolds = [];
     } else if (watch.heldSize === null) {
@@ -434,10 +479,16 @@ export function onSizeHoldsChange(listener: (terminalIds: string[]) => void): ()
   return () => sizeHoldListeners.delete(listener);
 }
 
-/** End the view's stream and any watch request it still has in flight. */
-export function stopTerminalWatch(webContentsId: number): void {
-  requests.delete(webContentsId);
-  stopWatch(webContentsId);
+/**
+ * End the view's streams and any watch request it still has in flight; with a
+ * slot, only that slot's.
+ */
+export function stopTerminalWatch(webContentsId: number, slot?: CanopyWatchSlot): void {
+  for (const each of slot === undefined ? SLOTS : [slot]) {
+    const key = watchKey(webContentsId, each);
+    requests.delete(key);
+    stopWatch(key);
+  }
 }
 
 /**
@@ -446,12 +497,13 @@ export function stopTerminalWatch(webContentsId: number): void {
  * request for, the stream another pane in the same view opened since.
  */
 export function stopTerminalWatchById(webContentsId: number, watchId: number): void {
-  if (watches.get(webContentsId)?.watchId === watchId) stopWatch(webContentsId);
+  const watch = findWatch(webContentsId, watchId);
+  if (watch) stopWatch(watch.key);
 }
 
 export function stopAllTerminalWatches(): void {
   requests.clear();
-  for (const id of [...watches.keys()]) stopWatch(id);
+  for (const key of [...watches.keys()]) stopWatch(key);
 }
 
 /**
@@ -460,8 +512,8 @@ export function stopAllTerminalWatches(): void {
  * cancelled either way: it is checked again on arrival.
  */
 export function stopWorkerTerminalWatches(): void {
-  for (const [id, watch] of [...watches]) {
-    if (watch.binding === null) stopWatch(id);
+  for (const [key, watch] of [...watches]) {
+    if (watch.binding === null) stopWatch(key);
   }
 }
 
@@ -473,8 +525,8 @@ export function watchedTerminal(
   webContentsId: number,
   watchId: number
 ): { runId: string; spawnedAt: number; assistant: boolean; mayType: boolean } | null {
-  const watch = watches.get(webContentsId);
-  if (!watch || watch.watchId !== watchId) return null;
+  const watch = findWatch(webContentsId, watchId);
+  if (!watch) return null;
   if (!watch.isCurrent()) {
     watch.end();
     return null;
@@ -487,7 +539,13 @@ export function watchedTerminal(
   };
 }
 
-/** Test seam: what each view is watching. */
-export function activeTerminalWatches(): ReadonlyMap<number, { runId: string; watchId: number }> {
-  return new Map([...watches].map(([id, w]) => [id, { runId: w.runId, watchId: w.watchId }]));
+/** Test seam: what each view is watching in the slot. */
+export function activeTerminalWatches(
+  slot: CanopyWatchSlot = "detail"
+): ReadonlyMap<number, { runId: string; watchId: number }> {
+  return new Map(
+    [...watches.values()]
+      .filter((w) => w.slot === slot)
+      .map((w) => [w.viewId, { runId: w.runId, watchId: w.watchId }])
+  );
 }

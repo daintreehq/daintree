@@ -46,7 +46,7 @@ import { loadXtermCore } from "@/services/terminal/xtermCore";
 import { hasUsableRenderer } from "@/services/terminal/xtermRendererProbe";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useCanopyStore } from "@/store/canopyStore";
+import { isCanopyEdgeDragging, useCanopyStore } from "@/store/canopyStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -411,8 +411,8 @@ export function CanopyTerminal({
         const cell = getXtermCellDimensions(terminal);
         // A host that doesn't take the size keeps the one its own window gave it.
         if (disposed || watchId === null || cell === null || !holdsSize) return;
-        // The list's edge is still moving: the drag's end asks again.
-        if (useCanopyStore.getState().listDrag !== null) return;
+        // The list's or the dock's edge is still moving: the drag's end asks again.
+        if (isCanopyEdgeDragging(useCanopyStore.getState())) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
         // rounded-up clientWidth can promise a column the pane hasn't got.
         const box = frame.getBoundingClientRect();
@@ -440,10 +440,10 @@ export function CanopyTerminal({
       ensureImageAddon();
       requestPanelSize();
     });
-    // The pane took its new width while the list's edge moved; the agent
-    // redraws for it once, as the edge lands.
+    // The pane took its new width while the list's or the dock's edge moved;
+    // the agent redraws for it once, as the last edge lands.
     const unsubscribeListDrag = useCanopyStore.subscribe((state, previous) => {
-      if (previous.listDrag !== null && state.listDrag === null) requestPanelSize();
+      if (isCanopyEdgeDragging(previous) && !isCanopyEdgeDragging(state)) requestPanelSize();
     });
     const unsubscribeFont = useTerminalFontStore.subscribe((font, previous) => {
       if (font.fontSize === previous.fontSize && font.fontFamily === previous.fontFamily) return;
@@ -754,6 +754,13 @@ export function CanopyTerminal({
         return;
       }
       if (opened.watchId === null || opened.snapshot === null) {
+        // A stream opened with no screen to start from is let go, not left
+        // running behind a pane that never shows it.
+        if (opened.watchId !== null) {
+          safeFireAndForget(unlessHostDisconnected(api.unwatchTerminal(opened.watchId)), {
+            context: "Ending a canopy terminal stream that opened with no screen",
+          });
+        }
         setStatus("failed");
         return;
       }

@@ -120,6 +120,31 @@ describe("global assistant IPC handlers", () => {
     expect(broadcast).toHaveBeenCalledTimes(1);
   });
 
+  it("moves input between a view's attachments only while the one named still holds it (#16214)", async () => {
+    await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+    const panel = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const canopy = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const other = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    const taken = await handlers.handleClaimGlobalAssistantInput(
+      ctx(10, 1),
+      canopy.attachmentId,
+      panel.attachmentId
+    );
+    expect(taken.inputOwner).toBe(canopy.attachmentId);
+    // Another window asks for it, and the hand-back that was on its way moves nothing.
+    const asked = await handlers.handleClaimGlobalAssistantInput(ctx(20, 2), other.attachmentId);
+    const handedBack = await handlers.handleClaimGlobalAssistantInput(
+      ctx(10, 1),
+      panel.attachmentId,
+      canopy.attachmentId
+    );
+    expect(handedBack.inputOwner).toBe(other.attachmentId);
+    expect(handedBack.inputEpoch).toBe(asked.inputEpoch);
+    await expect(
+      handlers.handleClaimGlobalAssistantInput(ctx(10, 1), panel.attachmentId, 5 as never)
+    ).rejects.toThrow(/attachment id/);
+  });
+
   it("tells the windows the run's new subject when its PTY is respawned under it", async () => {
     const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
     broadcast.mockClear();

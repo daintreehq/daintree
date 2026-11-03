@@ -2181,6 +2181,35 @@ describe("canopy IPC", () => {
       expect(state.writes).toEqual(["a"]);
     });
 
+    it("keeps the global session streaming beside a pane, through the panel closing (#16214)", async () => {
+      assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
+      const sender = fakeSender(7);
+      const global = await openAssistant(sender, {
+        hostId: "local",
+        scope: { kind: "global" },
+        terminalId: "global-1",
+        incarnation: 1,
+      });
+      const lane = await openAssistant(sender);
+      expect(global.watchId).not.toBeNull();
+      expect(activeTerminalWatches("global").get(7)?.watchId).toBe(global.watchId);
+      expect(activeTerminalWatches().get(7)?.watchId).toBe(lane.watchId);
+
+      // A pane letting go of its run, then the panel closing as it moves to
+      // another host: each ends the pane's stream, neither the global session's.
+      await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, sender);
+      expect(activeTerminalWatches().has(7)).toBe(false);
+      expect(activeTerminalWatches("global").get(7)?.watchId).toBe(global.watchId);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+      const reopened = await openAssistant(sender);
+      expect(activeTerminalWatches().get(7)?.watchId).toBe(reopened.watchId);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, false);
+      expect(activeTerminalWatches().has(7)).toBe(false);
+      expect(activeTerminalWatches("global").get(7)?.watchId).toBe(global.watchId);
+      await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, sender, global.watchId);
+      expect(activeTerminalWatches("global").has(7)).toBe(false);
+    });
+
     it("refuses a malformed input stamp", async () => {
       assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
       const refused = await outcome(

@@ -1,5 +1,6 @@
 import type { KeyboardEvent, RefObject } from "react";
 import { isMac } from "@/lib/platform";
+import { useCanopyStore } from "@/store/canopyStore";
 import {
   canopyCardDomId,
   type CanopyCardHandle,
@@ -174,9 +175,17 @@ export function useCanopyInboxKeyboard({
         : visible[Math.min(visible.length - 1, Math.max(0, current + step))]!;
     if (next.runId === focusedItem?.runId) return;
     const focus = paneFocusOf(document.activeElement);
-    // From the search the selection moves and the keyboard stays to type.
-    if (event.target === searchRef.current) selectNow(next.runId);
-    else if (focus === null) focusCardNow(next.runId);
+    // From the search, or the global assistant docked beside the agent, the
+    // selection moves and the keyboard stays to type: the next agent's ask
+    // shows while the user goes on directing the assistant.
+    if (
+      event.target === searchRef.current ||
+      (useCanopyStore.getState().globalDocked &&
+        event.target instanceof Element &&
+        event.target.closest("[data-canopy-global]") !== null)
+    ) {
+      selectNow(next.runId);
+    } else if (focus === null) focusCardNow(next.runId);
     else openPaneNow(next.runId, focus);
   };
 
