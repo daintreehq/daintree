@@ -58,6 +58,7 @@ interface Submitted {
   handback?: string;
   guard?: TerminalSubmitGuard;
   promptAsWritten?: string | null;
+  promptOwner?: string;
 }
 
 class FakePtyClient implements TerminalNotifyPtyClient {
@@ -87,7 +88,9 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     handback?: string,
     guard?: TerminalSubmitGuard,
     _imagePaths?: readonly string[],
-    promptAsWritten?: string | null
+    promptAsWritten?: string | null,
+    _handbackInstruction?: "run",
+    promptOwner?: string
   ) {
     this.submitted.push({
       id,
@@ -96,6 +99,7 @@ class FakePtyClient implements TerminalNotifyPtyClient {
       ...(handback !== undefined ? { handback } : {}),
       guard,
       promptAsWritten,
+      ...(promptOwner !== undefined ? { promptOwner } : {}),
     });
   }
 
@@ -3148,9 +3152,10 @@ describe("held prompts on a worker's line (#16187)", () => {
 
   function steerWake(
     id: string,
-    steer: { text: string; promptAsWritten: string; handbackCode?: string },
+    fields: { text: string; promptAsWritten: string; handbackCode?: string },
     maxPendingMs?: number
   ) {
+    const steer = { principal: "principal-assistant", ...fields };
     const outcomes: Array<{ outcome: LaneWakeOutcome; evidence?: LaneWakeEvidence }> = [];
     let check: LaneWakeCheck = { kind: "ready" };
     let reservations = 0;
@@ -3204,6 +3209,8 @@ describe("held prompts on a worker's line (#16187)", () => {
         handback: "hb-1",
         guard: { kind: "settled-prompt-exact", agentIncarnation: 3, agentSessionId: "session-9" },
         promptAsWritten: "Rebase onto develop",
+        // Filed as the Assistant's prompt once written, so another's held prompt drops on it.
+        promptOwner: "principal-assistant",
       },
     ]);
     expect(held.outcomes).toEqual([

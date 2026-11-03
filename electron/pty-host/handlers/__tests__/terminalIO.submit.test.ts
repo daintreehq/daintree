@@ -30,8 +30,23 @@ describe("submit (#15521)", () => {
       undefined,
       undefined,
       { text: "Fix the login bug", truncated: true },
+      undefined,
       undefined
     );
+  });
+
+  it("passes on whose prompt a line carries, only as a string (#16187)", () => {
+    const { ptyManager, handler } = setup();
+
+    handler({ type: "submit", id: "t1", text: "go", promptOwner: "principal-a" });
+    handler({ type: "submit", id: "t1", text: "go" });
+    handler({ type: "submit", id: "t1", text: "go", promptOwner: 7 as never });
+
+    expect(ptyManager.submit.mock.calls.map((call) => call[8])).toEqual([
+      "principal-a",
+      undefined,
+      undefined,
+    ]);
   });
 
   it("passes the run instruction on only with a code (#16171)", () => {

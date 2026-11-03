@@ -71,7 +71,8 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
         guard,
         imagePaths,
         firstPrompt,
-        msg.handbackCode !== undefined && msg.handbackInstruction === "run" ? "run" : undefined
+        msg.handbackCode !== undefined && msg.handbackInstruction === "run" ? "run" : undefined,
+        inputOwnerOf(msg.promptOwner)
       );
     },
 

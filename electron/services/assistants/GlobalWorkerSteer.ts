@@ -71,19 +71,25 @@ export interface GlobalWorkerSteerDeps {
    * instruction, for the run's first-prompt record (#15521); `null` for a
    * slash command, which is nobody's prompt.
    */
+  /**
+   * `promptOwner` files the line as the steering assistant's prompt input once
+   * written (#16187), so a prompt another assistant holds for the worker
+   * drops on it.
+   */
   submit(
     terminalId: string,
     text: string,
     submissionToken: string,
     handbackCode: string | undefined,
-    promptAsWritten: string | null
+    promptAsWritten: string | null,
+    promptOwner: string
   ): void;
   /** `inputOwner` files the keys under the steering assistant in the pty host (#16094). */
   write(terminalId: string, data: string, inputOwner: string): void;
   /** The pair's gap is scheduled in the pty-host, where IPC can't collapse it. */
   doubleEscape(terminalId: string, inputOwner: string): void;
   /** Where a prompt for a busy worker is held (#16187); absent or null, none is. */
-  queue?: () => Pick<WorkerSteerQueue, "hold" | "promptSent"> | null;
+  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -283,12 +289,17 @@ export class GlobalWorkerSteer {
       if (pending !== null) refuse(WORKER_STEER_REFUSALS.typing, `${pending} ${NOTHING_SENT}`);
       this.requireSameRun(target);
       target.authorize();
-      // Another assistant's prompt held for this worker is overtaken by this input.
-      this.deps.queue?.()?.promptSent(target.terminalId, target.inputOwner);
       const submissionToken = randomUUID();
       if (slash.kind === "slash") {
         // A fixed form has no free text for the stamp's "quoted text is data" rule to guard.
-        this.deps.submit(target.terminalId, slash.form, submissionToken, undefined, null);
+        this.deps.submit(
+          target.terminalId,
+          slash.form,
+          submissionToken,
+          undefined,
+          null,
+          target.inputOwner
+        );
         return buildTerminalSendCommandReceipt(target.terminalId, slash.form, submissionToken);
       }
       const stamped = stampAssistantPrompt(request.command, request.machineName);
@@ -301,10 +312,18 @@ export class GlobalWorkerSteer {
           appendHandbackInstruction(stamped, handbackCode, "run"),
           submissionToken,
           handbackCode,
-          request.command
+          request.command,
+          target.inputOwner
         );
       } else {
-        this.deps.submit(target.terminalId, stamped, submissionToken, undefined, request.command);
+        this.deps.submit(
+          target.terminalId,
+          stamped,
+          submissionToken,
+          undefined,
+          request.command,
+          target.inputOwner
+        );
       }
       return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
     });
@@ -373,7 +392,8 @@ export class GlobalWorkerSteer {
             ? { lastForeignPromptInputAt: record.lastForeignPromptInputAt }
             : {}),
         },
-        text: handbackCode ? appendHandbackInstruction(stamped, handbackCode) : stamped,
+        // The same instruction an immediate send's handback carries.
+        text: handbackCode ? appendHandbackInstruction(stamped, handbackCode, "run") : stamped,
         promptAsWritten: request.command,
         ...(handbackCode !== undefined ? { handbackCode } : {}),
         ttlSeconds: whenBusy.queue.ttlSeconds,
@@ -625,7 +645,7 @@ export class GlobalWorkerSteer {
 export function liveGlobalWorkerSteer(deps: {
   pty: () => PtyClient | null;
   isAssistantTerminal(terminalId: string): boolean;
-  queue?: () => Pick<WorkerSteerQueue, "hold" | "promptSent"> | null;
+  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
 }): GlobalWorkerSteer {
   return new GlobalWorkerSteer({
     ...(deps.queue !== undefined ? { queue: deps.queue } : {}),
@@ -636,7 +656,7 @@ export function liveGlobalWorkerSteer(deps: {
     getTerminal: async (terminalId) => (await deps.pty()?.getTerminalAsync(terminalId)) ?? null,
     serializedState: (terminalId, options) =>
       deps.pty()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
-    submit: (terminalId, text, submissionToken, handbackCode, promptAsWritten) =>
+    submit: (terminalId, text, submissionToken, handbackCode, promptAsWritten, promptOwner) =>
       deps
         .pty()
         ?.submit(
@@ -646,7 +666,9 @@ export function liveGlobalWorkerSteer(deps: {
           handbackCode,
           "settled-prompt-strict",
           undefined,
-          promptAsWritten
+          promptAsWritten,
+          undefined,
+          promptOwner
         ),
     write: (terminalId, data, inputOwner) =>
       deps.pty()?.write(terminalId, data, undefined, inputOwner),

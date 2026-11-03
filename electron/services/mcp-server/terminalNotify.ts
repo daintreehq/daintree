@@ -176,7 +176,9 @@ export interface TerminalNotifyPtyClient {
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
-    promptAsWritten?: string | null
+    promptAsWritten?: string | null,
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void;
   /** Take back a line that has not reached its Enter; see `WriteQueue.withdrawGuardedSubmission`. */
   withdrawGuardedSubmission(id: string, submissionToken: string): void;
@@ -382,7 +384,13 @@ export interface LaneWake {
    * first-prompt record (#15521). Typed only past `settled-prompt-exact`, and
    * at most one to a line, so a line's handback and first prompt are its.
    */
-  steer?: { text: string; promptAsWritten: string; handbackCode?: string };
+  steer?: {
+    text: string;
+    promptAsWritten: string;
+    handbackCode?: string;
+    /** The assistant whose prompt it is: the host files the line as its input once written. */
+    principal: string;
+  };
   /**
    * How long it may wait for its pane, from admission, up to
    * {@link LANE_WAKE_LONGEST_PENDING_MS}; {@link LANE_WAKE_MAX_PENDING_MS}
@@ -2541,7 +2549,9 @@ export class TerminalNotifyService {
         steer?.handbackCode,
         guard,
         undefined,
-        steer?.promptAsWritten ?? null
+        steer?.promptAsWritten ?? null,
+        undefined,
+        steer?.principal
       );
     } catch (err) {
       // Whether any of it reached the host is unknown, so this is a failed

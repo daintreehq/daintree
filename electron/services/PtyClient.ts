@@ -1640,6 +1640,9 @@ export class PtyClient extends EventEmitter {
    *
    * `handbackInstruction` is `run` when `text` already carries the instruction
    * that offers `needs-you`; such a submission is never decorated again.
+   *
+   * `promptOwner` names the assistant whose prompt a guarded line carries
+   * (#16187); the host files it as that assistant's prompt input once written.
    */
   submit(
     id: string,
@@ -1649,7 +1652,8 @@ export class PtyClient extends EventEmitter {
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
     promptAsWritten?: string | null,
-    handbackInstruction?: "run"
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void {
     if (handbackInstruction === undefined && this.submitDecorator !== null) {
       const armed = this.submitDecorator(id, text, handbackCode);
@@ -1678,6 +1682,7 @@ export class PtyClient extends EventEmitter {
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
       ...(firstPrompt !== undefined ? { firstPrompt } : {}),
+      ...(promptOwner !== undefined ? { promptOwner } : {}),
     });
     // A guarded submission is Daintree waking an idle agent, not anyone
     // answering it, and the host may yet refuse it.

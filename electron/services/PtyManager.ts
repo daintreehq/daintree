@@ -755,7 +755,8 @@ export class PtyManager extends EventEmitter {
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
     firstPrompt?: FirstPromptCandidate,
-    handbackInstruction?: "run"
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
@@ -773,7 +774,8 @@ export class PtyManager extends EventEmitter {
       guard,
       imagePaths,
       firstPrompt,
-      handbackInstruction
+      handbackInstruction,
+      promptOwner
     );
   }
 

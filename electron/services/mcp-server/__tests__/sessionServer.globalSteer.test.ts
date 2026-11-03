@@ -243,7 +243,7 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
   });
 
   it("runs a fixed slash form unstamped and refuses any other, in main (#16101)", async () => {
-    const { deps, pty, records } = harness({ shellName, global: true });
+    const { deps, pty, records, store } = harness({ shellName, global: true });
     records.set(WORKER, atPrompt({ detectedAgentId: "codex" }));
     const server = await serve(deps);
 
@@ -258,7 +258,9 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
       "/goal resume",
       expect.any(String),
       undefined,
-      null
+      null,
+      // Its input all the same, filed under the steering assistant (#16187).
+      store.resourceOwnership.ownerOf(SESSION)
     );
 
     const cleared = await callTool(server, {

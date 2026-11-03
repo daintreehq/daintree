@@ -175,6 +175,7 @@ export class WorkerSteerQueue {
         text: request.text,
         promptAsWritten: request.promptAsWritten,
         ...(request.handbackCode !== undefined ? { handbackCode: request.handbackCode } : {}),
+        principal: request.principal,
       },
       maxPendingMs: expiresAt - now,
       recheck: (info) => this.recheck(entry, info),
@@ -212,20 +213,6 @@ export class WorkerSteerQueue {
       else supersededToken = undefined;
     }
     return { queuedSendToken: token, expiresAt, ...(supersededToken ? { supersededToken } : {}) };
-  }
-
-  /**
-   * Another assistant's prompt went to the worker (#16187): it is input the
-   * worker could take as a prompt, so what others held for it is dropped,
-   * as someone typing there would drop it.
-   */
-  promptSent(terminalId: string, principal: string): void {
-    for (const entry of [...this.entries.values()]) {
-      if (entry.terminalId !== terminalId || entry.principal === principal) continue;
-      if (entry.record.status === "queued" && !entry.reserved) {
-        this.end(entry, "dropped", { reason: "typed" });
-      }
-    }
   }
 
   /** What became of `token`, for the principal that queued it; null when this host holds no record. */
@@ -363,7 +350,6 @@ export class WorkerSteerQueue {
       const notice = entry.notice;
       entry.notice = undefined;
       this.end(entry, "delivered", { submissionToken });
-      this.promptSent(entry.terminalId, entry.principal);
       if (notice !== undefined) notice.complete({ submissionToken });
       else this.safely(entry.onWritten);
       return;

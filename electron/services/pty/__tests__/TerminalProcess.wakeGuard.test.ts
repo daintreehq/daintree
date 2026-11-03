@@ -214,6 +214,28 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
     expect(t.lastForeignPromptInputAt).toBeUndefined();
 
+    // An assistant's guarded prompt is its own, filed once its Enter is written,
+    // at the next settle: one strict line per settle.
+    settleAtPrompt(terminal, Date.now());
+    vi.setSystemTime(Date.now() + 10);
+    const written = Date.now();
+    terminal.submit(
+      "brief",
+      "tok-3",
+      undefined,
+      "settled-prompt-strict",
+      undefined,
+      undefined,
+      undefined,
+      "principal-a"
+    );
+    expect(t.lastOwnedPromptInput).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-3")).toMatchObject({ phase: "pty_written" });
+    expect(t.lastOwnedPromptInput?.owner).toBe("principal-a");
+    expect(t.lastOwnedPromptInput!.at).toBeGreaterThanOrEqual(written);
+    expect(t.lastForeignPromptInputAt).toBeUndefined();
+
     const at = Date.now();
     terminal.submit("a person's prompt");
     expect(t.lastForeignPromptInputAt).toBe(at);

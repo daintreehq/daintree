@@ -48,7 +48,8 @@ describe("GlobalWorkerSteer (#14551)", () => {
   let steer: GlobalWorkerSteer;
   /** What the steer handed its queue, and how the queue answers; null is no queue. */
   let held: HoldSteerRequest[];
-  let overtaken: Array<[string, string]>;
+  /** Whose prompt each submit was filed as, in order. */
+  let owners: string[];
   let holdAnswer: ((request: HoldSteerRequest) => HoldSteerResult) | null;
 
   const atPrompt = (extra: Partial<WorkerSteerRecord> = {}): WorkerSteerRecord => ({
@@ -99,7 +100,7 @@ describe("GlobalWorkerSteer (#14551)", () => {
     duringGap = () => {};
     duringRead = () => {};
     held = [];
-    overtaken = [];
+    owners = [];
     holdAnswer = null;
     const deps: GlobalWorkerSteerDeps = {
       getTerminalProjectId: () => fake.projectId,
@@ -110,8 +111,10 @@ describe("GlobalWorkerSteer (#14551)", () => {
         duringRead();
         return { data: fake.screen };
       },
-      submit: (_id, text, token, handback, promptAsWritten) =>
-        submits.push({ text, token, ...(handback ? { handback } : {}), promptAsWritten }),
+      submit: (_id, text, token, handback, promptAsWritten, promptOwner) => {
+        submits.push({ text, token, ...(handback ? { handback } : {}), promptAsWritten });
+        owners.push(promptOwner);
+      },
       write: (_id, data, inputOwner) => {
         writes.push(data);
         // The host stamps every raw key as typed input, filed under its owner.
@@ -132,7 +135,6 @@ describe("GlobalWorkerSteer (#14551)", () => {
                 held.push(request);
                 return holdAnswer!(request);
               },
-              promptSent: (terminalId, principal) => overtaken.push([terminalId, principal]),
             },
     };
     steer = new GlobalWorkerSteer(deps);
@@ -311,19 +313,17 @@ describe("GlobalWorkerSteer (#14551)", () => {
       expect(receipt).toMatchObject({ sent: true });
     });
 
-    it("overtakes what other assistants held for the worker when it sends, and only then", async () => {
-      // Held, not sent: nothing is overtaken.
+    it("files every prompt it writes as its own, so another's held prompt drops on it", async () => {
+      // Held, not sent: nothing is filed.
       await queueSend();
-      expect(overtaken).toEqual([]);
+      expect(owners).toEqual([]);
 
       fake.record = atPrompt();
       await queueSend();
-      expect(overtaken).toEqual([[WORKER, OWNER]]);
-
-      // A refused send overtakes nothing.
-      personTypes();
-      await refusal(queueSend());
-      expect(overtaken).toHaveLength(1);
+      await queueSend("Rebase onto develop", { handback: true });
+      fake.record = atPrompt({ detectedAgentId: "codex" });
+      await queueSend("/goal resume");
+      expect(owners).toEqual([OWNER, OWNER, OWNER]);
     });
 
     it("keeps refusing what an immediate send refuses: a draft typed mid-turn", async () => {
@@ -954,7 +954,9 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
       undefined,
       "settled-prompt-strict",
       undefined,
-      "go"
+      "go",
+      undefined,
+      OWNER
     );
   });
 
@@ -1038,7 +1040,9 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
       undefined,
       "settled-prompt-strict",
       undefined,
-      null
+      null,
+      undefined,
+      OWNER
     );
   });
 });

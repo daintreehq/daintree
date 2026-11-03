@@ -6,7 +6,12 @@ import type {
   OwnPane,
   PendingNotify,
 } from "../../mcp-server/terminalNotify.js";
-import { HoldRefusedError, WorkerSteerQueue, type HoldSteerRequest } from "../WorkerSteerQueue.js";
+import {
+  HoldRefusedError,
+  WorkerSteerQueue,
+  type HeldRunIdentity,
+  type HoldSteerRequest,
+} from "../WorkerSteerQueue.js";
 
 const PROJECT = "proj-1";
 const WORKER = "term-worker";
@@ -82,6 +87,7 @@ describe("WorkerSteerQueue (#16187)", () => {
         text: "[stamped] Rebase onto develop",
         promptAsWritten: "Rebase onto develop",
         handbackCode: "hb-1",
+        principal: OWNER,
       },
       maxPendingMs: 600_000,
     });
@@ -123,7 +129,7 @@ describe("WorkerSteerQueue (#16187)", () => {
   });
 
   it("drops on someone else's prompt-capable input since it was held, never on its own sender's", () => {
-    const run = { agentIncarnation: 2, agentSessionId: "sess-1" };
+    const run: HeldRunIdentity = { agentIncarnation: 2, agentSessionId: "sess-1" };
     stampPromptInput(run, 900);
     queue.hold(request({ run }));
     const wake = lastWake();
@@ -147,13 +153,27 @@ describe("WorkerSteerQueue (#16187)", () => {
   });
 
   it.each([
-    ["a new launch generation", () => (generation = 5), atPrompt(), "restarted"],
+    [
+      "a new launch generation",
+      () => {
+        generation = 5;
+      },
+      atPrompt(),
+      "restarted",
+    ],
     ["a new agent incarnation", () => {}, atPrompt({ agentIncarnation: 3 }), "restarted"],
     ["a changed agent session", () => {}, atPrompt({ agentSessionId: "sess-2" }), "restarted"],
     ["another worktree", () => {}, atPrompt({ worktreeId: "wt-2" }), "restarted"],
     ["an exit", () => {}, atPrompt({ isExited: true }), "target-gone"],
     ["the trash", () => {}, atPrompt({ isTrashed: true }), "target-gone"],
-    ["another project", () => (projectOf = "proj-2"), atPrompt(), "target-gone"],
+    [
+      "another project",
+      () => {
+        projectOf = "proj-2";
+      },
+      atPrompt(),
+      "target-gone",
+    ],
   ] as const)("drops on %s", (_label, change, info, reason) => {
     queue.hold(request());
     change();
@@ -307,30 +327,6 @@ describe("WorkerSteerQueue (#16187)", () => {
     expect(() => queue.hold(request())).toThrow(/session that sent it has ended/);
     expect(wakes).toEqual([]);
     expect(queue.hold(request({ principal: OTHER })).queuedSendToken).toBe("tok-1");
-  });
-
-  it("drops what others held for a worker once another assistant's prompt goes to it", () => {
-    queue.hold(request());
-    queue.hold(request({ principal: OTHER }));
-    queue.hold(request({ principal: OTHER, terminalId: "term-elsewhere" }));
-
-    queue.promptSent(WORKER, OTHER);
-
-    expect(queue.status(OWNER, "tok-1")).toMatchObject({ status: "dropped", reason: "typed" });
-    // Its own sender's prompt, and a held prompt for another worker, stay.
-    expect(queue.status(OTHER, "tok-2")?.status).toBe("queued");
-    expect(queue.status(OTHER, "tok-3")?.status).toBe("queued");
-  });
-
-  it("drops another sender's held prompt for the worker once this one is written", () => {
-    queue.hold(request());
-    queue.hold(request({ principal: OTHER }));
-    const mine = wakes[0]!.wake;
-
-    mine.beforeType();
-    mine.report({ kind: "delivered" }, { phase: "pty_written", submissionToken: "line-1" });
-
-    expect(queue.status(OTHER, "tok-2")).toMatchObject({ status: "dropped", reason: "typed" });
   });
 
   it("tells the caller its line was written when no notice follows it, and only then", () => {

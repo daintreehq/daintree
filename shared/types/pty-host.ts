@@ -320,6 +320,12 @@ export type PtyHostRequest =
        * written (#15521), already capped. Present only while the run has none.
        */
       firstPrompt?: FirstPromptCandidate;
+      /**
+       * The assistant whose prompt this guarded line carries (#16187), filed
+       * as its prompt-capable input once the Enter is written. Absent, a
+       * guarded line is nobody's prompt.
+       */
+      promptOwner?: string;
     }
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
