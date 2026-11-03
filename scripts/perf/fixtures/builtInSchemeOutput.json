@@ -3424,10 +3424,10 @@
         "status-warning": "#9A6310",
         "status-danger": "#BE3C48",
         "status-info": "#3A6FC0",
-        "activity-active": "#2E8A66",
+        "activity-active": "#2B805F",
         "activity-idle": "#6C7494",
-        "activity-working": "#2E8A66",
-        "activity-waiting": "#A57A10",
+        "activity-working": "#2B805F",
+        "activity-waiting": "#99710F",
         "terminal-selection": "#313963",
         "terminal-red": "#D17A7A",
         "terminal-green": "#7AA889",
@@ -3478,10 +3478,10 @@
           "info": "#3A6FC0"
         },
         "activity": {
-          "active": "#2E8A66",
+          "active": "#2B805F",
           "idle": "#6C7494",
-          "working": "#2E8A66",
-          "waiting": "#A57A10"
+          "working": "#2B805F",
+          "waiting": "#99710F"
         },
         "overlayTint": "#2C2C3B",
         "terminal": {

@@ -39,11 +39,13 @@ export const theme: BuiltInThemeSource = {
       info: "#3A6FC0",
     },
     activity: {
-      active: "#2E8A66",
+      active: "#2B805F",
       idle: "#6C7494",
-      working: "#2E8A66",
+      // ≥ 3:1 as glyphs on a highlighted sidebar row (the hosts section's
+      // counts), where the highlight darkens the lavender.
+      working: "#2B805F",
       // working/waiting stay deuteranope-separable by luminance.
-      waiting: "#A57A10",
+      waiting: "#99710F",
     },
     // Cold near-neutral ink — the wash ladder must never read as grime on the
     // hued field.
