@@ -53,6 +53,13 @@ const ANCHOR_MIN_CHARS = 24;
 /** Rows read back from the start boundary to seed the text before the write. */
 const CONTEXT_ROWS = 64;
 
+/**
+ * Rows above the screen a realignment searches. At a resize everything that
+ * scrolled off has been read, so the last line read sits at the end of
+ * scrollback; this only bounds the cost of a pane being dragged.
+ */
+const REALIGN_SCAN_ROWS = 2000;
+
 const WHITESPACE = /\s/;
 
 function utf8Bytes(text: string): number {
@@ -92,11 +99,14 @@ function readLines(
   let next = row;
   while (row < limit) {
     let end = row;
-    let text = buffer.getLine(row)?.translateToString(true) ?? "";
+    let text = "";
+    // A row the line continues past keeps every cell, so a soft wrap that
+    // lands on the space between two words keeps the space.
     while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped === true) {
+      text += buffer.getLine(end)?.translateToString(false) ?? "";
       end += 1;
-      text += buffer.getLine(end)?.translateToString(true) ?? "";
     }
+    text += buffer.getLine(end)?.translateToString(true) ?? "";
     if (complete && end >= to) break;
     lines.push({ text: text.trimEnd(), endRow: end });
     row = end + 1;
@@ -259,6 +269,7 @@ export class SubmissionOutputCapture {
   private skip: PreWriteSkip | undefined;
   private replay: Replay | undefined;
   private purgeHandler: IDisposable | undefined;
+  private resizeHandler: IDisposable | undefined;
   private state: TerminalSubmissionOutput["state"] = "capturing";
 
   constructor(
@@ -280,6 +291,13 @@ export class SubmissionOutputCapture {
     this.markReadUpTo(boundary);
     // Runs before xterm's own handler, so lines that scrolled off since the
     // last sync are read before the purge deletes them.
+    // At the resize itself, after the reflow and before any later output can
+    // scroll unread lines into scrollback beside the ones already read.
+    this.resizeHandler = terminal.onResize(() => {
+      if (this.state === "capturing" && this.columnsChanged() && this.realign() === undefined) {
+        this.finish("lost");
+      }
+    });
     this.purgeHandler = terminal.parser.registerCsiHandler({ final: "J" }, (params) => {
       if (params[0] === 3 && terminal.buffer.active.type === "normal") this.notePurge();
       return false;
@@ -298,9 +316,11 @@ export class SubmissionOutputCapture {
   /** What has been captured, with the lines still on screen read live. */
   snapshot(): TerminalSubmissionOutput {
     this.sync();
-    if (this.state !== "capturing") return this.render(this.journal.lines, this.state);
+    if (this.state !== "capturing") {
+      return this.render(this.journal.lines, this.state, this.journal.full);
+    }
     const live = this.readLive();
-    return this.render(this.keptWith(live), this.state);
+    return this.render(this.keptWith(live), this.state, this.keptFull(live));
   }
 
   /** End the capture, keeping the lines still on screen, and return its final form. */
@@ -313,7 +333,7 @@ export class SubmissionOutputCapture {
           this.finish("lost");
         } else {
           const lines = this.keptWith(live);
-          const cut = this.journal.full || this.replay?.continuation.full === true;
+          const cut = this.keptFull(live);
           this.journal = new Budget();
           for (const line of lines) if (!this.journal.add(line, EMPTY)) break;
           if (cut) this.journal.full = true;
@@ -321,7 +341,7 @@ export class SubmissionOutputCapture {
         }
       }
     }
-    return this.render(this.journal.lines, this.state);
+    return this.render(this.journal.lines, this.state, this.journal.full);
   }
 
   dispose(): void {
@@ -365,10 +385,12 @@ export class SubmissionOutputCapture {
     if (marker !== undefined) return marker.isDisposed ? undefined : marker.line + 1;
     // Without a marker nothing tracks a trim, and trimming happens only once
     // scrollback is full; from then on the index is found again by content.
+    return this.scrollbackFull() ? undefined : this.unmarkedNext;
+  }
+
+  private scrollbackFull(): boolean {
     const buffer = this.terminal.buffer.normal;
-    const full = buffer.length >= this.terminal.rows + (this.terminal.options.scrollback ?? 0);
-    if (this.unmarkedNext > 0 && full) return undefined;
-    return this.unmarkedNext;
+    return buffer.length >= this.terminal.rows + (this.terminal.options.scrollback ?? 0);
   }
 
   /**
@@ -379,24 +401,37 @@ export class SubmissionOutputCapture {
   private realign(): number | undefined {
     const replay = this.replay;
     if (replay !== undefined) {
-      // A replay is found by content anyway: read it all again from the top.
-      replay.matcher = new AnchorMatcher(replay.anchor);
-      replay.aligned = false;
-      replay.continuation = new Budget();
-      this.markReadUpTo(0);
-      return 0;
+      if (replay.aligned) {
+        // Keep what the replay already gave, then find the boundary after it.
+        this.commitContinuation();
+        if (this.state !== "capturing") return undefined;
+      } else {
+        // Not lined up yet, so nothing is lost by reading it all again.
+        replay.matcher = new AnchorMatcher(replay.anchor);
+        this.markReadUpTo(0);
+        return 0;
+      }
     }
     const anchor = anchorTail(this.readText());
     if (anchor === "") {
+      // Nothing to find it by: right only if no row can have been trimmed.
+      if (this.scrollbackFull()) return undefined;
       this.markReadUpTo(0);
       return 0;
     }
     const buffer = this.terminal.buffer.normal;
     const matcher = new AnchorMatcher(anchor);
-    let next: number | undefined;
-    for (const line of readLines(buffer, 0, buffer.length, false).lines) {
-      if (matcher.feed(line.text) >= 0) next = line.endRow + 1;
+    let inScrollback: number | undefined;
+    let onScreen: number | undefined;
+    const scanFrom = Math.max(0, buffer.baseY - REALIGN_SCAN_ROWS);
+    for (const line of readLines(buffer, scanFrom, buffer.length, false).lines) {
+      if (matcher.feed(line.text) < 0) continue;
+      // What was read scrolled off, so a match there beats a later one on
+      // screen, which may be unread output that happens to repeat it.
+      if (line.endRow < buffer.baseY) inScrollback = line.endRow + 1;
+      else onScreen ??= line.endRow + 1;
     }
+    const next = inScrollback ?? onScreen;
     if (next !== undefined) this.markReadUpTo(next);
     return next;
   }
@@ -461,11 +496,18 @@ export class SubmissionOutputCapture {
     if (replay === undefined) return;
     this.replay = undefined;
     if (!replay.aligned) return;
-    if (replay.replacesJournal) this.journal = new Budget();
+    if (replay.replacesJournal) {
+      this.journal = new Budget();
+      // The question is what came just before the continuation now.
+      this.context = replay.anchor;
+    }
     for (const line of replay.continuation.lines) {
       if (!this.journal.add(line, EMPTY)) return this.finish("closed");
     }
-    if (replay.continuation.full) this.finish("closed");
+    if (replay.continuation.full) {
+      this.journal.full = true;
+      this.finish("closed");
+    }
   }
 
   private take(text: string): void {
@@ -550,14 +592,23 @@ export class SubmissionOutputCapture {
     return [...journal, ...continuation, ...live.lines];
   }
 
+  /** Whether a budget whose lines are kept was cut, leaving out one a live match replaced. */
+  private keptFull(live: { replaced: boolean }): boolean {
+    const replay = this.replay;
+    if (replay === undefined) return this.journal.full;
+    const journalKept = !(replay.replacesJournal && (replay.aligned || live.replaced));
+    return (journalKept && this.journal.full) || (!live.replaced && replay.continuation.full);
+  }
+
   private render(
     lines: readonly string[],
-    state: TerminalSubmissionOutput["state"]
+    state: TerminalSubmissionOutput["state"],
+    cut: boolean
   ): TerminalSubmissionOutput {
     const kept = [...lines];
     while (kept.length > 0 && kept[0]!.trim() === "") kept.shift();
     while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop();
-    let truncated = this.journal.full || this.replay?.continuation.full === true;
+    let truncated = cut;
     if (kept.length > SUBMISSION_OUTPUT_MAX_LINES) {
       kept.length = SUBMISSION_OUTPUT_MAX_LINES;
       truncated = true;
@@ -580,6 +631,8 @@ export class SubmissionOutputCapture {
     this.marker = undefined;
     this.purgeHandler?.dispose();
     this.purgeHandler = undefined;
+    this.resizeHandler?.dispose();
+    this.resizeHandler = undefined;
     this.replay = undefined;
     this.skip = undefined;
   }
@@ -600,29 +653,39 @@ function trimTrailingBlank(lines: string[]): string[] {
  */
 export class ParseBarrier {
   private fed = 0;
-  private parsed = 0;
+  /** The latest write whose parse callback ran. */
+  private done = 0;
   private waiters: Array<{ seq: number; run: () => void }> = [];
 
-  noteFed(): void {
-    this.fed += 1;
-  }
-
-  noteParsed(): void {
-    this.parsed += 1;
-    while (this.waiters.length > 0 && this.waiters[0]!.seq <= this.parsed) {
-      this.waiters.shift()!.run();
-    }
+  /**
+   * Count a write; returns the callback for its parse. One-shot, because
+   * xterm's synchronous drain can run a write's callback a second time, and
+   * a later write's completion stands in for an earlier one whose callback
+   * the drain dropped.
+   */
+  noteFed(): () => void {
+    const seq = ++this.fed;
+    let fired = false;
+    return () => {
+      if (fired) return;
+      fired = true;
+      if (seq <= this.done) return;
+      this.done = seq;
+      while (this.waiters.length > 0 && this.waiters[0]!.seq <= this.done) {
+        this.waiters.shift()!.run();
+      }
+    };
   }
 
   after(run: () => void): void {
-    if (this.parsed >= this.fed) run();
+    if (this.done >= this.fed) run();
     else this.waiters.push({ seq: this.fed, run });
   }
 
   /** Forget what was fed: the mirror it counted is gone or replaced. */
   reset(): void {
     this.fed = 0;
-    this.parsed = 0;
+    this.done = 0;
     this.waiters = [];
   }
 }

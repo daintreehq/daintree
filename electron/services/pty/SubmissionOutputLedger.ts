@@ -63,13 +63,13 @@ export class SubmissionOutputLedger {
     if (entry === undefined || entry.output.state !== "capturing") return;
     const redacted = redactSecrets(output.text);
     const text = cutToBytes(redacted, SUBMISSION_OUTPUT_MAX_BYTES);
-    // Redaction markers can outgrow the text they replace; reaching the cap
-    // that way ends the capture like reaching it any other way.
-    const cut = text.length < redacted.length;
+    // Redaction markers can outgrow the text they replace. The cut is
+    // flagged, but only the capture's own cap ends it: a replay can still
+    // replace everything published so far.
     entry.output = {
       text,
-      truncated: output.truncated || cut,
-      state: cut && output.state === "capturing" ? "closed" : output.state,
+      truncated: output.truncated || text.length < redacted.length,
+      state: output.state,
     };
   }
 

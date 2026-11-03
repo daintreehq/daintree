@@ -260,9 +260,12 @@ describe("TerminalProcess submission output (#16210), worker mirror", () => {
     timeline = [];
     onPtyExit!({ exitCode: 0 });
     await vi.waitFor(() => expect(timeline).toContain("post:submission-capture-close"));
+    terminal.dispose();
     const close = timeline.indexOf("post:submission-capture-close");
-    const later = timeline.findIndex((event) => event === "post:request" || event === "post:free");
-    if (later !== -1) expect(close).toBeLessThan(later);
+    const free = timeline.indexOf("post:free");
+    expect(free).toBeGreaterThan(close);
+    const request = timeline.indexOf("post:request");
+    if (request !== -1) expect(request).toBeGreaterThan(close);
   });
 
   it("settles an open capture as lost when no worker is left to host the terminal", async () => {

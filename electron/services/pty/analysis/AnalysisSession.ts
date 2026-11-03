@@ -179,7 +179,7 @@ export class AnalysisSession {
       this.ensureResponder();
     }
 
-    this.parseBarrier.noteFed();
+    const parsed = this.parseBarrier.noteFed();
     this.headlessTerminal.write(data, () => {
       this.parserTail.feed(data);
       // xterm's onRender event fires before this callback and invalidates only
@@ -188,18 +188,18 @@ export class AnalysisSession {
       this.noteProcessed(data.length);
       this.noteAgentOutputActivity();
       this.submissionCaptures.sync();
-      this.parseBarrier.noteParsed();
+      parsed();
       this.scheduleDigest();
     });
   }
 
   feedPrelude(data: string): void {
     if (this.disposed || !this.headlessTerminal) return;
-    this.parseBarrier.noteFed();
+    const parsed = this.parseBarrier.noteFed();
     this.headlessTerminal.write(data, () => {
       this.parserTail.feed(data);
       this.submissionCaptures.sync();
-      this.parseBarrier.noteParsed();
+      parsed();
       this.scheduleDigest();
     });
   }

@@ -345,8 +345,10 @@ describe("SubmissionOutputCapture after review (#16210)", () => {
   it("ignores a scrollback purge on the alternate screen", async () => {
     const terminal = mirror(40, 6);
     await write(terminal, "$ ");
-    const capture = new SubmissionOutputCapture(terminal, "top");
-    await write(terminal, "top\r\n\x1b[?1049h\x1b[3J\x1b[?1049l" + numbered("out", 12), capture);
+    // Long enough to anchor a replay, and never echoed: a purge wrongly taken
+    // for the normal screen's would wait for it forever.
+    const capture = new SubmissionOutputCapture(terminal, "a question long enough to anchor on");
+    await write(terminal, "\r\n\x1b[?1049h\x1b[3J\x1b[?1049l" + numbered("out", 12), capture);
 
     const output = capture.close();
     expect(output.state).toBe("closed");
@@ -483,17 +485,40 @@ describe("ParseBarrier", () => {
     const barrier = new ParseBarrier();
     const ran: string[] = [];
     barrier.after(() => ran.push("idle"));
-    barrier.noteFed();
-    barrier.noteFed();
+    const first = barrier.noteFed();
+    const second = barrier.noteFed();
     barrier.after(() => ran.push("after two"));
-    barrier.noteFed();
+    const third = barrier.noteFed();
     barrier.after(() => ran.push("after three"));
-    barrier.noteParsed();
+    first();
     expect(ran).toEqual(["idle"]);
-    barrier.noteParsed();
+    second();
     expect(ran).toEqual(["idle", "after two"]);
-    barrier.noteParsed();
+    third();
     expect(ran).toEqual(["idle", "after two", "after three"]);
+  });
+
+  it("does not count a parse callback that runs twice", () => {
+    const barrier = new ParseBarrier();
+    const ran: string[] = [];
+    const first = barrier.noteFed();
+    const second = barrier.noteFed();
+    barrier.after(() => ran.push("both parsed"));
+    first();
+    first();
+    expect(ran).toEqual([]);
+    second();
+    expect(ran).toEqual(["both parsed"]);
+  });
+
+  it("lets a later write's parse stand in for an earlier one whose callback was dropped", () => {
+    const barrier = new ParseBarrier();
+    const ran: string[] = [];
+    barrier.noteFed();
+    barrier.after(() => ran.push("after the dropped one"));
+    const later = barrier.noteFed();
+    later();
+    expect(ran).toEqual(["after the dropped one"]);
   });
 
   it("survives a resize that drains the mirror synchronously", async () => {
@@ -501,8 +526,8 @@ describe("ParseBarrier", () => {
     const barrier = new ParseBarrier();
     const seen: string[] = [];
     const feed = (data: string) => {
-      barrier.noteFed();
-      terminal.write(data, () => barrier.noteParsed());
+      const parsed = barrier.noteFed();
+      terminal.write(data, parsed);
     };
     feed("before ");
     barrier.after(() => seen.push(terminal.buffer.active.getLine(0)!.translateToString(true)));
@@ -511,5 +536,98 @@ describe("ParseBarrier", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(seen).toEqual(["before "]);
     expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe("before after");
+  });
+});
+
+describe("SubmissionOutputCapture, second review (#16210)", () => {
+  it("keeps the space a soft wrap lands on", async () => {
+    const terminal = mirror(10, 4);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    await write(terminal, "go\r\n123456789 word\r\n" + numbered("n", 6), capture);
+    expect(capture.snapshot().text.split("\n")[1]).toBe("123456789 word");
+  });
+
+  it("reports lost when one parse overflows scrollback before anything was read", async () => {
+    const terminal = mirror(40, 5, 10);
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    await write(terminal, numbered("flood", 40), capture);
+    expect(capture.snapshot().state).toBe("lost");
+  });
+
+  it("does not jump past unread output that repeats what was read last when a column change realigns", async () => {
+    const terminal = mirror(100, 20);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    // 600 characters, six rows at this width: longer than the anchor, so an
+    // unread repeat of it on screen matches the anchor whole.
+    const repeated = Array.from({ length: 100 }, (_, index) => `w${index % 10}xyz`).join(" ");
+    // The first copy is the last line read; the answer and a second copy
+    // are still on screen, unread.
+    await write(
+      terminal,
+      `go\r\n${numbered("start", 5)}${repeated}\r\nthe unique answer\r\n${repeated}\r\n` +
+        numbered("pad", 12),
+      capture
+    );
+    // Narrowing keeps the first copy in scrollback and pushes the answer up.
+    terminal.resize(80, 20);
+    await write(terminal, numbered("tail", 30), capture);
+
+    const lines = capture.snapshot().text.split("\n");
+    expect(lines).toContain("the unique answer");
+    expect(lines.filter((line) => line === repeated)).toHaveLength(2);
+  });
+
+  it("lines a second replay up after one anchored on the question", async () => {
+    const terminal = mirror(60, 10);
+    await insertHistory(terminal, ["• an earlier reply that is long enough to be context"]);
+    const question = "please list the permissions you still need";
+    const capture = new SubmissionOutputCapture(terminal, question);
+    const transcript = [
+      "• an earlier reply that is long enough to be context",
+      `› ${question}`,
+      "• network access",
+      ...rows("• detail", 12),
+    ];
+    await replay(terminal, transcript, capture);
+    await replay(terminal, [...transcript, "• written after both"], capture);
+    await insertHistory(terminal, rows("• busy", 12), capture);
+
+    const output = capture.snapshot();
+    expect(output.state).toBe("capturing");
+    const lines = output.text.split("\n");
+    expect(lines[0]).toBe("• network access");
+    expect(lines.filter((line) => line === "• network access")).toHaveLength(1);
+    expect(lines).toContain("• written after both");
+  });
+
+  it("does not flag a fresh answer truncated because a stale one before it was", async () => {
+    const terminal = mirror(60, 10);
+    const question = "please list the permissions you still need";
+    const capture = new SubmissionOutputCapture(terminal, question);
+    await replay(
+      terminal,
+      [`› ${question}`, ...rows("• stale", SUBMISSION_OUTPUT_MAX_LINES + 20)],
+      capture
+    );
+    // The fresh match is still on screen: only the live read finds it.
+    await write(terminal, `\x1b[2J\x1b[H› ${question}\r\n• fresh\r\n`, capture);
+    const output = capture.snapshot();
+    expect(output.text).toBe("• fresh");
+    expect(output.truncated).toBe(false);
+  });
+
+  it("keeps a continuation's truncation when a later purge commits it", async () => {
+    const terminal = mirror(60, 10);
+    const question = "please list the permissions you still need";
+    const capture = new SubmissionOutputCapture(terminal, question);
+    await replay(
+      terminal,
+      [`› ${question}`, ...rows("• line", SUBMISSION_OUTPUT_MAX_LINES + 20)],
+      capture
+    );
+    await write(terminal, "\x1b[2J\x1b[3J", capture);
+    expect(capture.snapshot()).toMatchObject({ truncated: true, state: "closed" });
   });
 });

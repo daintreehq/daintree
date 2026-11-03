@@ -34,7 +34,7 @@ describe("SubmissionOutputLedger", () => {
     ledger.dispose();
   });
 
-  it("ends a capture whose redacted text outgrew the byte cap, keeping its start", () => {
+  it("flags redacted text that outgrew the byte cap, keeping its start, and stays open to a replacement", () => {
     const ledger = new SubmissionOutputLedger();
     const id = ledger.begin("tok");
     // Short enough raw, past the cap once each value becomes a longer marker.
@@ -46,9 +46,10 @@ describe("SubmissionOutputLedger", () => {
     expect(output.text.startsWith("first line\npassword: [redacted]")).toBe(true);
     expect(output.text).not.toContain("abc");
     expect(Buffer.byteLength(output.text, "utf8")).toBeLessThanOrEqual(SUBMISSION_OUTPUT_MAX_BYTES);
-    expect(output).toMatchObject({ truncated: true, state: "closed" });
-    ledger.publish(id, capturing("later"));
-    expect(ledger.read("tok")?.text.startsWith("first line")).toBe(true);
+    expect(output).toMatchObject({ truncated: true, state: "capturing" });
+    // A replay that lines up with the real answer replaces it.
+    ledger.publish(id, capturing("the real answer"));
+    expect(ledger.read("tok")).toEqual(capturing("the real answer"));
     ledger.dispose();
   });
 

@@ -238,7 +238,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
       // are still queued (scheduler hold + xterm's async parser both count —
       // the callback fires only after the chunk has actually parsed).
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
-      this.parseBarrier.noteFed();
+      const parsed = this.parseBarrier.noteFed();
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
         this.parserTail.feed(data);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
@@ -248,7 +248,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
         this.viewportSnapshotCache.invalidate();
         this.noteAgentOutputActivity();
         this.submissionCaptures?.sync();
-        this.parseBarrier.noteParsed();
+        parsed();
         this.scheduleOutputProgressSample();
       });
     } else {
@@ -260,12 +260,12 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
-      this.parseBarrier.noteFed();
+      const parsed = this.parseBarrier.noteFed();
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
         this.parserTail.feed(prelude);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         this.submissionCaptures?.sync();
-        this.parseBarrier.noteParsed();
+        parsed();
         this.scheduleOutputProgressSample();
       });
     }
