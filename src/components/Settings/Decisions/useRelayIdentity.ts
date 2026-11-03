@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
   ClaimDecisionsRelayPayload,
+  ClaimDeployedDecisionsRelayPayload,
   DecisionsConnectResult,
   DecisionsRelayCheck,
   DecisionsStatus,
@@ -23,6 +24,8 @@ export interface UseRelayIdentityResult {
   /** Main couldn't make the change at all; not something the relay did. */
   error: { action: RelayIdentityAction; message: string } | null;
   claim(payload: ClaimDecisionsRelayPayload): void;
+  /** Claims a guided deploy's relay with the claim secret main holds from it (#16199). */
+  claimDeployed(payload: ClaimDeployedDecisionsRelayPayload): void;
   restore(payload: RestoreDecisionsIdentityPayload): void;
   /** Resolves true once the identity is removed; false when it wasn't (see `error`). */
   disconnect(): Promise<boolean>;
@@ -99,6 +102,10 @@ export function useRelayIdentity(
     void run("claim", () => window.electron.decisions.claimRelay(payload));
   };
 
+  const claimDeployed = (payload: ClaimDeployedDecisionsRelayPayload) => {
+    void run("claim", () => window.electron.decisions.claimDeployedRelay(payload));
+  };
+
   const restore = (payload: RestoreDecisionsIdentityPayload) => {
     void run("restore", () => window.electron.decisions.restoreIdentity(payload));
   };
@@ -112,5 +119,5 @@ export function useRelayIdentity(
     setError(null);
   };
 
-  return { pending, result, recheck, error, claim, restore, disconnect, reset };
+  return { pending, result, recheck, error, claim, claimDeployed, restore, disconnect, reset };
 }

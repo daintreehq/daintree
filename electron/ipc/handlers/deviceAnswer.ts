@@ -12,6 +12,8 @@ import {
 import { sanitizeDeviceAnswerSettings } from "../../services/deviceAnswer/deviceAnswerSettings.js";
 import { DEVICE_ANSWER_METHOD_CHANNELS } from "./deviceAnswer.preload.js";
 import { sshLoginTarget } from "../../utils/machineName.js";
+import { isRemoteView } from "../../window/webviewSrcGate.js";
+import { getVoiceSettings } from "./voiceInput.js";
 import type {
   DeviceAnswerStatus,
   SetDeviceAnswerPayload,
@@ -20,6 +22,7 @@ import type {
   ApproveDecisionsPairingPayload,
   CancelDecisionsSetupCheckPayload,
   ClaimDecisionsRelayPayload,
+  ClaimDeployedDecisionsRelayPayload,
   DecisionsConnectResult,
   DecisionsDevicesResult,
   DecisionsExportResult,
@@ -42,6 +45,7 @@ import type {
   ExportDecisionsDataPayload,
   ExportDecisionsRecoveryKitPayload,
   PaneDecisionState,
+  PreparedDecisionsRelayDeploy,
   RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
   VerifyDecisionsRecoveryKitPayload,
@@ -166,6 +170,12 @@ const claimRelaySchema = z
     claimSecret: z.string().min(16).max(256),
     acceptWeakStorage: z.boolean().optional(),
   })
+  .strict();
+
+// A guided deploy's id is one main minted for it.
+const relayDeployIdSchema = z.string().min(1).max(128);
+const claimDeployedRelaySchema = z
+  .object({ deployId: relayDeployIdSchema, acceptWeakStorage: z.boolean().optional() })
   .strict();
 
 // A kit is a few KiB; main checks its size again in bytes before reading it.
@@ -340,6 +350,44 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.claimRelay(payload);
+      }
+    ),
+    // The guided relay deploy (#16199). Its CLI runs in a pane on this
+    // computer and connects to a channel main opens here, so a window whose
+    // terminals run on a Remote Host can't start one.
+    prepareRelayDeploy: op(
+      CHANNELS.DECISIONS_PREPARE_RELAY_DEPLOY,
+      async (ctx): Promise<PreparedDecisionsRelayDeploy> => {
+        refuseWhileOff("deploy a relay");
+        if (isRemoteView(ctx.webContentsId)) {
+          throw new AppError({
+            code: "UNSUPPORTED",
+            message: "Run the guided deploy from a local project window",
+          });
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.prepareRelayDeploy(getVoiceSettings);
+      },
+      { withContext: true }
+    ),
+    cancelRelayDeploy: opValidated(
+      CHANNELS.DECISIONS_CANCEL_RELAY_DEPLOY,
+      relayDeployIdSchema,
+      async (deployId: string): Promise<void> => {
+        if (!decisionsOn()) return;
+        const decisions = await loadDecisions();
+        decisions?.cancelRelayDeploy(deployId);
+      }
+    ),
+    claimDeployedRelay: opValidated(
+      CHANNELS.DECISIONS_CLAIM_DEPLOYED_RELAY,
+      claimDeployedRelaySchema,
+      async (payload: ClaimDeployedDecisionsRelayPayload): Promise<DecisionsConnectResult> => {
+        refuseWhileOff("claim a relay");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.claimDeployedRelay(payload);
       }
     ),
     restoreIdentity: opValidated(

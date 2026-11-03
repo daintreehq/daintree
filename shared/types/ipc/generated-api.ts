@@ -306,12 +306,18 @@ export interface GeneratedElectronAPI {
     cancelModelEvaluation(
       ...args: IpcInvokeMap["decisions:cancel-model-evaluation"]["args"]
     ): Promise<IpcInvokeMap["decisions:cancel-model-evaluation"]["result"]>;
+    cancelRelayDeploy(
+      ...args: IpcInvokeMap["decisions:cancel-relay-deploy"]["args"]
+    ): Promise<IpcInvokeMap["decisions:cancel-relay-deploy"]["result"]>;
     cancelSetupCheck(
       ...args: IpcInvokeMap["decisions:cancel-setup-check"]["args"]
     ): Promise<IpcInvokeMap["decisions:cancel-setup-check"]["result"]>;
     checkRelay(
       ...args: IpcInvokeMap["decisions:check-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:check-relay"]["result"]>;
+    claimDeployedRelay(
+      ...args: IpcInvokeMap["decisions:claim-deployed-relay"]["args"]
+    ): Promise<IpcInvokeMap["decisions:claim-deployed-relay"]["result"]>;
     claimRelay(
       ...args: IpcInvokeMap["decisions:claim-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:claim-relay"]["result"]>;
@@ -375,6 +381,9 @@ export interface GeneratedElectronAPI {
     markAnswerHandled(
       ...args: IpcInvokeMap["decisions:mark-answer-handled"]["args"]
     ): Promise<IpcInvokeMap["decisions:mark-answer-handled"]["result"]>;
+    prepareRelayDeploy(
+      ...args: IpcInvokeMap["decisions:prepare-relay-deploy"]["args"]
+    ): Promise<IpcInvokeMap["decisions:prepare-relay-deploy"]["result"]>;
     reassignAnswer(
       ...args: IpcInvokeMap["decisions:reassign-answer"]["args"]
     ): Promise<IpcInvokeMap["decisions:reassign-answer"]["result"]>;

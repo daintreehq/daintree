@@ -1537,6 +1537,12 @@ export const CHANNELS = {
   // Claiming a relay, restoring an identity from a recovery kit, and removing
   // this computer's identity (#16006), all in main.
   DECISIONS_CLAIM_RELAY: "decisions:claim-relay",
+  // The guided relay deploy's host channel and the relay it created (#16199):
+  // opening the channel, dropping one no pane connected to, and claiming
+  // the relay with the claim secret main holds from it.
+  DECISIONS_PREPARE_RELAY_DEPLOY: "decisions:prepare-relay-deploy",
+  DECISIONS_CANCEL_RELAY_DEPLOY: "decisions:cancel-relay-deploy",
+  DECISIONS_CLAIM_DEPLOYED_RELAY: "decisions:claim-deployed-relay",
   DECISIONS_RESTORE_IDENTITY: "decisions:restore-identity",
   DECISIONS_DISCONNECT_RELAY: "decisions:disconnect-relay",
   // The devices paired with this computer's relay identity, and pairing a

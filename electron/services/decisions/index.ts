@@ -21,6 +21,7 @@ import {
   DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH,
   type ApproveDecisionsPairingPayload,
   type ClaimDecisionsRelayPayload,
+  type ClaimDeployedDecisionsRelayPayload,
   type DecisionsConnectResult,
   type DecisionsDevicesResult,
   type DecisionsExportResult,
@@ -46,6 +47,7 @@ import {
   type ExportDecisionsDataPayload,
   type ExportDecisionsRecoveryKitPayload,
   type PaneDecisionState,
+  type PreparedDecisionsRelayDeploy,
   type RestoreDecisionsIdentityPayload,
   type VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
@@ -91,6 +93,9 @@ import {
 import { decisionsKeyFilePath } from "./keyStore.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
+import { RelayDeploySessions } from "./relayDeploySession.js";
+import { relayDeployPrefill } from "./relayDeployPrefill.js";
+import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import {
   hostLifetimeSettings,
   hostRecordServes,
@@ -170,6 +175,12 @@ function makeHostEnroller(): HostEnroller {
   });
 }
 let hostEnroller = makeHostEnroller();
+
+/** The guided relay deploy Settings started, whose result rides on the status push (#16199). */
+function makeRelayDeploys(): RelayDeploySessions {
+  return new RelayDeploySessions({ onChange: () => publishStatus() });
+}
+let relayDeploys = makeRelayDeploys();
 /** One record keeper per store and installation, so its writes run one at a time. */
 let hostRecords: {
   store: DaintreeLocalStore;
@@ -505,6 +516,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
   // Nor does a check of them.
   const checked = settings.setupCheck !== null && keyFile !== false ? settings.setupCheck : null;
+  const deploy = relayDeploys.snapshot();
   return {
     ...observed,
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
@@ -514,6 +526,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(checked !== null
       ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
       : {}),
+    ...(deploy !== undefined ? { relayDeploy: deploy } : {}),
     revision,
   };
 }
@@ -723,6 +736,48 @@ function runSetup(run: SetupRun): Promise<DecisionsConnectResult> {
  */
 export function claimRelay(payload: ClaimDecisionsRelayPayload): Promise<DecisionsConnectResult> {
   return runSetup((options) => claimDecisionsRelay(payload, options));
+}
+
+/**
+ * Opens the channel a guided relay deploy's CLI connects to (#16199). The
+ * voice settings are read only when the CLI says hello, and only for the
+ * answers they prefill: the keys go to the CLI over the channel and nowhere
+ * else.
+ */
+export function prepareRelayDeploy(
+  readVoiceSettings: () => VoiceInputSettings
+): Promise<PreparedDecisionsRelayDeploy> {
+  if (shutDown || !readDecisionsSettings(store).enabled) return Promise.reject(setupRefused());
+  return relayDeploys.prepare(() => relayDeployPrefill(readVoiceSettings()));
+}
+
+/** Drops a guided deploy whose pane never opened, so its channel stops waiting. */
+export function cancelRelayDeploy(deployId: string): void {
+  relayDeploys.cancel(deployId);
+}
+
+/**
+ * Claims the relay a guided deploy created, with the claim secret its CLI
+ * handed over, which never leaves main. The secret is kept until a claim
+ * saves an identity, so a refusal can be tried again this session.
+ */
+export async function claimDeployedRelay(
+  payload: ClaimDeployedDecisionsRelayPayload
+): Promise<DecisionsConnectResult> {
+  const held = relayDeploys.claimable(payload.deployId);
+  if (held === null) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "Daintree no longer holds the claim secret from that deploy",
+    });
+  }
+  const outcome = await claimRelay({
+    url: held.url,
+    claimSecret: held.claimSecret,
+    ...(payload.acceptWeakStorage === true ? { acceptWeakStorage: true } : {}),
+  });
+  if (outcome.result === "saved") relayDeploys.claimed(payload.deployId);
+  return outcome;
 }
 
 /** Restores the owner identity of a claimed relay from its recovery kit (#16006). */
@@ -1890,6 +1945,7 @@ export function setDecisionsEnabled(
     if (!saved.enabled) {
       cancelRelayChecks();
       forgetOwnerDevices();
+      relayDeploys.reset();
     }
     try {
       if (saved.enabled && !shutDown) {
@@ -1918,6 +1974,7 @@ export async function stopDecisions(): Promise<void> {
   cancelRelayChecks();
   forgetOwnerDevices();
   cancelKitExports();
+  relayDeploys.dispose();
   hostEnroller.dispose();
   for (const controller of setups) controller.abort();
   await endSetupCheck();
@@ -1947,6 +2004,8 @@ export function _resetDecisionsForTesting(): void {
   modelRevision = 0;
   hostEnroller.dispose();
   hostEnroller = makeHostEnroller();
+  relayDeploys.dispose();
+  relayDeploys = makeRelayDeploys();
   hostRecords = null;
   hostRuntimeListeners.clear();
 }
