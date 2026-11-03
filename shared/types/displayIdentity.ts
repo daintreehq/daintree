@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 /**
  * A persona the person gave an assistant or an agent (#16213): what it is
  * called and the emoji it wears. Display only — routing, agent ids and terminal
@@ -9,11 +7,6 @@ export interface DisplayIdentity {
   name?: string;
   emoji?: string;
 }
-
-export const DisplayIdentitySchema = z.object({
-  name: z.string().optional(),
-  emoji: z.string().optional(),
-});
 
 /** The installation's assistant personas: the one global run, and one per project. */
 export interface AssistantIdentities {

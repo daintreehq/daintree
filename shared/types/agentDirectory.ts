@@ -2,7 +2,6 @@ import { z } from "zod";
 import { MAX_ASSISTANT_SLOTS } from "../config/assistantSlots.js";
 import { TERMINAL_NOTIFY_DELIVERY_STATUSES } from "./terminalNotify.js";
 import { HANDBACK_REPORTS } from "./handback.js";
-import { DisplayIdentitySchema } from "./displayIdentity.js";
 
 /**
  * The agent directory (#14160): one typed, passive list of a host's workers and
@@ -143,8 +142,10 @@ export const AgentDirectoryLiveEntrySchema = z.object({
     .optional(),
   /** An assistant's terminal notices; null when it holds none, absent where not reported. */
   notices: AgentDirectoryNoticesSchema.nullable().optional(),
-  /** The name and emoji the person gave an assistant; absent when none. Display only. */
-  identity: DisplayIdentitySchema.optional(),
+  /** The name the person gave an assistant (#16213); absent when none. Display only. */
+  personaName: z.string().optional(),
+  /** The emoji the person gave an assistant; absent when none. Display only. */
+  personaEmoji: z.string().optional(),
 });
 export type AgentDirectoryLiveEntry = z.infer<typeof AgentDirectoryLiveEntrySchema>;
 

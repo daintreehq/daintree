@@ -192,7 +192,7 @@ export function buildAssistantItems(
       agentId: entry.agentId,
       agentName: entry.agentId ? getAgentDisplayTitle(entry.agentId) : null,
       // Another machine wrote it: kept only as a persona can be.
-      identity: normalizeDisplayIdentity(entry.identity),
+      identity: normalizeDisplayIdentity({ name: entry.personaName, emoji: entry.personaEmoji }),
       scopeLabel,
       projectId,
       projectName,

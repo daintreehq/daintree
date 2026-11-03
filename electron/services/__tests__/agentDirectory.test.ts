@@ -166,14 +166,16 @@ describe("collectAgentDirectory (#14160)", () => {
     );
 
     expect(AgentDirectorySchema.safeParse(directory).success).toBe(true);
-    const identities = directory.entries.map((entry) =>
-      entry.state === "live" ? [entry.role, entry.subject.scope.kind, entry.identity] : null
+    const personas = directory.entries.map((entry) =>
+      entry.state === "live"
+        ? [entry.role, entry.subject.scope.kind, entry.personaName, entry.personaEmoji]
+        : null
     );
-    expect(identities).toEqual([
-      ["assistant", "global", { name: "Assistant to the Regional Manager" }],
-      ["assistant", "project", undefined],
-      ["worker", "project", undefined],
-      ["worker", "project", undefined],
+    expect(personas).toEqual([
+      ["assistant", "global", "Assistant to the Regional Manager", undefined],
+      ["assistant", "project", undefined, undefined],
+      ["worker", "project", undefined, undefined],
+      ["worker", "project", undefined, undefined],
     ]);
   });
 

@@ -946,6 +946,12 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                                 },
                               ],
                             },
+                            personaName: {
+                              type: "string",
+                            },
+                            personaEmoji: {
+                              type: "string",
+                            },
                           },
                           required: [
                             "state",
