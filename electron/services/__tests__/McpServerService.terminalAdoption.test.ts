@@ -680,6 +680,18 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     expect(service.listTerminalAdoptions()).toEqual([]);
   });
 
+  it("drops the prompts the ended session held for workers, and no other session's (#16187)", () => {
+    const queue = service.getWorkerSteerQueue();
+    const revoke = vi.spyOn(queue, "revokePrincipal");
+
+    service.retireRelayPrincipal("local", GLOBAL.sessionId);
+    expect(revoke).toHaveBeenLastCalledWith(relayOwnershipPrincipal("local", GLOBAL.sessionId));
+
+    service.endRelayHeldSends("sender-b", "help-b");
+    expect(revoke).toHaveBeenLastCalledWith(relayOwnershipPrincipal("sender-b", "help-b"));
+    revoke.mockRestore();
+  });
+
   it("a replacement run is a new principal, handed nothing the old one held", () => {
     adoptGlobal();
     service.releaseRelayAdoptions("local", GLOBAL.sessionId);

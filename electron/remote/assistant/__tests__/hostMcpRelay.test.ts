@@ -1262,6 +1262,26 @@ describe("throwaway runs of an owner that is gone (#14447)", () => {
     relay.dispose();
   });
 
+  it("drops what an ended help session held for its workers, for the proven sender only (#16187)", async () => {
+    const endHeldSends = vi.fn();
+    const { links, relay } = harness(
+      [
+        ["link-1", "sender-a"],
+        ["link-2", null],
+      ],
+      { endHeldSends }
+    );
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).resolves.toEqual({});
+    expect(endHeldSends).toHaveBeenCalledWith("sender-a", "help-1");
+    await expect(
+      links[1]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(endHeldSends).toHaveBeenCalledTimes(1);
+    relay.dispose();
+  });
+
   it("closes a sender's runs once its last link has been gone past the grace", async () => {
     vi.useFakeTimers();
     const { links, endOwner, relay, detach } = withRuns([["link-1", "sender-a"]]);

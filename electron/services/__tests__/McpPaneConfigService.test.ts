@@ -1133,6 +1133,11 @@ describe("McpPaneConfigService", () => {
         workspaceId: PROJECT_A,
       });
       expect(service.getDecisionsPrincipal("pane-dec-off")).toMatch(/^[0-9a-f-]{36}$/);
+      // Its notices, and a prompt held for it (#16187), sit under the launch's one principal.
+      expect(service.getLaunchPrincipal("pane-dec-off")).toBe(
+        service.getDecisionsPrincipal("pane-dec-off")
+      );
+      expect(service.getLaunchPrincipal("pane-never-launched")).toBeNull();
       // Nothing on the control surface or the orchestration hand-over knows it.
       expect(service.isValidPaneToken(bearer)).toBe(false);
       expect(service.getTierForToken(bearer)).toBeUndefined();
@@ -1189,6 +1194,9 @@ describe("McpPaneConfigService", () => {
       );
       expect(service.getOrchestratorPane("pane-dec-core")?.principalId).toBe(
         service.getDecisionsPrincipal("pane-dec-core")
+      );
+      expect(service.getLaunchPrincipal("pane-dec-core")).toBe(
+        service.getOwnershipPrincipalForToken(prepared.token!)
       );
     });
 
