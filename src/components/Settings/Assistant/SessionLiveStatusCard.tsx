@@ -243,7 +243,10 @@ function GlobalSessionRow() {
       label="Live session"
       description={
         <div className="space-y-1">
-          <SessionIdentity scope={displayIdentityLabel(globalIdentity, "Global")} agentId={agentId} />
+          <SessionIdentity
+            scope={displayIdentityLabel(globalIdentity, "Global")}
+            agentId={agentId}
+          />
           {boundElsewhere ? (
             <StatusLine tone="idle">
               This window runs on another host. Open the global assistant from a window on this

@@ -821,9 +821,9 @@ describe("PanelPersistence", () => {
     });
 
     it("saves a panel's persona emoji and leaves it out when there is none (#16213)", () => {
-      expect(panelToSnapshot(createMockTerminal({ id: "e1", displayEmoji: "🦊" })).displayEmoji).toBe(
-        "🦊"
-      );
+      expect(
+        panelToSnapshot(createMockTerminal({ id: "e1", displayEmoji: "🦊" })).displayEmoji
+      ).toBe("🦊");
       expect("displayEmoji" in panelToSnapshot(createMockTerminal({ id: "e2" }))).toBe(false);
     });
 

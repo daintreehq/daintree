@@ -61,8 +61,14 @@ describe("assistant identities (#16213)", () => {
   });
 
   it("clears a project's persona with an empty one and leaves the others", () => {
-    writeAssistantIdentity({ scope: { kind: "project", projectId: "p1" }, identity: { name: "A" } });
-    writeAssistantIdentity({ scope: { kind: "project", projectId: "p2" }, identity: { name: "B" } });
+    writeAssistantIdentity({
+      scope: { kind: "project", projectId: "p1" },
+      identity: { name: "A" },
+    });
+    writeAssistantIdentity({
+      scope: { kind: "project", projectId: "p2" },
+      identity: { name: "B" },
+    });
 
     const after = writeAssistantIdentity({
       scope: { kind: "project", projectId: "p1" },

@@ -466,7 +466,9 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                 {showTitleTip ? (
                   <Tooltip open={titleTip.open} onOpenChange={titleTip.onOpenChange}>
                     <TooltipTrigger asChild onPointerEnter={titleTip.onPointerEnter}>
-                      <DockChipLabel title={withDisplayEmoji(displayTitle, terminal.displayEmoji)} />
+                      <DockChipLabel
+                        title={withDisplayEmoji(displayTitle, terminal.displayEmoji)}
+                      />
                     </TooltipTrigger>
                     <TooltipContent side="top">{titleTooltip}</TooltipContent>
                   </Tooltip>

@@ -1236,10 +1236,7 @@ class AgentNotificationService {
     if (asks.length === 1) {
       notificationService.showNativeNotification(
         "Agent waiting",
-        describeWaiting(
-          this.getLabel(first.agentId, first.terminalId),
-          first.kind
-        ),
+        describeWaiting(this.getLabel(first.agentId, first.terminalId), first.kind),
         options
       );
       return;

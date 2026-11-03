@@ -832,7 +832,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               {showTitleTip ? (
                 <Tooltip open={titleTip.open} onOpenChange={titleTip.onOpenChange}>
                   <TooltipTrigger asChild onPointerEnter={titleTip.onPointerEnter}>
-                    <DockChipLabel title={withDisplayEmoji(displayTitle, activePanel.displayEmoji)} />
+                    <DockChipLabel
+                      title={withDisplayEmoji(displayTitle, activePanel.displayEmoji)}
+                    />
                   </TooltipTrigger>
                   <TooltipContent side="top">{titleTooltip}</TooltipContent>
                 </Tooltip>

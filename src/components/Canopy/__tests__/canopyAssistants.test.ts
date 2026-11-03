@@ -509,7 +509,11 @@ describe("assistant personas (#16213)", () => {
   it("names an assistant by its persona, and by its role without one", () => {
     const [named, plain] = buildAssistantItems(
       directory([
-        live(undefined, { personaName: " Assistant to the Regional Manager ", personaEmoji: "🐻" }, null),
+        live(
+          undefined,
+          { personaName: " Assistant to the Regional Manager ", personaEmoji: "🐻" },
+          null
+        ),
         live(0),
       ]),
       options

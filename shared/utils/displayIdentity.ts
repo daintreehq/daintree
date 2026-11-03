@@ -32,7 +32,9 @@ export function normalizeDisplayName(value: unknown): string | undefined {
     .trim();
   if (!text) return undefined;
   const parts = graphemeList(text);
-  return parts.length > DISPLAY_NAME_MAX ? parts.slice(0, DISPLAY_NAME_MAX).join("").trimEnd() : text;
+  return parts.length > DISPLAY_NAME_MAX
+    ? parts.slice(0, DISPLAY_NAME_MAX).join("").trimEnd()
+    : text;
 }
 
 /** Exactly one emoji (ZWJ sequences, flags, keycaps and skin tones included), or nothing. */
@@ -87,7 +89,5 @@ export function assistantIdentityFor(
   scope: AssistantIdentityScope
 ): DisplayIdentity {
   if (!identities) return {};
-  return scope.kind === "global"
-    ? identities.global
-    : (identities.projects[scope.projectId] ?? {});
+  return scope.kind === "global" ? identities.global : (identities.projects[scope.projectId] ?? {});
 }
