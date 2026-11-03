@@ -75,16 +75,18 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
     const seq = ++seqRef.current;
     sentRef.current = { change: { ...sentRef.current?.change, ...change }, seq };
     const failure = await saveIdentity(scope, next);
+    if (failure === null) {
+      // Any save that landed retires the draft it carried, and only that one:
+      // anything typed since stays.
+      setDraft((current) =>
+        current !== null && normalizeDisplayName(current) === next.name ? null : current
+      );
+    }
     // Only the latest save speaks for the row: an older one answering late
     // neither forgets what is still out nor overwrites its outcome.
     if (seqRef.current !== seq) return;
     sentRef.current = null;
     setError(failure);
-    if (failure !== null) return;
-    // Only the draft this save carried: anything typed since stays.
-    setDraft((current) =>
-      current !== null && normalizeDisplayName(current) === next.name ? null : current
-    );
   };
 
   const commitName = () => {
