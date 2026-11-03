@@ -35,7 +35,12 @@ function sources(overrides: Partial<AgentDirectorySources> = {}): AgentDirectory
       waitingReason: "approval",
       lastStateChange: 500,
       title: "  fix   the bug ",
-      lastHandback: { message: "private text", observedAt: 700, truncated: false },
+      lastHandback: {
+        message: "private text",
+        report: "needs-you",
+        observedAt: 700,
+        truncated: false,
+      },
       spawnedAt: 1,
     }),
     // Assistants run ordinary agents, stamped or bound to a lane.
@@ -178,7 +183,8 @@ describe("collectAgentDirectory (#14160)", () => {
       since: 500,
       label: "fix the bug",
       attached: null,
-      handback: { observedAt: 700 },
+      // Which marker the agent printed, never what it said (#16190).
+      handback: { observedAt: 700, report: "needs-you" },
       subject: { hostId: "local", scope: { kind: "project", projectId: "p1" }, incarnation: 4 },
     });
     const text = JSON.stringify(directory);

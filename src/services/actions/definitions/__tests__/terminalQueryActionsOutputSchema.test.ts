@@ -181,6 +181,27 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(parsed.terminals[0]?.recentOutputTruncated).toBe(true);
   });
 
+  it("terminal.getStatus keeps which marker the agent printed, and the waits accept it (#16190)", () => {
+    const handback = { message: "approve the deploy", report: "needs-you", observedAt: 1, truncated: false };
+    // Dispatch strips undeclared keys, so the report has to be declared to arrive.
+    const parsed = TerminalStatusResultSchema.parse({
+      terminals: [{ terminalId: "t1", agentId: null, agentState: "waiting", lastHandback: handback }],
+      source: "renderer",
+      unavailableFields: [],
+    });
+    expect(parsed.terminals[0]?.lastHandback?.report).toBe("needs-you");
+
+    const service = registerAll();
+    const validate = new Ajv2020({ strict: false }).compile(
+      outputSchema(service, "terminal.waitUntilIdle")!
+    );
+    const wait = { terminalId: "t1", busyState: "idle", trackingState: "tracked", timedOut: false };
+    expect(validate({ ...wait, lastHandback: handback })).toBe(true);
+    // An older host's observation has no report.
+    expect(validate({ ...wait, lastHandback: { ...handback, report: undefined } })).toBe(true);
+    expect(validate({ ...wait, lastHandback: { ...handback, report: "approve" } })).toBe(false);
+  });
+
   it("terminal.getOutput exposes content/lineCount/truncated properties", () => {
     const props =
       (outputSchema(registerAll(), "terminal.getOutput")!.properties as Record<string, unknown>) ??

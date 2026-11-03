@@ -93,7 +93,7 @@ const LAST_HANDBACK_OUTPUT_SCHEMA: Record<string, unknown> = {
   description: LAST_HANDBACK_DESCRIPTION,
   properties: {
     message: { type: ["string", "null"] },
-    report: { type: "string", enum: [...HANDBACK_REPORTS] },
+    report: { enum: [...HANDBACK_REPORTS] },
     observedAt: { type: "number" },
     submissionToken: { type: "string" },
     truncated: { type: "boolean" },

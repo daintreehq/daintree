@@ -349,7 +349,8 @@ describe("agentActions adversarial", () => {
         : undefined;
     expect(code).toEqual(expect.stringMatching(/^[a-z0-9]{6}$/));
     expect(options).toMatchObject({
-      prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code))}`,
+      // Every handback request offers needs-you beside done (#16190).
+      prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code), "run")}`,
       // The pane records what the caller wrote, never the instruction (#14592).
       promptAsWritten: "Fix the flaky test",
     });

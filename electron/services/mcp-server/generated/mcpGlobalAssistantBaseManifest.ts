@@ -864,6 +864,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                                     observedAt: {
                                       type: "number",
                                     },
+                                    report: {
+                                      type: "string",
+                                      enum: ["done", "needs-you"],
+                                    },
                                   },
                                   required: ["observedAt"],
                                   additionalProperties: false,

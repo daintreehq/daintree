@@ -100,6 +100,22 @@ describe("AgentStateChangedSchema (zod/mini migration, issue #10395)", () => {
       false
     );
   });
+
+  it("keeps a handback's report, and refuses one that is neither marker (#16190)", () => {
+    const lastHandback = { message: "approve the deploy", observedAt: 5, truncated: false };
+    const parsed = AgentStateChangedSchema.safeParse({
+      ...validPayload,
+      lastHandback: { ...lastHandback, report: "needs-you" },
+    });
+    expect(parsed.success && parsed.data.lastHandback?.report).toBe("needs-you");
+    expect(AgentStateChangedSchema.safeParse({ ...validPayload, lastHandback }).success).toBe(true);
+    expect(
+      AgentStateChangedSchema.safeParse({
+        ...validPayload,
+        lastHandback: { ...lastHandback, report: "approve" },
+      }).success
+    ).toBe(false);
+  });
 });
 
 describe("other migrated event schemas (zod/mini)", () => {

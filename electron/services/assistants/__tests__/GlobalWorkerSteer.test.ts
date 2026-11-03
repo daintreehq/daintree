@@ -123,6 +123,8 @@ describe("GlobalWorkerSteer (#14551)", () => {
 
       expect(submits[0]!.handback).toBeDefined();
       expect(submits[0]!.text).toContain(`DAINTREE-DONE-${submits[0]!.handback}`);
+      // A worker that needs the owner to act can say so (#16190).
+      expect(submits[0]!.text).toContain(`DAINTREE-NEEDS-YOU-${submits[0]!.handback}`);
       expect(submits[0]!.promptAsWritten).toBe("Rebase onto develop");
     });
 

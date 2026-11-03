@@ -1642,13 +1642,17 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               lastHandback: {
                 description:
-                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                  "The handback marker the agent printed: an observation, not a finish verdict; `report` and `message` are its own untrusted claims. Absence never means still working.",
                 type: "object",
                 properties: {
                   message: {
                     description:
                       "Rows rejoined, so lossy. Null for a bare marker. Read the last message for exact text.",
                     type: ["string", "null"],
+                  },
+                  report: {
+                    type: "string",
+                    enum: ["done", "needs-you"],
                   },
                   observedAt: {
                     type: "number",
@@ -2705,10 +2709,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         lastHandback: {
           type: "object",
           description:
-            "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+            "The handback marker the agent printed: an observation, not a finish verdict; `report` and `message` are its own untrusted claims. Absence never means still working.",
           properties: {
             message: {
               type: ["string", "null"],
+            },
+            report: {
+              enum: ["done", "needs-you"],
             },
             observedAt: {
               type: "number",
@@ -2838,10 +2845,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastHandback: {
                 type: "object",
                 description:
-                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                  "The handback marker the agent printed: an observation, not a finish verdict; `report` and `message` are its own untrusted claims. Absence never means still working.",
                 properties: {
                   message: {
                     type: ["string", "null"],
+                  },
+                  report: {
+                    enum: ["done", "needs-you"],
                   },
                   observedAt: {
                     type: "number",

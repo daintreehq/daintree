@@ -108,6 +108,30 @@ describe("extracting a reply", () => {
     expect(extracted.reply?.text.endsWith("Voted A END-abc123")).toBe(true);
   });
 
+  it("ends the quote at a needs-you marker as at a done one (#16190)", () => {
+    const screen = [
+      "• Pushed. The deploy job waits for a reviewer.",
+      "DAINTREE-NEEDS-YOU-abc123: approve the deployment END-abc123",
+      "",
+      "› Ask Codex to do anything",
+    ].join("\n");
+    const extracted = extractReply(screen, 40, { message: "approve the deployment", code: "abc123" });
+    expect(extracted.reachedHandback).toBe(true);
+    expect(extracted.reply?.text.endsWith("approve the deployment END-abc123")).toBe(true);
+  });
+
+  it("ends at a needs-you marker wrapped at its hyphen", () => {
+    const screen = [
+      "• Sign in with gh auth login, then tell me.",
+      "DAINTREE-NEEDS-YOU-",
+      "abc123: sign in to gh END-abc123",
+      "› Ask",
+    ].join("\n");
+    const extracted = extractReply(screen, 40, { message: "sign in to gh", code: "abc123" });
+    expect(extracted.reachedHandback).toBe(true);
+    expect(extracted.reply?.text).not.toContain("› Ask");
+  });
+
   it("tells two turns with the same summary apart by the marker's code", () => {
     const screen = [
       "• First answer.",

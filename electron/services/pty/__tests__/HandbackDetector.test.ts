@@ -287,12 +287,17 @@ describe("findHandback for a scheduled run's launch (#15982)", () => {
     expect(findHandback(screen(echo), [runRequest], 1)).toBeUndefined();
   });
 
-  it("finds no needs-you report for a request that was never offered one", () => {
-    const text = "⏺ DAINTREE-NEEDS-YOU-k7f3qa: stuck END-k7f3qa";
-    expect(
-      findHandback(screen(text), [{ code: CODE, seq: 1, delivered: true }], 1)
-    ).toBeUndefined();
-    expect(findHandback(screen(text), [runRequest], 1)?.report).toBe("needs-you");
+  it("finds a needs-you report for any request, and reports it to the runs only for a run's (#16190)", () => {
+    const text = "⏺ DAINTREE-NEEDS-YOU-k7f3qa: approve the deploy END-k7f3qa";
+    expect(findHandback(screen(text), [{ code: CODE, seq: 1, delivered: true }], 1)).toMatchObject({
+      report: "needs-you",
+      run: false,
+      handback: { message: "approve the deploy", report: "needs-you" },
+    });
+    expect(findHandback(screen(text), [runRequest], 1)).toMatchObject({
+      report: "needs-you",
+      run: true,
+    });
   });
 
   it("takes the latest complete report of either form", () => {
@@ -360,5 +365,12 @@ describe("keepFirstObservation (#13128)", () => {
   it("treats a capture for another submission as fresh", () => {
     const next = { ...held, submissionToken: "tok-2", observedAt: 2_000 };
     expect(keepFirstObservation(held, next)).toBe(next);
+  });
+
+  it("takes a capture whose report alone changed, keeping the first observation (#16190)", () => {
+    const done = { ...held, report: "done" as const };
+    expect(
+      keepFirstObservation(done, { ...done, report: "needs-you", observedAt: 2_000 })
+    ).toEqual({ ...done, report: "needs-you" });
   });
 });

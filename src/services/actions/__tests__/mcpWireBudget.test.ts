@@ -587,7 +587,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 57_694): `agent.launch` takes `accountId`, so a caller can launch on one of
   // the agent's accounts, chosen apart from its preset, or explicitly on the
   // CLI's default login.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 57_850;
+  // 57_850 → 58_020 for #16190, measured at 58_000 B (+172 over develop's
+  // 57_828): `report` on `lastHandback` in the status and both wait results,
+  // whether the agent printed `done` or `needs-you`, now that every handback
+  // request offers both. A worker that needs the owner to act outside its
+  // terminal read the same as one that finished. Status results are parsed
+  // through their schema, so the field must be advertised to arrive; the wait
+  // schemas carry it as a bare enum, and the shared description adds only the
+  // words that label it the agent's own untrusted claim.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 58_020;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -978,7 +986,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // output schema, the host tools' outcome envelope plus what the attempt
   // observed (its end, the wake, whether ssh got in and a start went, ssh's
   // own words). Assistant-only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 176_000;
+  // 176_000 → 176_170 for #16190, measured at 176_149 B (+227 over develop's
+  // 175_922): the external tier's `report` on `lastHandback` (above), and the
+  // same word on `host.list`'s agent entries, which is what lets the global
+  // Assistant tell a worker that needs the owner from one that finished
+  // without a status read per project.
+  const MAX_COHORT_PAYLOAD_BYTES = 176_170;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

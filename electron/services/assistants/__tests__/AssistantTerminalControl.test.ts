@@ -8,6 +8,7 @@ import {
   liveAssistantTerminalControl,
 } from "../AssistantTerminalControl.js";
 import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
+import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
 import { helpOwnershipPrincipal, principalOwnerKey } from "../../mcp-server/resourceOwnership.js";
@@ -197,9 +198,10 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(lines[0]).toMatch(/^From the Daintree Assistant on Greg's Mac mini\. /);
       expect(lines[0]).toMatch(/orchestrator's brief/);
       expect(text).toContain("\n\nRun the suite on this branch.");
-      expect(
-        String(text).endsWith(`END-${code}`) || String(text).includes(`DAINTREE-DONE-${code}`)
-      ).toBe(true);
+      // Offered both markers, so a worker that needs the owner can say so (#16190).
+      expect(String(text).endsWith(`\n\n${buildHandbackInstruction(String(code), "run")}`)).toBe(
+        true
+      );
       expect(receipt).toMatchObject({ terminalId: "t-one", submissionToken: token });
     });
 
