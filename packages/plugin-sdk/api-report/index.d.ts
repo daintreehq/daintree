@@ -1902,7 +1902,13 @@ type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
  * is needed before anything can act on it. Callers bound to one view never
  * see this code — main collapses it into the ordinary miss for them.
  */
- | "TERMINAL_IN_OTHER_PROJECT" | "INVALID_URL"
+ | "TERMINAL_IN_OTHER_PROJECT"
+/**
+ * A send was refused because the terminal's agent was last observed waiting
+ * on a choice dialog (#16209): text typed there picks an option or is lost.
+ * Nothing was sent. Answer the dialog with keys, or send once it is gone.
+ */
+ | "TERMINAL_CHOICE_DIALOG" | "INVALID_URL"
 /**
  * A plugin on a remote host dispatched an action while no frontend drives
  * its project: nobody is attached whose view could run it.
@@ -2216,6 +2222,13 @@ interface AgentDetectionConfig {
      * Safe to scan from visible lines even when the cursor line is active output.
      */
     promptHintPatterns?: string[];
+    /**
+     * The key-hint row a CLI draws under a select dialog whose options carry no
+     * numbers (#16209). Matched against the last row of a screen whose bottom
+     * block also holds a highlighted option, it reads the wait as a choice
+     * rather than an empty prompt, whatever the dialog asks. Case-insensitive.
+     */
+    choiceDialogFooterPatterns?: string[];
     /**
      * Number of lines from end of output to scan (default: 10).
      */
