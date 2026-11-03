@@ -465,15 +465,50 @@ describe("HostControlLinkClient.status (#16191)", () => {
     projects: [{ projectId: "p1" }, { projectId: "p2", terminalIds: ["t-2"] }],
     includeOutput: null,
   };
+  const DONE = { status: "done", projectId: "p1", result: null, complete: true, omitted: 0 };
 
-  it("proves the sender, then asks once for every project, giving the host what is left of the wait", async () => {
-    const { relay, calls } = client((method) =>
+  it("proves the sender, then asks once for every project with what is left of the wait", async () => {
+    vi.useFakeTimers();
+    try {
+      // Proving the sender takes 2 s of the 5 s wait.
+      const { relay, calls } = client((method) =>
+        method === AssistantLinkMethod.AUTHENTICATE
+          ? new Promise((resolve) => setTimeout(() => resolve(null), 2_000))
+          : { status: "done", projects: [DONE] }
+      );
+      const pending = relay.status("studio", STATUS, 5_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(pending).resolves.toEqual({ status: "done", projects: [DONE] });
+      expect(calls.map((call) => call.method)).toEqual([
+        AssistantLinkMethod.AUTHENTICATE,
+        AssistantLinkMethod.STATUS,
+      ]);
+      expect(calls[1]).toMatchObject({
+        payload: { ...STATUS, runMs: 3_000 },
+        timeoutMs: 3_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a project it can't parse as that project unreadable, keeping the rest", async () => {
+    const { relay } = client((method) =>
       method === AssistantLinkMethod.STATUS
         ? {
             status: "done",
             projects: [
-              { status: "done", projectId: "p1", result: null, complete: true, omitted: 0 },
+              DONE,
+              // A failure this Shell doesn't know, a status a newer host added, and a garbled read.
               { status: "failed", projectId: "p2", reason: "a reason from later" },
+              { status: "postponed", projectId: "p3", until: 9 },
+              {
+                status: "done",
+                projectId: "p4",
+                result: { terminals: "everything", source: "pty", unavailableFields: [] },
+                complete: true,
+                omitted: 0,
+              },
             ],
           }
         : null
@@ -481,24 +516,15 @@ describe("HostControlLinkClient.status (#16191)", () => {
     await expect(relay.status("studio", STATUS, 5_000)).resolves.toEqual({
       status: "done",
       projects: [
-        { status: "done", projectId: "p1", result: null, complete: true, omitted: 0 },
-        // A failure this Shell doesn't know reads as one it couldn't read.
+        DONE,
         { status: "failed", projectId: "p2", reason: "unreadable" },
+        { status: "failed", projectId: "p3", reason: "unreadable" },
+        { status: "failed", projectId: "p4", reason: "unreadable" },
       ],
     });
-    expect(calls.map((call) => call.method)).toEqual([
-      AssistantLinkMethod.AUTHENTICATE,
-      AssistantLinkMethod.STATUS,
-    ]);
-    const sent = calls[1]!;
-    expect(sent.payload).toMatchObject(STATUS);
-    const { runMs } = sent.payload as { runMs: number };
-    // Never more than the wait, and the host is told to answer inside it.
-    expect(runMs).toBeLessThanOrEqual(5_000);
-    expect(sent.timeoutMs).toBeGreaterThanOrEqual(runMs);
   });
 
-  it("names a host from before it unsupported, and an unreadable answer invalid", async () => {
+  it("names a host from before it unsupported, and an answer it can't read at all invalid", async () => {
     const old = client((method) => {
       if (method === AssistantLinkMethod.STATUS) {
         throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
@@ -510,20 +536,7 @@ describe("HostControlLinkClient.status (#16191)", () => {
     });
 
     const garbled = client((method) =>
-      method === AssistantLinkMethod.STATUS
-        ? {
-            status: "done",
-            projects: [
-              {
-                status: "done",
-                projectId: "p1",
-                result: { terminals: "everything", source: "pty", unavailableFields: [] },
-                complete: true,
-                omitted: 0,
-              },
-            ],
-          }
-        : null
+      method === AssistantLinkMethod.STATUS ? { status: "done", projects: "everything" } : null
     );
     await expect(garbled.relay.status("studio", STATUS, 5_000)).rejects.toMatchObject({
       code: "INTERNAL",

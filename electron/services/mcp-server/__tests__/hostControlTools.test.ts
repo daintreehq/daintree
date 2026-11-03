@@ -280,6 +280,13 @@ describe("runHostControlTool (#13493)", () => {
           ],
         },
         { targets: [{ hostId: "studio", projectId: "p2" }], includeOutput: { lines: 51 } },
+        // Every id is echoed back with its outcome, so together they are bounded.
+        {
+          targets: Array.from({ length: 40 }, (_, index) => ({
+            hostId: "studio",
+            projectId: `${index}-${"p".repeat(250)}`,
+          })),
+        },
       ].map((bad) => runHostControlTool("host.status", bad, access, { tier: "core" }))
     );
     // The same project on two hosts is two projects.

@@ -380,23 +380,30 @@ export const StatusPayloadSchema = z
 export type StatusPayload = z.infer<typeof StatusPayloadSchema>;
 
 /**
- * Why one project's read gave nothing: its answer was an error or couldn't be
- * read as a status (`unreadable`), its agents couldn't be listed when no
- * terminals were named (`agents-unread`), or it didn't answer in time
- * (`timeout`). A Shell reading an older host project by project also meets a
- * link it can't use (`unreachable`) and a host that runs no tools for other
- * machines' assistants (`unsupported`).
+ * Why one project's read gave nothing: its status read answered with an error
+ * (`tool-error`) or with something that isn't a status (`unreadable`); its
+ * agents couldn't be listed when no terminals were named, just now
+ * (`agents-unread`) or ever on this host (`agents-unsupported`); or it didn't
+ * answer in time (`timeout`). A Shell reading an older host project by project
+ * also meets a link it can't use (`unreachable`), a host that runs no tools for
+ * other machines' assistants (`unsupported`), one that turned this Shell's
+ * sender away (`sender-refused`) and one taking no more calls just now
+ * (`rate-limited`).
  */
 export const PROJECT_STATUS_FAILURES = [
+  "tool-error",
   "unreadable",
   "agents-unread",
+  "agents-unsupported",
   "timeout",
   "unreachable",
   "unsupported",
+  "sender-refused",
+  "rate-limited",
 ] as const;
 export type ProjectStatusFailure = (typeof PROJECT_STATUS_FAILURES)[number];
 
-export const ProjectStatusAnswerSchema = z.discriminatedUnion("status", [
+const KnownProjectStatusAnswerSchema = z.discriminatedUnion("status", [
   z
     .object({
       status: z.literal("done"),
@@ -435,6 +442,23 @@ export const ProjectStatusAnswerSchema = z.discriminatedUnion("status", [
       ]),
     })
     .strip(),
+]);
+
+/**
+ * One project's read. A project answered in a way this Shell can't read, a
+ * status a newer host added included, is that project unreadable: its
+ * siblings in the same answer still count.
+ */
+export const ProjectStatusAnswerSchema = z.union([
+  KnownProjectStatusAnswerSchema,
+  z
+    .object({ projectId: id })
+    .strip()
+    .transform(({ projectId }) => ({
+      status: "failed" as const,
+      projectId,
+      reason: "unreadable" as const,
+    })),
 ]);
 export type ProjectStatusAnswer = z.infer<typeof ProjectStatusAnswerSchema>;
 

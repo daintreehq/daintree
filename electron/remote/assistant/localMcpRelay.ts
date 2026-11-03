@@ -155,6 +155,7 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
                   { tool: STATUS_READ_TOOL, args, runMs }
                 ),
           ...(read ? { readAgents: (projectId) => read({ projectId }) } : {}),
+          hasProject: deps.hasProject,
           ...(deps.now ? { now: deps.now } : {}),
         },
         payload.projects,

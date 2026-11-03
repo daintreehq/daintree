@@ -11,6 +11,7 @@ import {
   HOST_STATUS_DEFAULT_LINES,
   HOST_STATUS_TERMINALS_MAX,
 } from "../../../shared/types/hostControl.js";
+import { unreadAgentDirectory } from "../../../shared/types/agentDirectory.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import { boundTerminalStatusOutput } from "../../../shared/utils/terminalOutputBudget.js";
 import type { HostControlLinkClient } from "./HostControlLinkClient.js";
@@ -90,17 +91,27 @@ const NO_AGENTS_DETAIL = "It lists no agents.";
 /** What one project's read came to, in fixed words: never anything a host said. */
 const FAILURE_READS: Record<
   ProjectStatusFailure,
-  { outcome: Exclude<HostControlOutcomeCode, "ok">; detail: string }
+  { outcome: Exclude<HostControlOutcomeCode, "ok">; detail: string; retryAfterMs?: number }
 > = {
-  unreadable: {
+  "tool-error": {
     outcome: "policy_rejected",
     detail:
-      "The project answered with an error, or with nothing readable as a status, so nothing was read. host.call terminal.getStatus there shows its own words.",
+      "The project's status read answered with an error, so nothing was read. host.call terminal.getStatus there shows its own words.",
   },
-  "agents-unread": {
+  unreadable: {
     outcome: "unsupported",
     detail:
-      "Its agents couldn't be listed there, so nothing was read. Name terminalIds: host.list with includeAgents lists them.",
+      "The project answered with something that isn't a status this Shell reads; the host may run another Daintree. Nothing was read.",
+  },
+  "agents-unread": {
+    outcome: "expired",
+    detail:
+      "Its agents couldn't be listed just now, so nothing was read. Read it again, or name its terminalIds.",
+  },
+  "agents-unsupported": {
+    outcome: "unsupported",
+    detail:
+      "The host can't list its agents for other machines, so nothing was read. Name terminalIds: terminal.list through host.call lists them.",
   },
   timeout: {
     outcome: "expired",
@@ -112,6 +123,8 @@ const FAILURE_READS: Record<
     detail:
       "The host can't run tools for other machines' assistants; it may need a newer Daintree. Nothing was read.",
   },
+  "sender-refused": { outcome: "policy_rejected", detail: SENDER_REFUSED_DETAIL },
+  "rate-limited": { outcome: "rate_limited", detail: RATE_LIMITED_DETAIL, retryAfterMs: 1_000 },
 };
 
 function refusalRead(
@@ -157,8 +170,8 @@ function readOf(answer: ProjectStatusAnswer, local: boolean): TargetRead {
       return settled(outcome, detail);
     }
     case "failed": {
-      const { outcome, detail } = FAILURE_READS[answer.reason];
-      return settled(outcome, detail);
+      const { outcome, detail, retryAfterMs } = FAILURE_READS[answer.reason];
+      return settled(outcome, detail, retryAfterMs ?? null);
     }
   }
 }
@@ -186,15 +199,26 @@ function within<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
 
 const TIMED_OUT = Symbol("timed-out");
 
-function linkFailureRead(error: unknown): TargetRead {
+/** What a link that threw says of a read, by its code alone. */
+function linkFailureOf(error: unknown): ProjectStatusFailure {
   switch (codeOf(error)) {
+    case "UNSUPPORTED":
+      return "unsupported";
     case "PERMISSION":
-      return settled("policy_rejected", SENDER_REFUSED_DETAIL);
+      return "sender-refused";
     case "RATE_LIMITED":
-      return settled("rate_limited", RATE_LIMITED_DETAIL, 1_000);
+      return "rate-limited";
+    // Sent, and no answer came back in time.
+    case "OUTCOME_UNKNOWN":
+      return "timeout";
     default:
-      return settled("disconnected", DISCONNECTED_DETAIL);
+      return "unreachable";
   }
+}
+
+function linkFailureRead(error: unknown): TargetRead {
+  const { outcome, detail, retryAfterMs } = FAILURE_READS[linkFailureOf(error)];
+  return settled(outcome, detail, retryAfterMs ?? null);
 }
 
 /**
@@ -231,16 +255,20 @@ function readProjectByProject(
             runMs
           );
         } catch (error) {
-          return {
-            status: "failed",
-            reason: codeOf(error) === "UNSUPPORTED" ? "unsupported" : "unreachable",
-          };
+          return { status: "failed", reason: linkFailureOf(error) };
         }
       },
       ...(agents
         ? {
             readAgents: async (projectId, runMs) => {
-              const answer = await agents.call(client, hostId, { projectId }, runMs);
+              const answer = await agents
+                .call(client, hostId, { projectId }, runMs)
+                .catch((error: unknown) => {
+                  if (codeOf(error) === "UNSUPPORTED") return null;
+                  throw error;
+                });
+              // A host from before agent directories could be read: it never lists them.
+              if (answer === null) return unreadAgentDirectory("unsupported");
               if (answer.status !== "done") throw new Error("The host didn't list its agents");
               return answer.directory;
             },
@@ -422,6 +450,13 @@ export function fitHostStatus(result: HostStatusResult, maxBytes: number): HostS
     drop(terminals.slice(HOST_STATUS_TERMINALS_MAX));
     terminals = terminals.slice(0, HOST_STATUS_TERMINALS_MAX);
   }
+  const counted = (): HostStatusTargetResult[] =>
+    result.targets.map((target, index) => {
+      const lost = dropped.get(index) ?? 0;
+      return lost === 0 ? target : { ...target, complete: false, omitted: target.omitted + lost };
+    });
+  const capped = { ...result, targets: counted(), terminals };
+  if (utf8Bytes(capped) <= maxBytes) return capped;
   // Measured with every count at the most it can reach, so a count that gains
   // digits never carries the answer past the cap.
   const worstTargets = result.targets.map((target, index) => ({
@@ -447,11 +482,7 @@ export function fitHostStatus(result: HostStatusResult, maxBytes: number): HostS
     drop(terminals.slice(kept));
     terminals = terminals.slice(0, kept);
   }
-  const targets: HostStatusTargetResult[] = result.targets.map((target, index) => {
-    const lost = dropped.get(index) ?? 0;
-    return lost === 0 ? target : { ...target, complete: false, omitted: target.omitted + lost };
-  });
-  return boundTerminalStatusOutput({ ...result, targets, terminals }, maxBytes);
+  return boundTerminalStatusOutput({ ...result, targets: counted(), terminals }, maxBytes);
 }
 
 function outputOf(includeOutput: HostStatusArgs["includeOutput"]): StatusOutput | null {
@@ -534,7 +565,10 @@ export async function runHostStatus(
       complete: read.answer?.complete ?? false,
       omitted: read.answer?.omitted ?? 0,
     });
-    for (const entry of result?.terminals ?? []) terminals.push({ ...entry, hostId, projectId });
+    // No token is ever asked after, so no submission is advertised: one a host sent anyway goes.
+    for (const { submission: _submission, ...entry } of result?.terminals ?? []) {
+      terminals.push({ ...entry, hostId, projectId });
+    }
   }
   return fitHostStatus(
     {

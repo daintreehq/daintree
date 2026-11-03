@@ -1,7 +1,6 @@
 import type { z } from "zod";
 import { isFullAgentDirectory, type AgentDirectory } from "../../../shared/types/agentDirectory.js";
 import { TerminalStatusResultSchema } from "../../../shared/types/terminalStatusSchemas.js";
-import { boundTerminalStatusOutput } from "../../../shared/utils/terminalOutputBudget.js";
 import { redactSecrets } from "../../services/redactSecrets.js";
 import type {
   McpCallAnswer,
@@ -34,6 +33,12 @@ export interface ProjectStatusReadDeps {
   ): Promise<McpCallAnswer | ProjectStatusFailed>;
   /** The agents the machine's own directory lists in one project; absent, none can be listed. */
   readAgents?(projectId: string, runMs: number): Promise<AgentDirectory>;
+  /**
+   * Whether the machine has the project, asked before its agents are listed,
+   * so one it doesn't have never reads as one with none; absent, the status
+   * read's own admission is the only check.
+   */
+  hasProject?(projectId: string): Promise<boolean>;
   now?: () => number;
 }
 
@@ -62,12 +67,13 @@ function agentTerminalIds(directory: AgentDirectory, projectId: string): string[
 }
 
 /**
- * One entry with what it read off a screen run through `redactSecrets` (#16191):
- * the tail, the handback's message and the parsed check's words. Everything
- * else is a state, a time or fixed text.
+ * One entry with its words run through `redactSecrets` (#16191): the tail, the
+ * handback's message, the parsed check's and an error, which a view's answer
+ * can fill from what failed. Everything else is a state, a time or an id.
  */
 export function redactStatusEntry<T extends StatusEntry>(entry: T): T {
   const redacted: T = { ...entry };
+  if (typeof entry.error === "string") redacted.error = redactSecrets(entry.error);
   if (typeof entry.recentOutput === "string") {
     redacted.recentOutput = redactSecrets(entry.recentOutput);
   }
@@ -104,18 +110,23 @@ async function readProject(
   let complete = true;
   let omitted = 0;
   if (terminalIds === undefined) {
+    const has = deps.hasProject;
+    const known = has
+      ? await Promise.resolve()
+          .then(() => has(projectId))
+          .catch(() => null)
+      : true;
+    if (known === null) return failed(projectId, "agents-unread");
+    if (!known) return { status: "refused", projectId, reason: "no-project" };
     const read = deps.readAgents;
-    if (!read) return failed(projectId, "agents-unread");
+    if (!read) return failed(projectId, "agents-unsupported");
     const directory = await Promise.resolve()
       .then(() => read(projectId, deadline - now()))
       .catch(() => null);
-    if (
-      directory === null ||
-      directory.coverage === "unreachable" ||
-      directory.coverage === "unsupported"
-    ) {
+    if (directory === null || directory.coverage === "unreachable") {
       return failed(projectId, "agents-unread");
     }
+    if (directory.coverage === "unsupported") return failed(projectId, "agents-unsupported");
     // Only a whole, current directory says these are all of them.
     complete = isFullAgentDirectory(directory);
     omitted = directory.omitted;
@@ -141,7 +152,7 @@ async function readProject(
       return failed(projectId, "unreadable");
     case "done": {
       // An error, or a status cut to text to fit, is nothing to show as one.
-      if (answer.result.isError) return failed(projectId, "unreadable");
+      if (answer.result.isError) return failed(projectId, "tool-error");
       const parsed = TerminalStatusResultSchema.safeParse(answer.result.structured);
       if (!parsed.success) return failed(projectId, "unreadable");
       return {
@@ -173,44 +184,12 @@ export async function readProjectStatuses(
   return Promise.all(
     projects.map((project) =>
       within(
-        readProject(deps, project, includeOutput, deadline),
+        readProject(deps, project, includeOutput, deadline).catch(() =>
+          failed(project.projectId, "unreadable")
+        ),
         runMs,
         failed(project.projectId, "timeout")
       )
     )
-  );
-}
-
-/**
- * The projects' tails cut so the whole answer's compact JSON fits `maxBytes`,
- * shared fairly across every terminal in it as one status read's are. Only
- * tails are cut; an answer whose states alone overrun is left to its carrier.
- */
-export function fitProjectStatuses(
-  projects: ProjectStatusAnswer[],
-  maxBytes: number
-): ProjectStatusAnswer[] {
-  const owners: number[] = [];
-  const terminals: StatusEntry[] = [];
-  const envelope = projects.map((project, index) => {
-    if (project.status !== "done" || project.result === null) return project;
-    for (const entry of project.result.terminals) {
-      owners.push(index);
-      terminals.push(entry);
-    }
-    return { ...project, result: { ...project.result, terminals: [] } };
-  });
-  const fitted = boundTerminalStatusOutput({ projects: envelope, terminals }, maxBytes).terminals;
-  const byProject = new Map<number, StatusEntry[]>();
-  fitted.forEach((entry, position) => {
-    const index = owners[position]!;
-    const list = byProject.get(index) ?? [];
-    list.push(entry);
-    byProject.set(index, list);
-  });
-  return envelope.map((project, index) =>
-    project.status === "done" && project.result !== null
-      ? { ...project, result: { ...project.result, terminals: byProject.get(index) ?? [] } }
-      : project
   );
 }

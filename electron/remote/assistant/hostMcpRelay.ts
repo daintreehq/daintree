@@ -10,7 +10,6 @@ import {
 import {
   AgentsPayloadSchema,
   AssistantLinkMethod,
-  MAX_RELAY_RESULT_BYTES,
   McpCallPayloadSchema,
   type AgentsAnswer,
   type McpCallAnswer,
@@ -21,7 +20,7 @@ import {
   ThrowawayCallPayloadSchema,
   ThrowawayReleasePayloadSchema,
 } from "./linkMethods.js";
-import { fitProjectStatuses, readProjectStatuses, STATUS_READ_TOOL } from "./projectStatusRead.js";
+import { readProjectStatuses, STATUS_READ_TOOL } from "./projectStatusRead.js";
 import {
   createMcpRelayExecutor,
   type McpRelayExecutorDeps,
@@ -283,6 +282,7 @@ export function installHostMcpRelay(
                 { tool: STATUS_READ_TOOL, args, runMs }
               ),
             ...(read ? { readAgents: (projectId) => read({ projectId }) } : {}),
+            hasProject: deps.hasProject,
             ...(deps.now ? { now: deps.now } : {}),
           },
           payload.projects,
@@ -293,7 +293,10 @@ export function installHostMcpRelay(
         if (disposed || !deps.acceptsRemoteControl()) {
           return { status: "refused", reason: "control-off" };
         }
-        return { status: "done", projects: fitProjectStatuses(projects, MAX_RELAY_RESULT_BYTES) };
+        // Tails are shared out once, on the Shell, across every host's terminals:
+        // each project's read is already held to one MCP result, and the link
+        // carries a long answer in fragments.
+        return { status: "done", projects };
       }
     );
     session.registerCallHandler(

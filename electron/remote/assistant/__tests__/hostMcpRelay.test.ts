@@ -1646,6 +1646,32 @@ describe("a Shell reading this host's agents' status (#16191)", () => {
       "terminal.getStatus",
       "terminal.list",
     ]);
+    // The session the read opened carries the call's notices and questions back over its link.
+    const spec = opened[0]!.spec;
+    spec.deliverNotices([
+      {
+        helpSessionId: "help-1",
+        callId: "call-1",
+        terminalId: "t-1",
+        observation: { kind: "closed" },
+        lastTransitionAt: null,
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(links[0]!.sent.map((sent) => sent.method)).toContain(AssistantLinkMethod.RELAY_NOTICES)
+    );
+    await spec.requestApproval({
+      callId: "call-1",
+      actionId: "worktree.delete",
+      args: { worktreeId: "/wt/feature" },
+      lines: ["No uncommitted changes."],
+    });
+    expect(links[0]!.sent.map((sent) => sent.method)).toContain(
+      AssistantLinkMethod.RELAY_APPROVE_TIMED
+    );
+    expect(
+      links[0]!.sent.find((sent) => sent.method === AssistantLinkMethod.RELAY_APPROVE_TIMED)
+    ).toMatchObject({ payload: { helpSessionId: "help-1", projectId: "project-1" } });
     relay.dispose();
   });
 
@@ -1661,9 +1687,12 @@ describe("a Shell reading this host's agents' status (#16191)", () => {
         live("t-c", "project-9", "worker"),
       ],
     }));
-    const { links, opened, relay } = harness([["link-1", "sender-a"]], { readAgents }, async () =>
-      statusAnswer("t-a")
-    );
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { readAgents }, async () => {
+      const answer = statusAnswer("t-a");
+      const result = answer.structuredContent as { terminals: Array<{ terminalId: string }> };
+      result.terminals.push({ ...result.terminals[0]!, terminalId: "t-b" });
+      return buildToolCallResult(result, { structuredContent: result });
+    });
     const answer = await links[0]!.ask(
       AssistantLinkMethod.STATUS,
       payload({ projects: [{ projectId: "project-1" }, { projectId: "project-2" }] })
@@ -1675,7 +1704,12 @@ describe("a Shell reading this host's agents' status (#16191)", () => {
     expect(answer).toMatchObject({
       status: "done",
       projects: [
-        { status: "done", projectId: "project-1", complete: true },
+        {
+          status: "done",
+          projectId: "project-1",
+          complete: true,
+          result: { terminals: [{ terminalId: "t-a" }, { terminalId: "t-b" }] },
+        },
         { status: "done", projectId: "project-2", result: null, complete: true, omitted: 0 },
       ],
     });
@@ -1691,10 +1725,34 @@ describe("a Shell reading this host's agents' status (#16191)", () => {
       )
     ).resolves.toEqual({
       status: "done",
-      projects: [{ status: "failed", projectId: "project-1", reason: "agents-unread" }],
+      projects: [{ status: "failed", projectId: "project-1", reason: "agents-unsupported" }],
     });
     expect(none.opened).toHaveLength(0);
     none.relay.dispose();
+
+    // A project this host doesn't have is never one with no agents.
+    const readAgents = vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 7,
+      complete: true,
+      omitted: 0,
+      entries: [],
+    }));
+    const gone = harness([["link-1", "sender-a"]], {
+      readAgents,
+      hasProject: async () => false,
+    });
+    await expect(
+      gone.links[0]!.ask(
+        AssistantLinkMethod.STATUS,
+        payload({ projects: [{ projectId: "project-1" }] })
+      )
+    ).resolves.toEqual({
+      status: "done",
+      projects: [{ status: "refused", projectId: "project-1", reason: "no-project" }],
+    });
+    expect(readAgents).not.toHaveBeenCalled();
+    gone.relay.dispose();
 
     const stale = harness(
       [["link-1", "sender-a"]],
@@ -1781,7 +1839,7 @@ describe("a Shell reading this host's agents' status (#16191)", () => {
       status: "done",
       projects: [
         { status: "refused", projectId: "project-0", reason: "no-project" },
-        { status: "failed", projectId: "project-1", reason: "unreadable" },
+        { status: "failed", projectId: "project-1", reason: "tool-error" },
         { status: "failed", projectId: "project-2", reason: "unreadable" },
         { status: "failed", projectId: "project-3", reason: "timeout" },
       ],

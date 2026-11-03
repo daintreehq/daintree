@@ -1351,7 +1351,7 @@ describe("host.status over a real link (#16191)", () => {
       "help-a",
       {
         targets: [
-          { hostId: HOST_ID, projectId: PROJECT, terminalIds: ["w-1", "w-elsewhere"] },
+          { hostId: HOST_ID, projectId: PROJECT, terminalIds: ["w-1", "w-unknown"] },
           { hostId: HOST_ID, projectId: "proj-gone", terminalIds: ["w-2"] },
         ],
         includeOutput: true,
@@ -1368,7 +1368,7 @@ describe("host.status over a real link (#16191)", () => {
         projectId: PROJECT,
         global: false,
         args: {
-          terminalIds: ["w-1", "w-elsewhere"],
+          terminalIds: ["w-1", "w-unknown"],
           includeOutput: { lines: 10, stripAnsi: true },
         },
       },
@@ -1388,7 +1388,7 @@ describe("host.status over a real link (#16191)", () => {
       {
         hostId: HOST_ID,
         projectId: PROJECT,
-        terminalId: "w-elsewhere",
+        terminalId: "w-unknown",
         error: "Terminal not found or status unavailable",
       },
     ]);

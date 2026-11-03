@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../../shared/config/mcpLimits.js";
 import {
+  HostStatusArgsSchema,
   HostStatusResultSchema,
   type HostStatusResult,
 } from "../../../../shared/types/hostControl.js";
@@ -287,6 +288,8 @@ describe("HostCallRuntime host.status (#16191)", () => {
       "ok",
     ]);
     expect(vi.getTimerCount()).toBe(0);
+    // Its link is let go however the read ended.
+    expect(runtime.hasCallInFlight("studio")).toBe(false);
     runtime.dispose();
   });
 
@@ -438,6 +441,135 @@ describe("HostCallRuntime host.status (#16191)", () => {
   });
 });
 
+describe("HostCallRuntime host.status on an older host (#16191)", () => {
+  const unsupported = () => new AppError({ code: "UNSUPPORTED", message: "no such method" });
+
+  it("says why each project couldn't be read the old way, as the link said it", async () => {
+    const codes: Record<string, string> = {
+      p1: "RATE_LIMITED",
+      p2: "PERMISSION",
+      p3: "OUTCOME_UNKNOWN",
+      p4: "HOST_DISCONNECTED",
+    };
+    const { runtime } = setup({
+      status: async () => {
+        throw unsupported();
+      },
+      relayCall: async (_hostId, request) => {
+        throw new AppError({
+          code: codes[request.projectId] as never,
+          message: "words from the link",
+        });
+      },
+    });
+    const result = await read(runtime, {
+      targets: ["p1", "p2", "p3", "p4"].map((projectId) => ({
+        hostId: "studio",
+        projectId,
+        terminalIds: ["t-1"],
+      })),
+    });
+    expect(result.targets.map((each) => [each.outcome, each.retryAfterMs])).toEqual([
+      ["rate_limited", 1_000],
+      ["policy_rejected", null],
+      ["expired", null],
+      ["disconnected", null],
+    ]);
+    expect(JSON.stringify(result)).not.toContain("words from the link");
+    expect(result.hosts).toEqual([{ hostId: "studio", coverage: "ok" }]);
+    runtime.dispose();
+  });
+
+  it("reads the old way only within what is left of the host's time", async () => {
+    vi.useFakeTimers();
+    const { runtime, relayCall } = setup({
+      status: () =>
+        new Promise<StatusAnswer>((_resolve, reject) =>
+          setTimeout(() => reject(unsupported()), HOST_STATUS_READ_MS - 500)
+        ),
+    });
+    const pending = runtime.status(
+      "a",
+      { targets: [{ hostId: "studio", projectId: "p1", terminalIds: ["t-1"] }] },
+      { tier: "core" }
+    );
+    await vi.advanceTimersByTimeAsync(HOST_STATUS_READ_MS);
+    const outcome = await pending;
+    // Under a second was left: too little for a relayed call, so none was sent.
+    expect(relayCall).not.toHaveBeenCalled();
+    expect(outcome.ok && outcome.value.targets[0]!.outcome).toBe("expired");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(runtime.hasCallInFlight("studio")).toBe(false);
+    runtime.dispose();
+  });
+
+  it("says a host that can't list its agents can't read a project named without terminals", async () => {
+    const { runtime, relayCall } = setup({
+      status: async () => {
+        throw unsupported();
+      },
+      agents: async () => {
+        throw unsupported();
+      },
+    });
+    const result = await read(runtime, { targets: [{ hostId: "studio", projectId: "p1" }] });
+    expect(result.targets[0]).toMatchObject({ outcome: "unsupported", complete: false });
+    expect(result.targets[0]!.detail).toContain("terminal.list");
+    expect(relayCall).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+});
+
+describe("HostCallRuntime host.status answer shape (#16191)", () => {
+  it("never advertises a submission, whatever a host sent", async () => {
+    const { runtime } = setup({
+      status: answering((projectId) =>
+        done(projectId, [
+          entry("s-1", { submission: { token: "tok", phase: "pty_written", at: 1 } }),
+        ])
+      ),
+    });
+    const result = await read(runtime, {
+      targets: [{ hostId: "studio", projectId: "p1", terminalIds: ["s-1"] }],
+    });
+    expect(result.terminals[0]).not.toHaveProperty("submission");
+    runtime.dispose();
+  });
+
+  it("fits every target's answer in one result at the longest ids a call may name", async () => {
+    // 64 projects whose ids, with their host's, take the whole allowance in
+    // three-byte characters, each answered with one of the longest details.
+    const targets = Array.from({ length: 64 }, (_, index) => ({
+      hostId: "studio",
+      projectId: `${index}`.padStart(2, "0") + "界".repeat(40),
+    }));
+    const parsed = HostStatusArgsSchema.safeParse({ targets });
+    expect(parsed.success).toBe(true);
+    expect(
+      HostStatusArgsSchema.safeParse({
+        targets: [...targets.slice(1), { hostId: "studio", projectId: "000" + "界".repeat(40) }],
+      }).success
+    ).toBe(false);
+    if (!parsed.success) return;
+    const { runtime } = setup({
+      status: async () => {
+        throw new AppError({ code: "UNSUPPORTED", message: "no such method" });
+      },
+      agents: async () => {
+        throw new AppError({ code: "UNSUPPORTED", message: "no such method" });
+      },
+    });
+    const outcome = await runtime.status("a", parsed.data, { tier: "core" });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.targets.every((each) => each.outcome === "unsupported")).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(outcome.value), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    runtime.dispose();
+  });
+});
+
 describe("fitHostStatus (#16191)", () => {
   const target = (hostId: string, projectId: string) => ({
     hostId,
@@ -503,9 +635,53 @@ describe("fitHostStatus (#16191)", () => {
     expect(fitted.terminals.length).toBeLessThan(200);
     // Nothing kept was cut: whole entries are left out, from the end, and counted.
     for (const kept of fitted.terminals) expect(kept.lastHandback?.message).toBe(handback.message);
-    const omitted = fitted.targets.reduce((sum, each) => sum + each.omitted, 0);
-    expect(omitted + fitted.terminals.length).toBe(200);
+    // Each target counts exactly its own terminals left out.
+    for (const projectId of ["p1", "p2"]) {
+      const kept = fitted.terminals.filter((terminal) => terminal.projectId === projectId).length;
+      const counted = fitted.targets.find((each) => each.projectId === projectId)!;
+      expect(counted.omitted).toBe(100 - kept);
+      expect(counted.complete).toBe(kept === 100);
+    }
     expect(fitted.targets[1]).toMatchObject({ complete: false });
+  });
+
+  it("leaves an answer that fits exactly as it is, state-only or with output", () => {
+    const stateOnly = {
+      hosts: [{ hostId: "studio", coverage: "ok" }],
+      targets: [target("studio", "p1")],
+      terminals: [{ ...entry("t-1"), hostId: "studio", projectId: "p1" }],
+    } as HostStatusResult;
+    expect(fitHostStatus(stateOnly, bytes(stateOnly))).toEqual(stateOnly);
+    const withOutput = {
+      ...stateOnly,
+      terminals: [
+        { ...entry("t-1", { recentOutput: "" }), hostId: "studio", projectId: "p1" },
+        { ...entry("t-2", { recentOutput: "ok" }), hostId: "studio", projectId: "p1" },
+      ],
+    } as HostStatusResult;
+    expect(fitHostStatus(withOutput, bytes(withOutput))).toEqual(withOutput);
+  });
+
+  it("counts by host and project, so the same project id on two hosts is two targets", () => {
+    const result = {
+      hosts: [
+        { hostId: "studio", coverage: "ok" },
+        { hostId: "mini", coverage: "ok" },
+      ],
+      targets: [target("studio", "p1"), target("mini", "p1")],
+      terminals: Array.from({ length: 300 }, (_, index) => ({
+        terminalId: `t-${index}`,
+        agentId: null,
+        agentState: null,
+        hostId: index < 200 ? "studio" : "mini",
+        projectId: "p1",
+      })),
+    } as HostStatusResult;
+    const fitted = fitHostStatus(result, Number.MAX_SAFE_INTEGER);
+    expect(fitted.targets.map((each) => [each.hostId, each.omitted])).toEqual([
+      ["studio", 0],
+      ["mini", 44],
+    ]);
   });
 
   it("carries no more terminals than its cap, counting the rest", () => {

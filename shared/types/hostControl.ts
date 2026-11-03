@@ -772,6 +772,15 @@ export const HOST_STATUS_TERMINALS_MAX = 256;
 /** Lines of output per terminal by default: fewer than one project's read, since many share the answer. */
 export const HOST_STATUS_DEFAULT_LINES = 10;
 export const HOST_STATUS_MAX_LINES = 50;
+/**
+ * Most UTF-8 bytes the hosts and projects one `host.status` names may take
+ * together. Each is echoed back with its outcome, so this keeps every
+ * target's answer inside one MCP result whatever its terminals take; 64 real
+ * project ids and host ids use well under it.
+ */
+export const HOST_STATUS_TARGET_ID_BYTES_MAX = 8 * 1024;
+
+const utf8 = new TextEncoder();
 
 const HostStatusTargetSchema = z.object({
   hostId: hostIdSchema,
@@ -794,6 +803,14 @@ export const HostStatusArgsSchema = z.object({
       (targets) =>
         new Set(targets.map(({ hostId, projectId }) => `${hostId}\u0000${projectId}`)).size ===
         targets.length
+    )
+    .refine(
+      (targets) =>
+        targets.reduce(
+          (sum, { hostId, projectId }) =>
+            sum + utf8.encode(hostId).length + utf8.encode(projectId).length,
+          0
+        ) <= HOST_STATUS_TARGET_ID_BYTES_MAX
     )
     .describe("1-64 projects, each named once, on any hosts."),
   includeOutput: z

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ProjectStatusAnswer } from "../linkMethods.js";
-import { fitProjectStatuses, redactStatusEntry } from "../projectStatusRead.js";
+import { createLocalMcpRelay } from "../localMcpRelay.js";
+import { readProjectStatuses, redactStatusEntry } from "../projectStatusRead.js";
 
 const TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2";
 
@@ -14,6 +14,7 @@ describe("redactStatusEntry (#16191)", () => {
       recentOutput: `token ${TOKEN}`,
       recentOutputTruncated: true,
       lastHandback: { message: `done, ${TOKEN}`, observedAt: 2, truncated: false },
+      error: `read failed: ${TOKEN}`,
       lastCheckResult: {
         command: `curl -H "Authorization: Bearer ${TOKEN}"`,
         passed: false,
@@ -52,40 +53,116 @@ describe("redactStatusEntry (#16191)", () => {
   });
 });
 
-describe("fitProjectStatuses (#16191)", () => {
-  it("cuts only tails, fairly across every project's terminals, to fit what the host sends", () => {
-    const project = (projectId: string, count: number): ProjectStatusAnswer => ({
-      status: "done",
-      projectId,
-      result: {
-        terminals: Array.from({ length: count }, (_, index) => ({
-          terminalId: `${projectId}-${index}`,
-          agentId: "claude",
-          agentState: "working",
-          recentOutput: "y".repeat(40_000),
-        })),
-        source: "pty",
-        unavailableFields: [],
+describe("readProjectStatuses (#16191)", () => {
+  const read = (overrides: Partial<Parameters<typeof readProjectStatuses>[0]> = {}) =>
+    readProjectStatuses(
+      {
+        getStatus: async () => ({
+          status: "done",
+          result: {
+            isError: false,
+            structured: { terminals: [], source: "pty", unavailableFields: [] },
+            text: null,
+          },
+        }),
+        readAgents: async () => ({
+          coverage: "ok",
+          observedAt: 1,
+          complete: true,
+          omitted: 0,
+          entries: [],
+        }),
+        hasProject: async (projectId) => projectId !== "gone",
+        ...overrides,
       },
-      complete: true,
-      omitted: 0,
-    });
-    const answers = [
-      project("p1", 1),
-      { status: "failed" as const, projectId: "p2", reason: "timeout" as const },
-      project("p3", 5),
-    ];
-    const fitted = fitProjectStatuses(answers, 100_000);
-    expect(Buffer.byteLength(JSON.stringify(fitted), "utf8")).toBeLessThanOrEqual(100_000);
-    const tails = fitted.flatMap((answer) =>
-      answer.status === "done" && answer.result
-        ? answer.result.terminals.map((terminal) => (terminal.recentOutput as string).length)
-        : []
+      [{ projectId: "gone" }, { projectId: "empty" }],
+      null,
+      1_000
     );
-    expect(tails).toHaveLength(6);
-    expect(Math.max(...tails) - Math.min(...tails)).toBeLessThanOrEqual(1);
-    expect(fitted[1]).toEqual(answers[1]);
-    // Under the cap, nothing changes.
-    expect(fitProjectStatuses(answers, Number.MAX_SAFE_INTEGER)).toEqual(answers);
+
+  it("never reads a project the machine doesn't have as one with no agents", async () => {
+    await expect(read()).resolves.toEqual([
+      { status: "refused", projectId: "gone", reason: "no-project" },
+      { status: "done", projectId: "empty", result: null, complete: true, omitted: 0 },
+    ]);
+  });
+
+  it("answers a project whose checks throw as one whose agents couldn't be listed, never failing the rest", async () => {
+    await expect(
+      read({
+        hasProject: async (projectId) => {
+          if (projectId === "gone") throw new Error("store down");
+          return true;
+        },
+        readAgents: async (projectId) => {
+          if (projectId === "empty") throw new Error("pty host down");
+          throw new Error("unreachable");
+        },
+      })
+    ).resolves.toEqual([
+      { status: "failed", projectId: "gone", reason: "agents-unread" },
+      { status: "failed", projectId: "empty", reason: "agents-unread" },
+    ]);
+  });
+});
+
+describe("createLocalMcpRelay status (#16191)", () => {
+  it("redacts this machine's screens as a host's are, through the gates its calls meet", async () => {
+    const opened: string[] = [];
+    const relay = createLocalMcpRelay({
+      machineName: () => "this-mac",
+      hasProject: async (projectId) => projectId === "p1",
+      openSession: async (spec) => {
+        opened.push(spec.projectId);
+        return {
+          isOpen: () => true,
+          callTool: async () => {
+            const result = {
+              terminals: [
+                {
+                  terminalId: "t-1",
+                  agentId: "claude",
+                  agentState: "waiting",
+                  recentOutput: `token ${TOKEN}`,
+                },
+              ],
+              source: "pty",
+              unavailableFields: [],
+            };
+            return {
+              content: [{ type: "text", text: JSON.stringify(result) }],
+              structuredContent: result,
+            };
+          },
+          close: () => {},
+        };
+      },
+      receiveNotices: () => {},
+      receiveApproval: async () => {
+        throw new Error("never asked");
+      },
+    });
+    const answers = await relay.status({
+      helpSessionId: "help-1",
+      tier: "core",
+      global: true,
+      projects: [
+        { projectId: "p1", terminalIds: ["t-1"] },
+        { projectId: "p9", terminalIds: ["t-9"] },
+      ],
+      includeOutput: { lines: 10, stripAnsi: true },
+      runMs: 5_000,
+    });
+    relay.dispose();
+    expect(opened).toEqual(["p1"]);
+    expect(JSON.stringify(answers)).not.toContain(TOKEN);
+    expect(answers).toMatchObject([
+      {
+        status: "done",
+        projectId: "p1",
+        result: { terminals: [{ recentOutput: "token [redacted]" }] },
+      },
+      { status: "refused", projectId: "p9", reason: "no-project" },
+    ]);
   });
 });
