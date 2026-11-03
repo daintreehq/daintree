@@ -280,12 +280,11 @@ describe("terminal.sendCommandOwned (#12407)", () => {
       if (name === "submissionToken") continue;
       expect(ownedProps[name], name).toEqual(schema);
     }
-    expect(Object.keys(ownedProps).filter((name) => !(name in delegateProps)).sort()).toEqual([
-      "expiresAt",
-      "queued",
-      "queuedSendToken",
-      "supersededToken",
-    ]);
+    expect(
+      Object.keys(ownedProps)
+        .filter((name) => !(name in delegateProps))
+        .sort()
+    ).toEqual(["expiresAt", "queued", "queuedSendToken", "supersededToken"]);
     const delegateRequired = delegate.required as string[];
     expect(owned.required).toEqual(delegateRequired.filter((name) => name !== "submissionToken"));
   });
