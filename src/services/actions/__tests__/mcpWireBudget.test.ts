@@ -978,14 +978,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // output schema, the host tools' outcome envelope plus what the attempt
   // observed (its end, the wake, whether ssh got in and a start went, ssh's
   // own words). Assistant-only, so the external ceiling does not move.
-  // 176_000 → 177_800 for #16188, measured at 177_774 B (+1_852 over develop's
-  // 175_922): `host.watch` on agents, so the global Assistant arms one watch
+  // 176_000 → 177_900 for #16188, measured at 177_818 B (+1_852 over develop's
+  // 175_966): `host.watch` on agents, so the global Assistant arms one watch
   // for an approval or question on any host instead of polling every project.
   // Most of it is the arm's answer: the agents already waiting, each with the
   // host, project, worktree, both run generations, reason and host-clock time,
   // and how each host is heard. Assistant-only, so the external ceiling does
   // not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 177_800;
+  const MAX_COHORT_PAYLOAD_BYTES = 177_900;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
