@@ -935,6 +935,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly callTimes = new Map<string, number>();
   /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
   private readonly throwawaySessions = new Map<string, ThrowawaySession>();
+  /**
+   * Hosts each help session asked to hold a message for a worker (#16187), so
+   * its end reaches them: a held message is never typed after it.
+   */
+  private readonly heldSendHosts = new Map<string, Set<HostId>>();
   private disposed = false;
   /** `host.list`'s waits for a dialed host's first summary, each ended at once by dispose. */
   private readonly sampleWaits = new Set<() => void>();
@@ -1467,9 +1472,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.hostWatches.endSession(helpSessionId);
     const session = this.throwawaySessions.get(helpSessionId);
     this.throwawaySessions.delete(helpSessionId);
+    const held = this.heldSendHosts.get(helpSessionId);
+    this.heldSendHosts.delete(helpSessionId);
     const client = this.deps.client();
-    if (session === undefined || !client?.throwawayRelease) return;
-    for (const hostId of session.hosts) {
+    if ((session === undefined && held === undefined) || !client?.throwawayRelease) return;
+    // The release says the session ended; a host drops its held messages on it too.
+    for (const hostId of new Set([...(session?.hosts ?? []), ...(held ?? [])])) {
       void client.throwawayRelease(hostId, { helpSessionId }).catch((error: unknown) => {
         logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
       });
@@ -1490,6 +1498,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     for (const end of [...this.sampleWaits]) end();
     this.hostWatches.dispose();
     this.throwawaySessions.clear();
+    this.heldSendHosts.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
@@ -1597,6 +1606,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const noted = resend
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
+      // This machine's own projects hear the session end in process.
+      if (!local && args.tool === "terminal.sendCommandOwned" && toolArgs.whenBusy === "queue") {
+        let hosts = this.heldSendHosts.get(helpSessionId);
+        if (hosts === undefined) {
+          hosts = new Set();
+          this.heldSendHosts.set(helpSessionId, hosts);
+        }
+        hosts.add(args.hostId);
+      }
       const sendDone = this.trackSend(
         callId,
         {

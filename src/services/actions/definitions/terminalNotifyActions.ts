@@ -3,6 +3,10 @@ import {
   TerminalNotifyWhenIdleArgsSchema,
   TerminalNotifyWhenIdleResultSchema,
 } from "@shared/types/terminalNotify";
+import {
+  TerminalCancelQueuedSendArgsSchema,
+  TerminalCancelQueuedSendResultSchema,
+} from "@shared/types/queuedSend";
 
 function mainProcessOnly(id: string): () => Promise<never> {
   return async () => {
@@ -45,5 +49,30 @@ export function registerTerminalNotifyActions(
       destructiveHint: false,
     },
     run: mainProcessOnly("terminal.notifyWhenIdle"),
+  }));
+
+  // A held message lives in main beside the notices (#16187), and only the
+  // session that held it can name it.
+  actions.set("terminal.cancelQueuedSend", () => ({
+    id: "terminal.cancelQueuedSend",
+    title: "Cancel held terminal message",
+    description:
+      'Withdraw text you held for a busy agent with `whenBusy: "queue"`, before it is typed. One already on its way into the terminal can\'t be withdrawn; the answer says what became of it.',
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["cancel", "queued", "held", "send", "withdraw"],
+    palette: { mode: "hidden" },
+    argsSchema: TerminalCancelQueuedSendArgsSchema,
+    resultSchema: TerminalCancelQueuedSendResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: true,
+      destructiveHint: false,
+    },
+    run: mainProcessOnly("terminal.cancelQueuedSend"),
   }));
 }

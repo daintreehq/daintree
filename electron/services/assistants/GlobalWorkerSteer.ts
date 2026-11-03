@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { WORKER_STEER_REFUSALS } from "../../../shared/types/assistantControl.js";
+import type { QueuedSendReceipt } from "../../../shared/types/queuedSend.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { classifyWorkerSteerCommand } from "../../../shared/config/workerSteerCommands.js";
@@ -17,6 +18,7 @@ import {
 } from "../../../shared/utils/terminalKeys.js";
 import {
   buildTerminalSendCommandReceipt,
+  MAX_ECHOED_COMMAND_CHARS,
   type TerminalSendCommandReceipt,
 } from "../../../shared/utils/terminalSendCommandResult.js";
 import {
@@ -25,8 +27,10 @@ import {
   typedSinceSettle,
 } from "../../../shared/utils/terminalInputProvenance.js";
 import { ASSISTANT_SEND_GATE, evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
+import type { PendingNotify } from "../mcp-server/terminalNotify.js";
 import type { PtyClient } from "../PtyClient.js";
 import { AssistantTargetError } from "./AssistantTerminalControl.js";
+import { HoldRefusedError, type WorkerSteerQueue } from "./WorkerSteerQueue.js";
 
 /** The pty-host record fields a steer reads. */
 export interface WorkerSteerRecord {
@@ -43,6 +47,12 @@ export interface WorkerSteerRecord {
   isExited?: boolean;
   hasPty?: boolean;
   isTrashed?: boolean;
+  /** The run identity a held prompt is checked against before it is typed (#16187). */
+  agentIncarnation?: number;
+  agentSessionId?: string;
+  worktreeId?: string;
+  lastOwnedPromptInput?: { owner: string; at: number };
+  lastForeignPromptInputAt?: number;
 }
 
 export interface GlobalWorkerSteerDeps {
@@ -72,6 +82,8 @@ export interface GlobalWorkerSteerDeps {
   write(terminalId: string, data: string, inputOwner: string): void;
   /** The pair's gap is scheduled in the pty-host, where IPC can't collapse it. */
   doubleEscape(terminalId: string, inputOwner: string): void;
+  /** Where a prompt for a busy worker is held (#16187); absent or null, none is. */
+  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -94,6 +106,21 @@ export interface WorkerSteerTarget {
    * goes out.
    */
   authorize(): void;
+  /**
+   * Asked right before a held prompt is written (#16187), long after the call
+   * that queued it: what `authorize` asks but the call's own session, which
+   * closes when idle while the Assistant that queued it carries on. Null
+   * while it may go ahead. Absent, nothing is held for this caller.
+   */
+  authorizeHeld?: () => { code: string; message: string } | null;
+}
+
+/** What a send asks of a worker that isn't waiting at its prompt (#16187). */
+export interface WhenBusy {
+  /** Hold it for the worker's next prompt, for up to this long. */
+  queue: { ttlSeconds: number };
+  /** Takes the call's armed `notify` once the prompt is held, for the line to complete. */
+  takeNotice?: () => PendingNotify | undefined;
 }
 
 /** Said on a receipt admitted only because everything typed since the settle was the caller's own keys. */
@@ -207,8 +234,8 @@ export class GlobalWorkerSteer {
 
   async prompt(
     target: WorkerSteerTarget,
-    request: { command: string; handback: boolean; machineName: string }
-  ): Promise<TerminalSendCommandReceipt> {
+    request: { command: string; handback: boolean; machineName: string; whenBusy?: WhenBusy }
+  ): Promise<TerminalSendCommandReceipt | QueuedSendReceipt> {
     return this.exclusive(target, async () => {
       const record = await this.requireWorker(target);
       // An agent CLI runs a slash command only when it opens the input, so a
@@ -227,6 +254,14 @@ export class GlobalWorkerSteer {
         );
       }
       const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
+      // Only a turn still running is waited out; every other refusal stands.
+      if (
+        verdict.kind === "hold" &&
+        verdict.reason === "working" &&
+        request.whenBusy !== undefined
+      ) {
+        return this.hold(target, record, slash.kind === "slash", request, request.whenBusy);
+      }
       if (verdict.kind !== "ready") {
         const typing = verdict.reason === "typing";
         refuse(
@@ -269,6 +304,96 @@ export class GlobalWorkerSteer {
       }
       return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
     });
+  }
+
+  /**
+   * Hold a prompt for a worker mid-turn (#16187), under the checks an
+   * immediate send makes now and again right before it is typed. Nothing is
+   * written here.
+   */
+  private hold(
+    target: WorkerSteerTarget,
+    record: WorkerSteerRecord,
+    slash: boolean,
+    request: { command: string; handback: boolean; machineName: string },
+    whenBusy: WhenBusy
+  ): QueuedSendReceipt {
+    const { terminalId } = target;
+    const busy = `Terminal '${terminalId}' isn't waiting at its agent's prompt (state: ${record.agentState ?? "unknown"}).`;
+    // A command landing at a moment nobody saw is another risk from prose.
+    if (slash) {
+      refuse(
+        "VALIDATION_ERROR",
+        `${busy} A slash command isn't held for its next prompt. ${NOTHING_SENT} Send it once the agent is waiting.`
+      );
+    }
+    const queue = this.deps.queue?.() ?? null;
+    if (queue === null || target.authorizeHeld === undefined) {
+      refuse(
+        WORKER_STEER_REFUSALS.busy,
+        `${busy} This host can't hold a message for it right now. ${NOTHING_SENT} Send once it is waiting.`
+      );
+    }
+    // What would stop an immediate send at its next prompt stops this one now:
+    // a draft typed mid-turn is still in the composer when the turn ends.
+    const pending = personAtTerminal(terminalId, record, target.inputOwner);
+    if (pending !== null) refuse(WORKER_STEER_REFUSALS.typing, `${pending} ${NOTHING_SENT}`);
+    if (typedSinceSettle(record, target.inputOwner) === "own-keys") {
+      refuse(
+        WORKER_STEER_REFUSALS.typing,
+        `The only input in terminal '${terminalId}' since its agent last settled is keys you sent, which can leave text at its prompt. ${NOTHING_SENT} Send once the agent settles again.`
+      );
+    }
+    this.requireSameRun(target);
+    target.authorize();
+    const stamped = stampAssistantPrompt(request.command, request.machineName);
+    const handbackCode = request.handback ? mintHandbackCode() : undefined;
+    const authorizeHeld = target.authorizeHeld;
+    let held: ReturnType<WorkerSteerQueue["hold"]>;
+    try {
+      held = queue.hold({
+        principal: target.inputOwner,
+        projectId: target.projectId,
+        terminalId,
+        generation: target.generation!,
+        run: {
+          ...(record.agentIncarnation !== undefined
+            ? { agentIncarnation: record.agentIncarnation }
+            : {}),
+          ...(record.agentSessionId !== undefined ? { agentSessionId: record.agentSessionId } : {}),
+          ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
+          ...(record.lastOwnedPromptInput !== undefined
+            ? { lastOwnedPromptInput: record.lastOwnedPromptInput }
+            : {}),
+          ...(record.lastForeignPromptInputAt !== undefined
+            ? { lastForeignPromptInputAt: record.lastForeignPromptInputAt }
+            : {}),
+        },
+        text: handbackCode ? appendHandbackInstruction(stamped, handbackCode) : stamped,
+        promptAsWritten: request.command,
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
+        ttlSeconds: whenBusy.queue.ttlSeconds,
+        authorize: authorizeHeld,
+        isWriting: () => this.writing.has(terminalId),
+        ...(whenBusy.takeNotice !== undefined ? { takeNotice: whenBusy.takeNotice } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof HoldRefusedError)) throw error;
+      refuse(WORKER_STEER_REFUSALS.busy, `${busy} ${error.message} ${NOTHING_SENT}`);
+    }
+    const superseded = held.supersededToken
+      ? ` It replaces your earlier held message ${held.supersededToken}, which won't be sent.`
+      : "";
+    return {
+      sent: false,
+      queued: true,
+      terminalId,
+      command: request.command.slice(0, MAX_ECHOED_COMMAND_CHARS),
+      queuedSendToken: held.queuedSendToken,
+      expiresAt: held.expiresAt,
+      ...(held.supersededToken ? { supersededToken: held.supersededToken } : {}),
+      message: `Held, not sent: it is typed the next time the agent waits at its own prompt with nothing typed there, and dropped if someone else sends it input or the run changes first.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
+    };
   }
 
   async keys(
@@ -495,8 +620,10 @@ export class GlobalWorkerSteer {
 export function liveGlobalWorkerSteer(deps: {
   pty: () => PtyClient | null;
   isAssistantTerminal(terminalId: string): boolean;
+  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
 }): GlobalWorkerSteer {
   return new GlobalWorkerSteer({
+    ...(deps.queue !== undefined ? { queue: deps.queue } : {}),
     getTerminalProjectId: (terminalId) => deps.pty()?.getTerminalProjectId(terminalId) ?? null,
     getLiveGeneration: (terminalId) => deps.pty()?.getLiveGeneration(terminalId) ?? null,
     isAssistantTerminal: (terminalId) =>

@@ -92,6 +92,14 @@ export interface TerminalPublicState {
    * between an assistant's check and its write is never filed under its own.
    */
   lastForeignInputAt?: number;
+  /**
+   * The last input the agent could have taken as a prompt written for an
+   * assistant, and whose (#16187): typed anywhere but an approval dialog, or
+   * a submission. Filed when it arrives, from the state then.
+   */
+  lastOwnedPromptInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
   lastOutputTime: number;
   lastCheckTime: number;
   /**

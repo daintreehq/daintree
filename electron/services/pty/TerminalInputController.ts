@@ -30,7 +30,11 @@ import {
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
 import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
-import { stampTypedInput } from "../../../shared/utils/terminalInputProvenance.js";
+import {
+  keysReachPrompt,
+  stampPromptInput,
+  stampTypedInput,
+} from "../../../shared/utils/terminalInputProvenance.js";
 import {
   isImageAttachmentPath,
   splitImageInputSegments,
@@ -192,7 +196,7 @@ export class TerminalInputController {
     }
 
     terminal.lastInputTime = Date.now();
-    if (!isTerminalReportOnly(data)) stampTypedInput(terminal, terminal.lastInputTime);
+    if (!isTerminalReportOnly(data)) this.stampTyped(terminal.lastInputTime);
     if (traceId !== undefined) {
       terminal.traceId = traceId || undefined;
     }
@@ -211,6 +215,18 @@ export class TerminalInputController {
       this.host.logWriteError(error, { operation: "tryWrite", traceId });
       return { ok: false, error: error as NodeJS.ErrnoException };
     }
+  }
+
+  /**
+   * Typed input, filed under `inputOwner` (#16094), and as input the agent
+   * could take as a prompt unless it waits on an approval dialog now (#16187):
+   * keys there pick an option, and the record says so only if read when they
+   * arrive.
+   */
+  private stampTyped(at: number, inputOwner?: string): void {
+    const terminal = this.host.terminalInfo;
+    stampTypedInput(terminal, at, inputOwner);
+    if (keysReachPrompt(terminal)) stampPromptInput(terminal, at, inputOwner);
   }
 
   /** `inputOwner` names the assistant the bytes were written for (#16094); absent, they are a person's. */
@@ -253,7 +269,7 @@ export class TerminalInputController {
     // `rethrow` is the submit lane's own body and Enter, which leave the
     // composer empty once the Enter lands; only raw input can leave a draft.
     if (!rethrow && !isTerminalReportOnly(data)) {
-      stampTypedInput(terminal, terminal.lastInputTime, inputOwner);
+      this.stampTyped(terminal.lastInputTime, inputOwner);
     }
 
     if (terminal.isExited) {
@@ -377,6 +393,11 @@ export class TerminalInputController {
     // time, which for a guarded line is only once it has been admitted.
     if (guard === undefined && this.host.analysis.hasMonitor() && text.trim().length > 0) {
       this.host.analysis.notifySubmission();
+    }
+    // Someone's prompt, by whoever submitted it (#16187). A guarded line is
+    // Daintree's own, typed only at a settled prompt, and is nobody's.
+    if (guard === undefined && text.trim().length > 0) {
+      stampPromptInput(this.host.terminalInfo, Date.now());
     }
 
     const admit =

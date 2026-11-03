@@ -23,6 +23,12 @@ import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveAct
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { SendKeysArgsSchema } from "../../../shared/utils/terminalKeys.js";
+import {
+  QUEUED_SEND_TTL_DEFAULT_SECONDS,
+  QUEUED_SEND_TTL_MAX_SECONDS,
+  QUEUED_SEND_TTL_MIN_SECONDS,
+  TERMINAL_CANCEL_QUEUED_SEND_TOOL,
+} from "../../../shared/types/queuedSend.js";
 import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
 import type { DispatchEnvelope } from "./shared.js";
 import {
@@ -267,6 +273,8 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // Terminal notices live in main and read the pty-host, so arming one needs
   // no project view.
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  // A held prompt lives in main beside them (#16187).
+  TERMINAL_CANCEL_QUEUED_SEND_TOOL,
   // Assistants are found, started and quota read in main (#13496), from the
   // caller's own session, never a view.
   ASSISTANT_LIST_TOOL,
@@ -374,6 +382,39 @@ function readStringArg(args: unknown, key: string): string | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
   const value = (args as Record<string, unknown>)[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * A steer send's `whenBusy` and how long it may be held (#16187), checked in
+ * main since the steer never reaches the action's own schema.
+ */
+function readQueueTtlSeconds(args: Record<string, unknown>): number {
+  const { whenBusy, queueTtlSeconds: ttl } = args;
+  if (whenBusy !== undefined && whenBusy !== "refuse" && whenBusy !== "queue") {
+    throw new AssistantTargetError(
+      "VALIDATION_ERROR",
+      "`whenBusy` is `refuse` or `queue`. Nothing was sent."
+    );
+  }
+  if (ttl === undefined) return QUEUED_SEND_TTL_DEFAULT_SECONDS;
+  if (whenBusy !== "queue") {
+    throw new AssistantTargetError(
+      "VALIDATION_ERROR",
+      '`queueTtlSeconds` goes only with `whenBusy: "queue"`. Nothing was sent.'
+    );
+  }
+  if (
+    typeof ttl !== "number" ||
+    !Number.isInteger(ttl) ||
+    ttl < QUEUED_SEND_TTL_MIN_SECONDS ||
+    ttl > QUEUED_SEND_TTL_MAX_SECONDS
+  ) {
+    throw new AssistantTargetError(
+      "VALIDATION_ERROR",
+      `\`queueTtlSeconds\` is a whole number of seconds from ${QUEUED_SEND_TTL_MIN_SECONDS} to ${QUEUED_SEND_TTL_MAX_SECONDS}. Nothing was sent.`
+    );
+  }
+  return ttl;
 }
 
 /**
@@ -717,6 +758,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyDisplayImage,
     workspaceBinding,
     terminalNotify,
+    workerSteerQueue,
     hostControl,
     assistantControl,
     replyWaiter,
@@ -981,6 +1023,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const refusal = assistantWriteRefusal(projectId);
           if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
         },
+        // A held prompt answers to the session that queued it through its
+        // principal, whose end drops it (#16187), not this MCP session, which
+        // closes when idle long before the worker's turn ends.
+        authorizeHeld: () => assistantWriteRefusal(projectId),
       };
     };
     // The global Assistant steering a worker it didn't launch (#14551). Every
@@ -994,10 +1040,26 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (command.trim().length === 0) {
           throw new AssistantTargetError("VALIDATION_ERROR", "A send needs a non-empty `command`.");
         }
+        const ttlSeconds = readQueueTtlSeconds(callArgs);
         return steer.prompt(target, {
           command,
           handback: callArgs.handback === true,
           machineName: deps.relay?.shellName ?? "another machine",
+          ...(callArgs.whenBusy === "queue"
+            ? {
+                whenBusy: {
+                  queue: { ttlSeconds },
+                  // The notice armed for this call now follows the held
+                  // prompt: completed once it is written, cancelled if it
+                  // never is.
+                  takeNotice: () => {
+                    const notice = pendingNotify;
+                    pendingNotify = undefined;
+                    return notice;
+                  },
+                },
+              }
+            : {}),
         });
       }
       if (actionId === "terminal.sendKeysOwned") {
@@ -1035,6 +1097,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // completes after the transport dropped still lands with the principal the
     // call was authorized under, where the pane's next session finds it.
     const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
+    // A status read naming a prompt held for a worker (#16187): only main
+    // holds it, so main adds its record to whatever answers the rest.
+    const queuedSendToken =
+      actionId === TERMINAL_GET_STATUS_TOOL ? readStringArg(args, "queuedSendToken") : undefined;
+    const withQueuedSend = (result: unknown): unknown =>
+      queuedSendToken === undefined ||
+      typeof result !== "object" ||
+      result === null ||
+      Array.isArray(result)
+        ? result
+        : {
+            ...result,
+            queuedSend: workerSteerQueue?.status(ownershipOwner, queuedSendToken) ?? null,
+          };
     // An api-key client (#12987): no bearer bound it, so its records are held
     // by the session and die with it. Asked of the owner, not the origin — a
     // pane's session has an `external` origin too.
@@ -1470,10 +1546,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         ) {
           emitToolCallStarted(false, false);
           try {
-            const result = await handleTerminalGetStatusViewless(
-              args,
-              assistantCaller.projectId,
-              new Set(assistantIds)
+            const result = withQueuedSend(
+              await handleTerminalGetStatusViewless(
+                args,
+                assistantCaller.projectId,
+                new Set(assistantIds)
+              )
             );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
@@ -2083,6 +2161,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }) as CallToolResult;
         }
 
+        // A held prompt is written long after this call returns (#16187);
+        // its notice, or a status read, says what became of it.
+        if (
+          waitForReply &&
+          globalSteerTerminalId !== undefined &&
+          actionId === "terminal.sendCommandOwned" &&
+          callArgs.whenBusy === "queue"
+        ) {
+          const message =
+            "`waitForReply` can't wait for a message that may be held: pass `notify: true` to hear when it is answered. Nothing was sent.";
+          outcome = {
+            kind: "result",
+            value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
+          };
+          return buildToolError({ code: "VALIDATION_ERROR", message });
+        }
+
         if (waitForReply && replyWaiter !== undefined) {
           replyWait = replyWaiter.wait({
             ...(actionId === AGENT_LAUNCH_TOOL
@@ -2299,7 +2394,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (viewlessStatusWorkspaceId !== undefined) {
           emitToolCallStarted(false, false);
           try {
-            const result = await handleTerminalGetStatusViewless(args, viewlessStatusWorkspaceId);
+            const result = withQueuedSend(
+              await handleTerminalGetStatusViewless(args, viewlessStatusWorkspaceId)
+            );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
@@ -2352,6 +2449,47 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               message: formatErrorMessage(err, `${actionId} failed`),
             });
           }
+        }
+
+        // Short-circuit: withdrawing a prompt held for a busy worker (#16187),
+        // which lives in main. Only the session that held it reaches it, by
+        // its principal, so another assistant's token finds nothing. Writes
+        // nothing, so it is never confirm-gated.
+        if (actionId === TERMINAL_CANCEL_QUEUED_SEND_TOOL) {
+          emitToolCallStarted(false, false);
+          const terminalId = readStringArg(args, "terminalId");
+          const token = readStringArg(args, "queuedSendToken");
+          const refuse = (code: "VALIDATION_ERROR" | "NOT_FOUND", message: string) => {
+            outcome = { kind: "result", value: { ok: false, error: { code, message } } };
+            return buildToolError({ code, message });
+          };
+          if (!terminalId || !token) {
+            return refuse(
+              "VALIDATION_ERROR",
+              "Pass the `terminalId` and the `queuedSendToken` a held send answered with."
+            );
+          }
+          const held = workerSteerQueue?.status(ownershipOwner, token) ?? null;
+          const answer =
+            held !== null && held.terminalId === terminalId
+              ? workerSteerQueue!.cancel(ownershipOwner, token)
+              : null;
+          if (answer === null) {
+            return refuse(
+              "NOT_FOUND",
+              `This host holds no message of yours for terminal '${terminalId}' under that token. Held messages are kept in memory, so a restart forgets them.`
+            );
+          }
+          const result = {
+            terminalId,
+            queuedSendToken: token,
+            cancelled: answer.cancelled,
+            queuedSend: answer.record,
+          };
+          outcome = { kind: "result", value: { ok: true, result } };
+          return buildToolCallResult(result, {
+            structuredContent: result as unknown as Record<string, unknown>,
+          });
         }
 
         // Short-circuit: a Shell assistant's host tools (#13493) run in main
@@ -3582,9 +3720,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               dispatchedWorkspace
             );
           }
-          const structuredContent = buildStructuredContent(entry, outcome.value.result);
+          const answered =
+            queuedSendToken !== undefined
+              ? withQueuedSend(outcome.value.result)
+              : outcome.value.result;
+          if (answered !== outcome.value.result) {
+            outcome = { kind: "result", value: { ok: true, result: answered } };
+          }
+          const structuredContent = buildStructuredContent(entry, answered);
           return withResolvedWorkspace(
-            buildToolCallResult(outcome.value.result, {
+            buildToolCallResult(answered, {
               ...(structuredContent ? { structuredContent } : {}),
             }),
             dispatchedWorkspace

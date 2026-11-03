@@ -118,6 +118,15 @@ export function relayNotifyKey(principal: string): string {
 }
 
 /**
+ * The notice line of a worker that holds no Daintree bearer, for a prompt
+ * held for it (#16187). No bearer, so no notices of its own for this to
+ * displace.
+ */
+export function workerNotifyKey(terminalId: string): string {
+  return `worker\u0000${terminalId}`;
+}
+
+/**
  * A relay principal's notice pane. Its terminal id is its key, which no
  * pty-host terminal can have, so no event about a real terminal reaches it.
  */
@@ -153,6 +162,9 @@ export interface NotifyTerminalInfo {
   agentIncarnation?: number;
   agentSessionId?: string;
   worktreeId?: string;
+  /** Input it could have taken as a prompt, and whose (#16187): a held prompt drops on someone else's. */
+  lastOwnedPromptInput?: { owner: string; at: number };
+  lastForeignPromptInputAt?: number;
 }
 
 export interface TerminalNotifyPtyClient {
@@ -341,9 +353,10 @@ export interface LaneWake {
    * {@link LaneWake.hostWatch}; `approval` says the user approved a refused
    * tool from the panel (#14995), in {@link LaneWake.approval}; `decision`
    * carries a Decisions answer for the pane that asked (#16015), in
-   * {@link LaneWake.decision}.
+   * {@link LaneWake.decision}; `steer` carries a global Assistant's prompt
+   * held for this pane's next prompt (#16187), in {@link LaneWake.steer}.
    */
-  kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision";
+  kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision" | "steer";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -364,6 +377,19 @@ export interface LaneWake {
    */
   decision?: { text: string };
   /**
+   * A `steer`'s prompt, already stamped as the Assistant's, with the handback
+   * code its instruction names and the text as written for the run's
+   * first-prompt record (#15521). Typed only past `settled-prompt-exact`, and
+   * at most one to a line, so a line's handback and first prompt are its.
+   */
+  steer?: { text: string; promptAsWritten: string; handbackCode?: string };
+  /**
+   * How long it may wait for its pane, from admission, up to
+   * {@link LANE_WAKE_LONGEST_PENDING_MS}; {@link LANE_WAKE_MAX_PENDING_MS}
+   * when absent.
+   */
+  maxPendingMs?: number;
+  /**
    * Asked synchronously immediately before the line is typed, and while it
    * waits. `info` is the pane's record as the delivery attempt just read it;
    * absent on the checks between attempts.
@@ -382,6 +408,8 @@ export interface LaneWake {
 export const LANE_WAKE_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
 /** How long a wake may wait for its pane, from admission; it holds hibernation off until then. */
 export const LANE_WAKE_MAX_PENDING_MS = 10 * 60_000;
+/** The longest a wake may ask to wait: an hour of its project kept awake (#16187). */
+export const LANE_WAKE_LONGEST_PENDING_MS = 60 * 60_000;
 /** How often a waiting wake is rechecked: a pause or lease ending raises no event. */
 export const LANE_WAKE_RECHECK_MS = 5_000;
 export const MAX_QUEUED_WAKES_PER_PANE = 32;
@@ -1034,7 +1062,7 @@ export class TerminalNotifyService {
       wake,
       key,
       ...(scope !== undefined ? { scope } : {}),
-      deadline: this.now() + LANE_WAKE_MAX_PENDING_MS,
+      deadline: this.now() + pendingMsOf(wake),
       heldReported: false,
     };
     owner.wakes.set(key, entry);
@@ -2370,8 +2398,14 @@ export class TerminalNotifyService {
     }
 
     // A CLI that queues mid-turn input takes the notice now, so the pane
-    // hears as soon as the target stops instead of after its own turn.
-    const verdict = evaluateWakeGate(info, wakeGateOptionsFor(info.detectedAgentId));
+    // hears as soon as the target stops instead of after its own turn. Not
+    // while a held prompt waits for the pane's own prompt (#16187): typed
+    // mid-turn, the notice would take the settle the prompt waits for.
+    const gate = wakeGateOptionsFor(info.detectedAgentId);
+    const verdict = evaluateWakeGate(
+      info,
+      holdsSteer(owner) ? { ...gate, acceptWorking: false } : gate
+    );
     if (verdict.kind === "hold") {
       this.holdWakes(owner, verdict.reason);
       this.setDelivery(owner, { status: "held", reason: verdict.reason }, info);
@@ -2403,9 +2437,16 @@ export class TerminalNotifyService {
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     // The last word on each wake: nothing is awaited between this and the submit.
-    const reserved = this.sweepWakes(owner, info).filter(
-      (entry) => owner.wakes.get(entry.key) === entry && this.reserveWake(owner, entry)
-    );
+    let steerTaken = false;
+    const reserved = this.sweepWakes(owner, info).filter((entry) => {
+      if (owner.wakes.get(entry.key) !== entry) return false;
+      // One held prompt to a line: another waits for the turn after this one's.
+      const steer = entry.wake.kind === "steer";
+      if (steer && steerTaken) return false;
+      if (!this.reserveWake(owner, entry)) return false;
+      if (steer) steerTaken = true;
+      return true;
+    });
     // A wake's own hooks may have stopped the pane or ended a scope meanwhile.
     if (owner.disposed) return;
     const wakes = reserved.filter((entry) => owner.wakes.get(entry.key) === entry);
@@ -2464,15 +2505,22 @@ export class TerminalNotifyService {
             ),
           ]
         : []),
+      // Last, so the line ends with the prompt and any handback instruction it carries.
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "steer" && wake.steer !== undefined ? [wake.steer.text] : []
+      ),
     ];
+    const steer = wakes.find(({ wake }) => wake.kind === "steer")?.wake.steer;
     const deliveredAt = this.now();
     owner.inHost = { token };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
-    // A decision answer is never typed into a working pane, even one whose
-    // CLI queues mid-turn input, nor into any run but the one just checked:
-    // the host holds the whole line to that.
-    const guard: TerminalSubmitGuard = wakes.some(({ wake }) => wake.kind === "decision")
+    // A decision answer or a held prompt is never typed into a working pane,
+    // even one whose CLI queues mid-turn input, nor into any run but the one
+    // just checked: the host holds the whole line to that.
+    const guard: TerminalSubmitGuard = wakes.some(
+      ({ wake }) => wake.kind === "decision" || wake.kind === "steer"
+    )
       ? {
           kind: "settled-prompt-exact",
           ...(info.agentIncarnation !== undefined
@@ -2484,8 +2532,17 @@ export class TerminalNotifyService {
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.
     try {
-      // A notice is nobody's prompt, so it never becomes the run's first one.
-      client.submit(owner.terminalId, lines.join("\n\n"), token, undefined, guard, undefined, null);
+      // A notice is nobody's prompt, so it never becomes the run's first one;
+      // a held prompt is the Assistant's, as it wrote it (#15521).
+      client.submit(
+        owner.terminalId,
+        lines.join("\n\n"),
+        token,
+        steer?.handbackCode,
+        guard,
+        undefined,
+        steer?.promptAsWritten ?? null
+      );
     } catch (err) {
       // Whether any of it reached the host is unknown, so this is a failed
       // line like any other: its notices wait for the pane's next turn.
@@ -2742,6 +2799,20 @@ function reportWake(wake: LaneWake, outcome: LaneWakeOutcome, evidence?: LaneWak
 }
 
 /** A feature's wake whose scope is still live. */
+function pendingMsOf(wake: LaneWake): number {
+  const asked = wake.maxPendingMs;
+  if (asked === undefined || !Number.isFinite(asked) || asked <= 0) return LANE_WAKE_MAX_PENDING_MS;
+  return Math.min(asked, LANE_WAKE_LONGEST_PENDING_MS);
+}
+
+/** A held prompt is still waiting on the pane's line (#16187). */
+function holdsSteer(owner: PaneOwner): boolean {
+  for (const entry of owner.wakes.values()) {
+    if (entry.wake.kind === "steer" && entry.token === undefined) return true;
+  }
+  return false;
+}
+
 function isLiveScoped(entry: WakeEntry): boolean {
   return entry.scope !== undefined && !entry.scope.released;
 }

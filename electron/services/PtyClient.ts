@@ -182,6 +182,10 @@ interface TerminalInfoResponse {
   lastOwnedInput?: OwnedTypedInput;
   /** The last of that input anyone but `lastOwnedInput`'s owner wrote: all of it while none is owned. */
   lastForeignInputAt?: number;
+  /** The last input the agent could have taken as a prompt written for an assistant, and whose (#16187). */
+  lastOwnedPromptInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;

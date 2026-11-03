@@ -1005,6 +1005,8 @@ export class TerminalProcess {
       lastTypedInputAt: t.lastTypedInputAt,
       lastOwnedInput: t.lastOwnedInput,
       lastForeignInputAt: t.lastForeignInputAt,
+      lastOwnedPromptInput: t.lastOwnedPromptInput,
+      lastForeignPromptInputAt: t.lastForeignPromptInputAt,
       lastOutputTime: t.lastOutputTime,
       lastCheckTime: t.lastCheckTime,
       detectedAgentId: t.detectedAgentId,

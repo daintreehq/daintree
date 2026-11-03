@@ -182,8 +182,13 @@ describe("GlobalWorkerSteer (#14551)", () => {
 
       const receipt = await send(" /goal resume\n");
 
+      expect(receipt.sent).toBe(true);
       expect(submits).toEqual([
-        { text: "/goal resume", token: receipt.submissionToken, promptAsWritten: null },
+        {
+          text: "/goal resume",
+          token: (receipt as { submissionToken: string }).submissionToken,
+          promptAsWritten: null,
+        },
       ]);
       expect(receipt).toMatchObject({ sent: true, terminalId: WORKER, command: "/goal resume" });
     });
