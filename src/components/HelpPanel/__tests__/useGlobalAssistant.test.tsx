@@ -15,6 +15,8 @@ const main = {
   epoch: 0,
   /** Bumps with every run, as main's does. */
   generation: 1,
+  /** The run's PTY launch: a respawn under the same run changes it alone. */
+  incarnation: 1,
   eligible: new Map<string, boolean>(),
   /** Attachments of another window: never this view's to hand around. */
   foreign: new Set<string>(),
@@ -37,7 +39,12 @@ function state(): GlobalAssistantView {
     attachments: [],
     inputOwner: main.owner,
     inputEpoch: main.epoch,
-    subject: { hostId: "local", scope: { kind: "global" }, terminalId: "g-1", incarnation: 1 },
+    subject: {
+      hostId: "local",
+      scope: { kind: "global" },
+      terminalId: "g-1",
+      incarnation: main.incarnation,
+    },
     agentState: null,
   };
 }
@@ -66,6 +73,7 @@ beforeEach(() => {
   main.owner = null;
   main.epoch = 0;
   main.generation = 1;
+  main.incarnation = 1;
   main.eligible.clear();
   main.foreign.clear();
   main.calls.length = 0;
@@ -241,6 +249,37 @@ describe("useGlobalAssistant keeping input in the view (#16214)", () => {
     main.generation = 2;
     act(() => setOwner("a-2"));
     canopy.unmount();
+    await flush();
+    expect(main.calls.slice(3)).toEqual(["detach a-2"]);
+    panel.unmount();
+  });
+
+  it("lets the loan go when the run's terminal is respawned under it", async () => {
+    const panel = render(<Surface name="panel" keepsViewInput={false} canType={false} />);
+    await flush();
+    act(() => setOwner("a-1"));
+    const canopy = render(<Surface name="canopy" keepsViewInput />);
+    await flush();
+    main.incarnation = 2;
+    act(() => setOwner("a-2"));
+    canopy.unmount();
+    await flush();
+    expect(main.calls.slice(3)).toEqual(["detach a-2"]);
+    panel.unmount();
+  });
+
+  it("knows of a new run told in the same moment it lets go", async () => {
+    const panel = render(<Surface name="panel" keepsViewInput={false} canType={false} />);
+    await flush();
+    act(() => setOwner("a-1"));
+    const canopy = render(<Surface name="canopy" keepsViewInput />);
+    await flush();
+    // The news and the dock closing land in one commit: the teardown runs before any effect.
+    act(() => {
+      main.generation = 2;
+      setOwner("a-2");
+      canopy.rerender(<Surface name="canopy" keepsViewInput active={false} />);
+    });
     await flush();
     expect(main.calls.slice(3)).toEqual(["detach a-2"]);
     panel.unmount();
