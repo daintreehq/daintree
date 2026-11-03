@@ -281,7 +281,7 @@ import {
   isDecisionsRemoveTerminalId,
   isDecisionsUpdateTerminalId,
 } from "../../../../shared/config/terminalScreenPersistence.js";
-import { parseRelayRemovalCommand } from "../../../../shared/config/decisionsRelayRemoval.js";
+import { parseRelayRemovalCommand } from "../../../../shared/config/relayRemoval.js";
 import {
   noteRelayRemovalLaunch,
   spoilRelayRemovalLaunch,

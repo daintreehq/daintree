@@ -55,7 +55,7 @@ import type {
 import {
   isRelayRemovalTerminalId,
   isRemovableRelayOrigin,
-} from "../../../shared/config/decisionsRelayRemoval.js";
+} from "../../../shared/config/relayRemoval.js";
 import type {
   DecisionsHostEnrollResult,
   DecisionsHostsResult,

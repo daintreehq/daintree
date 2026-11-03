@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { SettingsRow } from "@/components/Settings/SettingsGroup";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
-import { isRemovableRelayOrigin } from "@shared/config/decisionsRelayRemoval";
+import { isRemovableRelayOrigin } from "@shared/config/relayRemoval";
 import { DecisionsRemoveRelayDialog } from "./DecisionsRemoveRelayDialog";
 import { openRelayRemoveTerminal } from "./relayRemove";
 import { useGuidedTerminalPlacement } from "./useGuidedTerminalPlacement";

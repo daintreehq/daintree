@@ -4,7 +4,7 @@ import { logError } from "@/utils/logger";
 import { isWindows } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { DECISIONS_REMOVE_TERMINAL_PREFIX } from "@shared/config/terminalScreenPersistence";
-import { isRemovableRelayOrigin } from "@shared/config/decisionsRelayRemoval";
+import { isRemovableRelayOrigin } from "@shared/config/relayRemoval";
 
 /**
  * The published CLI the guided removal runs. Pinned apart from the deploy's
