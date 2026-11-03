@@ -3153,18 +3153,23 @@ describe("held prompts on a worker's line (#16187)", () => {
   ) {
     const outcomes: Array<{ outcome: LaneWakeOutcome; evidence?: LaneWakeEvidence }> = [];
     let check: LaneWakeCheck = { kind: "ready" };
+    let reservations = 0;
     const wake: LaneWake = {
       id,
       kind: "steer",
       steer,
       ...(maxPendingMs !== undefined ? { maxPendingMs } : {}),
       recheck: () => check,
-      beforeType: () => true,
+      beforeType: () => {
+        reservations++;
+        return true;
+      },
       report: (outcome, evidence) => outcomes.push({ outcome, evidence }),
     };
     return {
       wake,
       outcomes,
+      reservations: () => reservations,
       setCheck: (next: LaneWakeCheck) => {
         check = next;
       },
@@ -3221,6 +3226,9 @@ describe("held prompts on a worker's line (#16187)", () => {
     await flushWake();
     expect(h.client.submitted.map((line) => line.text)).toEqual(["first"]);
     expect(first.outcomes.map(({ outcome }) => outcome.kind)).toEqual(["delivered"]);
+    // Never reserved: it can still be cancelled or superseded before its own line.
+    expect(first.reservations()).toBe(1);
+    expect(second.reservations()).toBe(0);
     expect(second.outcomes).toEqual([]);
     expect(h.service.getPaneState(OWN)?.readyCount).toBe(1);
   });

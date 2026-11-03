@@ -55,6 +55,11 @@ export interface HoldSteerRequest {
    * never is. Not called when nothing is held.
    */
   takeNotice?(): PendingNotify | undefined;
+  /**
+   * Told once the line is written, when the call armed no notice: what the
+   * caller's pane heard about the worker's earlier prompt is stale from then.
+   */
+  onWritten?(): void;
 }
 
 export interface HoldSteerResult {
@@ -93,6 +98,7 @@ interface Entry {
   readonly promptBaseline: number | undefined;
   readonly authorize: HoldSteerRequest["authorize"];
   readonly isWriting: HoldSteerRequest["isWriting"];
+  readonly onWritten: HoldSteerRequest["onWritten"];
   notice?: PendingNotify;
   /** Taken onto a line: from here only the host's record says what became of it. */
   reserved: boolean;
@@ -100,6 +106,8 @@ interface Entry {
 
 /** Ended records kept for status reads, oldest forgotten first. */
 const MAX_ENDED_RECORDS = 256;
+/** Sessions known to have ended, oldest forgotten first: none of them holds anything new. */
+const MAX_FENCED_PRINCIPALS = 256;
 
 function clampTtlSeconds(seconds: number): number {
   if (!Number.isFinite(seconds)) return QUEUED_SEND_TTL_MAX_SECONDS;
@@ -127,12 +135,16 @@ export class WorkerSteerQueue {
   private readonly entries = new Map<string, Entry>();
   private readonly pending = new Map<string, string>();
   private readonly ended: string[] = [];
+  private readonly fenced = new Set<string>();
   private disposed = false;
 
   constructor(private readonly deps: WorkerSteerQueueDeps) {}
 
   hold(request: HoldSteerRequest): HoldSteerResult {
     if (this.disposed) throw new HoldRefusedError("this host is shutting down");
+    if (this.fenced.has(request.principal)) {
+      throw new HoldRefusedError("the Assistant session that sent it has ended");
+    }
     const now = this.now();
     const token = this.deps.newToken?.() ?? randomUUID();
     const expiresAt = now + clampTtlSeconds(request.ttlSeconds) * 1_000;
@@ -152,6 +164,7 @@ export class WorkerSteerQueue {
       promptBaseline: foreignPromptInputAt(request.run, request.principal),
       authorize: request.authorize,
       isWriting: request.isWriting,
+      onWritten: request.onWritten,
       reserved: false,
     };
     this.entries.set(token, entry);
@@ -201,6 +214,20 @@ export class WorkerSteerQueue {
     return { queuedSendToken: token, expiresAt, ...(supersededToken ? { supersededToken } : {}) };
   }
 
+  /**
+   * Another assistant's prompt went to the worker (#16187): it is input the
+   * worker could take as a prompt, so what others held for it is dropped,
+   * as someone typing there would drop it.
+   */
+  promptSent(terminalId: string, principal: string): void {
+    for (const entry of [...this.entries.values()]) {
+      if (entry.terminalId !== terminalId || entry.principal === principal) continue;
+      if (entry.record.status === "queued" && !entry.reserved) {
+        this.end(entry, "dropped", { reason: "typed" });
+      }
+    }
+  }
+
   /** What became of `token`, for the principal that queued it; null when this host holds no record. */
   status(principal: string, token: string): QueuedSendRecord | null {
     const entry = this.entries.get(token);
@@ -230,8 +257,18 @@ export class WorkerSteerQueue {
     return { cancelled: true, record: { ...entry.record } };
   }
 
-  /** The Assistant session behind `principal` ended: nothing it held is typed for a successor. */
-  revokePrincipal(principal: string): void {
+  /**
+   * The Assistant session behind `principal` ended: nothing it held is typed
+   * for a successor. `fence` also refuses anything it holds from now on, for
+   * an end heard while its calls may still be admitted.
+   */
+  revokePrincipal(principal: string, options: { fence?: boolean } = {}): void {
+    if (options.fence === true) {
+      this.fenced.add(principal);
+      if (this.fenced.size > MAX_FENCED_PRINCIPALS) {
+        this.fenced.delete(this.fenced.values().next().value!);
+      }
+    }
     for (const entry of [...this.entries.values()]) {
       if (entry.principal !== principal) continue;
       if (entry.record.status === "queued" && !entry.reserved) {
@@ -326,7 +363,9 @@ export class WorkerSteerQueue {
       const notice = entry.notice;
       entry.notice = undefined;
       this.end(entry, "delivered", { submissionToken });
-      notice?.complete({ submissionToken });
+      this.promptSent(entry.terminalId, entry.principal);
+      if (notice !== undefined) notice.complete({ submissionToken });
+      else this.safely(entry.onWritten);
       return;
     }
     if (entry.record.status !== "queued") return;
@@ -370,6 +409,14 @@ export class WorkerSteerQueue {
     while (this.ended.length > MAX_ENDED_RECORDS) {
       const oldest = this.ended.shift()!;
       this.entries.delete(oldest);
+    }
+  }
+
+  private safely(hook: (() => void) | undefined): void {
+    try {
+      hook?.();
+    } catch (err) {
+      console.error("[WorkerSteerQueue] A held prompt's follow-up failed:", err);
     }
   }
 

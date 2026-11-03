@@ -614,9 +614,26 @@ describe.each(LANES)(
       store.sessionTierMap.delete(SESSION);
       const wake = wakes[0]!;
       expect(wake.recheck(atItsPrompt())).toEqual({ kind: "ready" });
+      refuseWrite.mockClear();
+      expect(wake.beforeType()).toBe(true);
+      expect(refuseWrite).toHaveBeenCalledWith(PROJECT);
+    });
+
+    it("drops a held prompt that comes to be written where the drive rule refuses it", async () => {
+      const { deps, store, records, wakes, refuseWrite } = harness({ shellName, global: true });
+      records.set(WORKER, working());
+      const server = await serve(deps);
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "go", generation: 4, whenBusy: "queue" },
+      });
+      store.sessionTierMap.delete(SESSION);
+
+      refuseWrite.mockClear();
       refuseWrite.mockReturnValueOnce({ code: "DRIVEN_ELSEWHERE", message: "driven elsewhere" });
-      expect(wake.beforeType()).toBe(false);
-      expect(refuseWrite).toHaveBeenLastCalledWith(PROJECT);
+      expect(wakes[0]!.beforeType()).toBe(false);
+      expect(refuseWrite).toHaveBeenCalledOnce();
+      expect(refuseWrite).toHaveBeenCalledWith(PROJECT);
     });
 
     it("drops it when someone else sends the worker a prompt, not on keys at an approval", async () => {
@@ -681,6 +698,43 @@ describe.each(LANES)(
       expect(wakes[0]!.beforeType()).toBe(true);
       wakes[0]!.report({ kind: "delivered" }, { phase: "pty_written", submissionToken: "line-7" });
       expect(pending.complete).toHaveBeenCalledWith({ submissionToken: "line-7" });
+      expect(handlers.supersede).not.toHaveBeenCalled();
+    });
+
+    it("leaves the pane's notices about the worker until a held prompt without notify is written", async () => {
+      const handlers = {
+        whenIdle: vi.fn(),
+        prepareSend: vi.fn(),
+        prepareLaunch: vi.fn(),
+        prepareKeys: vi.fn(),
+        forgetTarget: vi.fn(),
+        holdTarget: vi.fn(),
+        settleTargetHold: vi.fn(),
+        supersede: vi.fn(),
+        releaseHold: vi.fn(),
+      } satisfies TerminalNotifyHandlers;
+      const pane = { key: "relay\u0000p", terminalId: "relay\u0000p" };
+      const { deps, records, wakes } = harness({ shellName, global: true });
+      records.set(WORKER, working());
+      const server = await serve({ ...deps, terminalNotify: handlers, resolveOwnPane: () => pane });
+
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "go", generation: 4, whenBusy: "queue" },
+      });
+      expect(handlers.supersede).not.toHaveBeenCalled();
+
+      wakes[0]!.beforeType();
+      wakes[0]!.report({ kind: "delivered" }, { phase: "pty_written", submissionToken: "line-8" });
+      expect(handlers.supersede).toHaveBeenCalledWith(pane, WORKER);
+
+      // A send that went in at once still supersedes at once.
+      records.set(WORKER, atPrompt());
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "now", generation: 4 },
+      });
+      expect(handlers.supersede).toHaveBeenCalledTimes(2);
     });
 
     it("refuses what it can't hold, holding nothing", async () => {

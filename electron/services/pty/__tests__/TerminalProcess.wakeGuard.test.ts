@@ -179,9 +179,12 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     expect(t.lastTypedInputAt).toBe(start);
     expect(t.lastForeignPromptInputAt).toBeUndefined();
 
-    // The same keys reach the composer mid-turn, or at its prompt.
+    // The same keys reach the composer mid-turn, or at its prompt, whichever way they come.
     t.agentState = "working";
     t.waitingReason = undefined;
+    vi.setSystemTime(start + 5);
+    terminal.tryWrite("w");
+    expect(t.lastForeignPromptInputAt).toBe(start + 5);
     vi.setSystemTime(start + 10);
     terminal.write("x");
     expect(t.lastForeignPromptInputAt).toBe(start + 10);

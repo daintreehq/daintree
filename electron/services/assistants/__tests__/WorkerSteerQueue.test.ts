@@ -162,12 +162,20 @@ describe("WorkerSteerQueue (#16187)", () => {
     expect(queue.status(OWNER, "tok-1")).toMatchObject({ status: "dropped", reason });
   });
 
-  it("drops once its time runs out, read or rechecked", () => {
+  it("drops once its time runs out, when rechecked first", () => {
+    queue.hold(request({ ttlSeconds: 60 }));
+    now = 61_000;
+
+    expect(lastWake().recheck(atPrompt())).toEqual({ kind: "unavailable", reason: "expired" });
+    expect(queue.status(OWNER, "tok-1")).toMatchObject({ status: "dropped", reason: "expired" });
+  });
+
+  it("drops once its time runs out, when read first", () => {
     queue.hold(request({ ttlSeconds: 60 }));
     now = 61_000;
 
     expect(queue.status(OWNER, "tok-1")).toMatchObject({ status: "dropped", reason: "expired" });
-    expect(lastWake().recheck(atPrompt())).toMatchObject({ kind: "unavailable" });
+    expect(lastWake().beforeType()).toBe(false);
   });
 
   it("asks its deferred authority right before the line, dropping it unwritten when refused", () => {
@@ -291,6 +299,61 @@ describe("WorkerSteerQueue (#16187)", () => {
       cancelled: false,
       record: { status: "queued" },
     });
+  });
+
+  it("refuses anything new from a session whose end was fenced, and only that session", () => {
+    queue.revokePrincipal(OWNER, { fence: true });
+
+    expect(() => queue.hold(request())).toThrow(/session that sent it has ended/);
+    expect(wakes).toEqual([]);
+    expect(queue.hold(request({ principal: OTHER })).queuedSendToken).toBe("tok-1");
+  });
+
+  it("drops what others held for a worker once another assistant's prompt goes to it", () => {
+    queue.hold(request());
+    queue.hold(request({ principal: OTHER }));
+    queue.hold(request({ principal: OTHER, terminalId: "term-elsewhere" }));
+
+    queue.promptSent(WORKER, OTHER);
+
+    expect(queue.status(OWNER, "tok-1")).toMatchObject({ status: "dropped", reason: "typed" });
+    // Its own sender's prompt, and a held prompt for another worker, stay.
+    expect(queue.status(OTHER, "tok-2")?.status).toBe("queued");
+    expect(queue.status(OTHER, "tok-3")?.status).toBe("queued");
+  });
+
+  it("drops another sender's held prompt for the worker once this one is written", () => {
+    queue.hold(request());
+    queue.hold(request({ principal: OTHER }));
+    const mine = wakes[0]!.wake;
+
+    mine.beforeType();
+    mine.report({ kind: "delivered" }, { phase: "pty_written", submissionToken: "line-1" });
+
+    expect(queue.status(OTHER, "tok-2")).toMatchObject({ status: "dropped", reason: "typed" });
+  });
+
+  it("tells the caller its line was written when no notice follows it, and only then", () => {
+    const onWritten = vi.fn();
+    queue.hold(request({ onWritten }));
+    lastWake().beforeType();
+    expect(onWritten).not.toHaveBeenCalled();
+
+    lastWake().report({ kind: "delivered" }, { phase: "pty_written", submissionToken: "line-1" });
+    expect(onWritten).toHaveBeenCalledOnce();
+
+    const notice: PendingNotify = { complete: vi.fn(), cancel: vi.fn() };
+    const quiet = vi.fn();
+    queue.hold(request({ onWritten: quiet, takeNotice: () => notice }));
+    lastWake().beforeType();
+    lastWake().report({ kind: "delivered" }, { phase: "pty_written", submissionToken: "line-2" });
+    expect(quiet).not.toHaveBeenCalled();
+    expect(notice.complete).toHaveBeenCalledWith({ submissionToken: "line-2" });
+
+    const dropped = vi.fn();
+    queue.hold(request({ onWritten: dropped }));
+    queue.cancel(OWNER, WORKER, "tok-3");
+    expect(dropped).not.toHaveBeenCalled();
   });
 
   it("drops what an ended session held, and nothing another session holds", () => {

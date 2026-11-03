@@ -1678,8 +1678,9 @@ export class McpServerService {
     this.sessionStore.resourceOwnership.revokePrincipal(principal);
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
     this.terminalNotify.revokeOwner(relayNotifyKey(principal));
-    // Held for a worker by the session that ended, never typed for its successor (#14161).
-    this.workerSteerQueue.revokePrincipal(principal);
+    // Held for a worker by the session that ended, never typed for its successor
+    // (#14161), under the owner key its calls held them by.
+    this.workerSteerQueue.revokePrincipal(principalOwnerKey(principal));
   }
 
   /**
@@ -1688,7 +1689,11 @@ export class McpServerService {
    * typed after the session that wrote it is gone.
    */
   endRelayHeldSends(senderId: string, helpSessionId: string): void {
-    this.workerSteerQueue.revokePrincipal(relayOwnershipPrincipal(senderId, helpSessionId));
+    // Fenced: a call of that session still being admitted holds nothing after this.
+    this.workerSteerQueue.revokePrincipal(
+      principalOwnerKey(relayOwnershipPrincipal(senderId, helpSessionId)),
+      { fence: true }
+    );
   }
 
   /**

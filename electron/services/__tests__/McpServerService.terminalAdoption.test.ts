@@ -684,11 +684,16 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     const queue = service.getWorkerSteerQueue();
     const revoke = vi.spyOn(queue, "revokePrincipal");
 
+    // Held by the owner key a relayed session's calls run under, as `ownerOf` gives it.
     service.retireRelayPrincipal("local", GLOBAL.sessionId);
-    expect(revoke).toHaveBeenLastCalledWith(relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    expect(revoke).toHaveBeenLastCalledWith(globalOwner);
 
+    // A remote session's end is fenced: its calls still being admitted hold nothing.
     service.endRelayHeldSends("sender-b", "help-b");
-    expect(revoke).toHaveBeenLastCalledWith(relayOwnershipPrincipal("sender-b", "help-b"));
+    expect(revoke).toHaveBeenLastCalledWith(
+      principalOwnerKey(relayOwnershipPrincipal("sender-b", "help-b")),
+      { fence: true }
+    );
     revoke.mockRestore();
   });
 

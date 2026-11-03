@@ -83,7 +83,7 @@ export interface GlobalWorkerSteerDeps {
   /** The pair's gap is scheduled in the pty-host, where IPC can't collapse it. */
   doubleEscape(terminalId: string, inputOwner: string): void;
   /** Where a prompt for a busy worker is held (#16187); absent or null, none is. */
-  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
+  queue?: () => Pick<WorkerSteerQueue, "hold" | "promptSent"> | null;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -121,6 +121,8 @@ export interface WhenBusy {
   queue: { ttlSeconds: number };
   /** Takes the call's armed `notify` once the prompt is held, for the line to complete. */
   takeNotice?: () => PendingNotify | undefined;
+  /** Told once the held line is written, when no notice follows it. */
+  onWritten?: () => void;
 }
 
 /** Said on a receipt admitted only because everything typed since the settle was the caller's own keys. */
@@ -281,6 +283,8 @@ export class GlobalWorkerSteer {
       if (pending !== null) refuse(WORKER_STEER_REFUSALS.typing, `${pending} ${NOTHING_SENT}`);
       this.requireSameRun(target);
       target.authorize();
+      // Another assistant's prompt held for this worker is overtaken by this input.
+      this.deps.queue?.()?.promptSent(target.terminalId, target.inputOwner);
       const submissionToken = randomUUID();
       if (slash.kind === "slash") {
         // A fixed form has no free text for the stamp's "quoted text is data" rule to guard.
@@ -376,6 +380,7 @@ export class GlobalWorkerSteer {
         authorize: authorizeHeld,
         isWriting: () => this.writing.has(terminalId),
         ...(whenBusy.takeNotice !== undefined ? { takeNotice: whenBusy.takeNotice } : {}),
+        ...(whenBusy.onWritten !== undefined ? { onWritten: whenBusy.onWritten } : {}),
       });
     } catch (error) {
       if (!(error instanceof HoldRefusedError)) throw error;
@@ -620,7 +625,7 @@ export class GlobalWorkerSteer {
 export function liveGlobalWorkerSteer(deps: {
   pty: () => PtyClient | null;
   isAssistantTerminal(terminalId: string): boolean;
-  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
+  queue?: () => Pick<WorkerSteerQueue, "hold" | "promptSent"> | null;
 }): GlobalWorkerSteer {
   return new GlobalWorkerSteer({
     ...(deps.queue !== undefined ? { queue: deps.queue } : {}),

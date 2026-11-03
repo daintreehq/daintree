@@ -56,6 +56,18 @@ function registerAll(): ActionService {
   return service;
 }
 
+function propertiesOf(schema: Record<string, unknown>): Record<string, unknown> {
+  const { properties } = schema;
+  return typeof properties === "object" && properties !== null ? { ...properties } : {};
+}
+
+function requiredOf(schema: Record<string, unknown>): string[] {
+  const { required } = schema;
+  return Array.isArray(required)
+    ? required.filter((name): name is string => typeof name === "string")
+    : [];
+}
+
 function outputSchema(service: ActionService, id: string): Record<string, unknown> | undefined {
   return service.get(id as ActionId)?.outputSchema as Record<string, unknown> | undefined;
 }
@@ -274,8 +286,8 @@ describe("terminal.sendCommandOwned (#12407)", () => {
     const owned = outputSchema(service, "terminal.sendCommandOwned")!;
     const delegate = outputSchema(service, "terminal.sendCommand")!;
     expect(owned.type).toBe("object");
-    const ownedProps = owned.properties as Record<string, unknown>;
-    const delegateProps = delegate.properties as Record<string, unknown>;
+    const ownedProps = propertiesOf(owned);
+    const delegateProps = propertiesOf(delegate);
     for (const [name, schema] of Object.entries(delegateProps)) {
       if (name === "submissionToken") continue;
       expect(ownedProps[name], name).toEqual(schema);
@@ -285,8 +297,9 @@ describe("terminal.sendCommandOwned (#12407)", () => {
         .filter((name) => !(name in delegateProps))
         .sort()
     ).toEqual(["expiresAt", "queued", "queuedSendToken", "supersededToken"]);
-    const delegateRequired = delegate.required as string[];
-    expect(owned.required).toEqual(delegateRequired.filter((name) => name !== "submissionToken"));
+    expect(requiredOf(owned)).toEqual(
+      requiredOf(delegate).filter((name) => name !== "submissionToken")
+    );
   });
 
   it("validates both a sent and a held receipt (#16187)", () => {

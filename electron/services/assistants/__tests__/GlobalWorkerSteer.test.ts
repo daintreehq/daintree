@@ -48,6 +48,7 @@ describe("GlobalWorkerSteer (#14551)", () => {
   let steer: GlobalWorkerSteer;
   /** What the steer handed its queue, and how the queue answers; null is no queue. */
   let held: HoldSteerRequest[];
+  let overtaken: Array<[string, string]>;
   let holdAnswer: ((request: HoldSteerRequest) => HoldSteerResult) | null;
 
   const atPrompt = (extra: Partial<WorkerSteerRecord> = {}): WorkerSteerRecord => ({
@@ -98,6 +99,7 @@ describe("GlobalWorkerSteer (#14551)", () => {
     duringGap = () => {};
     duringRead = () => {};
     held = [];
+    overtaken = [];
     holdAnswer = null;
     const deps: GlobalWorkerSteerDeps = {
       getTerminalProjectId: () => fake.projectId,
@@ -130,6 +132,7 @@ describe("GlobalWorkerSteer (#14551)", () => {
                 held.push(request);
                 return holdAnswer!(request);
               },
+              promptSent: (terminalId, principal) => overtaken.push([terminalId, principal]),
             },
     };
     steer = new GlobalWorkerSteer(deps);
@@ -306,6 +309,21 @@ describe("GlobalWorkerSteer (#14551)", () => {
       expect(held).toEqual([]);
       expect(submits).toHaveLength(1);
       expect(receipt).toMatchObject({ sent: true });
+    });
+
+    it("overtakes what other assistants held for the worker when it sends, and only then", async () => {
+      // Held, not sent: nothing is overtaken.
+      await queueSend();
+      expect(overtaken).toEqual([]);
+
+      fake.record = atPrompt();
+      await queueSend();
+      expect(overtaken).toEqual([[WORKER, OWNER]]);
+
+      // A refused send overtakes nothing.
+      personTypes();
+      await refusal(queueSend());
+      expect(overtaken).toHaveLength(1);
     });
 
     it("keeps refusing what an immediate send refuses: a draft typed mid-turn", async () => {

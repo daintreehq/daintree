@@ -384,6 +384,13 @@ function readStringArg(args: unknown, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** A send held for a worker's next prompt (#16187): nothing was written yet. */
+function isHeldReceipt(result: unknown): boolean {
+  return (
+    typeof result === "object" && result !== null && "queued" in result && result.queued === true
+  );
+}
+
 /**
  * A steer send's `whenBusy` and how long it may be held (#16187), checked in
  * main since the steer never reaches the action's own schema.
@@ -1056,6 +1063,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                     const notice = pendingNotify;
                     pendingNotify = undefined;
                     return notice;
+                  },
+                  // Without a notice, what this pane heard about the worker's
+                  // earlier prompt goes stale once this one is written, not now.
+                  onWritten: () => {
+                    const pane = tier === "external" ? null : ownPane();
+                    if (pane !== null) terminalNotify?.supersede(pane, terminalId);
                   },
                 },
               }
@@ -3560,7 +3573,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             envelope.result.ok &&
             NOTIFY_PROMPT_TOOLS.has(actionId) &&
             terminalNotify !== undefined &&
-            tier !== "external"
+            tier !== "external" &&
+            !isHeldReceipt(envelope.result.result)
           ) {
             // A prompt without `notify` still makes the pane's undelivered
             // notice about the target stale: typed after this prompt, it
