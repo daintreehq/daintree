@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CDN_PREFIX = "https://cdn.daintree.org/readme/";

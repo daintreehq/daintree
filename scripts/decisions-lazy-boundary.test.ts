@@ -59,10 +59,13 @@ function startupChunks(metafile: Metafile): Set<string> {
 describe("Decisions lazy boundary", () => {
   let metafile: Metafile;
   let eager: Set<string>;
+  let hostRoleEnabled: boolean;
 
   beforeAll(async () => {
+    const config = mainEsmConfig({ production: true });
+    hostRoleEnabled = config.define?.__DAINTREE_REMOTE_HOST_ROLE__ === "true";
     const result = await build({
-      ...mainEsmConfig({ production: true }),
+      ...config,
       write: false,
       metafile: true,
       logLevel: "silent",
@@ -102,7 +105,6 @@ describe("Decisions lazy boundary", () => {
       "electron/services/decisions/daintreeResumeAdapter.ts",
       "electron/services/decisions/hostEnrollment.ts",
       "electron/services/decisions/hostEnrollmentRecords.ts",
-      "electron/services/decisions/hostEnrollmentHost.ts",
       "electron/services/decisions/attentionList.ts",
       "electron/services/decisions/decisionModel.ts",
     ]) {
@@ -114,6 +116,12 @@ describe("Decisions lazy boundary", () => {
         library
       ).toBe(true);
     }
+  });
+
+  it("bundles host-side enrollment only for a build that can be a Host", () => {
+    expect(
+      Object.hasOwn(metafile.inputs, "electron/services/decisions/hostEnrollmentHost.ts")
+    ).toBe(hostRoleEnabled);
   });
 
   it("reaches no Decisions module from the startup graph", () => {

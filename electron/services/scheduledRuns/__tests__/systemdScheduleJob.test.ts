@@ -866,24 +866,36 @@ describe("DISPLAY_WAIT_SCRIPT", () => {
     };
   }
 
-  it("goes on at once in a desktop session, on X11 or Wayland", () => {
-    expect(wait(["HOME=/home/someone\nDISPLAY=:0\n"])).toMatchObject({ code: 0, looks: 1 });
-    expect(wait(["WAYLAND_DISPLAY=wayland-0\n"])).toMatchObject({ code: 0, looks: 1 });
-  });
+  it.skipIf(process.platform === "win32")(
+    "goes on at once in a desktop session, on X11 or Wayland",
+    () => {
+      expect(wait(["HOME=/home/someone\nDISPLAY=:0\n"])).toMatchObject({ code: 0, looks: 1 });
+      expect(wait(["WAYLAND_DISPLAY=wayland-0\n"])).toMatchObject({ code: 0, looks: 1 });
+    }
+  );
 
-  it("waits for the session to say where its display is, an empty one not counting", () => {
-    expect(
-      wait(["HOME=/home/someone\n", "DISPLAY=\nXDISPLAY=:0\n", "WAYLAND_DISPLAY=wayland-0\n"])
-    ).toMatchObject({ code: 0, looks: 3, sleeps: ["2", "2"] });
-  });
+  it.skipIf(process.platform === "win32")(
+    "waits for the session to say where its display is, an empty one not counting",
+    () => {
+      expect(
+        wait(["HOME=/home/someone\n", "DISPLAY=\nXDISPLAY=:0\n", "WAYLAND_DISPLAY=wayland-0\n"])
+      ).toMatchObject({ code: 0, looks: 3, sleeps: ["2", "2"] });
+    }
+  );
 
-  it("keeps waiting past the first minutes, looking less often", () => {
-    const quick = Number(/-le (\d+) \]/.exec(DISPLAY_WAIT_SCRIPT)![1]);
-    const environments = [...Array<string>(quick + 3).fill("HOME=/home/someone\n"), "DISPLAY=:1\n"];
-    const { code, sleeps } = wait(environments);
-    expect(code).toBe(0);
-    expect(sleeps).toEqual([...Array<string>(quick).fill("2"), "30", "30", "30"]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "keeps waiting past the first minutes, looking less often",
+    () => {
+      const quick = Number(/-le (\d+) \]/.exec(DISPLAY_WAIT_SCRIPT)![1]);
+      const environments = [
+        ...Array<string>(quick + 3).fill("HOME=/home/someone\n"),
+        "DISPLAY=:1\n",
+      ];
+      const { code, sleeps } = wait(environments);
+      expect(code).toBe(0);
+      expect(sleeps).toEqual([...Array<string>(quick).fill("2"), "30", "30", "30"]);
+    }
+  );
 
   it("is written so systemd hands the shell exactly this script", () => {
     // systemd reads `$$` as `$` and `%%` as `%`, after unquoting the word.
@@ -893,6 +905,9 @@ describe("DISPLAY_WAIT_SCRIPT", () => {
     expect(line.replace(/\\(.)/g, "$1").replace(/\$\$/g, "$").replace(/%%/g, "%")).toBe(
       DISPLAY_WAIT_SCRIPT
     );
+  });
+
+  it.skipIf(process.platform === "win32")("is valid POSIX shell syntax", () => {
     expect(execFileSync("/bin/sh", ["-n", "-c", DISPLAY_WAIT_SCRIPT]).toString()).toBe("");
   });
 });

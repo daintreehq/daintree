@@ -10,6 +10,7 @@ import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { ensureWindowFocused } from "../../helpers/focus";
 import { getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { getTerminalText, waitForTerminalText } from "../../helpers/terminal";
+import { switchWorktree } from "../../helpers/workflows";
 import {
   approveWorktreeCommands,
   writeResourceConfig,
@@ -163,7 +164,7 @@ test.describe.serial("Full: Worktree Resources", () => {
     await expect(newCard).toBeVisible({ timeout: T_LONG });
     await approveWorktreeCommands(window, BRANCH);
 
-    await newCard.click({ position: { x: 10, y: 10 } });
+    await switchWorktree(window, BRANCH);
     await expect(window.locator(SEL.worktree.row(BRANCH))).toHaveAttribute("aria-current", "true", {
       timeout: T_LONG,
     });
@@ -471,8 +472,8 @@ test.describe.serial("Full: Worktree Resources", () => {
     });
 
     const failBranch = "e2e/resource-teardown-fail";
-    const card = await createWorktree(window, failBranch);
-    await card.click({ position: { x: 10, y: 10 } });
+    await createWorktree(window, failBranch);
+    await switchWorktree(window, failBranch);
     await expect(window.locator(SEL.worktree.row(failBranch))).toHaveAttribute(
       "aria-current",
       "true",

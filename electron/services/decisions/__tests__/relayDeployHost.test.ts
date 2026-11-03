@@ -234,13 +234,27 @@ describe("openRelayDeployHost", () => {
     expect(events.readPrefill).toHaveBeenCalledOnce();
   });
 
-  it("takes one connection: the socket is gone for any other", async () => {
+  it("takes one connection: a later client is refused", async () => {
     const events = recorder();
     const host = await open(events);
-    await connect(host);
+    const client = await connect(host);
+    // A pipe's client can connect before the server has accepted it.
+    client.send(line(HELLO));
+    expect(await client.next()).toEqual({ v: 1, type: "prefill", answers: PREFILL });
     await vi.waitFor(() => expect(UNIX ? existsSync(host.channelPath) : false).toBe(false));
 
-    await expect(Client.connect(host.channelPath)).rejects.toThrow();
+    const later = Client.connect(host.channelPath).then(
+      (other) => {
+        clients.push(other);
+        return "connected";
+      },
+      () => "refused"
+    );
+    // Windows retains the pipe until the accepted connection closes.
+    client.send(line(RESULT));
+    expect(await client.next()).toEqual({ v: 1, type: "received" });
+    await client.closed;
+    expect(await later).toBe("refused");
     expect(events.onInterrupted).not.toHaveBeenCalled();
   });
 

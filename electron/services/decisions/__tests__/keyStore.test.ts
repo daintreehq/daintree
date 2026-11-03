@@ -25,6 +25,7 @@ import {
 import { DecisionsKeyStoreError, KeyFileChangedError, SealedKeyStore } from "../keyStore.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+const filesystemPlatform = process.platform;
 
 function setPlatform(value: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value, configurable: true });
@@ -126,7 +127,7 @@ describe("SealedKeyStore", () => {
       expect(text).not.toContain(secret);
     }
     expect(JSON.parse(text)).toMatchObject({ v: 1, protection: "keychain" });
-    if (process.platform !== "win32") {
+    if (filesystemPlatform !== "win32") {
       expect((await stat(file)).mode & 0o777).toBe(0o600);
       expect((await stat(join(dir, "decisions"))).mode & 0o777).toBe(0o700);
     }

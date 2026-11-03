@@ -47,6 +47,14 @@ const baseConfig: KnipConfig = {
     "electron-builder.config.cjs",
     "scripts/generate-sounds.mjs",
 
+    // README tools run directly; the renderer spawns export-data by path,
+    // and the artwork HTML loads glyphs through script tags.
+    "scripts/readme/preview.mjs",
+    "scripts/readme/publish.mjs",
+    "scripts/readme/render-art.mjs",
+    "scripts/readme/export-data.ts",
+    "scripts/readme/art/glyphs.js",
+
     // The perf dispatcher launches these entry points by string path in
     // isolated subprocesses, so static analysis cannot follow those edges.
     "scripts/perf/run.ts",
@@ -181,6 +189,7 @@ const baseConfig: KnipConfig = {
     // the host OS rather than npm dependencies in this package.
     "create-daintree-plugin",
     "daintree-plugin",
+    "cwebp",
     "ffmpeg",
     "magick",
     "sqlite3",
@@ -190,6 +199,8 @@ const baseConfig: KnipConfig = {
     // not be declared as package dependencies.
     // The native supervisor tests compile their fixture with the host C compiler.
     "cc",
+    // Real-agent E2E fixtures invoke the separately installed agent CLI.
+    "codex",
     "ditto",
     "du",
     "gnome-control-center",

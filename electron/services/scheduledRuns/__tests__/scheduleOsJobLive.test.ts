@@ -103,6 +103,7 @@ vi.mock("../taskSchedulerScheduleJob.js", async (importActual) => ({
 }));
 
 const realPlatform = process.platform;
+const realGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
 const realWindowsStore = Object.getOwnPropertyDescriptor(process, "windowsStore");
 const realArgv = process.argv;
 
@@ -132,6 +133,8 @@ beforeEach(() => {
 
 afterEach(() => {
   onPlatform(realPlatform);
+  if (realGetuid) Object.defineProperty(process, "getuid", realGetuid);
+  else delete process.getuid;
   if (realWindowsStore) Object.defineProperty(process, "windowsStore", realWindowsStore);
   else delete (process as { windowsStore?: boolean }).windowsStore;
   process.argv = realArgv;
@@ -282,10 +285,12 @@ describe("scheduleOsJobLive", () => {
 
   it("keeps the LaunchAgent on macOS", async () => {
     onPlatform("darwin");
+    Object.defineProperty(process, "getuid", { value: () => 501, configurable: true });
     const { scheduleOsJobStatus } = await live();
 
     expect((await scheduleOsJobStatus("p1")).context.kind).toBe("launch-agent");
     expect(mocks.launchAgentDeps).toHaveLength(1);
+    expect(mocks.launchAgentDeps[0]).toMatchObject({ uid: 501 });
     expect(mocks.systemdDeps).toEqual([]);
   });
 

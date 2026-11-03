@@ -67,6 +67,7 @@ function configRootsOf(config: AgentConfig): string[] {
     .map((p) => p.replace(/^~[/\\]/, "").replace(/\\/g, "/"))
     .filter((p) => !path.isAbsolute(p) && !p.includes("%"))
     .map((p) => (p.includes("/") ? path.posix.dirname(p) : p));
+  if (config.account?.kind === "config-folder") roots.push(config.account.defaultDir);
   return [...new Set([...roots, ...(EXTRA_CONFIG_ROOTS[config.id] ?? [])])];
 }
 
