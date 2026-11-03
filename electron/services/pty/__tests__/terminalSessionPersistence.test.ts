@@ -20,7 +20,10 @@ import {
   readAndDeleteHibernatedMarker,
   getHibernatedMarkerPath,
 } from "../terminalSessionPersistence.js";
-import { DECISIONS_DEPLOY_TERMINAL_PREFIX } from "../../../../shared/config/terminalScreenPersistence.js";
+import {
+  DECISIONS_DEPLOY_TERMINAL_PREFIX,
+  DECISIONS_REMOVE_TERMINAL_PREFIX,
+} from "../../../../shared/config/terminalScreenPersistence.js";
 import { HOST_THROWAWAY_TERMINAL_PREFIX } from "../../../../shared/config/hostThrowaway.js";
 
 const { Terminal } = headless;
@@ -113,6 +116,7 @@ describe("terminalSessionPersistence", () => {
 
   it.each([
     ["a relay deploy", `${DECISIONS_DEPLOY_TERMINAL_PREFIX}1`],
+    ["a relay removal", `${DECISIONS_REMOVE_TERMINAL_PREFIX}1`],
     ["a throwaway run", `${HOST_THROWAWAY_TERMINAL_PREFIX}1`],
   ])("never writes %s's screen, by either writer", async (_label, id) => {
     const screen = { data: "  Claim secret  0123456789abcdef0123456789abcdef", cols: 80, rows: 24 };

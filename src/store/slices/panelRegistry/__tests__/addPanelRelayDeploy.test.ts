@@ -123,6 +123,11 @@ describe("addPanel — a relay deploy pane (#16023)", () => {
       "daintree-decisions-update-1",
       "npx --yes @daintreehq/decisions-cli@0.3.0 update --url https://r.example.dev --protocol 1",
     ],
+    [
+      "removal (#16202)",
+      "daintree-decisions-remove-1",
+      "npx --yes @daintreehq/decisions-cli@0.3.0 remove https://relay.example.workers.dev",
+    ],
   ])(
     "spawns running the %s, and the pane keeps no command to run again",
     async (_label, id, command) => {
@@ -136,7 +141,8 @@ describe("addPanel — a relay deploy pane (#16023)", () => {
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
 
       expect(spawn.mock.calls[0]![0]).toMatchObject({ id, command });
-      expect(ptyPanel(id)?.command).toBeUndefined();
+      expect(ptyPanel(id)).toBeDefined();
+      expect(ptyPanel(id)!.command).toBeUndefined();
     }
   );
 

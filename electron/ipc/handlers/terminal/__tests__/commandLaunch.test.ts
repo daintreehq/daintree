@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { buildCommandLaunchShell } from "../commandLaunch.js";
+import {
+  buildCommandLaunchShell,
+  buildRelayRemovalLaunch,
+  relayRemovalEnv,
+} from "../commandLaunch.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -184,6 +188,53 @@ describe("buildCommandLaunchShell", () => {
 
       expect(result?.args.slice(0, 2)).toEqual(["-i", "-c"]);
       expect(result?.args[2]).toBe("trap : INT\nnpm run dev\nexit");
+    });
+  });
+
+  // A relay removal's status is all Daintree reads of how it went (#16202), so
+  // its CLI is the PTY's own process: no shell, so no startup file stands in.
+  describe("relay removal launch", () => {
+    const argv = [
+      "npx",
+      "--yes",
+      "@daintreehq/decisions-cli@0.3.0",
+      "remove",
+      "https://r.example.dev",
+    ];
+
+    it("runs the CLI through env on POSIX, with no shell in between", () => {
+      setPlatform("darwin");
+
+      expect(buildRelayRemovalLaunch(argv, "C:\\Windows\\System32\\cmd.exe")).toEqual({
+        shell: "/usr/bin/env",
+        args: argv,
+      });
+    });
+
+    it("runs npm's batch shim under cmd on Windows, skipping AutoRun", () => {
+      setPlatform("win32");
+      const windowsArgv = ["npx.cmd", ...argv.slice(1)];
+
+      expect(buildRelayRemovalLaunch(windowsArgv, "C:\\Windows\\System32\\cmd.exe")).toEqual({
+        shell: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/c", ...windowsArgv],
+      });
+    });
+  });
+
+  describe("relay removal environment", () => {
+    it("names a script shell that reads no startup files, in both spellings, over the pane's own", () => {
+      setPlatform("linux");
+      expect(relayRemovalEnv({ FOO: "1", npm_config_script_shell: "/bin/zsh" }, "cmd.exe")).toEqual(
+        { FOO: "1", npm_config_script_shell: "/bin/sh", NPM_CONFIG_SCRIPT_SHELL: "/bin/sh" }
+      );
+    });
+
+    it("names cmd on Windows, which npm starts with /d", () => {
+      setPlatform("win32");
+      expect(relayRemovalEnv(undefined, "C:\\Windows\\System32\\cmd.exe")).toMatchObject({
+        npm_config_script_shell: "C:\\Windows\\System32\\cmd.exe",
+      });
     });
   });
 

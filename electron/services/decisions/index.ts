@@ -36,6 +36,8 @@ import {
   type DecisionsRelayCheck,
   type DecisionsRelayDeleteResult,
   type DecisionsRelayRequestFailure,
+  type DecisionsRelayRemoval,
+  type DecisionsRelayRemovalLocal,
   type DecisionsRevokeDeviceResult,
   type DecisionsRotateKeysResult,
   type DecisionsSettings,
@@ -49,6 +51,7 @@ import {
   type PaneDecisionState,
   type PreparedDecisionsRelayDeploy,
   type RestoreDecisionsIdentityPayload,
+  type StartDecisionsRelayRemovalPayload,
   type VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
 import type {
@@ -73,6 +76,7 @@ import type {
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
@@ -116,6 +120,8 @@ import {
   type RelaySetupOutcome,
   type SetupKeyStore,
 } from "./relayIdentity.js";
+import { RelayRemovals, type RemovedRelayRecord } from "./relayRemoval.js";
+import { takeRelayRemovalLaunch } from "../pty/relayRemovalLaunches.js";
 import { SetupCheck } from "./setupCheck.js";
 import { SetupDiagnostics } from "./setupDiagnostic.js";
 import { decisionsPolicyOf, type PolicySettings } from "./workflowGates.js";
@@ -289,6 +295,8 @@ let setupCheckRevision = 0;
 let setupCheckEpoch = 0;
 /** How long turning off, a disconnect, a deletion or quit waits for a check's cleanup. */
 const SETUP_CHECK_CANCEL_MS = 5_000;
+/** The guided relay removals of this run (#16202), made on the first one. */
+let relayRemovals: RelayRemovals | null = null;
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
@@ -527,6 +535,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
       ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
       : {}),
     ...(deploy !== undefined ? { relayDeploy: deploy } : {}),
+    ...(relayRemovals !== null ? { relayRemovals: relayRemovals.list() } : {}),
     revision,
   };
 }
@@ -791,16 +800,37 @@ function forgetRecordedIdentity(): DecisionsSettings {
   });
 }
 
+/** Whether the setting still records exactly the identity a removal started with. */
+function stillRecords(record: RemovedRelayRecord): boolean {
+  const current = readDecisionsSettings(store);
+  return (
+    current.relayOrigin === record.relayOrigin &&
+    current.installationId === record.installationId &&
+    current.deviceId === record.deviceId
+  );
+}
+
 /**
  * Removes this computer's Decisions identity: the key file, then the relay's
  * origin and ids in the setting. The switch, consent and stored rows stay,
  * and nothing is sent to the relay, so everything on it is untouched. Keys
  * that can't be removed leave the setting as it was.
  */
-export function disconnectRelay(): Promise<DecisionsStatus> {
+export async function disconnectRelay(): Promise<DecisionsStatus> {
+  return (await disconnectRecorded(null))!;
+}
+
+/**
+ * Disconnects, or with `only` set, only while the setting still records that
+ * identity, checked before anything is stopped and again in its turn: null
+ * when it no longer does, with nothing changed.
+ */
+function disconnectRecorded(only: RemovedRelayRecord | null): Promise<DecisionsStatus | null> {
+  if (only !== null && !stillRecords(only)) return Promise.resolve(null);
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
+    if (only !== null && !stillRecords(only)) return null;
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
     hostEnroller.forget();
@@ -935,11 +965,20 @@ export function deleteRelayData(
  * keys and its record of the relay. Nothing is sent to the relay, so
  * everything on it stays. The switch and consent stay as they are.
  */
-export function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
+export async function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
+  return (await deleteLocalDataOf(null))!;
+}
+
+/** Deletes local data, or with `only` set, only while the setting still records that identity (null otherwise). */
+function deleteLocalDataOf(
+  only: RemovedRelayRecord | null
+): Promise<DecisionsLocalDeleteResult | null> {
+  if (only !== null && !stillRecords(only)) return Promise.resolve(null);
   // Before the queue, as a disconnect does: a kit of keys being erased is never written.
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
+    if (only !== null && !stillRecords(only)) return null;
     let outcome: LocalEraseOutcome;
     // Its terminal closes and its question is cancelled in the store before the rows go.
     await checkStopped;
@@ -959,6 +998,81 @@ export function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
       ? { result: "deleted", status }
       : { result: "incomplete", erased: outcome.erased, status };
   });
+}
+
+/**
+ * Forgets a relay its guided removal took out of Cloudflare (#16202): a
+ * disconnect, or with `deleteLocalHistory` a local data deletion, and only
+ * while the setting records exactly the identity the removal started with.
+ */
+async function forgetRemovedRelay(
+  record: RemovedRelayRecord,
+  deleteLocalHistory: boolean
+): Promise<DecisionsRelayRemovalLocal> {
+  if (!stillRecords(record)) return "changed";
+  if (shutDown || !readDecisionsSettings(store).enabled) return "off";
+  try {
+    if (!deleteLocalHistory) {
+      return (await disconnectRecorded(record)) === null ? "changed" : "forgotten";
+    }
+    const deleted = await deleteLocalDataOf(record);
+    if (deleted === null) return "changed";
+    return deleted.result === "failed" ? "failed" : deleted.result;
+  } catch (error) {
+    // Turned off, or quitting, while it waited its turn.
+    if (error instanceof AppError && error.code === "CANCELLED") return "off";
+    throw error;
+  }
+}
+
+function relayRemovalsFor(): RelayRemovals {
+  if (relayRemovals) return relayRemovals;
+  const source = getPtyClient();
+  if (!source) {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message:
+        "Terminals aren't available yet, so the removal can't be watched. Try again in a moment.",
+    });
+  }
+  relayRemovals = new RelayRemovals({
+    source,
+    takeLaunch: takeRelayRemovalLaunch,
+    forget: forgetRemovedRelay,
+    isShuttingDown: () => shutDown,
+    onChanged: () => publishStatus(),
+    logWarn: (message) => console.warn(message),
+  });
+  return relayRemovals;
+}
+
+/**
+ * Watches a guided removal of a relay from Cloudflare (#16202), before the
+ * renderer opens its pane under `terminalId`. The identity recorded now is the
+ * one forgotten if the removal exits 0, and only if it is still recorded then.
+ */
+export function startRelayRemoval(
+  payload: StartDecisionsRelayRemovalPayload
+): DecisionsRelayRemoval {
+  if (shutDown) throw setupRefused();
+  const settings = readDecisionsSettings(store);
+  const record: RemovedRelayRecord | null =
+    settings.relayOrigin !== null && settings.relayOrigin === payload.origin
+      ? {
+          relayOrigin: settings.relayOrigin,
+          installationId: settings.installationId,
+          deviceId: settings.deviceId,
+        }
+      : null;
+  const removals = relayRemovalsFor();
+  try {
+    return removals.start(payload.terminalId, payload.origin, record, payload.deleteLocalHistory);
+  } catch (error) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: formatErrorMessage(error, "The removal couldn't be watched"),
+    });
+  }
 }
 
 /**
@@ -1958,6 +2072,7 @@ export function setDecisionsEnabled(
 /** Quit: ends the service for good. One still being made is waited for, so it can't start afterwards. */
 export async function stopDecisions(): Promise<void> {
   shutDown = true;
+  relayRemovals?.dispose();
   cancelRelayChecks();
   forgetOwnerDevices();
   cancelKitExports();
@@ -1995,4 +2110,6 @@ export function _resetDecisionsForTesting(): void {
   relayDeploys = makeRelayDeploys();
   hostRecords = null;
   hostRuntimeListeners.clear();
+  relayRemovals?.dispose();
+  relayRemovals = null;
 }

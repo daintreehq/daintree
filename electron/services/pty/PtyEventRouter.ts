@@ -78,7 +78,8 @@ export interface PtyEventRouterCallbacks {
     exitCode: number,
     launchGeneration?: number,
     signal?: number,
-    spawnedAt?: number
+    spawnedAt?: number,
+    stopped?: boolean
   ) => void;
   /**
    * Optional. Fires for each terminal a `graceful-kill-by-project` captures, as
@@ -217,6 +218,9 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         event.launchGeneration !== currentGeneration;
       if (!superseded) callbacks.onTerminalRemovedFromTrash(event.id);
       const killCount = state.pendingKillCount.get(event.id) ?? 0;
+      // Daintree ended it (a kill, or a respawn under the same id), so its
+      // status is the teardown's, not the command's.
+      const stopped = killCount > 0 || superseded;
       if (killCount > 0) {
         // Exit from a kill() call — a new spawn() may have already
         // re-registered this id; don't clear pendingSpawns.
@@ -238,7 +242,8 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
             event.exitCode,
             event.launchGeneration,
             event.signal,
-            event.spawnedAt
+            event.spawnedAt,
+            stopped
           );
         } catch (err) {
           deps.logWarn(`[PtyClient] onTerminalExit threw for ${event.id}: ${String(err)}`);
@@ -260,6 +265,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         spawnedAt: event.spawnedAt,
         exitCode: event.exitCode,
         signal: event.signal ?? null,
+        stopped: true,
       });
       return true;
 

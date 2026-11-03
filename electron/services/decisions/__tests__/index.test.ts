@@ -7,6 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LearnedDecision } from "@daintreehq/decisions-client";
@@ -404,6 +405,7 @@ import { outstandingRows, row } from "./questionRows.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
 import { setDecisionsHostsPort } from "../../../window/serviceRefs.js";
+import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
 import type { DecisionsHostLink, DecisionsHostsPort } from "../../../types/decisionsHosts.js";
 
 /** An entry status: what it observed, and the revision it was read at. */
@@ -457,6 +459,7 @@ import {
   setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
   startDecisionsModelEvaluation,
+  startRelayRemoval,
   startDecisionsIfEnabled,
   startSetupCheck,
   stopDecisions,
@@ -1959,6 +1962,220 @@ describe("Decisions entry", () => {
       expect(storedRows.count).toBe(3);
       expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
       expect(saved.value).toMatchObject({ enabled: true, consentedAt: 5, ...RELAY });
+    });
+  });
+
+  describe("guided relay removal (#16202)", () => {
+    const TERMINAL = "daintree-decisions-remove-00000000-0000-4000-8000-000000000001";
+    let pty: EventEmitter & { getTerminalProjectId: () => string };
+    let realPty: unknown;
+
+    beforeEach(() => {
+      realPty = mcpRefs.ptyClient;
+      pty = Object.assign(new EventEmitter(), { getTerminalProjectId: () => "project-a" });
+      mcpRefs.ptyClient = pty as unknown as typeof mcpRefs.ptyClient;
+    });
+    afterEach(() => {
+      mcpRefs.ptyClient = realPty as typeof mcpRefs.ptyClient;
+    });
+
+    /** The spawn handler sending the removal, and its terminal ending by itself with `exitCode`. */
+    function removalExits(exitCode: number) {
+      noteRelayRemovalLaunch(TERMINAL);
+      pty.emit("spawn-result", TERMINAL, { success: true, id: TERMINAL, spawnedAt: 1_000 });
+      pty.emit("incarnation-exit", {
+        terminalId: TERMINAL,
+        spawnedAt: 1_000,
+        exitCode,
+        signal: null,
+      });
+    }
+
+    async function removalOutcome() {
+      const status = await getDecisionsStatus();
+      return status.relayRemovals?.find((entry) => entry.terminalId === TERMINAL)?.outcome;
+    }
+
+    it("forgets the relay and its keys once the removal exits 0, keeping the history", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+
+      expect(
+        startRelayRemoval({
+          terminalId: TERMINAL,
+          origin: RELAY.relayOrigin,
+          deleteLocalHistory: false,
+        })
+      ).toMatchObject({ recorded: true, outcome: { state: "running" } });
+      removalExits(0);
+
+      await vi.waitFor(async () =>
+        expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 0, local: "forgotten" })
+      );
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(saved.value).toMatchObject({ enabled: true, consentedAt: 5, relayOrigin: null });
+      expect(storedRows.count).toBe(3);
+      // Connection is back to its first run: no relay recorded, no keys.
+      const status = await getDecisionsStatus();
+      expect(status.relayOrigin).toBeUndefined();
+      expect(status.keysStored).toBeUndefined();
+    });
+
+    it("deletes this computer's Decisions data too when that was chosen", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+
+      startRelayRemoval({
+        terminalId: TERMINAL,
+        origin: RELAY.relayOrigin,
+        deleteLocalHistory: true,
+      });
+      removalExits(0);
+
+      await vi.waitFor(async () =>
+        expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 0, local: "deleted" })
+      );
+      expect(storedRows.count).toBe(0);
+      expect(saved.value).toMatchObject({ relayOrigin: null });
+    });
+
+    it("keeps the record, keys and history when the removal doesn't exit 0", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+
+      startRelayRemoval({
+        terminalId: TERMINAL,
+        origin: RELAY.relayOrigin,
+        deleteLocalHistory: true,
+      });
+      removalExits(1);
+
+      expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 1, local: "kept" });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject(RELAY);
+      expect(storedRows.count).toBe(3);
+    });
+
+    it.each([false, true])(
+      "changes nothing when another identity is recorded while the forget waits its turn (delete history: %s)",
+      async (deleteLocalHistory) => {
+        saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+        await startDecisionsIfEnabled();
+        writeFileSync(keyFile.path, "sealed");
+        storedRows.count = 3;
+        // An export's write holds the transitions, so the forget queues behind it.
+        dataRuns.buildArchive.mockResolvedValue({
+          archive: { fileName: "race.json", text: "{}", questions: 0, auditEvents: 0 },
+        });
+        let release!: () => void;
+        writes.held = new Promise<void>((resolve) => (release = resolve));
+        const exporting = exportData({ passphrase: "a long export passphrase" }, async () =>
+          join(keyFile.path, "..", "race.json")
+        );
+        await vi.waitFor(() => expect(writes.writing).toBe(true));
+
+        startRelayRemoval({ terminalId: TERMINAL, origin: RELAY.relayOrigin, deleteLocalHistory });
+        removalExits(0);
+        expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 0, local: "pending" });
+
+        // The same relay, recorded again under a new device while the forget waits.
+        saved.value = { enabled: true, consentedAt: 5, ...RELAY, deviceId: "dev_87654321" };
+        release();
+        await exporting;
+
+        await vi.waitFor(async () =>
+          expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 0, local: "changed" })
+        );
+        expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+        expect(storedRows.count).toBe(3);
+        expect(saved.value).toMatchObject({ deviceId: "dev_87654321" });
+      }
+    );
+
+    it("changes nothing when another identity was recorded while the removal ran", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      startRelayRemoval({
+        terminalId: TERMINAL,
+        origin: RELAY.relayOrigin,
+        deleteLocalHistory: false,
+      });
+
+      // The same relay, claimed again from this computer under new ids.
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY, deviceId: "dev_87654321" };
+      removalExits(0);
+
+      await vi.waitFor(async () =>
+        expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 0, local: "changed" })
+      );
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ deviceId: "dev_87654321" });
+    });
+
+    it("forgets nothing here for a relay that isn't the one recorded", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+
+      expect(
+        startRelayRemoval({
+          terminalId: TERMINAL,
+          origin: "https://unclaimed.example.workers.dev",
+          deleteLocalHistory: true,
+        })
+      ).toMatchObject({ recorded: false, deleteLocalHistory: false });
+      removalExits(0);
+
+      expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 0, local: "none" });
+      // An unfinished setup's keys are the person's to remove.
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+    });
+
+    it("keeps the record when Decisions was turned off before the removal ended", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      startRelayRemoval({
+        terminalId: TERMINAL,
+        origin: RELAY.relayOrigin,
+        deleteLocalHistory: false,
+      });
+
+      await setDecisionsEnabled(false);
+      removalExits(0);
+
+      await vi.waitFor(async () =>
+        expect(await removalOutcome()).toEqual({ state: "exited", exitCode: 0, local: "off" })
+      );
+      expect(saved.value).toMatchObject({ enabled: false, ...RELAY });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+    });
+
+    it("pushes each change to Settings and the pane", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+
+      startRelayRemoval({
+        terminalId: TERMINAL,
+        origin: RELAY.relayOrigin,
+        deleteLocalHistory: false,
+      });
+      removalExits(1);
+
+      await vi.waitFor(() =>
+        expect(
+          pushedStatuses().map(
+            (status) => (status.relayRemovals as { outcome: unknown }[] | undefined)?.[0]?.outcome
+          )
+        ).toContainEqual({ state: "exited", exitCode: 1, local: "kept" })
+      );
     });
   });
 

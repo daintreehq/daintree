@@ -365,10 +365,10 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       ...(location === "background" && {
         backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
       }),
-      // A relay deploy or update runs its command once, from the spawn options,
-      // and the pane never keeps it: a restart, duplicate, restore or recipe
-      // would otherwise run the deploy again under the same Worker name
-      // (#16023), or start an update nobody asked for (#16201).
+      // A relay deploy, update or removal runs its command once, from the spawn
+      // options, and the pane never keeps it: a restart, duplicate, restore or
+      // recipe would otherwise run the deploy again under the same Worker name
+      // (#16023), or start an update or removal nobody asked for (#16201, #16202).
       command: isDecisionsRelayTerminalId(id) ? undefined : options.command,
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted

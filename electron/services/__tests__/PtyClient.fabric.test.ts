@@ -800,33 +800,46 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("never replays a Decisions relay deploy after a crash, and reports it lost (#16023)", async () => {
-      const client = createFabricClient();
-      const lost: string[] = [];
-      client.on("terminal-lost", (id: string) => lost.push(id));
-      const deploy = "daintree-decisions-deploy-1";
-      client.spawn(deploy, {
-        cwd: "/home/me",
-        cols: 80,
-        rows: 24,
-        projectId: "project-a",
-        command: "npx --yes @daintreehq/decisions-cli@0.1.0 deploy --name n --bucket n",
-      });
-      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
-      const shardA = projectShard("project-a");
-      shardA.child.emit("message", { type: "ready" });
-      // The first launch runs it once.
-      expect(messagesOfType(shardA.child, "spawn").map((m) => m.id)).toEqual([deploy, "t1"]);
+    it.each([
+      [
+        "deploy (#16023)",
+        "daintree-decisions-deploy-1",
+        "npx --yes @daintreehq/decisions-cli@0.1.0 deploy --name n --bucket n",
+      ],
+      [
+        "removal (#16202)",
+        "daintree-decisions-remove-1",
+        "npx --yes @daintreehq/decisions-cli@0.3.0 remove https://relay.example.workers.dev",
+      ],
+    ])(
+      "never replays a Decisions relay %s after a crash, and reports it lost",
+      async (_label, deploy, command) => {
+        const client = createFabricClient();
+        const lost: string[] = [];
+        client.on("terminal-lost", (id: string) => lost.push(id));
+        client.spawn(deploy, {
+          cwd: "/home/me",
+          cols: 80,
+          rows: 24,
+          projectId: "project-a",
+          command,
+        });
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+        // The first launch runs it once.
+        expect(messagesOfType(shardA.child, "spawn").map((m) => m.id)).toEqual([deploy, "t1"]);
 
-      shardA.child.emit("exit", 1);
-      await vi.advanceTimersByTimeAsync(15_000);
-      const restarted = forks[forks.length - 1];
-      restarted.child.emit("message", { type: "ready" });
+        shardA.child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(15_000);
+        const restarted = forks[forks.length - 1];
+        restarted.child.emit("message", { type: "ready" });
 
-      expect(messagesOfType(restarted.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
-      expect(lost).toEqual([deploy]);
-      client.dispose();
-    });
+        expect(messagesOfType(restarted.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
+        expect(lost).toEqual([deploy]);
+        client.dispose();
+      }
+    );
 
     it("leaves a Decisions relay deploy behind when its shard's terminals migrate (#16023)", async () => {
       const client = createFabricClient();

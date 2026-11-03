@@ -190,6 +190,11 @@ export interface DecisionsStatus {
    * whether main holds one.
    */
   relayDeploy?: DecisionsRelayDeploy;
+  /**
+   * The guided relay removals started in this run (#16202), newest last, as
+   * main saw their terminals end. Absent until one starts; kept in memory only.
+   */
+  relayRemovals?: DecisionsRelayRemoval[];
 }
 
 /**
@@ -229,6 +234,63 @@ export interface PreparedDecisionsRelayDeploy {
 export interface ClaimDeployedDecisionsRelayPayload {
   deployId: string;
   acceptWeakStorage?: boolean;
+}
+
+/**
+ * What became of this computer's record of a relay once its guided removal
+ * ended. Only an exit with status 0 changes anything.
+ */
+export type DecisionsRelayRemovalLocal =
+  /** The removal didn't exit with status 0, so the record, keys and history stay. */
+  | "kept"
+  /** It exited with status 0 and the record is being forgotten. */
+  | "pending"
+  /** It exited with status 0, but the relay wasn't the one recorded here: nothing to forget. */
+  | "none"
+  /** The record and keys are gone; the decision history stays. */
+  | "forgotten"
+  /** The record, keys and decision history are gone. */
+  | "deleted"
+  /** Deleting the decision history didn't finish; Data says what's left. */
+  | "incomplete"
+  /** Another relay identity was recorded meanwhile, so nothing was changed. */
+  | "changed"
+  /** Decisions was off by then, so nothing was changed. */
+  | "off"
+  /** Forgetting the relay failed, so the record stays. */
+  | "failed";
+
+/**
+ * One guided relay removal (#16202): the `decisions remove` command running in
+ * a terminal, and what its terminal's end showed. Its status is the CLI's own
+ * only when the terminal ended by itself; anything Daintree ended (a close, a
+ * restart, a lost pty-host, quitting) says nothing about Cloudflare.
+ */
+export interface DecisionsRelayRemoval {
+  terminalId: string;
+  /** The relay's origin, as the removal was started for it. */
+  origin: string;
+  /** It was the relay recorded on this computer when the removal started. */
+  recorded: boolean;
+  /** The person also asked for this computer's decision history to go, after a removal that exits 0. */
+  deleteLocalHistory: boolean;
+  outcome:
+    | { state: "running" }
+    /** The terminal ended by itself, with the command's exit status. */
+    | { state: "exited"; exitCode: number; local: DecisionsRelayRemovalLocal }
+    /** Daintree ended the terminal, or lost it, before the command said how it went. */
+    | { state: "interrupted" };
+}
+
+/**
+ * Starting a guided relay removal (#16202). Main watches `terminalId`, which
+ * the pane is then opened under, and forgets `origin` only if it is still the
+ * relay recorded here when the removal exits 0.
+ */
+export interface StartDecisionsRelayRemovalPayload {
+  terminalId: string;
+  origin: string;
+  deleteLocalHistory: boolean;
 }
 
 /** How strictly a question needs a person: only a person, or a proxy answer may do. */

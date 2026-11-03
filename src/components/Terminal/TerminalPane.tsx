@@ -149,8 +149,11 @@ import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
 import { RelayDeployBanner } from "./RelayDeployBanner";
 import { RelayUpdateBanner } from "./RelayUpdateBanner";
+import { RelayRemovalBanner, describeRelayRemoval } from "./RelayRemovalBanner";
+import { useRelayRemoval } from "./useRelayRemoval";
 import {
   isDecisionsDeployTerminalId,
+  isDecisionsRemoveTerminalId,
   isDecisionsUpdateTerminalId,
 } from "@shared/config/terminalScreenPersistence";
 import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
@@ -1377,6 +1380,10 @@ function TerminalPaneComponent({
   const [blockedBannerDismissed, setBlockedBannerDismissed] = useState(false);
   const [relayDeployBannerDismissed, setRelayDeployBannerDismissed] = useState(false);
   const [relayUpdateBannerDismissed, setRelayUpdateBannerDismissed] = useState(false);
+  const relayRemoval = useRelayRemoval(id, isDecisionsRemoveTerminalId(id));
+  const relayRemovalCopy = relayRemoval ? describeRelayRemoval(relayRemoval) : null;
+  // A dismissal holds until what the banner says changes.
+  const [relayRemovalDismissed, setRelayRemovalDismissed] = useState<string | null>(null);
   // Folding and unfolding swap the control the keyboard is on; hand focus to
   // its counterpart once the swap has painted, unless it already moved on.
   const keepBlockedNoticeFocus = (label: string) => {
@@ -1855,6 +1862,17 @@ function TerminalPaneComponent({
 
         <BannerSlot visible={isDecisionsUpdateTerminalId(id) && !relayUpdateBannerDismissed}>
           <RelayUpdateBanner onDismiss={() => setRelayUpdateBannerDismissed(true)} />
+        </BannerSlot>
+
+        <BannerSlot
+          visible={relayRemovalCopy !== null && relayRemovalCopy.key !== relayRemovalDismissed}
+        >
+          {relayRemovalCopy && (
+            <RelayRemovalBanner
+              copy={relayRemovalCopy}
+              onDismiss={() => setRelayRemovalDismissed(relayRemovalCopy.key)}
+            />
+          )}
         </BannerSlot>
       </div>
 

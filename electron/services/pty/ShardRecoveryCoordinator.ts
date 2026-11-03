@@ -316,7 +316,8 @@ export class ShardRecoveryCoordinator {
    * would start a fresh agent nobody launched. Nor does a Decisions relay
    * deploy (#16023): its shell outlives the deploy, so a replay would run it
    * again under the same Worker name, updating that Worker or giving it a new
-   * claim secret. Nor a relay update (#16201), which nobody asked to run
+   * claim secret. Nor a relay update (#16201), which nobody asked to run, nor a
+   * removal (#16202), which would ask to delete the relay
    * again. Dropped before any replay, and reported lost so their panes and
    * inventory let them go.
    */

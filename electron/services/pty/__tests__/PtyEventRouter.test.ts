@@ -335,8 +335,9 @@ describe("routeHostEvent", () => {
     expect(state.pendingKillCount.has("t1")).toBe(false);
     expect(callbacks.trashIdsRemoved).toEqual([]);
     expect(onExit).not.toHaveBeenCalled();
-    // The superseded incarnation's exit still reaches main, named by its spawn time.
-    expect(recordExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 1, undefined, 100);
+    // The superseded incarnation's exit still reaches main, named by its spawn
+    // time, and as stopped: a successor replaced it, so its status isn't its own.
+    expect(recordExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 1, undefined, 100, true);
 
     routeHostEvent(
       { type: "exit", id: "t1", exitCode: 0, signal: 9, launchGeneration: 2, spawnedAt: 200 },
@@ -347,7 +348,21 @@ describe("routeHostEvent", () => {
     expect(state.terminalPids.has("t1")).toBe(false);
     expect(callbacks.trashIdsRemoved).toEqual(["t1"]);
     expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 9, undefined);
-    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2, 9, 200);
+    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2, 9, 200, false);
+  });
+
+  it("marks an exit a kill was asked for as stopped, and one that came by itself as not (#16202)", () => {
+    const { deps, state } = makeDeps();
+    const recordExit = vi.fn();
+    deps.callbacks.onTerminalExit = recordExit;
+    state.pendingSpawns.set("t1", { cwd: "/", cols: 80, rows: 24 });
+
+    routeHostEvent({ type: "exit", id: "t1", exitCode: 0, spawnedAt: 100 }, deps);
+    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, undefined, undefined, 100, false);
+
+    state.pendingKillCount.set("t2", 1);
+    routeHostEvent({ type: "exit", id: "t2", exitCode: 0, spawnedAt: 200 }, deps);
+    expect(recordExit).toHaveBeenLastCalledWith("t2", 0, undefined, undefined, 200, true);
   });
 
   it("hands a host-replaced incarnation's exit to main as its facts alone (#15976)", () => {
@@ -380,6 +395,7 @@ describe("routeHostEvent", () => {
       spawnedAt: 100,
       exitCode: 143,
       signal: 15,
+      stopped: true,
     });
     expect(onExit).not.toHaveBeenCalled();
     expect(recordExit).not.toHaveBeenCalled();

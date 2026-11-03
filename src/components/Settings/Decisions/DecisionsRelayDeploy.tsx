@@ -3,16 +3,10 @@ import { Button } from "@/components/ui/button";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { SeverityMark } from "@/lib/statusSeverity";
-import { useHomeDir } from "@/hooks/app/useHomeDir";
-import { isRemoteWindow } from "@/hooks/useHostPlatform";
-import { useProjectStore } from "@/store/projectStore";
-import { useScratchStore } from "@/store/scratchStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { selectViewProject, selectViewScratch } from "@/store/viewWorkspace";
 import type { DecisionsRelayDeploy as RelayDeployState } from "@shared/types/decisions";
 import { openRelayDeployTerminal } from "./relayDeploy";
 import { describeRelayDeploy } from "./relayDeployCopy";
+import { useGuidedTerminalPlacement } from "./useGuidedTerminalPlacement";
 
 interface DecisionsRelayDeployProps {
   disabled: boolean;
@@ -24,37 +18,14 @@ interface DecisionsRelayDeployProps {
   onUseRelay: (url: string) => void;
 }
 
-/** Where a guided deploy's pane would go, or why it can't go anywhere this window shows. */
-function useDeployPlacement():
-  { ready: true; cwd: string; worktreeId: string | undefined } | { ready: false; reason?: string } {
-  const { homeDir } = useHomeDir();
-  const hasProject = useProjectStore(
-    (state) => selectViewProject(getViewWorkspaceId(), state) !== undefined
-  );
-  const hasScratch = useScratchStore(
-    (state) => selectViewScratch(getViewWorkspaceId(), state) !== undefined
-  );
-  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
-
+/** Why a guided deploy's pane can't go anywhere this window shows. */
+const PLACEMENT_REASON = {
   // Its terminals run on the Host, which can't reach the channel Daintree opens here.
-  if (isRemoteWindow()) {
-    return {
-      ready: false,
-      reason:
-        "This window's terminals run on its Remote Host. Run the guided deploy from Settings → Decisions in a local project window",
-    };
-  }
-  if (!hasProject && !hasScratch) {
-    return {
-      ready: false,
-      reason:
-        "It runs in a terminal in this window. Open a project or a scratch here first, then start it",
-    };
-  }
-  // A project's grid shows one worktree's panes, so the pane waits until that's known.
-  if (homeDir === undefined || (hasProject && activeWorktreeId === null)) return { ready: false };
-  return { ready: true, cwd: homeDir, worktreeId: activeWorktreeId ?? undefined };
-}
+  remote:
+    "This window's terminals run on its Remote Host. Run the guided deploy from Settings → Decisions in a local project window",
+  "no-project":
+    "It runs in a terminal in this window. Open a project or a scratch here first, then start it",
+} as const;
 
 /**
  * "Don't have a relay yet?" (#16023, #16199): the guided deploy, the one route
@@ -70,7 +41,7 @@ export function DecisionsRelayDeploy({
   deploy,
   onUseRelay,
 }: DecisionsRelayDeployProps) {
-  const placement = useDeployPlacement();
+  const placement = useGuidedTerminalPlacement();
   const [starting, setStarting] = useState(false);
   const running = deploy?.state === "running";
   const outcome = deploy ? describeRelayDeploy(deploy) : null;
@@ -108,7 +79,7 @@ export function DecisionsRelayDeploy({
         disabled={disabled || !placement.ready || starting || running}
         disabledReason={
           !placement.ready
-            ? placement.reason
+            ? placement.reason && PLACEMENT_REASON[placement.reason]
             : running
               ? "A guided deploy is running. Finish or close its terminal to start another"
               : undefined

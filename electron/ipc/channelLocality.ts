@@ -261,6 +261,7 @@ export const CHANNEL_LOCALITY = {
   "decisions:set-proxy-allowlisted": "shell",
   "decisions:start-model-evaluation": "shell",
   "decisions:start-pairing": "shell",
+  "decisions:start-relay-removal": "shell",
   "decisions:start-setup-check": "shell",
   "decisions:verify-recovery-kit": "shell",
   "demo:annotate": "shell",

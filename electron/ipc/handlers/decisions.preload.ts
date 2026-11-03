@@ -11,6 +11,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   claimDeployedRelay: "decisions:claim-deployed-relay",
   restoreIdentity: "decisions:restore-identity",
   disconnectRelay: "decisions:disconnect-relay",
+  startRelayRemoval: "decisions:start-relay-removal",
   listDevices: "decisions:list-devices",
   startPairing: "decisions:start-pairing",
   getPairing: "decisions:get-pairing",

@@ -267,6 +267,12 @@ export interface PtyIncarnationExit {
   spawnedAt?: number;
   exitCode: number;
   signal: number | null;
+  /**
+   * Daintree ended this incarnation: a kill was asked for before it exited,
+   * or a newer one under the same id replaced it. Its status is then the
+   * teardown's, not what it ran.
+   */
+  stopped?: true;
 }
 
 /** One incarnation died with its pty-host, and its terminal is being replayed as a new one. */
@@ -885,7 +891,7 @@ export class PtyClient extends EventEmitter {
         // Lifecycle-ledger bookkeeping. Exits carry the host-adopted
         // launchGeneration so a stale exit arriving after a same-id respawn
         // closes its own incarnation, never the successor.
-        onTerminalExit: (id, exitCode, launchGeneration, signal, spawnedAt) => {
+        onTerminalExit: (id, exitCode, launchGeneration, signal, spawnedAt, stopped) => {
           terminalCrashReapService.detachTerminal(id, launchGeneration);
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
@@ -902,6 +908,7 @@ export class PtyClient extends EventEmitter {
           // same-id respawn superseded, but that exit still ends its own run.
           const fact: PtyIncarnationExit = { terminalId: id, exitCode, signal: signal ?? null };
           if (spawnedAt !== undefined) fact.spawnedAt = spawnedAt;
+          if (stopped) fact.stopped = true;
           this.emit("incarnation-exit", fact);
         },
         // Per-terminal captures streamed while a graceful kill is still

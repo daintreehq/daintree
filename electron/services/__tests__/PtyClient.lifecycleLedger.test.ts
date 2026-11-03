@@ -397,8 +397,9 @@ describe("PtyClient lifecycle ledger", () => {
       spawnedAt: 2_000,
     });
 
+    // The killed incarnation's exit is marked stopped; its successor's own exit isn't (#16202).
     expect(facts.mock.calls).toEqual([
-      [{ terminalId: "t1", spawnedAt: 1_000, exitCode: 0, signal: 15 }],
+      [{ terminalId: "t1", spawnedAt: 1_000, exitCode: 0, signal: 15, stopped: true }],
       [{ terminalId: "t1", spawnedAt: 2_000, exitCode: 2, signal: 0 }],
     ]);
   });
