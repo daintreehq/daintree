@@ -485,13 +485,12 @@ export class HostWatches {
           ];
     const options = record.projectId === null ? {} : { projectId: record.projectId };
     const reads = await Promise.all(
-      targets.map(
-        (target): Promise<AgentWatchRead> =>
-          read === undefined
-            ? Promise.resolve({ status: "unread" })
-            : Promise.resolve()
-                .then(() => read(target.hostId, options))
-                .catch((): AgentWatchRead => ({ status: "unread" }))
+      targets.map((target): Promise<AgentWatchRead> =>
+        read === undefined
+          ? Promise.resolve({ status: "unread" })
+          : Promise.resolve()
+              .then(() => read(target.hostId, options))
+              .catch((): AgentWatchRead => ({ status: "unread" }))
       )
     );
     const matches: HostWatchAgent[] = [];
@@ -538,7 +537,10 @@ export class HostWatches {
   ): HostWatchHostCoverage {
     const base = { hostId: target.hostId, name: target.name };
     // An older host's waits come only as the person's attention, which names no reason.
-    const older = { ...base, hears: anyReason(record.reasons) ? "attention" : "older-host" } as const;
+    const older = {
+      ...base,
+      hears: anyReason(record.reasons) ? "attention" : "older-host",
+    } as const;
     switch (answer.status) {
       case "read":
         return answer.waitingEvents ? { ...base, hears: "events" } : older;

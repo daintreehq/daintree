@@ -136,7 +136,10 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
 /** One of this host's agents stopping work to wait, as its own bus reports it. */
 function waitingEvent(
   base: Omit<WaitingEvent, "previousState" | "seen">,
-  overrides: { previousState?: WaitingEvent["previousState"]; seen?: Partial<AgentWaitingPayload> } = {}
+  overrides: {
+    previousState?: WaitingEvent["previousState"];
+    seen?: Partial<AgentWaitingPayload>;
+  } = {}
 ): WaitingEvent {
   return {
     ...base,
@@ -597,7 +600,9 @@ describe("installHostMetricsHostWith", () => {
       });
     }
     const base = { kind: "waiting", projectId: "p1", projectName: null, agentName: null } as const;
-    d.fireWaiting(waitingEvent({ ...base, terminalId: "t1" }, { seen: { waitingReason: "prompt" } }));
+    d.fireWaiting(
+      waitingEvent({ ...base, terminalId: "t1" }, { seen: { waitingReason: "prompt" } })
+    );
     // Inside any cooldown, and refined while it already waited.
     d.fireWaiting(
       waitingEvent(
@@ -688,7 +693,7 @@ describe("installHostMetricsHostWith", () => {
         projectId: null,
         projectName: null,
         agentName: null,
-    });
+      });
 
     // Waiting notifications off on this host: nothing reaches a Shell that left it to the host.
     d.fireWaiting(event("off"));
@@ -756,7 +761,7 @@ describe("installHostMetricsHostWith", () => {
         projectId,
         projectName: null,
         agentName: null,
-    });
+      });
 
     d.fireWaiting(event("in-muted", "muted"));
     d.fireWaiting(event("in-other", "other"));

@@ -358,7 +358,9 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
     expect(queued).toHaveLength(0);
     listener?.("local", heard("t-worker"));
     advance(NOTIFY_TARGET_SETTLE_MS);
-    expect(formatHostWatchLine(queued[0]!.hostWatch!)).toContain("terminal t-worker on this machine");
+    expect(formatHostWatchLine(queued[0]!.hostWatch!)).toContain(
+      "terminal t-worker on this machine"
+    );
   });
 
   it("hears an older host's attention only for any reason, and never a host that sends its own", async () => {
@@ -391,7 +393,11 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
       waitingReasons: ["any"],
       projectId: null,
     });
-    expect(any.agents?.hosts).toContainEqual({ hostId: "old", name: "old-box", hears: "attention" });
+    expect(any.agents?.hosts).toContainEqual({
+      hostId: "old",
+      name: "old-box",
+      hears: "attention",
+    });
     // A host that sends its own waits is heard once, not again through the person's notice.
     listener?.("studio", legacy("t-new"));
     listener?.("old", legacy("t-old"));

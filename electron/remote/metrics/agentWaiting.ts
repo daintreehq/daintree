@@ -27,7 +27,8 @@ export function agentWaitingOf(
     worktreeId:
       payload.worktreeId || facts?.getTerminalLaunchAttribution(terminalId)?.worktreeId || null,
     incarnation: facts?.getLiveGeneration(terminalId) ?? null,
-    agentIncarnation: typeof payload.agentIncarnation === "number" ? payload.agentIncarnation : null,
+    agentIncarnation:
+      typeof payload.agentIncarnation === "number" ? payload.agentIncarnation : null,
     waitingReason: payload.waitingReason ?? null,
     refined: payload.previousState === "waiting",
     seenAt: payload.timestamp,

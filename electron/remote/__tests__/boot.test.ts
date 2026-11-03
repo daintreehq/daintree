@@ -436,7 +436,9 @@ vi.mock("../projects/hostInstall.js", () => ({
 }));
 const metrics = vi.hoisted(() => ({
   installHostMetricsClient: vi.fn((_options: unknown) => () => {}),
-  installHostMetricsHost: vi.fn(async (_server: unknown, _acceptsRemoteControl: unknown) => () => {}),
+  installHostMetricsHost: vi.fn(
+    async (_server: unknown, _acceptsRemoteControl: unknown) => () => {}
+  ),
 }));
 vi.mock("../metrics/clientInstall.js", () => ({
   installHostMetricsClient: metrics.installHostMetricsClient,

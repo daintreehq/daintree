@@ -46,7 +46,9 @@ describe("agentWaitingOf (#16188)", () => {
   });
 
   it("says nothing of other transitions, and keeps what it can't read unknown", () => {
-    expect(agentWaitingOf(change({ state: "working", previousState: "waiting" }), facts)).toBeNull();
+    expect(
+      agentWaitingOf(change({ state: "working", previousState: "waiting" }), facts)
+    ).toBeNull();
     expect(agentWaitingOf(change({ terminalId: undefined }), facts)).toBeNull();
     expect(agentWaitingOf(change({ terminalId: "gone" }), null)).toEqual({
       terminalId: "gone",

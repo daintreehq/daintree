@@ -1981,7 +1981,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const local = this.deps.local;
       if (!local) return { status: "unread" };
       // This machine's own transitions are always heard; the read only names who waits now.
-      return { status: "read", directory: await this.localAgents(local, options), waitingEvents: true };
+      return {
+        status: "read",
+        directory: await this.localAgents(local, options),
+        waitingEvents: true,
+      };
     }
     if (!this.controlOn(hostId)) return { status: "unread" };
     const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);

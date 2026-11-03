@@ -216,7 +216,12 @@ describe("HostCallRuntime host.watch on agents (#16188)", () => {
       ["shy", "host-refused"],
       ["down", "link-down"],
     ]);
-    expect(agents.mock.calls.map(([hostId]) => hostId)).toEqual(["fresh", "older", "ancient", "shy"]);
+    expect(agents.mock.calls.map(([hostId]) => hostId)).toEqual([
+      "fresh",
+      "older",
+      "ancient",
+      "shy",
+    ]);
     expect(connect).not.toHaveBeenCalled();
     expect(agentListener).not.toBeNull();
 

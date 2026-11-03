@@ -586,7 +586,12 @@ export const HostWatchArgsSchema = z.object({
     .max(HOST_WATCH_WAITING_REASONS.length + 1)
     .optional()
     .describe('Up to 5. Default approval, question. "any" also hears older hosts that send none.'),
-  projectId: z.string().min(1).max(256).optional().describe("With agentsWaiting: only that project."),
+  projectId: z
+    .string()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe("With agentsWaiting: only that project."),
   expiresInSeconds: z
     .number()
     .int()
