@@ -21,7 +21,7 @@ export interface RelayDeployDescription {
 
 /** What agents get once the relay is claimed, true of launches only (#16012). */
 export const AGENTS_AFTER_CLAIM =
-  "Agents launched from now on get ask_human. Agents already running get it at their next launch.";
+  "Supported agents launched from now on get ask_human. Agents already running get it at their next launch.";
 
 /** A reason from the CLI or main as one sentence, however it ended. */
 function sentence(text: string): string {
@@ -95,6 +95,10 @@ function describeClaim(
  */
 export function describeRelayDeploy(deploy: DecisionsRelayDeploy): RelayDeployDescription {
   const url = deploy.url !== undefined ? { url: deploy.url, next: "use" as const } : {};
+  // A claim of the deployed relay is the latest thing that happened to it,
+  // whether main started it or the person did for a deploy that stopped late.
+  if (deploy.claim && deploy.url !== undefined)
+    return describeClaim(deploy, deploy.url, deploy.claim);
   switch (deploy.state) {
     case "waiting":
       return {
@@ -112,9 +116,7 @@ export function describeRelayDeploy(deploy: DecisionsRelayDeploy): RelayDeployDe
       if (deploy.url === undefined) {
         return { label: "Deploy finished", detail: "The CLI reported no Worker URL." };
       }
-      return deploy.claim
-        ? describeClaim(deploy, deploy.url, deploy.claim)
-        : { label: "Relay deployed", detail: `${deploy.url}. ${claimNote(deploy)}`, ...url };
+      return { label: "Relay deployed", detail: `${deploy.url}. ${claimNote(deploy)}`, ...url };
     case "cancelled": {
       // Connection stays as it was: nothing is claimed for a deploy that didn't finish.
       const reason = deploy.error !== undefined ? `${sentence(deploy.error)} ` : "";

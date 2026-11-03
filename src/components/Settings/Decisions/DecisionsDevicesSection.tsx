@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SkeletonBone } from "@/components/ui/Skeleton";
@@ -16,7 +16,12 @@ import { DecisionsRevokeDeviceDialog } from "./DecisionsRevokeDeviceDialog";
 import { deviceRoleLabel } from "./devicesCopy";
 import { useDecisionsDevices } from "./useDecisionsDevices";
 import { useDecisionsKeyActions } from "./useDecisionsKeyActions";
-import { currentPairButton, DEVICES_SECTION_ID, PAIR_BUTTON_ATTR } from "./pairPhoneLanding";
+import {
+  currentPairButton,
+  DEVICES_SECTION_ID,
+  landOnPairPhone,
+  PAIR_BUTTON_ATTR,
+} from "./pairPhoneLanding";
 
 const SECTION_ID = DEVICES_SECTION_ID;
 const ROTATE_BUTTON_ATTR = "data-decisions-rotate-keys";
@@ -87,13 +92,29 @@ function DeviceFacts({ device }: { device: DecisionsDevice }) {
 export function DecisionsDevicesSection({
   status,
   locked = false,
+  pairFocusRequest = 0,
+  onPairFocused,
 }: {
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
   locked?: boolean;
+  /** Above zero, and bumped, to land on Pair a phone once it shows (#16200). */
+  pairFocusRequest?: number;
+  /** The request was met, so a later mount doesn't take focus again. */
+  onPairFocused?: () => void;
 }) {
   const relaySetUp = status.relayOrigin !== undefined;
   const { devices, failure, loading, reload } = useDecisionsDevices(relaySetUp);
+  // Pair a phone shows only once the devices are read, so a request waits for it.
+  const landOnPair = useEffectEvent(() => {
+    const button = currentPairButton();
+    if (!button) return;
+    landOnPairPhone();
+    if (document.activeElement === button) onPairFocused?.();
+  });
+  useEffect(() => {
+    if (pairFocusRequest > 0) landOnPair();
+  }, [pairFocusRequest, relaySetUp, devices, failure]);
   const [pairingOpen, setPairingOpen] = useState(false);
   const keyActions = useDecisionsKeyActions(reload);
   const [revokeTarget, setRevokeTarget] = useState<DecisionsDevice | null>(null);

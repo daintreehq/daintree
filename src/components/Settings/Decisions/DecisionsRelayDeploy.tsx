@@ -23,6 +23,8 @@ interface DecisionsRelayDeployProps {
   onUseRelay: (url: string) => void;
   /** A claim finished from the outcome row settled: main's status when it saved, else null. */
   onClaimSettled?: (status: DecisionsStatus | null) => void;
+  /** Takes the person on to pairing a phone; without it, Devices is landed on directly. */
+  onPairPhone?: () => void;
 }
 
 const NEXT_LABEL: Record<RelayDeployNext, string> = {
@@ -43,23 +45,24 @@ export function DecisionsRelayDeployOutcome({
   disabled,
   onUseRelay,
   onClaimSettled,
+  onPairPhone,
 }: {
   deploy: RelayDeployState;
   disabled: boolean;
   onUseRelay: (url: string) => void;
   onClaimSettled?: (status: DecisionsStatus | null) => void;
+  onPairPhone?: () => void;
 }) {
   const [finishing, setFinishing] = useState(false);
   /**
    * A refusal main didn't record, kept with the claim it was asked against: a
    * claim main ran records how it ended on the deploy, which moves it on, so
-   * the row says each refusal once.
+   * the row says each refusal once. Compared by content, since every status
+   * read brings a new copy of the same claim.
    */
-  const [error, setError] = useState<{ claim: RelayDeployState["claim"]; message: string } | null>(
-    null
-  );
+  const [error, setError] = useState<{ claim: string; message: string } | null>(null);
   const outcome = describeRelayDeploy(deploy);
-  const claim = deploy.claim;
+  const claim = JSON.stringify([deploy.id, deploy.claim ?? null]);
 
   const finishClaim = (acceptWeakStorage: boolean) => {
     if (finishing || disabled) return;
@@ -100,7 +103,8 @@ export function DecisionsRelayDeployOutcome({
         finishClaim(true);
         return;
       case "pair":
-        landOnPairPhone();
+        if (onPairPhone) onPairPhone();
+        else landOnPairPhone();
         return;
     }
   };
@@ -171,6 +175,7 @@ export function DecisionsRelayDeploy({
   deploy,
   onUseRelay,
   onClaimSettled,
+  onPairPhone,
 }: DecisionsRelayDeployProps) {
   const placement = useGuidedTerminalPlacement();
   const [starting, setStarting] = useState(false);
@@ -233,6 +238,7 @@ export function DecisionsRelayDeploy({
           disabled={disabled}
           onUseRelay={onUseRelay}
           onClaimSettled={onClaimSettled}
+          onPairPhone={onPairPhone}
         />
       )}
     </SettingsGroup>

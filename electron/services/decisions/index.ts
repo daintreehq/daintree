@@ -184,7 +184,11 @@ let hostEnroller = makeHostEnroller();
 
 /** The guided relay deploy Settings started, whose result rides on the status push (#16199). */
 function makeRelayDeploys(): RelayDeploySessions {
-  return new RelayDeploySessions({ onChange: () => publishStatus(), claimRelay });
+  return new RelayDeploySessions({
+    onChange: () => publishStatus(),
+    claimRelay: (claim, stillWanted) =>
+      runSetup((options) => claimDecisionsRelay(claim, options), stillWanted),
+  });
 }
 let relayDeploys = makeRelayDeploys();
 /** One record keeper per store and installation, so its writes run one at a time. */
@@ -716,8 +720,12 @@ function recordIdentity(
 
 type SetupRun = (options: Pick<RelaySetupOptions, "keys" | "signal">) => Promise<RelaySetupOutcome>;
 
-function runSetup(run: SetupRun): Promise<DecisionsConnectResult> {
+/** `stillWanted`, when given, is asked as the setup's turn comes, before anything starts. */
+function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<DecisionsConnectResult> {
   return serialize(async () => {
+    if (stillWanted && !stillWanted()) {
+      throw new AppError({ code: "CANCELLED", message: "The guided deploy was dropped" });
+    }
     const { service: running, keys } = await setupKeys();
     const settings = readDecisionsSettings(store);
     if (settings.relayOrigin !== null) {

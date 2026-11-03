@@ -35,7 +35,15 @@ interface Run {
   claiming: Promise<DecisionsConnectResult> | null;
 }
 
-type ClaimRelay = (claim: ClaimDecisionsRelayPayload) => Promise<DecisionsConnectResult>;
+/**
+ * The setup path's claim. `stillWanted` is asked once the claim's turn in
+ * main's queue comes, after any switch change queued ahead of it, so a deploy
+ * dropped meanwhile sends nothing.
+ */
+type ClaimRelay = (
+  claim: ClaimDecisionsRelayPayload,
+  stillWanted: () => boolean
+) => Promise<DecisionsConnectResult>;
 
 type OpenHost = (
   events: RelayDeployHostEvents,
@@ -244,11 +252,14 @@ export class RelayDeploySessions {
         if (!current()) {
           throw new AppError({ code: "CANCELLED", message: "The guided deploy was dropped" });
         }
-        return this.deps.claimRelay({
-          url: held.url,
-          claimSecret: held.claimSecret,
-          ...(acceptWeakStorage ? { acceptWeakStorage: true } : {}),
-        });
+        return this.deps.claimRelay(
+          {
+            url: held.url,
+            claimSecret: held.claimSecret,
+            ...(acceptWeakStorage ? { acceptWeakStorage: true } : {}),
+          },
+          current
+        );
       })
       .then(
         (outcome) => {

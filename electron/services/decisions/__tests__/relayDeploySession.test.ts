@@ -41,7 +41,10 @@ const WEAK: DecisionsConnectResult = {
   reason: "No keyring is available",
 };
 
-type ClaimRelay = (claim: ClaimDecisionsRelayPayload) => Promise<DecisionsConnectResult>;
+type ClaimRelay = (
+  claim: ClaimDecisionsRelayPayload,
+  stillWanted: () => boolean
+) => Promise<DecisionsConnectResult>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -117,7 +120,10 @@ describe("RelayDeploySessions", () => {
     hosts[0]!.events.onResult(COMPLETED);
     await settled();
 
-    expect(claimRelay).toHaveBeenCalledExactlyOnceWith({ url: URL, claimSecret: SECRET });
+    expect(claimRelay).toHaveBeenCalledExactlyOnceWith(
+      { url: URL, claimSecret: SECRET },
+      expect.any(Function)
+    );
     expect(sessions.claimable(id)).toBeNull();
     expect(sessions.snapshot()).toEqual({
       id,
@@ -144,7 +150,10 @@ describe("RelayDeploySessions", () => {
     expect(claimRelay).not.toHaveBeenCalled();
 
     await expect(sessions.claim({ deployId: failed.id })).resolves.toBe(SAVED);
-    expect(claimRelay).toHaveBeenCalledExactlyOnceWith({ url: URL, claimSecret: SECRET });
+    expect(claimRelay).toHaveBeenCalledExactlyOnceWith(
+      { url: URL, claimSecret: SECRET },
+      expect.any(Function)
+    );
   });
 
   it("keeps the secret through a claim that didn't save, for another try with weaker storage", async () => {
@@ -217,6 +226,19 @@ describe("RelayDeploySessions", () => {
 
     expect(claimRelay).not.toHaveBeenCalled();
     expect(sessions.claimable(id)).not.toBeNull();
+  });
+
+  it("asks the setup queue whether a claim is still wanted, which a reset answers no", async () => {
+    const pending = deferred<DecisionsConnectResult>();
+    claimRelay.mockReturnValueOnce(pending.promise);
+    await sessions.prepare(readPrefill);
+    hosts[0]!.events.onResult(COMPLETED);
+    await settled();
+    const stillWanted = claimRelay.mock.calls[0]![1];
+
+    expect(stillWanted()).toBe(true);
+    sessions.reset();
+    expect(stillWanted()).toBe(false);
   });
 
   it("leaves a newer deploy alone when an older one's claim saves after Decisions turned off", async () => {

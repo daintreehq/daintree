@@ -1488,6 +1488,23 @@ describe("Decisions entry", () => {
       });
     });
 
+    it("sends nothing for a deploy dropped by a switch change queued ahead of its claim", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
+      await prepareRelayDeploy(voice);
+
+      deployHosts.events[0]!.onResult(COMPLETED);
+      const off = setDecisionsEnabled(false);
+      const on = setDecisionsEnabled(true);
+      await Promise.all([off, on]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(setupRuns.claim).not.toHaveBeenCalled();
+      expect(saved.value).not.toHaveProperty("relayOrigin", CLAIMED.relayOrigin);
+      expect((await getDecisionsStatus()).relayDeploy).toBeUndefined();
+    });
+
     it("leaves Connection as it was for a cancelled deploy", async () => {
       saved.value = { enabled: true, consentedAt: 5 };
       await startDecisionsIfEnabled();
@@ -1520,7 +1537,18 @@ describe("Decisions entry", () => {
 
       deployHosts.events[0]!.onResult(COMPLETED);
       await vi.waitFor(async () =>
-        expect((await getDecisionsStatus()).relayDeploy?.claim).toMatchObject({ state: "failed" })
+        expect((await getDecisionsStatus()).relayDeploy).toMatchObject({
+          holdsClaimSecret: true,
+          claim: {
+            state: "failed",
+            failure: {
+              result: "unreachable",
+              origin: CLAIMED.relayOrigin,
+              reason: "timeout",
+              kept: true,
+            },
+          },
+        })
       );
       expect(saved.value).not.toHaveProperty("relayOrigin", CLAIMED.relayOrigin);
 

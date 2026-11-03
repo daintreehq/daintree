@@ -473,7 +473,7 @@ describe("Decisions relay deploy offer", () => {
 
         const row = outcomeRow();
         expect(row.textContent).toMatch(/Relay deployed and claimed/);
-        expect(row.textContent).toMatch(/Agents launched from now on get ask_human/);
+        expect(row.textContent).toMatch(/Supported agents launched from now on get ask_human/);
         expect(row.textContent).toMatch(/already running get it at their next launch/);
         expect(screen.queryByRole("group", { name: "Don't have a relay yet?" })).toBeNull();
 
@@ -575,6 +575,14 @@ describe("Decisions relay deploy offer", () => {
       });
       expect(outcomeRow().textContent).toMatch(/no longer holds the claim secret/);
 
+      // The status read the settled claim asks for brings a copy of the same claim.
+      rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={withDeploy(structuredClone(failed))} locked={false} />
+        </TooltipProvider>
+      );
+      expect(outcomeRow().textContent).toMatch(/no longer holds the claim secret/);
+
       // Main's own record of a later attempt replaces it.
       rerender(
         <TooltipProvider>
@@ -609,6 +617,87 @@ describe("Decisions relay deploy offer", () => {
       );
       expect(button("Use this relay").disabled).toBe(false);
       expect(claimDeployedRelay).not.toHaveBeenCalled();
+    });
+
+    it("offers nothing more for a claimed relay this computer has since disconnected from", () => {
+      renderSection(
+        withDeploy({
+          ...COMPLETED,
+          holdsClaimSecret: undefined,
+          claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+        })
+      );
+
+      expect(document.getElementById("decisions-deploy-outcome")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Pair a phone" })).toBeNull();
+      expect(button("Guided deploy").disabled).toBe(false);
+    });
+
+    it("promises no ask_human for a claimed relay that has revoked this computer", () => {
+      renderSection({
+        state: "revoked",
+        relayOrigin: DEPLOYED_ORIGIN,
+        relayDeploy: {
+          ...COMPLETED,
+          holdsClaimSecret: undefined,
+          claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+        },
+      });
+
+      expect(document.getElementById("decisions-deploy-outcome")).toBeNull();
+      expect(screen.queryByText(/get ask_human/)).toBeNull();
+    });
+
+    it("says a cancelled deploy's relay is claimed once the person claimed it", () => {
+      renderSection({
+        state: "connecting",
+        relayOrigin: DEPLOYED_ORIGIN,
+        relayDeploy: {
+          ...COMPLETED,
+          state: "cancelled",
+          holdsClaimSecret: undefined,
+          claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+        },
+      });
+
+      expect(outcomeRow().textContent).toMatch(/Relay deployed and claimed/);
+      expect(outcomeRow().textContent).not.toMatch(/didn't claim it/);
+      expect(within(outcomeRow()).getByRole("button", { name: "Pair a phone" })).toBeTruthy();
+    });
+
+    it("announces how main's claim ended", () => {
+      const live = () =>
+        screen
+          .getAllByRole("status")
+          .map((region) => region.textContent)
+          .join(" | ");
+      const { rerender } = renderSection(
+        withDeploy({ ...COMPLETED, claim: { state: "claiming" } })
+      );
+      expect(live()).not.toMatch(/didn't confirm the claim/);
+
+      rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection
+            status={withDeploy({
+              ...COMPLETED,
+              claim: {
+                state: "failed",
+                failure: {
+                  result: "unreachable",
+                  origin: DEPLOYED_ORIGIN,
+                  reason: "timeout",
+                  kept: true,
+                },
+              },
+            })}
+            locked={false}
+          />
+        </TooltipProvider>
+      );
+
+      expect(live()).toMatch(/didn't confirm the claim\./);
+      expect(live()).toMatch(/so the claim can be finished with it/);
     });
   });
 });

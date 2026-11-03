@@ -19,6 +19,7 @@ import { describeConnectResult } from "./relayIdentityCopy";
 import { DecisionsRelaySetup } from "./DecisionsRelaySetup";
 import { DecisionsDisconnectDialog } from "./DecisionsDisconnectDialog";
 import { DecisionsRelayDeploy, DecisionsRelayDeployOutcome } from "./DecisionsRelayDeploy";
+import { describeRelayDeploy } from "./relayDeployCopy";
 import { DecisionsRelayUpdate } from "./DecisionsRelayUpdate";
 import { canUpdateRelayAt, useRelayUpdateRun } from "./relayUpdate";
 import { describeRelayUpdateOutcome, relayVersionAfter } from "./relayUpdateCopy";
@@ -144,6 +145,7 @@ export function DecisionsConnectionSection({
   onChanged,
   onClose,
   onFinishSetup,
+  onPairPhone,
 }: {
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
@@ -157,6 +159,8 @@ export function DecisionsConnectionSection({
   onClose?: SettingsTabClose;
   /** Takes the person to the recovery kit, which finishes setup. */
   onFinishSetup?: () => void;
+  /** Takes the person on to pairing a phone, once a deployed relay is claimed here. */
+  onPairPhone?: () => void;
 }) {
   const { label, detail, severity } = describeConnection(status);
   // A revoked relay, or one that can't be used, says so on its own row: no kit or check changes that.
@@ -176,11 +180,21 @@ export function DecisionsConnectionSection({
   const deploy = status.relayDeploy;
   // Main is claiming the relay a guided deploy created (#16200): nothing here starts meanwhile.
   const deployClaiming = deploy?.claim?.state === "claiming";
-  // Its claim made it this computer's relay, so how that went stays beside it.
+  const deployClaimed = deploy?.claim?.state === "claimed";
+  // Its claim made it this computer's relay, so how that went stays beside it,
+  // while that relay is still the one agents launch with.
   const deployClaimedHere =
     deploy !== undefined &&
     deploy.claim?.state === "claimed" &&
-    deploy.claim.origin === savedOrigin;
+    deploy.claim.origin === savedOrigin &&
+    status.state !== "revoked" &&
+    status.problem === undefined;
+  // How main's claim ended, heard as it ends: the outcome row itself isn't a live region.
+  const deployOutcome =
+    deploy?.claim && deploy.claim.state !== "claiming" && (deployClaimedHere || !deployClaimed)
+      ? describeRelayDeploy(deploy)
+      : null;
+  const deployAnnouncement = deployOutcome ? `${deployOutcome.label}. ${deployOutcome.detail}` : "";
   const busy = locked || identity.pending !== null || deployClaiming;
 
   // The update whose end this mount has checked the relay for; a reset drops that check.
@@ -345,6 +359,9 @@ export function DecisionsConnectionSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
       </span>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {deployAnnouncement}
+      </span>
       {reason === "kit" && (
         <Callout
           severity="warning"
@@ -400,6 +417,7 @@ export function DecisionsConnectionSection({
             disabled={busy}
             onUseRelay={checkDeployedRelay}
             onClaimSettled={(next) => onChanged?.(next)}
+            onPairPhone={onPairPhone}
           />
         )}
         {savedOrigin === null ? (
@@ -558,13 +576,15 @@ export function DecisionsConnectionSection({
       {savedOrigin !== null && status.state !== "revoked" && (
         <DecisionsSetupCheck check={setup} status={status} disabled={busy} />
       )}
+      {/* A claimed relay no longer set up here (disconnected since) has nothing left to offer. */}
       {savedOrigin === null && (
         <DecisionsRelayDeploy
           disabled={busy || relay.checking}
           onClose={onClose}
-          deploy={deploy}
+          deploy={deployClaimed ? undefined : deploy}
           onUseRelay={checkDeployedRelay}
           onClaimSettled={(next) => onChanged?.(next)}
+          onPairPhone={onPairPhone}
         />
       )}
       {(savedOrigin !== null || keysStored || removeTarget !== null) && (
