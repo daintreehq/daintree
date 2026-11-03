@@ -18,7 +18,7 @@ import {
   documentTabClassName,
 } from "@/components/ui/document-tab";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { usePanelStore } from "@/store/panelStore";
+import { usePanelStore } from "@/store";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import {
   SESSION_COLORS,

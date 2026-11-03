@@ -65,6 +65,7 @@ vi.mock("@/components/icons", () => {
     SwiftIcon: stub,
     TerraformIcon: stub,
     ElixirIcon: stub,
+    SmilePlus: stub,
   };
 });
 

@@ -15,7 +15,15 @@ import { PanelRecordIndex, type PanelRecord } from "./agentNotificationPanels.js
 import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
-import { normalizeDisplayEmoji, withDisplayEmoji } from "../../shared/utils/displayIdentity.js";
+import {
+  displayIdentityLabel,
+  isEmptyDisplayIdentity,
+  normalizeDisplayEmoji,
+  withDisplayEmoji,
+} from "../../shared/utils/displayIdentity.js";
+import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
+import { readAssistantIdentity } from "./assistantIdentity.js";
+import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import { getOsDndService } from "./OsDndService.js";
 import type { UserPresence } from "./userPresence.js";
 import { shouldPlayUiFeedbackSound } from "../utils/uiFeedbackSound.js";
@@ -890,7 +898,7 @@ class AgentNotificationService {
       this.completionTimers.delete(key);
       const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId), projectId);
       if (settings.enabled === false || !settings.completedEnabled) return;
-      const label = this.getLabel(agentId, this.panels.get(terminalId));
+      const label = this.getLabel(agentId, terminalId);
       this.completionBurstBuffer.push({
         title: "Agent finished",
         body: `${label} finished its task`,
@@ -996,7 +1004,7 @@ class AgentNotificationService {
     }
 
     if (dedupedItems.length === 1) {
-      const label = this.getLabel(first.agentId, this.panels.get(first.terminalId));
+      const label = this.getLabel(first.agentId, first.terminalId);
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
       notificationService.showWatchNotification(
         "Agent waiting",
@@ -1128,7 +1136,7 @@ class AgentNotificationService {
           }
         );
       } else {
-        const label = this.getLabel(agentId, panel);
+        const label = this.getLabel(agentId, terminalId, panel);
         // Reason captured at the waiting transition — repeated waiting events
         // while already waiting don't reschedule this timer, so the closure
         // value is the reason for this wait episode. The duration-flavored
@@ -1229,7 +1237,7 @@ class AgentNotificationService {
       notificationService.showNativeNotification(
         "Agent waiting",
         describeWaiting(
-          this.getLabel(first.agentId, this.panels.get(first.terminalId)),
+          this.getLabel(first.agentId, first.terminalId),
           first.kind
         ),
         options
@@ -1444,7 +1452,14 @@ class AgentNotificationService {
    * named it, else the agent's display name, else plain "Agent". Never an id:
    * an agent id is a slug, and a worktree id is an absolute path.
    */
-  private getLabel(agentId: string | undefined, terminal?: PanelRecord): string {
+  private getLabel(
+    agentId: string | undefined,
+    terminalId: string | undefined,
+    terminal: PanelRecord | undefined = this.panels.get(terminalId)
+  ): string {
+    // An assistant is named as the person named it, wherever it runs.
+    const assistant = this.assistantLabel(terminalId);
+    if (assistant) return assistant;
     const title = terminal?.title?.trim();
     const name =
       title && (terminal?.titleMode === "user" || terminal?.titleMode === "custom")
@@ -1452,6 +1467,17 @@ class AgentNotificationService {
         : (agentId ? getEffectiveRegistry()[agentId]?.name?.trim() : undefined) || "Agent";
     // The persona the person gave the pane leads, as it does on the pane.
     return withDisplayEmoji(name, normalizeDisplayEmoji(terminal?.displayEmoji));
+  }
+
+  /** The persona of the assistant a terminal runs, when it is one and has a persona. */
+  private assistantLabel(terminalId: string | undefined): string | null {
+    if (!terminalId || !getAgentAvailabilityStore().isHelpTerminal(terminalId)) return null;
+    const projectId = this.projectOf(terminalId);
+    if (!projectId) return null;
+    const identity = readAssistantIdentity(
+      isGlobalAssistantId(projectId) ? { kind: "global" } : { kind: "project", projectId }
+    );
+    return isEmptyDisplayIdentity(identity) ? null : displayIdentityLabel(identity, "Assistant");
   }
 
   /** A banner's click target, with the panel's worktree and title as it is saved now. */
@@ -1463,7 +1489,7 @@ class AgentNotificationService {
     const panel = this.panels.get(terminalId);
     return {
       panelId: terminalId ?? agentId ?? "unknown",
-      panelTitle: this.getLabel(agentId, panel),
+      panelTitle: this.getLabel(agentId, terminalId, panel),
       worktreeId: panel ? panel.worktreeId : worktreeId,
     };
   }

@@ -339,6 +339,7 @@ export const CHANNEL_LEASE_POLICY = {
   "help-assistant:get-identities": "free",
   "help-assistant:get-live-session-status": "free",
   "help-assistant:get-settings": "free",
+  "help-assistant:identities-changed": "free",
   "help-assistant:set-identity": "free",
   "help-assistant:set-settings": "free",
   "help:adopt-detached-session": "driver",
