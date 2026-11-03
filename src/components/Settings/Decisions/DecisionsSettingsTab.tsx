@@ -117,7 +117,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onFinishSetup={askForKit}
           />
           <DecisionsDevicesSection status={status} locked={pending !== null} />
-          <DecisionsAgentsSection />
+          <DecisionsAgentsSection status={status} />
           <DecisionsQuestionsSection policy={policy} />
           <DecisionsPolicySection policy={policy} />
           <DecisionsModelSection

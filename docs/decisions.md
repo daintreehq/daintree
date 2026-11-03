@@ -80,7 +80,7 @@ The check proves one round trip at the time it ran. It doesn't prove that every 
 
 ## Agents
 
-With Decisions on, every launch of a supported agent gets a `daintree-decisions` MCP server beside your own, whatever the project's MCP setting, with three tools: `ask_human`, `get_decision` and `cancel_question`. Daintree hands it over at launch only: nothing is written into your agent's config or your project. An agent that was already running gets it at its next launch. **Agents** in Settings lists your installed agents under **Get ask_human** and **Not supported yet**.
+With Decisions on and a relay connected, every launch of a supported agent gets a `daintree-decisions` MCP server beside your own, whatever the project's MCP setting, with three tools: `ask_human`, `get_decision` and `cancel_question`. Daintree hands it over at launch only: nothing is written into your agent's config or your project. An agent that was already running gets it at its next launch. **Agents** in Settings lists your installed agents under **Get ask_human** and **Not supported yet**. Before a relay is set up, or once its connection has stopped or been revoked, agents launch without it: the section says so, points to **Connection**, and lists the supported ones under **Get ask_human once connected**. A launch while the connection is retrying still gets it, and its questions go out once the relay is back.
 
 | Agent | Gets `ask_human` | Resumed to deliver an answer when its terminal is gone |
 | --- | --- | --- |
