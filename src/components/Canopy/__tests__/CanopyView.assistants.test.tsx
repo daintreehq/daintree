@@ -7,6 +7,7 @@ import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
 import type { AssistantWorkReading } from "@shared/types/assistantWork";
+import type { GlobalAssistantView } from "@shared/types/ipc/help";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
@@ -62,7 +63,7 @@ const openInAssistantMock = vi.hoisted(() =>
   vi.fn(async (): Promise<{ ok: true } | { ok: false; reason: "ended" }> => ({ ok: true }))
 );
 const assistantApiMock = vi.hoisted(() =>
-  vi.fn((subject: unknown) => ({ assistantSubject: subject }))
+  vi.fn((subject: unknown, _stamp?: unknown) => ({ assistantSubject: subject, dispose: vi.fn() }))
 );
 vi.mock("@/services/assistantSubject", () => ({
   openInAssistant: openInAssistantMock,
@@ -137,6 +138,34 @@ function assistant(
 let directory: AgentDirectory;
 let assistantWork: AssistantWorkReading;
 
+const GLOBAL_SUBJECT = {
+  hostId: "local",
+  scope: { kind: "global" as const },
+  terminalId: "g-1",
+  incarnation: 4,
+};
+
+/** The global assistant as main tells a view of it. */
+function globalRunning(overrides: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
+  return {
+    phase: "running",
+    generation: 1,
+    agentId: "claude",
+    terminalId: "g-1",
+    attachments: [],
+    inputOwner: null,
+    inputEpoch: 0,
+    subject: GLOBAL_SUBJECT,
+    agentState: null,
+    ...overrides,
+  };
+}
+
+let globalView: GlobalAssistantView;
+let attachments = 0;
+/** Who holds input once a view attaches: by default the one attaching, as main hands it over. */
+let ownerOnAttach: (attachmentId: string) => string | null;
+
 function installElectron() {
   const canopy = {
     onSnapshotUpdated: vi.fn(() => () => {}),
@@ -158,12 +187,41 @@ function installElectron() {
     readAgentDirectory: vi.fn(async () => directory),
     readAssistantWork: vi.fn(async () => assistantWork),
   };
+  const help = {
+    onGlobalAssistantChanged: vi.fn((_listener: (state: GlobalAssistantView) => void) => () => {}),
+    attachGlobalAssistant: vi.fn(async () => {
+      const attachmentId = `attachment-${++attachments}`;
+      const owner = ownerOnAttach(attachmentId);
+      globalView = {
+        ...globalView,
+        inputOwner: owner,
+        inputEpoch: globalView.inputEpoch + (owner === globalView.inputOwner ? 0 : 1),
+      };
+      return { attachmentId, state: globalView };
+    }),
+    detachGlobalAssistant: vi.fn(async () => {}),
+    setGlobalAssistantInputEligible: vi.fn(async () => {}),
+    claimGlobalAssistantInput: vi.fn(async (attachmentId: string) => {
+      globalView = {
+        ...globalView,
+        inputOwner: attachmentId,
+        inputEpoch: globalView.inputEpoch + 1,
+      };
+      return globalView;
+    }),
+    ensureGlobalAssistant: vi.fn(async () => globalView),
+  };
   Object.defineProperty(window, "electron", {
-    value: { canopy, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
+    value: { canopy, help, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
     configurable: true,
     writable: true,
   });
   return canopy;
+}
+
+function electronHelp() {
+  return (window as unknown as { electron: { help: Record<string, ReturnType<typeof vi.fn>> } })
+    .electron.help;
 }
 
 async function settle() {
@@ -210,6 +268,9 @@ beforeEach(() => {
     entries: [assistant(0), assistant(1)],
   };
   assistantWork = { coverage: "ok", observedAt: NOW, complete: true, omitted: 0, workers: [] };
+  globalView = globalRunning();
+  attachments = 0;
+  ownerOnAttach = (attachmentId) => globalView.inputOwner ?? attachmentId;
   useProjectStore.setState({
     projects: [{ id: "p1", path: "/repo", name: "app", emoji: "🌳", lastOpened: NOW }],
   });
@@ -244,8 +305,11 @@ afterEach(() => {
     unreadOnly: false,
     roleFilter: "all",
     workOf: null,
+    globalDocked: false,
+    dockWidth: null,
   });
   window.localStorage.removeItem("daintree-canopy-order");
+  window.localStorage.removeItem("daintree-canopy-global-docked");
   window.localStorage.removeItem("daintree-canopy-role");
   window.localStorage.removeItem("daintree-canopy-assistant-handbacks");
   vi.clearAllMocks();
@@ -921,5 +985,166 @@ describe("CanopyView show its work", () => {
     expect(useCanopyStore.getState().workOf).not.toBeNull();
     act(() => useCanopyStore.getState().close());
     expect(useCanopyStore.getState().workOf).toBeNull();
+  });
+});
+
+describe("CanopyView's docked global assistant (#16214)", () => {
+  const dock = () => document.querySelector<HTMLElement>("[data-canopy-global]");
+  /** One per stream the pane opened: each mount of its terminal makes its own api. */
+  const globalStreams = () =>
+    assistantApiMock.mock.calls.filter(
+      ([subject]) => (subject as { terminalId: string }).terminalId === "g-1"
+    );
+  const globalApiStamps = () =>
+    assistantApiMock.mock.calls
+      .filter(([subject]) => (subject as { terminalId: string }).terminalId === "g-1")
+      .map(([, stamp]) => stamp);
+  const buttonIn = (root: Element, label: string) =>
+    [...root.querySelectorAll("button")].find((button) => button.textContent === label);
+
+  beforeEach(() => {
+    directory.entries = [assistant(0), assistant(0, { subject: GLOBAL_SUBJECT })];
+  });
+
+  it("shows the global assistant beside the selected worker, typing under the input it holds", async () => {
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    expect(document.getElementById("canopy-detail-waiting")).not.toBeNull();
+    const pane = dock()!;
+    expect(pane.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+    expect(pane.querySelector("[data-canopy-assistant-state]")!.textContent).toBe("At its prompt");
+    expect(globalApiStamps().at(-1)).toEqual({ attachmentId: "attachment-1", inputEpoch: 1 });
+    expect(pane.querySelector("[data-testid=help-global-input-elsewhere]")).toBeNull();
+
+    // Another worker selected: the assistant beside it keeps its stream.
+    const opened = globalStreams().length;
+    const first = document.getElementById("canopy-card-waiting")!;
+    await act(async () => {
+      first.focus();
+      fireEvent.keyDown(first, { key: "ArrowDown" });
+    });
+    await settle();
+    expect(document.getElementById("canopy-detail-working")).not.toBeNull();
+    expect(globalStreams()).toHaveLength(opened);
+    expect(electronHelp().detachGlobalAssistant).not.toHaveBeenCalled();
+  });
+
+  it("docks from the header and is kept, the toggle's name never changing", async () => {
+    render(<CanopyView />);
+    await settle();
+    expect(dock()).toBeNull();
+    const toggle = document.querySelector<HTMLElement>("[data-testid=canopy-global-toggle]")!;
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => fireEvent.click(toggle));
+    await settle();
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.getAttribute("aria-label")).toBe("Global assistant");
+    expect(toggle.getAttribute("aria-controls")).toBe(dock()!.id);
+    expect(window.localStorage.getItem("daintree-canopy-global-docked")).toBe("1");
+    expect(document.getElementById("canopy-detail-waiting")).not.toBeNull();
+
+    await act(async () => fireEvent.click(toggle));
+    await settle();
+    expect(dock()).toBeNull();
+    expect(toggle.getAttribute("aria-label")).toBe("Global assistant");
+    expect(electronHelp().detachGlobalAssistant).toHaveBeenCalledWith("attachment-1");
+  });
+
+  it("stays docked whatever the filters hide, and in one project's scope", async () => {
+    useCanopyStore.setState({ globalDocked: true, roleFilter: "workers", scope: "project" });
+    render(<CanopyView />);
+    await settle();
+    expect(assistantRows()).toHaveLength(0);
+    expect(dock()!.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+  });
+
+  it("shows one pane for the global assistant's own row, without reopening its stream", async () => {
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    const opened = globalStreams().length;
+    const row = assistantRows().find((each) => each.textContent?.includes("Global"))!;
+    await act(async () => fireEvent.click(row));
+    await settle();
+    expect(document.querySelectorAll("[data-testid=canopy-global-assistant]")).toHaveLength(1);
+    expect(document.querySelector("[data-canopy-card-detail]")).toBeNull();
+    expect(document.getElementById("canopy-detail-waiting")).toBeNull();
+    expect(globalStreams()).toHaveLength(opened);
+  });
+
+  it("opens the Assistant from the dock with the worker still selected beside it", async () => {
+    openInAssistantMock.mockResolvedValueOnce({ ok: false, reason: "ended" });
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    await act(async () => fireEvent.click(buttonIn(dock()!, "Open in Assistant")!));
+    await settle();
+    expect(openInAssistantMock).toHaveBeenCalledWith(GLOBAL_SUBJECT);
+    expect(dock()!.textContent).toContain("Couldn't open this assistant");
+    expect(document.getElementById("canopy-detail-waiting")).not.toBeNull();
+  });
+
+  it("offers to start the global assistant when none runs, and starts nothing by itself", async () => {
+    globalView = globalRunning({ phase: "absent", subject: null, terminalId: null });
+    directory.entries = [assistant(0)];
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    const start = dock()!.querySelector<HTMLElement>("[data-testid=canopy-global-start]")!;
+    expect(electronHelp().ensureGlobalAssistant).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(start));
+    expect(electronHelp().ensureGlobalAssistant).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the dock up with no agent running, its start offer in reach", async () => {
+    globalView = globalRunning({ phase: "absent", subject: null, terminalId: null });
+    directory.entries = [];
+    useFleetSnapshotStore.setState({
+      snapshot: { runs: [], changedAt: NOW, degraded: false, lastSuccessfulAt: NOW },
+    });
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    expect(dock()!.querySelector("[data-testid=canopy-global-start]")).not.toBeNull();
+  });
+
+  it("asks before taking input another window holds", async () => {
+    globalView = globalRunning({ inputOwner: "another-window", inputEpoch: 3 });
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    expect(electronHelp().claimGlobalAssistantInput).not.toHaveBeenCalled();
+    expect(globalApiStamps().at(-1)).toBeUndefined();
+    const take = dock()!.querySelector<HTMLElement>("[data-testid=help-global-take-input]")!;
+    await act(async () => fireEvent.click(take));
+    await settle();
+    expect(electronHelp().claimGlobalAssistantInput).toHaveBeenCalledWith("attachment-1");
+    expect(globalApiStamps().at(-1)).toEqual({ attachmentId: "attachment-1", inputEpoch: 4 });
+  });
+
+  it("dictates into nothing while the keyboard is in the dock, and says why", async () => {
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    const stream = terminalApis.filter((entry) => entry.runId === "waiting").at(-1)!;
+    await act(async () =>
+      stream.onStreamChange?.({ watchId: 7, ended: false, secretPrompt: false })
+    );
+    expect(resolveCanopyReplyDictation().ok).toBe(true);
+    act(() => buttonIn(dock()!, "Open in Assistant")!.focus());
+    expect(resolveCanopyReplyDictation()).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("agent's reply"),
+    });
+  });
+
+  it("keeps Escape in its terminal for the agent, with Canopy left open", async () => {
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    const terminal = dock()!.querySelector<HTMLElement>("[data-canopy-terminal]")!;
+    fireEvent.keyDown(terminal, { key: "Escape" });
+    expect(useCanopyStore.getState().isOpen).toBe(true);
   });
 });

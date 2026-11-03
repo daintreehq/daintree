@@ -697,8 +697,8 @@ describe("CanopyTerminal", () => {
     });
 
     it("holds the PTY while the dock's edge is dragged, until the last edge lands (#16214)", async () => {
-      await openSized();
       act(() => useCanopyStore.getState().setDockDrag(500));
+      await openSized();
       act(() => useCanopyStore.getState().setListDrag(600));
       expect(terminalResize).not.toHaveBeenCalled();
       // The list's edge lands while the dock's still moves: nothing yet.

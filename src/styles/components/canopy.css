@@ -28,6 +28,19 @@
   max-width: max(calc(100% - var(--canopy-pane-min-width, 0px)), 50%);
 }
 
+/* The global assistant docked beside the selected agent (#16214): a little
+   under half the area by default, or the width its edge was dragged to, and
+   never so wide the agent beside it loses its own minimum. Stacked where the
+   two don't fit side by side, each keeps enough height to read and type in. */
+.canopy-dock {
+  width: var(--canopy-dock-width, clamp(22.5rem, 42%, 40rem));
+  max-width: calc(100% - var(--canopy-dock-agent-room, 0px));
+}
+
+.canopy-dock-stacked {
+  min-height: 16rem;
+}
+
 /* The list and the status bar under it, on one surface. */
 .canopy-inbox-column {
   background: var(--theme-surface-sidebar);

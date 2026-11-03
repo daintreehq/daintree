@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { Button } from "@/components/ui/button";
@@ -166,6 +166,7 @@ export function CanopyAssistantPane({
   onOpen,
   showingWork,
   onShowWork,
+  terminal,
 }: {
   item: CanopyAssistantItem;
   /** Why the last "Open in Assistant" didn't, in words. */
@@ -175,18 +176,32 @@ export function CanopyAssistantPane({
   showingWork: boolean;
   /** Narrow the inbox to its work, or, while it is, show the whole inbox again. */
   onShowWork: () => void;
+  /** Its live session, when the caller watches it: the global assistant, typed to under its input. */
+  terminal?: ReactNode;
 }) {
-  // Made once per pane: the pane is keyed by the exact subject, and a fresh
-  // directory read hands over an equal subject that must not reopen the stream.
-  const [api] = useState(() => assistantTerminalApi(item.subject));
   const supervision = assistantSupervision(item);
+  const status = assistantStatus(item);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
-      <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">
+      {/* Wraps rather than clips where the pane is narrow, as it is docked beside an agent. */}
+      <div className="flex min-h-9 min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-1 py-1 text-xs select-none">
+        {/* What it is doing, as its row says it: the observation, never a verdict. */}
+        <span
+          data-canopy-assistant-state=""
+          className={cn(
+            "flex max-w-full min-w-0 shrink-0 items-center gap-1.5",
+            item.ask ? "text-text-primary" : "text-text-secondary"
+          )}
+        >
+          <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center">
+            <PilotRunState band={assistantBand(item)} agentState={item.agentState ?? undefined} />
+          </span>
+          <span className="min-w-0 truncate">{status}</span>
+        </span>
         <span className="min-w-0 shrink-0 font-medium text-text-primary">
           {assistantDisplayName(item)}
         </span>
-        <span className="min-w-0 flex-1 truncate text-text-secondary">
+        <span className="min-w-0 flex-1 basis-24 truncate text-text-secondary">
           {[item.scopeLabel, item.agentName].filter(Boolean).join(" · ")}
         </span>
         <Button variant="outline" size="xs" pressed={showingWork} onClick={onShowWork}>
@@ -220,15 +235,25 @@ export function CanopyAssistantPane({
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel">
-        {/* The viewer is admitted by the exact subject, not by a spawn stamp:
-            the incarnation only says which run this pane is for. */}
-        <CanopyTerminal
-          runId={item.subject.terminalId}
-          spawnedAt={item.subject.incarnation}
-          api={api}
-        />
+        {terminal ?? <AssistantLiveTerminal item={item} />}
       </div>
     </div>
+  );
+}
+
+/** An assistant's session through the exact-subject viewer, read and typed to as its own host allows. */
+function AssistantLiveTerminal({ item }: { item: CanopyAssistantItem }) {
+  // Made once per pane: the pane is keyed by the exact subject, and a fresh
+  // directory read hands over an equal subject that must not reopen the stream.
+  const [api] = useState(() => assistantTerminalApi(item.subject));
+  // The viewer is admitted by the exact subject, not by a spawn stamp: the
+  // incarnation only says which run this pane is for.
+  return (
+    <CanopyTerminal
+      runId={item.subject.terminalId}
+      spawnedAt={item.subject.incarnation}
+      api={api}
+    />
   );
 }
 

@@ -30,7 +30,9 @@ const watchKey = (viewId: number, slot: CanopyWatchSlot): string => `${viewId}:$
 export function assistantWatchSlot(subject: unknown): CanopyWatchSlot {
   if (typeof subject !== "object" || subject === null) return "detail";
   const scope = (subject as { scope?: unknown }).scope;
-  return typeof scope === "object" && scope !== null && (scope as { kind?: unknown }).kind === "global"
+  return typeof scope === "object" &&
+    scope !== null &&
+    (scope as { kind?: unknown }).kind === "global"
     ? "global"
     : "detail";
 }
@@ -111,10 +113,7 @@ let nextWatchId = 0;
 let nextRequest = 0;
 
 /** Claim the slot's next watch; any request still in flight for it loses. */
-export function beginWatchRequest(
-  webContentsId: number,
-  slot: CanopyWatchSlot = "detail"
-): number {
+export function beginWatchRequest(webContentsId: number, slot: CanopyWatchSlot = "detail"): number {
   const ticket = ++nextRequest;
   requests.set(watchKey(webContentsId, slot), ticket);
   return ticket;
