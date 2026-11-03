@@ -765,6 +765,25 @@ describe("terminal.sendKeys with no frontend", () => {
     });
   });
 
+  it("says whether the screen changed across the keys, only when both reads came back (#16209)", async () => {
+    const screens: Record<string, string> = { "t-1": "❯ Keep auto (1m tokens)\n" };
+    const pty = makePty({ "t-1": { kind: "terminal" } }, screens);
+    const { deps, send } = makeDeps({ getPtyReader: () => pty });
+    const press = () =>
+      executeViewlessAction(request("terminal.sendKeys", { terminalId: "t-1", keys: ["Escape"] }), deps);
+
+    await expect(press()).resolves.toMatchObject({ result: { screenChanged: false } });
+
+    send.mockImplementation(() => {
+      screens["t-1"] = "❯ \n";
+    });
+    await expect(press()).resolves.toMatchObject({ result: { screenChanged: true } });
+
+    delete screens["t-1"];
+    const unread = await press();
+    expect((unread as { result: object }).result).not.toHaveProperty("screenChanged");
+  });
+
   it("refuses a terminal this project does not have", async () => {
     const { deps, send } = makeDeps({ getPtyReader: () => makePty() });
 

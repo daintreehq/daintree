@@ -357,6 +357,85 @@ describe("terminal input and the drive lease", () => {
   });
 });
 
+describe("terminal:submit and a choice dialog (#16209)", () => {
+  let reading: Record<string, unknown> = {};
+  const ptyClient = {
+    write: vi.fn(),
+    submit: vi.fn(),
+    getTerminalAsync: vi.fn(async () => ({ hasPty: true, ...reading })),
+    getTerminalProjectId: vi.fn(() => "project-a"),
+  };
+  const AT_DIALOG = { detectedAgentId: "claude", agentState: "waiting", waitingReason: "approval" };
+
+  let dispose: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    reading = {};
+    _resetIpcGuardForTesting();
+    markIpcSecurityReady();
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        const { code, message } = error as { code?: string; message: string };
+        return { ok: false, error: { code, message } } as unknown as IpcEnvelope;
+      }
+    });
+    dispose = registerTerminalIOHandlers({ ptyClient } as unknown as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    dispose();
+    getIpcDispatcher().setInvokeEnveloper(null);
+  });
+
+  const submit = (...args: unknown[]) =>
+    remoteInvoke(CHANNELS.TERMINAL_SUBMIT, "term-a", "hello", "tok-1", ...args);
+
+  it("refuses a guarded send while the host reads a choice dialog, sending nothing", async () => {
+    reading = AT_DIALOG;
+    const envelope = await submit(undefined, undefined, "no-choice-dialog");
+
+    expect(envelope.ok ? null : envelope.error.code).toBe("TERMINAL_CHOICE_DIALOG");
+    expect(envelope.ok ? "" : envelope.error.message).toContain("Nothing was sent");
+    expect(ptyClient.submit).not.toHaveBeenCalled();
+  });
+
+  it("hands the guard on to the host, which checks it again at the lane", async () => {
+    reading = { ...AT_DIALOG, waitingReason: "prompt" };
+    const envelope = await submit(undefined, undefined, "no-choice-dialog");
+
+    expect(envelope.ok).toBe(true);
+    expect(ptyClient.submit).toHaveBeenCalledWith(
+      "term-a",
+      "hello",
+      "tok-1",
+      undefined,
+      "no-choice-dialog"
+    );
+  });
+
+  it("leaves an unguarded submit, and a shell, as they were", async () => {
+    reading = AT_DIALOG;
+    await expect(submit()).resolves.toMatchObject({ ok: true });
+    reading = { ...AT_DIALOG, detectedAgentId: undefined };
+    await expect(submit(undefined, undefined, "no-choice-dialog")).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(ptyClient.submit.mock.calls).toEqual([
+      ["term-a", "hello", "tok-1", undefined],
+      ["term-a", "hello", "tok-1", undefined, "no-choice-dialog"],
+    ]);
+  });
+
+  it("refuses a guard it doesn't know rather than sending unguarded", async () => {
+    const envelope = await submit(undefined, undefined, "settled-prompt");
+    expect(envelope.ok ? null : envelope.error.code).toBe("VALIDATION");
+    expect(ptyClient.submit).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * The IPC resize fallback follows the drive lease the port paths already
  * enforce: a caller whose client isn't driving the terminal's project can't

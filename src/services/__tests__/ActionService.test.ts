@@ -1194,6 +1194,27 @@ describe("ActionService", () => {
       });
     });
 
+    it("reports main's refusal of a send into a choice dialog under its own code (#16209)", async () => {
+      const refusal = "Terminal 't1' was observed waiting on a choice dialog. Nothing was sent.";
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockRejectedValue(new Error(`[AppError|TERMINAL_CHOICE_DIALOG] ${refusal}`)),
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "agent" });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "TERMINAL_CHOICE_DIALOG", message: refusal },
+      });
+    });
+
     it("maps TerminalInOtherProjectError to TERMINAL_IN_OTHER_PROJECT with plain details (#13120)", async () => {
       service.register({
         id: "actions.list" as ActionId,

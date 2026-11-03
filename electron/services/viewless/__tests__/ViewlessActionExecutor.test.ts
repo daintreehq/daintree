@@ -700,6 +700,26 @@ describe("viewless actions", () => {
       ]);
     });
 
+    it("reports the host refusing a send into a choice dialog under its own code (#16209)", async () => {
+      const refusal = Object.assign(new Error("Nothing was sent."), {
+        code: "TERMINAL_CHOICE_DIALOG",
+      });
+      const { deps } = makeDeps({
+        getPtyReader: () => pty,
+        invoke: vi.fn().mockRejectedValue(refusal) as ViewlessDeps["invoke"],
+      });
+
+      const result = await executeViewlessAction(
+        request("terminal.sendCommand", { terminalId: "t-1", command: "ls" }),
+        deps
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "TERMINAL_CHOICE_DIALOG", message: "Nothing was sent." },
+      });
+    });
+
     it("bounds the echoed command exactly as the renderer does", async () => {
       const { deps } = makeDeps({ getPtyReader: () => pty });
       const command = "x".repeat(MAX_ECHOED_COMMAND_CHARS + 50);

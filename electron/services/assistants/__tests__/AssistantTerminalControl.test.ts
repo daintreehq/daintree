@@ -409,6 +409,27 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(mocks.write.mock.calls.map((call) => call[1])).toEqual(["\x1b[B", "\r"]);
     });
 
+    it("says whether the screen changed across the keys (#16209)", async () => {
+      addLane(1, "t-one", { record: approval() });
+      const press = () =>
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["Escape"],
+          choose: undefined,
+          generation: 3,
+        });
+
+      deps.serializedState = async () => ({ data: "❯ Keep auto (1m tokens)\n" });
+      await expect(press()).resolves.toMatchObject({ screenChanged: false });
+
+      deps.serializedState = async () => ({
+        data: mocks.write.mock.calls.length > 1 ? "❯ \n" : "❯ Keep auto (1m tokens)\n",
+      });
+      await expect(press()).resolves.toMatchObject({ screenChanged: true });
+
+      deps.serializedState = async () => null;
+      expect(await press()).not.toHaveProperty("screenChanged");
+    });
+
     it("refuses when someone types while the screen is read for a choice", async () => {
       const lane = addLane(1, "t-one", { record: approval() });
       deps.serializedState = async () => {
