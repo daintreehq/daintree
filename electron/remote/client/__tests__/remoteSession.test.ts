@@ -1573,6 +1573,7 @@ describe("remote session wiring", () => {
         quietHoursWeekdays: [],
       }),
       shellDecides: () => false,
+      acceptsRemoteControl: () => true,
       now: Date.now,
     });
     cleanups.push(disposeHost);

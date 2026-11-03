@@ -10,6 +10,7 @@ import {
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
 import {
+  AgentWaitingPayloadSchema,
   AttentionPayloadSchema,
   MAX_PROCESS_TERMINALS,
   MetricsLinkMethod,
@@ -30,7 +31,7 @@ import {
   type MetricsSessionSource,
   type WaitingEvent,
 } from "../hostMetricsHost.js";
-import type { AttentionPayload } from "../linkMethods.js";
+import type { AgentWaitingPayload, AttentionPayload } from "../linkMethods.js";
 import { SummaryLoop } from "../summaryLoop.js";
 
 let dir: string;
@@ -125,9 +126,35 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
     },
     notificationSettings: () => NO_QUIET_HOURS,
     shellDecides: () => false,
+    acceptsRemoteControl: () => true,
     now: () => (clock += 1000),
     fireWaiting: (payload) => waiting?.(payload),
     ...overrides,
+  };
+}
+
+/** One of this host's agents stopping work to wait, as its own bus reports it. */
+function waitingEvent(
+  base: Omit<WaitingEvent, "previousState" | "seen">,
+  overrides: {
+    previousState?: WaitingEvent["previousState"];
+    seen?: Partial<AgentWaitingPayload>;
+  } = {}
+): WaitingEvent {
+  return {
+    ...base,
+    previousState: overrides.previousState ?? "working",
+    seen: {
+      terminalId: base.terminalId,
+      projectId: base.projectId,
+      worktreeId: null,
+      incarnation: 1,
+      agentIncarnation: 0,
+      waitingReason: "approval",
+      refined: false,
+      seenAt: 1_000,
+      ...overrides.seen,
+    },
   };
 }
 
@@ -511,13 +538,13 @@ describe("installHostMetricsHostWith", () => {
       heardB.push(p);
       return null;
     });
-    const payload: WaitingEvent = {
+    const payload = waitingEvent({
       kind: "waiting",
       terminalId: "t1",
       projectId: "p1",
       projectName: "app",
       agentName: "Claude",
-    };
+    });
     d.fireWaiting(payload);
     clock += 1_000;
     d.fireWaiting(payload);
@@ -525,7 +552,137 @@ describe("installHostMetricsHostWith", () => {
     clock += ATTENTION_COOLDOWN_MS;
     d.fireWaiting(payload);
     await waitFor(() => heardA.length === 2);
-    expect(heardA[0]).toEqual({ ...payload, quiet: false });
+    expect(heardA[0]).toEqual({
+      kind: "waiting",
+      terminalId: "t1",
+      projectId: "p1",
+      projectName: "app",
+      agentName: "Claude",
+      quiet: false,
+    });
+    dispose();
+  });
+
+  it("sends every Shell each agent's wait, refinements too, past every alert choice (#16188)", async () => {
+    const server = new FakeServer();
+    let accepts = true;
+    const d = deps({
+      // This host's own waiting notifications are off, and each Shell leaves it to the host.
+      notificationSettings: () => ({ ...NO_QUIET_HOURS, waitingEnabled: false }),
+      acceptsRemoteControl: () => accepts,
+      now: () => 0,
+    });
+    const dispose = installHostMetricsHostWith(server, d);
+    const a = await pair();
+    const b = await pair();
+    const older = await pair();
+    server.attach(a.host, "a");
+    server.attach(b.host, "b");
+    // A Shell from before the event refuses it, which this host ignores.
+    server.attach(older.host, "older");
+    const heard: Record<string, AgentWaitingPayload[]> = { a: [], b: [] };
+    const paged: AttentionPayload[] = [];
+    for (const [name, p] of [
+      ["a", a],
+      ["b", b],
+    ] as const) {
+      p.client.registerCallHandler(
+        MetricsLinkMethod.AGENT_WAITING,
+        AgentWaitingPayloadSchema,
+        (body) => {
+          heard[name]!.push(body);
+          return null;
+        }
+      );
+      p.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (body) => {
+        paged.push(body);
+        return null;
+      });
+    }
+    const base = { kind: "waiting", projectId: "p1", projectName: null, agentName: null } as const;
+    d.fireWaiting(
+      waitingEvent({ ...base, terminalId: "t1" }, { seen: { waitingReason: "prompt" } })
+    );
+    // Inside any cooldown, and refined while it already waited.
+    d.fireWaiting(
+      waitingEvent(
+        { ...base, terminalId: "t1" },
+        { previousState: "waiting", seen: { waitingReason: "approval", refined: true } }
+      )
+    );
+    await waitFor(() => heard.a!.length === 2 && heard.b!.length === 2);
+    expect(heard.a!.map((body) => [body.waitingReason, body.refined])).toEqual([
+      ["prompt", false],
+      ["approval", true],
+    ]);
+    expect(heard.a![1]).toEqual({
+      terminalId: "t1",
+      projectId: "p1",
+      worktreeId: null,
+      incarnation: 1,
+      agentIncarnation: 0,
+      waitingReason: "approval",
+      refined: true,
+      seenAt: 1_000,
+    });
+
+    // A host that takes no assistants' work sends its agents' waits to none.
+    accepts = false;
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "t2" }));
+    accepts = true;
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "t3" }));
+    await waitFor(() => heard.a!.length === 3);
+    expect(heard.a!.map((body) => body.terminalId)).toEqual(["t1", "t1", "t3"]);
+    // The person's own notice still follows this host's choices: off here.
+    expect(paged).toEqual([]);
+    dispose();
+  });
+
+  it("keeps the person's cooldown while every wait still reaches the watches, in order", async () => {
+    const server = new FakeServer();
+    const d = deps({ shellDecides: () => true, now: () => 0 });
+    const dispose = installHostMetricsHostWith(server, d);
+    const a = await pair();
+    server.attach(a.host, "a");
+    const order: string[] = [];
+    a.client.registerCallHandler(
+      MetricsLinkMethod.AGENT_WAITING,
+      AgentWaitingPayloadSchema,
+      (b) => {
+        order.push(`wait:${b.seenAt}`);
+        return null;
+      }
+    );
+    a.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, () => {
+      order.push("page");
+      return null;
+    });
+    const base = { kind: "waiting", projectId: null, projectName: null, agentName: null } as const;
+    // Two stops of one agent inside its cooldown.
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "t1" }, { seen: { seenAt: 1 } }));
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "t1" }, { seen: { seenAt: 2 } }));
+    await waitFor(() => order.length === 3);
+    expect(order).toEqual(["wait:1", "page", "wait:2"]);
+    dispose();
+  });
+
+  it("pages a person only for an agent that stopped working, never for a refined reason", async () => {
+    const server = new FakeServer();
+    const d = deps({ shellDecides: () => true, now: () => 0 });
+    const dispose = installHostMetricsHostWith(server, d);
+    const a = await pair();
+    server.attach(a.host, "a");
+    const paged: string[] = [];
+    a.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (body) => {
+      paged.push(body.terminalId);
+      return null;
+    });
+    const base = { kind: "waiting", projectId: null, projectName: null, agentName: null } as const;
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "refined" }, { previousState: "waiting" }));
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "idle" }, { previousState: "idle" }));
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "stopped" }, { previousState: "directing" }));
+    await waitFor(() => paged.length === 1);
+    expect(paged).toEqual(["stopped"]);
     dispose();
   });
 
@@ -557,13 +714,14 @@ describe("installHostMetricsHostWith", () => {
       heardByMac.push(body);
       return null;
     });
-    const event = (terminalId: string): WaitingEvent => ({
-      kind: "waiting",
-      terminalId,
-      projectId: null,
-      projectName: null,
-      agentName: null,
-    });
+    const event = (terminalId: string): WaitingEvent =>
+      waitingEvent({
+        kind: "waiting",
+        terminalId,
+        projectId: null,
+        projectName: null,
+        agentName: null,
+      });
 
     // Waiting notifications off on this host: nothing reaches a Shell that left it to the host.
     d.fireWaiting(event("off"));
@@ -624,13 +782,14 @@ describe("installHostMetricsHostWith", () => {
         return null;
       }
     );
-    const event = (terminalId: string, projectId: string | null): WaitingEvent => ({
-      kind: "waiting",
-      terminalId,
-      projectId,
-      projectName: null,
-      agentName: null,
-    });
+    const event = (terminalId: string, projectId: string | null): WaitingEvent =>
+      waitingEvent({
+        kind: "waiting",
+        terminalId,
+        projectId,
+        projectName: null,
+        agentName: null,
+      });
 
     d.fireWaiting(event("in-muted", "muted"));
     d.fireWaiting(event("in-other", "other"));
@@ -666,13 +825,13 @@ describe("installHostMetricsHostWith", () => {
         return null;
       });
     }
-    const event: WaitingEvent = {
+    const event = waitingEvent({
       kind: "waiting",
       terminalId: "t1",
       projectId: null,
       projectName: null,
       agentName: null,
-    };
+    });
 
     // Only the Shell that decides for itself hears it while this host has waiting off.
     d.fireWaiting(event);

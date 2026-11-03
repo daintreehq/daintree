@@ -21,6 +21,16 @@ export const MetricsLinkMethod = {
    * Shell decides by its own settings and presents it (#14701).
    */
   ATTENTION: "host.attention",
+  /**
+   * Host → Shell: one of the host's agents was seen starting to wait, or its
+   * waiting reason changed while it waited (#16188). Sent to every open
+   * session on each such transition, with none of the person's notification
+   * choices, cooldown or budget, while the host takes work from other
+   * machines' assistants: a Shell hands it only to its assistants' armed
+   * `host.watch`es, and never shows it to a person. A Shell from before it
+   * existed refuses the call, which the host ignores.
+   */
+  AGENT_WAITING: "host.agent-waiting",
   /** Shell → Host: the host's agent runs, as fleet targets. */
   LIST_FLEET_TARGETS: "fleet.list-targets",
   /** Shell → Host: submit a fleet prompt to one of the host's agents. */
@@ -78,6 +88,28 @@ export const AttentionPayloadSchema = z.object({
   quiet: z.boolean(),
 });
 export type AttentionPayload = z.infer<typeof AttentionPayloadSchema>;
+
+const generation = z.number().int().nonnegative();
+
+/** What a host saw of one agent starting to wait: observations only, never screen text. */
+export const AgentWaitingPayloadSchema = z
+  .object({
+    terminalId: id,
+    projectId: id.nullable(),
+    worktreeId: z.string().min(1).max(4096).nullable(),
+    /** The terminal's PTY launch, as the agent directory names it. */
+    incarnation: generation.nullable(),
+    /** The agent run inside that PTY, as `terminal.getStatus` answers it. */
+    agentIncarnation: generation.nullable(),
+    /** A reason a later host adds is read as unknown, never refused. */
+    waitingReason: z.enum(["prompt", "question", "approval", "error"]).nullable().catch(null),
+    /** It was already waiting, and only its reason changed. */
+    refined: z.boolean(),
+    /** When the transition was seen, by the host's own clock. */
+    seenAt: z.number().finite(),
+  })
+  .strip();
+export type AgentWaitingPayload = z.infer<typeof AgentWaitingPayloadSchema>;
 
 const FLEET_OP_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WaitingReason } from "./agent.js";
 import { AgentDirectorySchema } from "./agentDirectory.js";
 import {
   ASSISTANT_HOST_SETTING_KEYS,
@@ -52,9 +53,12 @@ export const HOST_SETTINGS_TOOL = "host.settings";
 
 /**
  * One notice when a host's link or capacity is first observed meeting a
- * condition the caller named (#14463), so an assistant holding work for a host
- * can end its turn. Passive: it reads the link and summaries this Shell already
- * has, never dials, holds or wakes a host, and acts on nothing when it fires.
+ * condition the caller named (#14463), or when an agent on a host is first
+ * seen starting to wait for a reason the caller named (#16188), so an
+ * assistant holding work or covering for the person can end its turn.
+ * Passive: it reads the link, summaries and agent transitions this Shell
+ * already hears, never dials, holds or wakes a host, and acts on nothing when
+ * it fires.
  */
 export const HOST_WATCH_TOOL = "host.watch";
 
@@ -527,6 +531,25 @@ export const HOST_WATCH_HISTORY_MAX = 16;
 export const HOST_WATCH_CONNECTION_SETTLE_MS = 5_000;
 /** Longest note a watch echoes back. */
 export const HOST_WATCH_NOTE_MAX = 160;
+/** Why an agent waits, as its host observed it; the order a watch names them in. */
+export const HOST_WATCH_WAITING_REASONS = [
+  "approval",
+  "question",
+  "prompt",
+  "error",
+] as const satisfies readonly WaitingReason[];
+/**
+ * What an agent watch hears when the caller names no reasons. `prompt` is the
+ * fallback and every finished turn, and input may not unblock `error`, so both
+ * are asked for by name.
+ */
+export const HOST_WATCH_DEFAULT_WAITING_REASONS = ["approval", "question"] as const;
+/** Agents one agent watch's notice names; the rest are counted. */
+export const HOST_WATCH_AGENTS_MAX = 8;
+/** Agents already waiting that one arm names; the rest are counted. */
+export const HOST_WATCH_MATCHES_MAX = 16;
+
+const waitingReasonSchema = z.enum(HOST_WATCH_WAITING_REASONS);
 
 export const HostWatchArgsSchema = z.object({
   operation: z
@@ -534,7 +557,11 @@ export const HostWatchArgsSchema = z.object({
     .describe(
       "arm: one notice when first observed. cancel: end one. list: yours, armed and ended."
     ),
-  hostId: hostIdSchema.optional().describe("For arm: the host. For list: only that host."),
+  hostId: hostIdSchema
+    .optional()
+    .describe(
+      "For arm: the host; with agentsWaiting, omit for all, local too. For list: only that host."
+    ),
   connection: z
     .enum(["connected", "disconnected"])
     .optional()
@@ -547,6 +574,24 @@ export const HostWatchArgsSchema = z.object({
     .describe("Arm on capacity instead: all given figures met by a fresh sample."),
   cpuIdleCoresAtLeast: z.number().min(0).max(4096).optional(),
   memoryPressureAtMost: z.enum(["normal", "warn"]).optional(),
+  agentsWaiting: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Arm on agents instead: fires as one starts to wait. Arm names those already waiting."
+    ),
+  waitingReasons: z
+    .array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"]))
+    .min(1)
+    .max(HOST_WATCH_WAITING_REASONS.length + 1)
+    .optional()
+    .describe('Up to 5. Default approval, question. "any" also hears older hosts that send none.'),
+  projectId: z
+    .string()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe("With agentsWaiting: only that project."),
   expiresInSeconds: z
     .number()
     .int()
@@ -564,8 +609,61 @@ const hostWatchConditionSchema = z.object({
   memoryAvailableBytesAtLeast: z.number().nullable(),
   cpuIdleCoresAtLeast: z.number().nullable(),
   memoryPressureAtMost: z.enum(["normal", "warn"]).nullable(),
+  /** An agent watch: the reasons it fires on (`["any"]`: every one), and its one project, if any. */
+  agentsWaiting: z
+    .object({
+      waitingReasons: z.array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"])),
+      projectId: z.string().nullable(),
+    })
+    .nullable(),
 });
 export type HostWatchCondition = z.infer<typeof hostWatchConditionSchema>;
+export type HostWatchWaitingReasons = NonNullable<
+  HostWatchCondition["agentsWaiting"]
+>["waitingReasons"];
+
+/**
+ * An agent a host was seen waiting on (#16188), as observed: never a verdict
+ * that it still waits, or on what. Read its status and screen before acting.
+ */
+export const HostWatchAgentSchema = z.object({
+  hostId: z.string(),
+  projectId: z.string().nullable(),
+  worktreeId: z.string().nullable(),
+  terminalId: z.string(),
+  /** The terminal's PTY launch, as the agent directory names it; null when not said. */
+  incarnation: z.number().nullable(),
+  /** The agent run inside it, as `terminal.getStatus` answers it; null when not said. */
+  agentIncarnation: z.number().nullable(),
+  /** Null from a host too old to say why. */
+  waitingReason: waitingReasonSchema.nullable(),
+  /** When it was seen waiting, by that host's own clock; null when the host didn't say. */
+  seenAt: z.number().nullable(),
+});
+export type HostWatchAgent = z.infer<typeof HostWatchAgentSchema>;
+
+/**
+ * How an agent watch hears one host. `events`: every waiting transition, with
+ * its reason. `attention`: a host too old to send them, heard by "any" alone
+ * through the person's notices, once a minute per agent at most, with no
+ * reason. Not heard now: `link-down` (watch its connection too),
+ * `host-refused` (it takes no assistants' work), `older-host` (only "any"
+ * hears it). `unread`: its link is up, but it didn't say whether it sends them.
+ */
+export const HOST_WATCH_HEARING = [
+  "events",
+  "attention",
+  "link-down",
+  "host-refused",
+  "older-host",
+  "unread",
+] as const;
+export const HostWatchHostCoverageSchema = z.object({
+  hostId: z.string(),
+  name: z.string(),
+  hears: z.enum(HOST_WATCH_HEARING),
+});
+export type HostWatchHostCoverage = z.infer<typeof HostWatchHostCoverageSchema>;
 
 /** A host as this Shell saw it at one moment: observations, never a promise it can take work. */
 export const HostWatchObservedSchema = z.object({
@@ -605,8 +703,9 @@ export type HostWatchDelivery = (typeof HOST_WATCH_DELIVERIES)[number];
 
 export const HostWatchSchema = z.object({
   watchId: z.string(),
-  hostId: z.string(),
-  hostName: z.string(),
+  /** Null for an agent watch on every host the caller controls. */
+  hostId: z.string().nullable(),
+  hostName: z.string().nullable(),
   condition: hostWatchConditionSchema,
   note: z.string().nullable(),
   armedAt: z.number(),
@@ -628,6 +727,18 @@ export const HostWatchResultSchema = z.object({
   watches: z.array(HostWatchSchema),
   /** arm: the host as observed when it was asked. */
   observed: HostWatchObservedSchema.nullable(),
+  /**
+   * An agent arm only: who was already seen waiting as it was armed (no notice
+   * comes for them), and how each host is heard.
+   */
+  agents: z
+    .object({
+      matches: z.array(HostWatchAgentSchema),
+      /** Matches past the cap. */
+      omitted: z.number(),
+      hosts: z.array(HostWatchHostCoverageSchema),
+    })
+    .optional(),
 });
 export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
 

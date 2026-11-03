@@ -382,6 +382,9 @@ function startClient(options: StartRemoteHostsOptions): void {
           for (const off of offs) off();
         };
       },
+      // What an agent `host.watch` hears of hosts (#16188): only links already up.
+      watchHostAgents: (listener) =>
+        getRemoteService("hostMetrics")?.onAgentWaiting(listener) ?? (() => {}),
     })
   );
   // The sender each session proves to a host before a call is relayed there.
@@ -393,6 +396,11 @@ function startClient(options: StartRemoteHostsOptions): void {
         if (client.manager.connectionState(hostId).status !== "connected") {
           await client.client.connectAndWait(hostId, HOST_CALL_CONNECT_MS);
         }
+        const session = client.sessionFor(hostId);
+        return session?.isOpen ? session : null;
+      },
+      // An agent watch's arm reads over a link only while it is up (#16188).
+      openSession: (hostId) => {
         const session = client.sessionFor(hostId);
         return session?.isOpen ? session : null;
       },

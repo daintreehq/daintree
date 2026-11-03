@@ -5,11 +5,14 @@ import {
   displayNoticeHostName,
   displayNoticeTerminalId,
 } from "../../../shared/types/terminalNotify.js";
-import type {
-  HostWatchCondition,
-  HostWatchLostReason,
-  HostWatchObserved,
+import {
+  HOST_WATCH_AGENTS_MAX,
+  type HostWatchAgent,
+  type HostWatchCondition,
+  type HostWatchLostReason,
+  type HostWatchObserved,
 } from "../../../shared/types/hostControl.js";
+import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 import { cutToNewestChars, type NoticeReply } from "./noticeReply.js";
 
@@ -293,9 +296,13 @@ export function formatAssistantApprovalLine(approval: AssistantApproval): string
     : `Daintree: the user raised this session to the '${approval.tier}' tool set. Retry what it refused if you still need it.`;
 }
 
+/** An agent a watch fired on, with the name this Shell knows its host by. */
+export type HostWatchNoticeAgent = HostWatchAgent & { hostName: string };
+
 /** What became of a `host.watch` (#14463), as its run is told: observations only. */
 export interface HostWatchNotice {
-  hostName: string;
+  /** Null for an agent watch on every host the run controls. */
+  hostName: string | null;
   watchId: string;
   event: "fired" | "expired" | "lost";
   condition: HostWatchCondition;
@@ -304,6 +311,12 @@ export interface HostWatchNotice {
   observed: HostWatchObserved | null;
   note?: string;
   lostReason?: HostWatchLostReason;
+  /**
+   * The agents an agent watch fired on (#16188), and how many more it saw
+   * without keeping them. Kept to those whose host the run may still reach as
+   * it is typed; the line names the first few.
+   */
+  agents?: { seen: HostWatchNoticeAgent[]; omitted: number };
 }
 
 /** A time as a line spells it. A host's own clock can send any number, which Date can't always read. */
@@ -316,8 +329,29 @@ function gib(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
 
+const WAITING_ON = {
+  approval: "an approval",
+  question: "a question",
+  prompt: "its prompt",
+  error: "an error",
+} as const;
+
 function describeWatchCondition(condition: HostWatchCondition): string {
   if (condition.connection !== null) return `its link ${condition.connection}`;
+  const agents = condition.agentsWaiting;
+  if (agents !== null) {
+    const named = agents.waitingReasons.flatMap((reason) =>
+      reason === "any" ? [] : [WAITING_ON[reason]]
+    );
+    const why =
+      agents.waitingReasons.includes("any") || named.length === 0
+        ? "for any reason"
+        : `on ${named.join(" or ")}`;
+    // A project id is another machine's text, spelled out as a bounded plain line.
+    const where =
+      agents.projectId !== null ? ` in project ${displayNoticeTerminalId(agents.projectId)}` : "";
+    return `an agent start waiting ${why}${where}`;
+  }
   const parts: string[] = [];
   if (condition.memoryAvailableBytesAtLeast !== null) {
     parts.push(`memory available at least ${gib(condition.memoryAvailableBytesAtLeast)}`);
@@ -353,14 +387,66 @@ function describeWatchObserved(observed: HostWatchObserved): string {
   return parts.join(", ");
 }
 
+/** Where an agent was seen, and as which run: ids another machine sent, as bounded plain lines. */
+function describeWatchedAgent(agent: HostWatchNoticeAgent): string {
+  const host =
+    agent.hostId === LOCAL_HOST_ID
+      ? "on this machine"
+      : `on host "${displayNoticeHostName(agent.hostName)}"`;
+  const facts = [
+    agent.projectId !== null ? `project ${displayNoticeTerminalId(agent.projectId)}` : null,
+    agent.worktreeId !== null ? `worktree ${displayNoticeTerminalId(agent.worktreeId)}` : null,
+    agent.incarnation !== null ? `incarnation ${agent.incarnation}` : null,
+    agent.agentIncarnation !== null ? `agentIncarnation ${agent.agentIncarnation}` : null,
+  ].filter((fact): fact is string => fact !== null);
+  const on =
+    agent.waitingReason !== null ? `waiting on ${WAITING_ON[agent.waitingReason]}` : "waiting";
+  const clock =
+    agent.seenAt === null
+      ? ""
+      : agent.hostId === LOCAL_HOST_ID
+        ? ` at ${iso(agent.seenAt)}`
+        : ` at ${iso(agent.seenAt)} by that host's clock`;
+  const detail = facts.length > 0 ? ` (${facts.join(", ")})` : "";
+  return `terminal ${displayNoticeTerminalId(agent.terminalId)} ${host}${detail} ${on}${clock}`;
+}
+
+/** An agent watch that fired: what each agent was seen doing and when, never that it still does. */
+function formatAgentWatchFired(
+  notice: HostWatchNotice,
+  agents: NonNullable<HostWatchNotice["agents"]>
+): string {
+  const shown = agents.seen.slice(0, HOST_WATCH_AGENTS_MAX);
+  const rest = agents.seen.length - shown.length + agents.omitted;
+  const named =
+    shown.length === 0
+      ? "too many to name here"
+      : `${shown.map(describeWatchedAgent).join("; ")}${rest > 0 ? `; and ${rest} more` : ""}`;
+  const note = notice.note !== undefined ? ` Your note: "${notice.note}".` : "";
+  const remote = agents.omitted > 0 || agents.seen.some((agent) => agent.hostId !== LOCAL_HOST_ID);
+  const read = remote
+    ? "Read each one's status and screen with terminal.getStatus, through host.call for a host,"
+    : "Read each one's status and screen with terminal.getStatus";
+  const count = agents.seen.length + agents.omitted;
+  const what = count === 1 ? "an agent start waiting" : `${count} agents start waiting`;
+  return `Daintree: watch ${notice.watchId} (armed ${iso(notice.armedAt)}) saw ${what}: ${named}.${note} Observations only; it may have moved on, and the reason is a reading of its screen. ${read} before acting, and arm the watch again to keep hearing.`;
+}
+
 /**
  * The line for a watch that fired, expired or was lost (#14463): Daintree's
  * own wording, the host's name as this Shell knows it, what was seen and when,
  * and the caller's note. It says what was observed, never that the host can
- * take the work, and sends the reader back to check before acting.
+ * take the work or that an agent still waits, and sends the reader back to
+ * check before acting.
  */
 export function formatHostWatchLine(notice: HostWatchNotice): string {
-  const where = `host "${displayNoticeHostName(notice.hostName)}" watch ${notice.watchId}`;
+  if (notice.event === "fired" && notice.agents !== undefined) {
+    return formatAgentWatchFired(notice, notice.agents);
+  }
+  const where =
+    notice.hostName === null
+      ? `watch ${notice.watchId} on every host you control`
+      : `host "${displayNoticeHostName(notice.hostName)}" watch ${notice.watchId}`;
   const wanted = describeWatchCondition(notice.condition);
   const note = notice.note !== undefined ? ` Your note: "${notice.note}".` : "";
   const seen =

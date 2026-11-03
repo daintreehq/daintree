@@ -1392,9 +1392,10 @@ describe("a Shell listing this host's agents (#14455)", () => {
     const readAgents = vi.fn(async () => DIRECTORY);
     const openSession = vi.fn();
     const { links, relay } = harness([["link-1", "sender-a"]], { readAgents, openSession });
+    // It says it sends its agents' waits, which an older host's answer never does (#16188).
     await expect(
       links[0]!.ask(AssistantLinkMethod.AGENTS, { projectId: "project-1" })
-    ).resolves.toEqual({ status: "done", directory: DIRECTORY });
+    ).resolves.toEqual({ status: "done", directory: DIRECTORY, waitingEvents: true });
     expect(readAgents).toHaveBeenCalledWith({ projectId: "project-1" });
     // Listing opens no MCP session, and so takes no tier, grant or ownership.
     expect(openSession).not.toHaveBeenCalled();
@@ -1460,6 +1461,7 @@ describe("a Shell listing this host's agents (#14455)", () => {
         omitted: 0,
         entries: [],
       },
+      waitingEvents: true,
     });
     broken.relay.dispose();
   });
@@ -1470,6 +1472,7 @@ describe("a Shell listing this host's agents (#14455)", () => {
     await expect(partial.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
       status: "done",
       directory: stale,
+      waitingEvents: true,
     });
     partial.relay.dispose();
 

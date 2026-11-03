@@ -3,6 +3,7 @@ import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.j
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { getLocalAgentDirectory } from "../../services/assistants/localAgentDirectory.js";
+import { events } from "../../services/events.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
@@ -15,6 +16,7 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import type { LinkSession } from "../link/session.js";
 import { getLocalSummaryLoop } from "../metrics/localLoop.js";
+import { agentWaitingOf, type AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
   HostCallRuntime,
@@ -191,6 +193,30 @@ export interface HostControlInstallDeps {
    * `host.list` waits for a host it dialed to send its first summary.
    */
   watchHosts?: HostCallRuntimeDeps["watchHosts"];
+  /**
+   * Hears hosts' agents starting to wait as they report it, for an agent
+   * `host.watch` (#16188); held only while one is armed, and never dials.
+   */
+  watchHostAgents?(listener: AgentWaitingListener): () => void;
+}
+
+/**
+ * This machine's agents and its hosts' starting to wait (#16188): this one's
+ * straight off its own transitions, the hosts' as they report them.
+ */
+function watchAgentsHere(
+  listener: AgentWaitingListener,
+  hosts: HostControlInstallDeps["watchHostAgents"]
+): () => void {
+  const offLocal = events.on("agent:state-changed", (payload) => {
+    const seen = agentWaitingOf(payload, getPtyClient());
+    if (seen !== null) listener(LOCAL_HOST_ID, { ...seen, source: "event" });
+  });
+  const offHosts = hosts?.(listener);
+  return () => {
+    offLocal();
+    offHosts?.();
+  };
 }
 
 /**
@@ -274,6 +300,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     // Workers a schedule's assistant launched elsewhere, for its run (#16169).
     noteAnswered: (answer) => noteHostCallAnswer(answer, deps.listHostProjects),
     ...(deps.watchHosts ? { watchHosts: deps.watchHosts } : {}),
+    watchAgents: (listener) => watchAgentsHere(listener, deps.watchHostAgents),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.
@@ -428,6 +455,8 @@ export function installRetiredSendsNotice(
 export interface HostControlLinkClientInstallDeps {
   /** The host's open session, connecting it if need be; null when it can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
+  /** The host's session if one is open now, never connecting it or marking it used. */
+  openSession?(hostId: HostId): LinkSession | null;
   onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
   /** Hosts this Shell still knows; a removed host's credential goes with it. */
   knownHosts(): HostId[];
@@ -488,6 +517,7 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
     credential: (hostId) => credentials.credential(hostId),
     existingCredential: (hostId) => credentials.existing(hostId),
     session: deps.session,
+    ...(deps.openSession ? { openSession: deps.openSession } : {}),
     onSessionOpened: deps.onSessionOpened,
     noticeReceiver: () => getRemoteService("hostCallRelayClient"),
     approvalReceiver: () => getRemoteService("hostCallRelayClient"),

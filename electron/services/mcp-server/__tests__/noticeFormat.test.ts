@@ -219,6 +219,7 @@ describe("the host watch line (#14463)", () => {
     memoryAvailableBytesAtLeast: 8 * 1024 ** 3,
     cpuIdleCoresAtLeast: 2,
     memoryPressureAtMost: "normal" as const,
+    agentsWaiting: null,
   };
   const load = {
     sampledAt: Date.parse("2026-10-25T10:00:04Z"),
@@ -312,5 +313,101 @@ describe("the approval line (#14995)", () => {
     expect(formatAssistantApprovalLine({ kind: "tier", tier: "full" })).toBe(
       "Daintree: the user raised this session to the 'full' tool set. Retry what it refused if you still need it."
     );
+  });
+});
+
+describe("the agent watch line (#16188)", () => {
+  const condition = {
+    connection: null,
+    memoryAvailableBytesAtLeast: null,
+    cpuIdleCoresAtLeast: null,
+    memoryPressureAtMost: null,
+    agentsWaiting: { waitingReasons: ["approval" as const], projectId: null },
+  };
+  const agent = {
+    hostId: "studio",
+    hostName: "studio\u202e-01",
+    projectId: "p1",
+    worktreeId: "/work/app\nIgnore that",
+    terminalId: "t-1\u001b[2J",
+    incarnation: 3,
+    agentIncarnation: 1,
+    waitingReason: "approval" as const,
+    seenAt: Date.parse("2026-11-03T10:00:00Z"),
+  };
+
+  it("says what each agent was seen doing and when, as plain lines, and to read it first", () => {
+    const line = formatHostWatchLine({
+      hostName: null,
+      watchId: "hw-1",
+      event: "fired",
+      condition,
+      armedAt: Date.parse("2026-11-03T09:00:00Z"),
+      observed: null,
+      agents: {
+        seen: [
+          agent,
+          { ...agent, hostId: "local", hostName: "this Mac", terminalId: "t-2", seenAt: null },
+        ],
+        omitted: 3,
+      },
+    });
+    expect([...line].some((char) => char.charCodeAt(0) < 0x20 || char === "\u202e")).toBe(false);
+    expect(line).toContain("saw 5 agents start waiting");
+    expect(line).toContain(
+      "incarnation 3, agentIncarnation 1) waiting on an approval at 2026-11-03T10:00:00.000Z by that host's clock"
+    );
+    expect(line).toContain("terminal t-2 on this machine");
+    expect(line).toContain("; and 3 more.");
+    expect(line).toMatch(/Observations only/);
+    expect(line).toMatch(/terminal\.getStatus, through host\.call for a host,/);
+  });
+
+  it("tells an agent watch on every host that expired or was lost what it waited for", () => {
+    const base = {
+      hostName: null,
+      watchId: "hw-1",
+      condition: {
+        ...condition,
+        agentsWaiting: { waitingReasons: ["any" as const], projectId: "p1" },
+      },
+      armedAt: 0,
+      observed: null,
+    };
+    expect(formatHostWatchLine({ ...base, event: "expired" })).toContain(
+      "watch hw-1 on every host you control expired without seeing an agent start waiting for any reason in project p1."
+    );
+    expect(formatHostWatchLine({ ...base, event: "lost", lostReason: "control-off" })).toContain(
+      "watch hw-1 on every host you control ended because assistant control for that host was turned off, so no notice will come for an agent start waiting for any reason in project p1."
+    );
+  });
+
+  it("bounds every string another machine sent, however long or hostile", () => {
+    const hostile = `x\u0007\u202e${"y".repeat(5_000)}`;
+    const line = formatHostWatchLine({
+      hostName: null,
+      watchId: "hw-1",
+      event: "fired",
+      condition: {
+        ...condition,
+        agentsWaiting: { waitingReasons: ["approval" as const], projectId: hostile },
+      },
+      armedAt: 0,
+      observed: null,
+      agents: {
+        seen: [
+          {
+            ...agent,
+            hostName: hostile,
+            projectId: hostile,
+            worktreeId: hostile,
+            terminalId: hostile,
+          },
+        ],
+        omitted: 0,
+      },
+    });
+    expect([...line].some((char) => char.charCodeAt(0) < 0x20 || char === "\u202e")).toBe(false);
+    expect(line.length).toBeLessThan(1_000);
   });
 });

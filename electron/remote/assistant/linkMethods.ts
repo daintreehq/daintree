@@ -297,7 +297,18 @@ export const AgentsPayloadSchema = z.object({ projectId: id.optional() }).strict
 export type AgentsPayload = z.infer<typeof AgentsPayloadSchema>;
 
 export const AgentsAnswerSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("done"), directory: AgentDirectorySchema }).strip(),
+  z
+    .object({
+      status: z.literal("done"),
+      directory: AgentDirectorySchema,
+      /**
+       * This host sends `host.agent-waiting` for its agents' waits (#16188).
+       * Absent from a host from before it, which a watch hears only through
+       * the person's attention notices.
+       */
+      waitingEvents: z.boolean().optional(),
+    })
+    .strip(),
   /** This host doesn't take work from other machines' assistants; nothing was read. */
   z
     .object({

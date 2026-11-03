@@ -400,6 +400,64 @@ describe("HostControlLinkClient.agents (#14455)", () => {
   });
 });
 
+describe("HostControlLinkClient.agentsOnOpenLink (#16188)", () => {
+  const DIRECTORY = { coverage: "ok", observedAt: 7, complete: true, omitted: 0, entries: [] };
+
+  function passive(options: { open: boolean; kept: string | null }) {
+    const calls: string[] = [];
+    const session = {
+      isOpen: options.open,
+      call: vi.fn(async (method: string) => {
+        calls.push(method);
+        return method === AssistantLinkMethod.AGENTS
+          ? { status: "done", directory: DIRECTORY, waitingEvents: true }
+          : null;
+      }),
+    } as unknown as LinkSession;
+    const dialing = vi.fn(async () => session);
+    const mint = vi.fn(() => CREDENTIAL);
+    const relay = new HostControlLinkClient({
+      credential: mint,
+      existingCredential: () => options.kept,
+      session: dialing,
+      openSession: () => session,
+      onSessionOpened: () => () => {},
+    });
+    return { relay, calls, dialing, mint };
+  }
+
+  it("reads over a link already open with the credential already kept, and says it sends waits", async () => {
+    const { relay, calls, dialing, mint } = passive({ open: true, kept: CREDENTIAL });
+    await expect(relay.agentsOnOpenLink("studio", {}, 5_000)).resolves.toEqual({
+      status: "done",
+      directory: DIRECTORY,
+      waitingEvents: true,
+    });
+    expect(calls).toEqual([AssistantLinkMethod.AUTHENTICATE, AssistantLinkMethod.AGENTS]);
+    // Proven once per link.
+    await relay.agentsOnOpenLink("studio", {});
+    expect(calls.filter((method) => method === AssistantLinkMethod.AUTHENTICATE)).toHaveLength(1);
+    expect(dialing).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+  });
+
+  it("never dials a link that isn't open, nor mints a credential none was kept for", async () => {
+    const down = passive({ open: false, kept: CREDENTIAL });
+    await expect(down.relay.agentsOnOpenLink("studio", {})).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    const stranger = passive({ open: true, kept: null });
+    await expect(stranger.relay.agentsOnOpenLink("studio", {})).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    for (const { calls, dialing, mint } of [down, stranger]) {
+      expect(calls).toEqual([]);
+      expect(dialing).not.toHaveBeenCalled();
+      expect(mint).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("HostControlLinkClient relay notices (#13500)", () => {
   type Receiver = RelayNoticeReceiver;
 

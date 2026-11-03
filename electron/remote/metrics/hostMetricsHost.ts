@@ -8,6 +8,7 @@ import type { ProcessInventorySnapshot } from "../../../shared/types/processes.j
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import type { HostRestartImpact } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
+import type { AgentState } from "../../../shared/types/agent.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../link/messages.js";
@@ -20,8 +21,10 @@ import {
   MAX_RESTART_SHELLS,
   MetricsLinkMethod,
   SubmitFleetPayloadSchema,
+  type AgentWaitingPayload,
   type AttentionPayload,
 } from "./linkMethods.js";
+import { agentWaitingOf } from "./agentWaiting.js";
 import { createLogger } from "../../utils/logger.js";
 import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 
@@ -72,8 +75,16 @@ export interface MetricsHostDeps {
    * depends on. Agent activity never calls it.
    */
   onProjectsChanged(listener: () => void): () => void;
-  /** Told when one of this host's agents goes from working to waiting. */
+  /**
+   * Told when one of this host's agents starts waiting, or its waiting reason
+   * changes while it waits (#16188).
+   */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
+  /**
+   * Whether this host takes work from other machines' assistants: only then
+   * are its agents' waits sent for their watches, as their directory is read.
+   */
+  acceptsRemoteControl(): boolean;
   /**
    * This host's own notification settings under `projectId`'s overrides,
    * which decide only for a Shell that never sent its own choices (one from
@@ -104,7 +115,15 @@ export type LocalRestartTerminals = Omit<
 /** A waiting agent before this host's policy has been applied. */
 export type WaitingEvent = Omit<AttentionPayload, "quiet" | "projectId"> & {
   projectId: string | null;
+  previousState: AgentState;
+  /** What a Shell's agent watches are sent of it. */
+  seen: AgentWaitingPayload;
 };
+
+/** Only an agent that stopped working pages a person: a reason refined while it waits never does. */
+function announcesToPeople(event: WaitingEvent): boolean {
+  return event.previousState === "working" || event.previousState === "directing";
+}
 
 /**
  * One machine's verdict on a waiting agent from its own settings: not
@@ -279,6 +298,16 @@ export function installHostMetricsHostWith(
   if (server.sessions.length > 0) ensureLoop();
 
   const offWaiting = deps.onAgentWaiting((event) => {
+    // Sent first, so a Shell hears it before the same transition's attention.
+    if (deps.acceptsRemoteControl()) {
+      for (const ctx of server.sessions) {
+        if (!ctx.session.isOpen) continue;
+        ctx.session.call(MetricsLinkMethod.AGENT_WAITING, event.seen).catch(() => {
+          // A Shell from before it, or one that can't take it now: no watch there was told.
+        });
+      }
+    }
+    if (!announcesToPeople(event)) return;
     const now = deps.now();
     // Read once, and only for a Shell that leaves the verdict to this host.
     let hostPolicy: ReturnType<typeof waitingPolicy> | undefined;
@@ -296,7 +325,14 @@ export function installHostMetricsHostWith(
         quiet = hostPolicy === "quiet";
       }
       lastAttention.set(key, now);
-      const payload: AttentionPayload = { ...event, quiet };
+      const payload: AttentionPayload = {
+        kind: event.kind,
+        terminalId: event.terminalId,
+        projectId: event.projectId,
+        projectName: event.projectName,
+        agentName: event.agentName,
+        quiet,
+      };
       ctx.session.call(MetricsLinkMethod.ATTENTION, payload).catch(() => {
         // A Shell that can't take it now has nothing to retry: the agent's state is on screen.
       });
@@ -362,7 +398,10 @@ export function installProcessInventoryHost(
 }
 
 /** Wire the real sampler, fleet and worktree reads and agent-state events into a host server. */
-export async function installHostMetricsHost(server: MetricsSessionSource): Promise<() => void> {
+export async function installHostMetricsHost(
+  server: MetricsSessionSource,
+  acceptsRemoteControl: () => boolean
+): Promise<() => void> {
   const [
     { getLocalSummaryLoop },
     ops,
@@ -390,26 +429,27 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
     onProjectsChanged: ops.onLocalProjectsChanged,
     onAgentWaiting(listener) {
       return events.on("agent:state-changed", (payload) => {
-        if (payload.state !== "waiting") return;
-        if (payload.previousState !== "working" && payload.previousState !== "directing") return;
-        const terminalId = payload.terminalId;
-        if (!terminalId) return;
-        const projectId = getPtyClient()?.getTerminalProjectId(terminalId) ?? null;
+        const seen = agentWaitingOf(payload, getPtyClient());
+        if (seen === null) return;
+        const projectId = seen.projectId;
         const project = projectId ? projectStore.getProjectById(projectId) : null;
         const agentName = payload.agentId
           ? (registry.getAgentConfig(payload.agentId)?.name ?? payload.agentId)
           : null;
         listener({
           kind: "waiting",
-          terminalId,
+          terminalId: seen.terminalId,
           projectId,
           projectName: project?.name ?? null,
           agentName,
+          previousState: payload.previousState,
+          seen,
         });
       });
     },
     notificationSettings: (projectId) => projectStore.getEffectiveNotificationSettings(projectId),
     shellDecides: (clientId) => agentNotificationService.hasShellPolicy(clientId),
+    acceptsRemoteControl,
     now: Date.now,
   });
 }

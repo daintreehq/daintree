@@ -623,6 +623,121 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("hands a host's agents' waits to armed agent watches only, past every alert choice (#16188)", async () => {
+    const watched = { ...descriptor("studio"), assistantControlEnabled: true };
+    const h = harness([watched, descriptor("plain")], { waitingPolicy: () => "silent" });
+    h.client.start();
+    const studio = await openSessionPair(dir);
+    const plain = await openSessionPair(dir);
+    open.push(studio.host, studio.client, plain.host, plain.client);
+    h.openSession("studio", studio.client);
+    h.openSession("plain", plain.client);
+    const wait = {
+      terminalId: "t1",
+      projectId: "p1",
+      worktreeId: "/work/app",
+      incarnation: 2,
+      agentIncarnation: 0,
+      waitingReason: "approval",
+      refined: false,
+      seenAt: 5,
+    };
+    // Nothing listens while no watch is armed.
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+
+    const heard: Array<[string, unknown]> = [];
+    const off = h.client.onAgentWaiting((hostId, event) => heard.push([hostId, event]));
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, {
+      ...wait,
+      waitingReason: "a reason from a later build",
+    });
+    // A host the person hasn't given assistant control is never heard.
+    await plain.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+    // An older host's attention stands in, with no reason, whatever this
+    // screen's alert choices and the host's notifications switch say.
+    await studio.host.call(MetricsLinkMethod.ATTENTION, {
+      kind: "waiting",
+      terminalId: "t2",
+      projectId: "p1",
+      projectName: "app",
+      agentName: "Claude",
+      quiet: false,
+    });
+    expect(heard).toEqual([
+      ["studio", { ...wait, waitingReason: null, source: "event" }],
+      [
+        "studio",
+        {
+          source: "attention",
+          terminalId: "t2",
+          projectId: "p1",
+          worktreeId: null,
+          incarnation: null,
+          agentIncarnation: null,
+          waitingReason: null,
+          refined: false,
+          seenAt: null,
+        },
+      ],
+    ]);
+    // None of it reached a person, nor dialled a host.
+    expect(h.attention).toEqual([]);
+    expect(h.connect).not.toHaveBeenCalled();
+
+    off();
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+    expect(heard).toHaveLength(2);
+    h.client.dispose();
+  });
+
+  it("hears a host's agents by the link they came on, past the person's spent notice budget", async () => {
+    const watched = { ...descriptor("loud", true), assistantControlEnabled: true };
+    const h = harness([watched]);
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    const page = {
+      kind: "waiting",
+      projectId: null,
+      projectName: null,
+      agentName: null,
+      quiet: false,
+    };
+    for (let index = 0; index < 20; index += 1) {
+      await loud.host.call(MetricsLinkMethod.ATTENTION, { ...page, terminalId: `p-${index}` });
+    }
+    // The person's share of notices from this host is spent.
+    expect(h.attention.length).toBeLessThan(20);
+    const heard: Array<[string, string]> = [];
+    h.client.onAgentWaiting((hostId, event) => heard.push([hostId, event.terminalId]));
+    await loud.host.call(MetricsLinkMethod.AGENT_WAITING, {
+      hostId: "someone-else",
+      terminalId: "t1",
+      projectId: null,
+      worktreeId: null,
+      incarnation: null,
+      agentIncarnation: null,
+      waitingReason: "question",
+      refined: false,
+      seenAt: 1,
+    });
+    await expect(
+      loud.host.call(MetricsLinkMethod.AGENT_WAITING, {
+        terminalId: "x".repeat(300),
+        projectId: null,
+        worktreeId: null,
+        incarnation: null,
+        agentIncarnation: null,
+        waitingReason: null,
+        refined: false,
+        seenAt: 1,
+      })
+    ).rejects.toBeDefined();
+    expect(heard).toEqual([["loud", "t1"]]);
+    h.client.dispose();
+  });
+
   it("tells every view a host's worktree list changed, whether or not its notifications are on", async () => {
     const h = harness([descriptor("quiet")]);
     h.client.start();
