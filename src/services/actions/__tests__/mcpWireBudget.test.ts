@@ -994,7 +994,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 177_900 → 179_000 for #16189, measured at 178_950 B (+1_132 over
   // develop's 177_818): the same `inputLine` result field as the external
   // ceiling's raise, carried in-app for the external⊆in-app subset invariant.
-  const MAX_COHORT_PAYLOAD_BYTES = 179_000;
+  // 179_000 → 185_600 for #16191, measured at 185_534 B (+6_584 over develop's
+  // 178_950): `host.status`, one read of agents' status across projects and
+  // hosts in place of a `host.call` per project. 5_354 B of it is the output
+  // schema, which carries a status entry's own field descriptions: the global
+  // Assistant is never offered `terminal.getStatus`, so this is where it learns
+  // what `lastTypedInputAt`, `agentIncarnation` or `inputLine` mean. The entry
+  // leaves out `submission`, which no token here asks for. Assistant-only, so
+  // the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 185_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

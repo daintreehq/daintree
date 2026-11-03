@@ -1264,6 +1264,374 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
+      "Read agents' status in many projects on many hosts in one call, as each project's own status read answers it: states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
+    enabled: true,
+    id: "host.status",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        targets: {
+          minItems: 1,
+          maxItems: 64,
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              hostId: {
+                type: "string",
+                minLength: 1,
+                maxLength: 64,
+                description: "A host id from the host list.",
+              },
+              projectId: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                description: "A projectId from the host list.",
+              },
+              terminalIds: {
+                description: "1-256 terminals in that project. Omit for every agent it lists.",
+                minItems: 1,
+                maxItems: 256,
+                type: "array",
+                items: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 256,
+                },
+              },
+            },
+            required: ["hostId", "projectId"],
+          },
+          description: "1-64 projects, each named once, on any hosts.",
+        },
+        includeOutput: {
+          description:
+            "`true` or options: adds `recentOutput`, `lastOutputChangeAt` and `lastTypedInputAt`. Tails share one 50 KiB answer.",
+          anyOf: [
+            {
+              type: "boolean",
+            },
+            {
+              type: "object",
+              properties: {
+                lines: {
+                  default: 10,
+                  description: "Trailing lines per terminal (max 50, default 10).",
+                  type: "integer",
+                  minimum: 1,
+                  maximum: 50,
+                },
+                stripAnsi: {
+                  default: true,
+                  description: "Strip ANSI (default true).",
+                  type: "boolean",
+                },
+              },
+            },
+          ],
+        },
+      },
+      required: ["targets"],
+    },
+    keywords: ["host", "remote", "status", "screen", "agent", "state", "waiting"],
+    kind: "query",
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    name: "host.status",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        hosts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              hostId: {
+                type: "string",
+              },
+              coverage: {
+                type: "string",
+                enum: ["ok", "unreachable", "unsupported"],
+              },
+            },
+            required: ["hostId", "coverage"],
+            additionalProperties: false,
+          },
+        },
+        targets: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              hostId: {
+                type: "string",
+              },
+              projectId: {
+                type: "string",
+              },
+              outcome: {
+                type: "string",
+                enum: [
+                  "ok",
+                  "ambiguous",
+                  "opted_out",
+                  "disconnected",
+                  "unsupported",
+                  "policy_rejected",
+                  "expired",
+                  "not_found",
+                  "rate_limited",
+                  "too_large",
+                  "conflict",
+                ],
+              },
+              detail: {
+                type: ["string", "null"],
+              },
+              retryAfterMs: {
+                type: ["number", "null"],
+              },
+              source: {
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["renderer", "pty"],
+                    description:
+                      "Which surface answered; `pty` is the reduced reading when this workspace has no open window.",
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              unavailableFields: {
+                anyOf: [
+                  {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      enum: [
+                        "armed",
+                        "lastCheckResult",
+                        "exitCode",
+                        "hasPty",
+                        "lastOutputChangeAt",
+                        "lastTypedInputAt",
+                      ],
+                    },
+                    description:
+                      "Fields this surface cannot observe: absent from every entry, unknown rather than false.",
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              complete: {
+                type: "boolean",
+                description:
+                  "Every terminal asked for, or every agent listed, is here; else absence proves nothing.",
+              },
+              omitted: {
+                type: "number",
+                description: "Its terminals left out of this answer, to fit it.",
+              },
+            },
+            required: [
+              "hostId",
+              "projectId",
+              "outcome",
+              "detail",
+              "retryAfterMs",
+              "source",
+              "unavailableFields",
+              "complete",
+              "omitted",
+            ],
+            additionalProperties: false,
+          },
+        },
+        terminals: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              agentId: {
+                type: ["string", "null"],
+              },
+              agentState: {
+                type: ["string", "null"],
+              },
+              waitingReason: {
+                type: "string",
+              },
+              lastTransitionAt: {
+                type: "number",
+              },
+              lastOutputChangeAt: {
+                description:
+                  "Epoch ms the screen last changed, ignoring spinner and timer redraws. Absent if unobserved. Not a hang verdict.",
+                type: "number",
+              },
+              lastTypedInputAt: {
+                description:
+                  "Epoch ms of last PTY input (keys, paste, broadcast, withdrawn sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.",
+                type: "number",
+              },
+              exitCode: {
+                description:
+                  "Set once the process exits, so absence means still running unless listed in `unavailableFields`. Null means killed by a signal with no numeric code.",
+                anyOf: [
+                  {
+                    type: "integer",
+                    minimum: -9007199254740991,
+                    maximum: 9007199254740991,
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              spawnedAt: {
+                description: "Spawn time, epoch ms.",
+                type: "number",
+              },
+              agentIncarnation: {
+                description:
+                  "Times a new agent took over this PTY after one exited, which `spawnedAt` misses. Absent is unobserved, not 0.",
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              lastCheckResult: {
+                description:
+                  "Best-effort parse of the agent's latest test, lint or build summary from its output, not an exit code. Absence means no summary seen, not no check and not a pass. Check its time for freshness.",
+                type: "object",
+                properties: {
+                  command: {
+                    type: ["string", "null"],
+                  },
+                  passed: {
+                    type: "boolean",
+                  },
+                  ranAt: {
+                    type: "number",
+                  },
+                  failureSummary: {
+                    type: ["string", "null"],
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["command", "passed", "ranAt", "failureSummary", "truncated"],
+                additionalProperties: false,
+              },
+              lastHandback: {
+                description:
+                  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
+                type: "object",
+                properties: {
+                  message: {
+                    description:
+                      "Rows rejoined, so lossy. Null for a bare marker. Read the last message for exact text.",
+                    type: ["string", "null"],
+                  },
+                  report: {
+                    type: "string",
+                    enum: ["done", "needs-you"],
+                  },
+                  observedAt: {
+                    type: "number",
+                  },
+                  submissionToken: {
+                    type: "string",
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["message", "observedAt", "truncated"],
+                additionalProperties: false,
+              },
+              recentOutput: {
+                type: ["string", "null"],
+              },
+              inputLine: {
+                type: "object",
+                properties: {
+                  state: {
+                    type: "string",
+                    enum: ["empty", "typed", "suggestion", "unknown"],
+                  },
+                  text: {
+                    type: "string",
+                    description: "Text after the prompt glyph; empty for `empty` and `unknown`.",
+                  },
+                  truncated: {
+                    description: "`text` was cut to its first 200 characters.",
+                    type: "boolean",
+                    const: true,
+                  },
+                },
+                required: ["state", "text"],
+                additionalProperties: false,
+                description:
+                  "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.",
+              },
+              recentOutputTruncated: {
+                description:
+                  "Older output was cut, by `lines` or the shared 50 KiB budget; the newest lines are kept.",
+                type: "boolean",
+              },
+              armed: {
+                description:
+                  "Whether fleet broadcast input reaches this terminal. Set for every found terminal unless in `unavailableFields`.",
+                type: "boolean",
+              },
+              hasPty: {
+                description:
+                  "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface.",
+                type: "boolean",
+              },
+              error: {
+                description:
+                  "Set when the terminal was not found, and on every resolved entry when a batched fetch fails; then the status fields are still set and only that fetch's field is missing. Never fails the call.",
+                type: "string",
+              },
+              hostId: {
+                type: "string",
+              },
+              projectId: {
+                type: "string",
+              },
+            },
+            required: ["terminalId", "agentId", "agentState", "hostId", "projectId"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["hosts", "targets", "terminals"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Read agents' status across hosts",
+  },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
       "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
     enabled: true,
     id: "host.watch",

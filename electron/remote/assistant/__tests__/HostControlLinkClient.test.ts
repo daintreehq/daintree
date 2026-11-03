@@ -458,6 +458,92 @@ describe("HostControlLinkClient.agentsOnOpenLink (#16188)", () => {
   });
 });
 
+describe("HostControlLinkClient.status (#16191)", () => {
+  const STATUS = {
+    helpSessionId: "help-1",
+    tier: "core" as const,
+    projects: [{ projectId: "p1" }, { projectId: "p2", terminalIds: ["t-2"] }],
+    includeOutput: null,
+  };
+  const DONE = { status: "done", projectId: "p1", result: null, complete: true, omitted: 0 };
+
+  it("proves the sender, then asks once for every project with what is left of the wait", async () => {
+    vi.useFakeTimers();
+    try {
+      // Proving the sender takes 2 s of the 5 s wait.
+      const { relay, calls } = client((method) =>
+        method === AssistantLinkMethod.AUTHENTICATE
+          ? new Promise((resolve) => setTimeout(() => resolve(null), 2_000))
+          : { status: "done", projects: [DONE] }
+      );
+      const pending = relay.status("studio", STATUS, 5_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(pending).resolves.toEqual({ status: "done", projects: [DONE] });
+      expect(calls.map((call) => call.method)).toEqual([
+        AssistantLinkMethod.AUTHENTICATE,
+        AssistantLinkMethod.STATUS,
+      ]);
+      expect(calls[1]).toMatchObject({
+        payload: { ...STATUS, runMs: 3_000 },
+        timeoutMs: 3_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a project it can't parse as that project unreadable, keeping the rest", async () => {
+    const { relay } = client((method) =>
+      method === AssistantLinkMethod.STATUS
+        ? {
+            status: "done",
+            projects: [
+              DONE,
+              // A failure this Shell doesn't know, a status a newer host added, and a garbled read.
+              { status: "failed", projectId: "p2", reason: "a reason from later" },
+              { status: "postponed", projectId: "p3", until: 9 },
+              {
+                status: "done",
+                projectId: "p4",
+                result: { terminals: "everything", source: "pty", unavailableFields: [] },
+                complete: true,
+                omitted: 0,
+              },
+            ],
+          }
+        : null
+    );
+    await expect(relay.status("studio", STATUS, 5_000)).resolves.toEqual({
+      status: "done",
+      projects: [
+        DONE,
+        { status: "failed", projectId: "p2", reason: "unreadable" },
+        { status: "failed", projectId: "p3", reason: "unreadable" },
+        { status: "failed", projectId: "p4", reason: "unreadable" },
+      ],
+    });
+  });
+
+  it("names a host from before it unsupported, and an answer it can't read at all invalid", async () => {
+    const old = client((method) => {
+      if (method === AssistantLinkMethod.STATUS) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return null;
+    });
+    await expect(old.relay.status("studio", STATUS, 5_000)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+
+    const garbled = client((method) =>
+      method === AssistantLinkMethod.STATUS ? { status: "done", projects: "everything" } : null
+    );
+    await expect(garbled.relay.status("studio", STATUS, 5_000)).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+  });
+});
+
 describe("HostControlLinkClient relay notices (#13500)", () => {
   type Receiver = RelayNoticeReceiver;
 

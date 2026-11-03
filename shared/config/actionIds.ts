@@ -595,6 +595,7 @@ export const BUILT_IN_ACTION_IDS = [
   "host.settings",
   "host.watch",
   "host.bringBack",
+  "host.status",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",
@@ -721,6 +722,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "host.settings",
   "host.watch",
   "host.bringBack",
+  "host.status",
   // Replays the user's last action as a keybinding, which would carry a plugin
   // past every other entry in this list (#13494).
   "action.repeatLast",

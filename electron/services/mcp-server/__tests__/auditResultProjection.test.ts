@@ -734,3 +734,70 @@ describe("host.bringBack audit (#16170)", () => {
     ).toMatchObject({ status: null, wake: null });
   });
 });
+
+describe("host.status audit (#16191)", () => {
+  it("records which projects were read and how each went, never a screen, handback or check", () => {
+    const result = projectAuditResult("host.status", {
+      hosts: [{ hostId: "studio-01", coverage: "ok" }],
+      targets: [
+        {
+          hostId: "studio-01",
+          projectId: "a3f9c2",
+          outcome: "ok",
+          detail: "DETAIL-SENTINEL",
+          retryAfterMs: null,
+          source: "pty",
+          unavailableFields: [],
+          complete: true,
+          omitted: 2,
+        },
+        { hostId: "studio-01", projectId: "PROJECT SENTINEL with words", outcome: "WEIRD" },
+      ],
+      terminals: [
+        {
+          terminalId: "t-1",
+          agentId: "claude",
+          agentState: "waiting",
+          recentOutput: "SCREEN-SENTINEL",
+          lastHandback: { message: "HANDBACK-SENTINEL", observedAt: 1, truncated: false },
+          lastCheckResult: {
+            command: "COMMAND-SENTINEL",
+            passed: false,
+            ranAt: 1,
+            failureSummary: "CHECK-SENTINEL",
+            truncated: false,
+          },
+          error: "ERROR-SENTINEL",
+          hostId: "studio-01",
+          projectId: "a3f9c2",
+        },
+      ],
+    });
+    expect(result).toEqual({
+      hosts: [{ hostId: "studio-01", coverage: "ok" }],
+      targets: [
+        { hostId: "studio-01", projectId: "a3f9c2", outcome: "ok", omitted: 2 },
+        { hostId: "studio-01", projectId: null, outcome: null, omitted: null },
+      ],
+      terminalCount: 1,
+    });
+    const args = projectAuditArgs("host.status", {
+      targets: [
+        { hostId: "studio-01", projectId: "a3f9c2", terminalIds: ["ID-SENTINEL", "t-2"] },
+        { hostId: "mini", projectId: "b4" },
+      ],
+      includeOutput: { lines: 5 },
+      note: "ARG-SENTINEL",
+    });
+    expect(args).toEqual({
+      targets: [
+        { hostId: "studio-01", projectId: "a3f9c2", terminalCount: 2 },
+        { hostId: "mini", projectId: "b4", terminalCount: null },
+      ],
+      includeOutput: true,
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.status", "nope")).toEqual({ status: "unrecognized" });
+  });
+});

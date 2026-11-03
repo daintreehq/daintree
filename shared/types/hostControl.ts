@@ -7,6 +7,7 @@ import {
 } from "./hostSettings.js";
 import { HostThrowawayCallSchema } from "./hostThrowaway.js";
 import { HostBringBackAnswerSchema } from "./hostWake.js";
+import { TerminalStatusEntrySchema, TerminalStatusResultSchema } from "./terminalStatusSchemas.js";
 
 /**
  * This Shell's reach into its Remote Hosts for its own assistants (#13493,
@@ -71,6 +72,15 @@ export const HOST_WATCH_TOOL = "host.watch";
  */
 export const HOST_BRING_BACK_TOOL = "host.bringBack";
 
+/**
+ * `terminal.getStatus` for terminals in many projects on many hosts, in one
+ * answer (#16191). Each project is read as `host.call` would read it there,
+ * through the same gates, and every host is read at once. Screen text and
+ * handback messages are redacted before they leave the machine they were read
+ * on. Directory data stays without text: this is a read the caller asks for.
+ */
+export const HOST_STATUS_TOOL = "host.status";
+
 export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
@@ -78,6 +88,7 @@ export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
   HOST_BRING_BACK_TOOL,
+  HOST_STATUS_TOOL,
 ]);
 
 /** Most projects `host.list` names for one host in one answer: a page. */
@@ -752,6 +763,119 @@ export const HostBringBackResultSchema = z.object({
 });
 export type HostBringBackResult = z.infer<typeof HostBringBackResultSchema>;
 
+/** Most projects one `host.status` reads, across every host. */
+export const HOST_STATUS_TARGETS_MAX = 64;
+/** Most terminals one project's read names: `terminal.getStatus`'s own bound. */
+export const HOST_STATUS_PROJECT_TERMINALS_MAX = 256;
+/** Most terminals one `host.status` answer carries; the rest are counted in their target's `omitted`. */
+export const HOST_STATUS_TERMINALS_MAX = 256;
+/** Lines of output per terminal by default: fewer than one project's read, since many share the answer. */
+export const HOST_STATUS_DEFAULT_LINES = 10;
+export const HOST_STATUS_MAX_LINES = 50;
+/**
+ * Most bytes the hosts and projects one `host.status` names may take
+ * together, as its answer's JSON writes them. Each is echoed back with its outcome, so this keeps every
+ * target's answer inside one MCP result whatever its terminals take; 64 real
+ * project ids and host ids use well under it.
+ */
+export const HOST_STATUS_TARGET_ID_BYTES_MAX = 8 * 1024;
+
+const utf8 = new TextEncoder();
+/** What a string takes in the answer's JSON, escapes included, quotes not. */
+const jsonBytes = (text: string): number => utf8.encode(JSON.stringify(text)).length - 2;
+
+const HostStatusTargetSchema = z.object({
+  hostId: hostIdSchema,
+  projectId: idSchema.describe("A projectId from the host list."),
+  terminalIds: z
+    .array(idSchema)
+    .min(1)
+    .max(HOST_STATUS_PROJECT_TERMINALS_MAX)
+    .optional()
+    .describe("1-256 terminals in that project. Omit for every agent it lists."),
+});
+
+export const HostStatusArgsSchema = z.object({
+  targets: z
+    .array(HostStatusTargetSchema)
+    .min(1)
+    .max(HOST_STATUS_TARGETS_MAX)
+    // One read per project: a second target for it would be read twice.
+    .refine(
+      (targets) =>
+        new Set(targets.map(({ hostId, projectId }) => `${hostId}\u0000${projectId}`)).size ===
+        targets.length
+    )
+    .refine(
+      (targets) =>
+        targets.reduce(
+          (sum, { hostId, projectId }) => sum + jsonBytes(hostId) + jsonBytes(projectId),
+          0
+        ) <= HOST_STATUS_TARGET_ID_BYTES_MAX
+    )
+    .describe("1-64 projects, each named once, on any hosts."),
+  includeOutput: z
+    .union([
+      z.boolean(),
+      z.object({
+        lines: z
+          .number()
+          .int()
+          .min(1)
+          .max(HOST_STATUS_MAX_LINES)
+          .default(HOST_STATUS_DEFAULT_LINES)
+          .describe("Trailing lines per terminal (max 50, default 10)."),
+        stripAnsi: z.boolean().default(true).describe("Strip ANSI (default true)."),
+      }),
+    ])
+    .optional()
+    .describe(
+      "`true` or options: adds `recentOutput`, `lastOutputChangeAt` and `lastTypedInputAt`. Tails share one 50 KiB answer."
+    ),
+});
+export type HostStatusArgs = z.infer<typeof HostStatusArgsSchema>;
+
+/**
+ * What a host's read covered: `ok`, it answered; `unreachable`, no link, no
+ * answer in time, or reading it isn't allowed now; `unsupported`, it runs a
+ * Daintree that can't be read this way. Never `stale`: nothing read is kept.
+ */
+export const HOST_STATUS_COVERAGE = ["ok", "unreachable", "unsupported"] as const;
+export type HostStatusCoverage = (typeof HOST_STATUS_COVERAGE)[number];
+
+const statusShape = TerminalStatusResultSchema.shape;
+
+export const HostStatusTargetResultSchema = z.object({
+  hostId: z.string(),
+  projectId: z.string(),
+  ...outcomeFields,
+  source: statusShape.source.nullable(),
+  unavailableFields: statusShape.unavailableFields.nullable(),
+  complete: z
+    .boolean()
+    .describe(
+      "Every terminal asked for, or every agent listed, is here; else absence proves nothing."
+    ),
+  omitted: z.number().describe("Its terminals left out of this answer, to fit it."),
+});
+export type HostStatusTargetResult = z.infer<typeof HostStatusTargetResultSchema>;
+
+/** An entry as `terminal.getStatus` reads it there; never a `submission`, since no token is asked after. */
+export const HostStatusTerminalSchema = TerminalStatusEntrySchema.omit({ submission: true }).extend(
+  {
+    hostId: z.string(),
+    projectId: z.string(),
+  }
+);
+export type HostStatusTerminal = z.infer<typeof HostStatusTerminalSchema>;
+
+export const HostStatusResultSchema = z.object({
+  hosts: z.array(z.object({ hostId: z.string(), coverage: z.enum(HOST_STATUS_COVERAGE) })),
+  targets: z.array(HostStatusTargetResultSchema),
+  terminals: z.array(HostStatusTerminalSchema),
+});
+export type HostStatusResult = z.infer<typeof HostStatusResultSchema>;
+
 /** Why a host tool refused outright: the caller isn't this machine's assistant, or its arguments don't parse. */
 export type HostControlRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
@@ -761,7 +885,8 @@ export type HostControlToolResult =
   | HostEnsureProjectResult
   | HostSettingsResult
   | HostWatchResult
-  | HostBringBackResult;
+  | HostBringBackResult
+  | HostStatusResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

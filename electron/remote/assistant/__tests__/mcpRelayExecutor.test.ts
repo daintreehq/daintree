@@ -199,3 +199,47 @@ describe("createMcpRelayExecutor timing a call from when it arrived (#15699)", (
     expect(timeouts).toEqual([]);
   });
 });
+
+describe("createMcpRelayExecutor reads (#16191)", () => {
+  let executor: McpRelayExecutor | undefined;
+
+  afterEach(() => executor?.dispose());
+
+  it("admits a read as a call is admitted, runs it each time, and refuses one that would arm a notice", async () => {
+    let consent = true;
+    const calls: Array<{ tool: string; callId: string }> = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => consent,
+      hasProject: async (projectId) => projectId === "proj-2",
+      openSession: async () => ({
+        isOpen: () => true,
+        callTool: async (tool, _args, { callId }) => {
+          calls.push({ tool, callId });
+          return ANSWER;
+        },
+        close: () => {},
+      }),
+    });
+    const read = { tool: "terminal.getStatus", args: { terminalIds: ["t-1"] }, runMs: 5_000 };
+
+    await expect(executor.read(SPEC, read)).resolves.toMatchObject({ status: "done" });
+    await expect(executor.read(SPEC, read)).resolves.toMatchObject({ status: "done" });
+    // No record to answer a resend from: each read runs, under its own id.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.callId).not.toBe(calls[1]!.callId);
+
+    await expect(executor.read({ ...SPEC, projectId: "proj-9" }, read)).resolves.toEqual({
+      status: "refused",
+      reason: "no-project",
+    });
+    await expect(
+      executor.read(SPEC, { ...read, args: { ...read.args, notify: true } })
+    ).resolves.toMatchObject({ status: "done", result: { isError: true } });
+    consent = false;
+    await expect(executor.read(SPEC, read)).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    expect(calls).toHaveLength(2);
+  });
+});

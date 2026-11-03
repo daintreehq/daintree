@@ -584,12 +584,14 @@ describe("global assistant prompts (#14546)", () => {
     ["global/AGENTS.md", readFileSync(path.join(root, "assistant/global/AGENTS.md"), "utf8")],
   ];
 
-  it.each(GLOBAL)("%s carries the routing guidance and its four tools", (_name, body) => {
+  it.each(GLOBAL)("%s carries the routing guidance and its six tools", (_name, body) => {
     for (const tool of [
       "host.list",
       "host.call",
+      "host.status",
       "host.settings",
       "host.watch",
+      "host.bringBack",
       "actions.search",
     ]) {
       expect(body).toContain(tool);

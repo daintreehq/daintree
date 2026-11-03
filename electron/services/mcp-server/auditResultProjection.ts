@@ -1,6 +1,7 @@
 import {
   HOST_CONTROL_OUTCOMES,
   HOST_ENSURE_ACCEPTABLE,
+  HOST_STATUS_COVERAGE,
   HOST_WATCH_DELIVERIES,
   HOST_WATCH_LOST_REASONS,
   HOST_WATCH_STATUSES,
@@ -140,6 +141,43 @@ const HOST_WAKE_RESULT_SET: ReadonlySet<string> = new Set(HOST_WAKE_RESULTS);
 
 function auditHostId(value: unknown): string | null {
   return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
+}
+
+/** A project id is a hash or a UUID: one word-shaped token, never a sentence. */
+const PROJECT_ID_PATTERN = /^[\w.-]{1,128}$/;
+const HOST_STATUS_COVERAGE_SET: ReadonlySet<string> = new Set(HOST_STATUS_COVERAGE);
+
+function auditProjectId(value: unknown): string | null {
+  return typeof value === "string" && PROJECT_ID_PATTERN.test(value) ? value : null;
+}
+
+/** Which projects were read and how each went, and how many terminals came back. */
+function projectHostStatus(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null) return { status: "unrecognized" };
+  return {
+    hosts: Array.isArray(record.hosts)
+      ? record.hosts.map((entry) => {
+          const host = asRecord(entry);
+          return {
+            hostId: auditHostId(host?.hostId),
+            coverage: fromSet(host?.coverage, HOST_STATUS_COVERAGE_SET),
+          };
+        })
+      : null,
+    targets: Array.isArray(record.targets)
+      ? record.targets.map((entry) => {
+          const target = asRecord(entry);
+          return {
+            hostId: auditHostId(target?.hostId),
+            projectId: auditProjectId(target?.projectId),
+            outcome: fromSet(target?.outcome, HOST_OUTCOMES),
+            omitted: finiteNumber(target?.omitted),
+          };
+        })
+      : null,
+    terminalCount: Array.isArray(record.terminals) ? record.terminals.length : null,
+  };
 }
 
 function fromSet(value: unknown, allowed: ReadonlySet<string>): string | null {
@@ -329,6 +367,8 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  // Never a screen, a handback or a check's words (#16191): outcomes and counts.
+  ["host.status", projectHostStatus],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -381,6 +421,30 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
     },
   ],
   ["host.bringBack", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
+  [
+    "host.status",
+    // The projects named and how many terminals in each, and whether output was asked for.
+    (args) => {
+      const record = asRecord(args);
+      return {
+        targets: Array.isArray(record?.targets)
+          ? record.targets.map((entry) => {
+              const target = asRecord(entry);
+              return {
+                hostId: auditHostId(target?.hostId),
+                projectId: auditProjectId(target?.projectId),
+                terminalCount: Array.isArray(target?.terminalIds)
+                  ? target.terminalIds.length
+                  : null,
+              };
+            })
+          : null,
+        includeOutput:
+          record?.includeOutput === true ||
+          (record?.includeOutput !== null && typeof record?.includeOutput === "object"),
+      };
+    },
+  ],
   [
     "host.list",
     // Which host and whether it searched or paged, never the words searched for.
