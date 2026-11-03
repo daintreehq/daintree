@@ -384,7 +384,9 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     submittedText: string,
     publish: SubmissionCapturePublish
   ): boolean {
-    if (this.inactive()) return false;
+    // With its `create` dropped there is no session to start in, and the start
+    // would be dropped with nothing ever answering it.
+    if (this.inactive() || this.sessionCreatePending) return false;
     // The worker orders messages per terminal, so with the hold posted first
     // the start lands behind every byte fed before the write.
     if (!this.flushHeldFeed()) return false;
@@ -405,10 +407,12 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   closeSubmissionCapture(): void {
     if (this.captures.size === 0 || this.inactive()) return;
     if (!this.flushHeldFeed()) return this.settleCaptures("lost");
-    this.pool.post(this.spec.terminalId, {
+    const sent = this.pool.post(this.spec.terminalId, {
       type: "submission-capture-close",
       terminalId: this.spec.terminalId,
     });
+    // Unclosed, the capture would take the next submission's output as its own.
+    if (!sent) this.settleCaptures("lost");
   }
 
   /** End every capture on what it last published: the worker will send no more for them. */
@@ -716,6 +720,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   handleDetached(): void {
     if (this.released) return;
     this.detached = true;
+    this.settleCaptures("lost");
     this.stopProcessStatePush();
     // No worker to flush a hold into — drop it and zero the ledger.
     this.heldFeed = null;

@@ -34,13 +34,21 @@ describe("SubmissionOutputLedger", () => {
     ledger.dispose();
   });
 
-  it("cuts redacted text that grew past the byte cap and flags it", () => {
+  it("ends a capture whose redacted text outgrew the byte cap, keeping its start", () => {
     const ledger = new SubmissionOutputLedger();
     const id = ledger.begin("tok");
-    ledger.publish(id, capturing("é".repeat(SUBMISSION_OUTPUT_MAX_BYTES)));
+    // Short enough raw, past the cap once each value becomes a longer marker.
+    const raw = `first line\n${Array.from({ length: 1100 }, () => "password: abc").join("\n")}`;
+    expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(SUBMISSION_OUTPUT_MAX_BYTES);
+    ledger.publish(id, capturing(raw));
+
     const output = ledger.read("tok")!;
+    expect(output.text.startsWith("first line\npassword: [redacted]")).toBe(true);
+    expect(output.text).not.toContain("abc");
     expect(Buffer.byteLength(output.text, "utf8")).toBeLessThanOrEqual(SUBMISSION_OUTPUT_MAX_BYTES);
-    expect(output.truncated).toBe(true);
+    expect(output).toMatchObject({ truncated: true, state: "closed" });
+    ledger.publish(id, capturing("later"));
+    expect(ledger.read("tok")?.text.startsWith("first line")).toBe(true);
     ledger.dispose();
   });
 
@@ -53,6 +61,8 @@ describe("SubmissionOutputLedger", () => {
     vi.advanceTimersByTime(SUBMISSION_OUTPUT_RETENTION_MS - 1);
     expect(ledger.read("tok")?.text).toBe("answer");
     vi.advanceTimersByTime(1);
+    // Let go of without a read: the timer, not the next lookup, drops it.
+    expect((ledger as unknown as { entries: Map<string, unknown> }).entries.size).toBe(0);
     expect(ledger.read("tok")).toBeUndefined();
     // Gone from memory, so a publish for it lands nowhere.
     ledger.publish(id, capturing("again"));
@@ -80,12 +90,27 @@ describe("SubmissionOutputLedger", () => {
     ledger.dispose();
   });
 
-  it("settles open captures on what they last published", () => {
+  it("settles open captures on what they last published, in the state given, and leaves ended ones", () => {
     const ledger = new SubmissionOutputLedger();
-    const id = ledger.begin("tok");
-    ledger.publish(id, capturing("partial"));
-    ledger.settleOpen("closed");
-    expect(ledger.read("tok")).toEqual({ text: "partial", truncated: false, state: "closed" });
+    const open = ledger.begin("open");
+    const ended = ledger.begin("ended");
+    ledger.publish(open, capturing("partial"));
+    ledger.publish(ended, { text: "done", truncated: false, state: "closed" });
+    ledger.settleOpen("lost");
+    expect(ledger.read("open")).toEqual({ text: "partial", truncated: false, state: "lost" });
+    expect(ledger.read("ended")?.state).toBe("closed");
     ledger.dispose();
+  });
+
+  it("never reuses a capture id across ledgers", () => {
+    const first = new SubmissionOutputLedger();
+    const second = new SubmissionOutputLedger();
+    const a = first.begin("tok");
+    const b = second.begin("tok");
+    expect(b).not.toBe(a);
+    second.publish(a, capturing("from the other terminal"));
+    expect(second.read("tok")?.text).toBe("");
+    first.dispose();
+    second.dispose();
   });
 });

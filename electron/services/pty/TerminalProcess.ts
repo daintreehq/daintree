@@ -2174,6 +2174,10 @@ export class TerminalProcess {
     this.ptyDataDisposable = dataHandoff ? dataHandoff.takeOver(onData) : ptyProcess.onData(onData);
 
     ptyProcess.onExit(({ exitCode, signal }) => {
+      // Ahead of the exit's final snapshot, which the worker answers after
+      // this, so a capture ends on the last frame whether or not the mirror
+      // is kept for a preserved snapshot.
+      this.analysis.closeSubmissionCapture();
       this.exitHandler.handleExit(ptyProcess, exitCode, signal);
     });
   }

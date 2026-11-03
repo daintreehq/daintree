@@ -14,7 +14,7 @@ import { ActivityMonitor, type ProcessStateValidator } from "../../ActivityMonit
 import { buildActivityMonitorOptions, buildPatternConfig } from "../terminalActivityPatterns.js";
 import { installHeadlessResponder } from "../headlessResponder.js";
 import { Osc94Parser } from "../Osc94Parser.js";
-import { SubmissionCaptureHost } from "../SubmissionOutputCapture.js";
+import { ParseBarrier, SubmissionCaptureHost } from "../SubmissionOutputCapture.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
 import {
   mirrorNeedsResize,
@@ -113,6 +113,7 @@ export class AnalysisSession {
   private ackTimer: NodeJS.Timeout | null = null;
   private disposed = false;
   private readonly submissionCaptures: SubmissionCaptureHost;
+  private readonly parseBarrier = new ParseBarrier();
 
   constructor(spec: AnalysisCreateSpec, emit: Emit) {
     this.terminalId = spec.terminalId;
@@ -178,6 +179,7 @@ export class AnalysisSession {
       this.ensureResponder();
     }
 
+    this.parseBarrier.noteFed();
     this.headlessTerminal.write(data, () => {
       this.parserTail.feed(data);
       // xterm's onRender event fires before this callback and invalidates only
@@ -186,28 +188,30 @@ export class AnalysisSession {
       this.noteProcessed(data.length);
       this.noteAgentOutputActivity();
       this.submissionCaptures.sync();
+      this.parseBarrier.noteParsed();
       this.scheduleDigest();
     });
   }
 
   feedPrelude(data: string): void {
     if (this.disposed || !this.headlessTerminal) return;
+    this.parseBarrier.noteFed();
     this.headlessTerminal.write(data, () => {
       this.parserTail.feed(data);
       this.submissionCaptures.sync();
+      this.parseBarrier.noteParsed();
       this.scheduleDigest();
     });
   }
 
   /**
    * Start a submission's output capture (#16210) once everything fed before
-   * this message has parsed: the write callback fires after those writes and
-   * before any later one.
+   * this message has parsed, and before anything fed after it.
    */
   startSubmissionCapture(captureId: number, text: string): void {
     const terminal = this.headlessTerminal;
     if (this.disposed || !terminal) return;
-    terminal.write("", () => {
+    this.parseBarrier.after(() => {
       if (!this.disposed && this.headlessTerminal === terminal) {
         this.submissionCaptures.start(terminal, captureId, text);
       }
@@ -215,9 +219,8 @@ export class AnalysisSession {
   }
 
   closeSubmissionCapture(): void {
-    const terminal = this.headlessTerminal;
-    if (this.disposed || !terminal) return;
-    terminal.write("", () => {
+    if (this.disposed) return;
+    this.parseBarrier.after(() => {
       if (!this.disposed) this.submissionCaptures.close();
     });
   }
@@ -452,6 +455,7 @@ export class AnalysisSession {
     // frees this session while its backend stays registered).
     this.flushAck();
     this.submissionCaptures.dispose();
+    this.parseBarrier.reset();
     this.disposed = true;
     this.stopMonitor();
     if (this.agentOutputNoteTimer) {

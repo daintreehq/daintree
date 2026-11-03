@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Terminal } from "@xterm/headless";
-import { SubmissionOutputCapture, cutToBytes } from "../SubmissionOutputCapture.js";
+import {
+  ParseBarrier,
+  SUBMISSION_CAPTURE_PUBLISH_MS,
+  SubmissionCaptureHost,
+  SubmissionOutputCapture,
+  cutToBytes,
+} from "../SubmissionOutputCapture.js";
 import {
   SUBMISSION_OUTPUT_MAX_BYTES,
   SUBMISSION_OUTPUT_MAX_LINES,
@@ -46,7 +52,22 @@ async function insertHistory(
 
 afterEach(() => {
   for (const terminal of terminals.splice(0)) terminal.dispose();
+  vi.useRealTimers();
 });
+
+/** Codex on a resize: erase the screen, purge scrollback, then the transcript again. */
+async function replay(
+  terminal: Terminal,
+  transcript: string[],
+  capture: SubmissionOutputCapture
+): Promise<void> {
+  await write(terminal, "\x1b[2J\x1b[3J\x1b[H", capture);
+  await insertHistory(terminal, transcript, capture);
+}
+
+function rows(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`);
+}
 
 describe("SubmissionOutputCapture", () => {
   it("keeps a shell's output after the write and drops the rows that were already on screen", async () => {
@@ -264,5 +285,231 @@ describe("cutToBytes", () => {
     expect(cutToBytes("aé", 2)).toBe("a");
     expect(cutToBytes("aé", 3)).toBe("aé");
     expect(cutToBytes("😀b", 3)).toBe("");
+  });
+});
+
+describe("SubmissionOutputCapture after review (#16210)", () => {
+  it("keeps the latest match even when an older answer in the replay is longer than the cap", async () => {
+    const terminal = mirror(60, 10);
+    const question = "please list the permissions you still need";
+    const capture = new SubmissionOutputCapture(terminal, question);
+    await replay(
+      terminal,
+      [
+        `› ${question}`,
+        ...rows("• stale", SUBMISSION_OUTPUT_MAX_LINES + 50),
+        `› ${question}`,
+        "• the fresh answer",
+        ...rows("• more", 12),
+      ],
+      capture
+    );
+
+    const output = capture.snapshot();
+    expect(output.text.split("\n")[0]).toBe("• the fresh answer");
+    expect(output.text).not.toContain("stale");
+    expect(output.state).toBe("capturing");
+  });
+
+  it("neither drops nor repeats text when a column change reflows a wrapped line", async () => {
+    const terminal = mirror(20, 6);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    const long = "abcdefghij".repeat(4);
+    await write(terminal, `go\r\n${long}\r\n` + numbered("a", 8), capture);
+    terminal.resize(40, 6);
+    await write(terminal, numbered("b", 8), capture);
+    terminal.resize(15, 6);
+    await write(terminal, numbered("c", 8), capture);
+
+    const lines = capture.snapshot().text.split("\n");
+    expect(lines.slice(0, 2)).toEqual(["$ go", long]);
+    for (const prefix of ["a", "b", "c"]) {
+      for (let index = 1; index <= 8; index += 1) {
+        expect(lines.filter((line) => line === `${prefix} ${index}`)).toHaveLength(1);
+      }
+    }
+  });
+
+  it("does not take the normal screen's history when it starts on the alternate screen", async () => {
+    const terminal = mirror(40, 6);
+    await write(terminal, numbered("history", 30) + "$ vim\r\n\x1b[?1049h\x1b[Hediting");
+    const capture = new SubmissionOutputCapture(terminal, ":q");
+    await write(terminal, "\x1b[?1049l$ " + numbered("after", 12), capture);
+
+    const text = capture.snapshot().text;
+    expect(text).toContain("after 1");
+    expect(text).not.toContain("history");
+  });
+
+  it("ignores a scrollback purge on the alternate screen", async () => {
+    const terminal = mirror(40, 6);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "top");
+    await write(terminal, "top\r\n\x1b[?1049h\x1b[3J\x1b[?1049l" + numbered("out", 12), capture);
+
+    const output = capture.close();
+    expect(output.state).toBe("closed");
+    expect(output.text).toContain("out 12");
+  });
+
+  it("keeps output that scrolled off just before an app took the alternate screen", async () => {
+    const terminal = mirror(40, 6);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "run");
+    await write(terminal, "run\r\n" + numbered("answer", 12) + "\x1b[?1049h\x1b[Hpager", capture);
+
+    const output = capture.close();
+    expect(output.text).toContain("answer 1");
+    expect(output.text).toContain("pager");
+  });
+
+  it("lines a replay up after the pane grew taller and the erase took its marker", async () => {
+    const terminal = mirror(40, 8);
+    await insertHistory(terminal, ["• earlier reply"]);
+    const capture = new SubmissionOutputCapture(terminal, "what is left?");
+    const answer = rows("• the answer part", 12);
+    await insertHistory(terminal, ["› what is left?", ...answer], capture);
+
+    terminal.resize(40, 16);
+    await replay(
+      terminal,
+      ["• earlier reply", "› what is left?", ...answer, "• and then more"],
+      capture
+    );
+    await insertHistory(terminal, rows("• busy", 20), capture);
+
+    const output = capture.snapshot();
+    expect(output.state).toBe("capturing");
+    const lines = output.text.split("\n");
+    expect(lines.filter((line) => line === "• the answer part 1")).toHaveLength(1);
+    expect(lines).toContain("• and then more");
+    expect(output.text).not.toContain("earlier reply");
+  });
+
+  it("does not repeat a short captured start when a replay is anchored on the question", async () => {
+    const terminal = mirror(40, 6);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    await write(terminal, "go\r\nOK\r\n" + numbered("x", 6), capture);
+    await write(terminal, "\x1b[2J\x1b[3J\x1b[H$ go\r\nOK\r\n" + numbered("x", 6), capture);
+
+    const lines = capture.snapshot().text.split("\n");
+    expect(lines.filter((line) => line === "OK")).toHaveLength(1);
+  });
+
+  it("stops skipping on screen at the first line that is not from before the write", async () => {
+    const terminal = mirror(40, 8);
+    await write(terminal, "Done\r\n$ ");
+    const capture = new SubmissionOutputCapture(terminal, "next");
+    await write(terminal, "\x1b[2J\x1b[HNew answer\r\nDone\r\n", capture);
+
+    expect(capture.snapshot().text).toBe("New answer\nDone");
+  });
+
+  it("keeps the exact start of the output when the byte cap cuts it", async () => {
+    const terminal = mirror(100, 10);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    const line = "y".repeat(99);
+    const count = Math.ceil(SUBMISSION_OUTPUT_MAX_BYTES / 100) + 10;
+    let data = "go\r\n";
+    for (let index = 0; index < count; index += 1) data += `${line}\r\n`;
+    await write(terminal, data, capture);
+
+    const output = capture.snapshot();
+    const expected = cutToBytes(
+      ["$ go", ...Array<string>(count).fill(line)].join("\n"),
+      SUBMISSION_OUTPUT_MAX_BYTES
+    );
+    expect(output.text).toBe(expected);
+    expect(Buffer.byteLength(output.text, "utf8")).toBe(SUBMISSION_OUTPUT_MAX_BYTES);
+    expect(output).toMatchObject({ truncated: true, state: "closed" });
+  });
+});
+
+describe("SubmissionCaptureHost", () => {
+  it("publishes a growing capture at most once per interval, skips unchanged output, and ends it once", async () => {
+    vi.useFakeTimers();
+    const terminal = mirror();
+    const published: Array<{ id: number; text: string; state: string }> = [];
+    const host = new SubmissionCaptureHost((id, output) =>
+      published.push({ id, text: output.text, state: output.state })
+    );
+    terminal.write("$ ");
+    await vi.runAllTimersAsync();
+    host.start(terminal, 7, "ask");
+    expect(published).toEqual([{ id: 7, text: "$", state: "capturing" }]);
+
+    terminal.write("ask\r\none\r\n");
+    await vi.advanceTimersByTimeAsync(1);
+    host.sync();
+    host.sync();
+    expect(published).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(SUBMISSION_CAPTURE_PUBLISH_MS);
+    expect(published).toHaveLength(2);
+    expect(published[1]!.text).toBe("$ ask\none");
+
+    host.sync();
+    await vi.advanceTimersByTimeAsync(SUBMISSION_CAPTURE_PUBLISH_MS);
+    expect(published).toHaveLength(2);
+
+    host.start(terminal, 8, "next");
+    expect(published[2]).toEqual({ id: 7, text: "$ ask\none", state: "closed" });
+    expect(published[3]!.id).toBe(8);
+    host.dispose();
+    expect(published[4]).toMatchObject({ id: 8, state: "closed" });
+    host.dispose();
+    expect(published).toHaveLength(5);
+  });
+
+  it("publishes the final form as soon as the cap ends a capture", async () => {
+    const terminal = mirror();
+    const published: Array<{ id: number; state: string; truncated: boolean }> = [];
+    const host = new SubmissionCaptureHost((id, output) =>
+      published.push({ id, state: output.state, truncated: output.truncated })
+    );
+    host.start(terminal, 1, "go");
+    await write(terminal, numbered("row", SUBMISSION_OUTPUT_MAX_LINES + 20));
+    host.sync();
+    expect(published.at(-1)).toEqual({ id: 1, state: "closed", truncated: true });
+    host.dispose();
+    expect(published.filter((entry) => entry.state === "closed")).toHaveLength(1);
+  });
+});
+
+describe("ParseBarrier", () => {
+  it("runs work once every write fed before it has parsed, in order", () => {
+    const barrier = new ParseBarrier();
+    const ran: string[] = [];
+    barrier.after(() => ran.push("idle"));
+    barrier.noteFed();
+    barrier.noteFed();
+    barrier.after(() => ran.push("after two"));
+    barrier.noteFed();
+    barrier.after(() => ran.push("after three"));
+    barrier.noteParsed();
+    expect(ran).toEqual(["idle"]);
+    barrier.noteParsed();
+    expect(ran).toEqual(["idle", "after two"]);
+    barrier.noteParsed();
+    expect(ran).toEqual(["idle", "after two", "after three"]);
+  });
+
+  it("survives a resize that drains the mirror synchronously", async () => {
+    const terminal = mirror();
+    const barrier = new ParseBarrier();
+    const seen: string[] = [];
+    const feed = (data: string) => {
+      barrier.noteFed();
+      terminal.write(data, () => barrier.noteParsed());
+    };
+    feed("before ");
+    barrier.after(() => seen.push(terminal.buffer.active.getLine(0)!.translateToString(true)));
+    feed("after");
+    terminal.resize(41, 10);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(seen).toEqual(["before "]);
+    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe("before after");
   });
 });

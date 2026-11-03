@@ -19,12 +19,17 @@ vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
 
 vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 
+/** Pty writes and worker posts, in the order they happened. */
+let timeline: string[] = [];
+
 class FakeWorker implements WorkerLike {
   posted: HostToWorkerMessage[] = [];
   private listeners = new Map<string, Array<(arg: never) => void>>();
 
   postMessage(msg: unknown): void {
-    this.posted.push(msg as HostToWorkerMessage);
+    const message = msg as HostToWorkerMessage;
+    this.posted.push(message);
+    timeline.push(`post:${message.type}`);
   }
 
   on(event: string, cb: (arg: never) => void): void {
@@ -41,13 +46,16 @@ class FakeWorker implements WorkerLike {
 }
 
 let onPtyData: ((data: string) => void) | null = null;
+let onPtyExit: ((event: { exitCode: number; signal?: number }) => void) | null = null;
 
 function createMockPty(): IPty {
   const pty: Partial<IPty> = {
     pid: 123,
     cols: 40,
     rows: 10,
-    write: () => {},
+    write: (data: string) => {
+      timeline.push(`pty:${data}`);
+    },
     resize: () => {},
     kill: () => {},
     pause: () => {},
@@ -56,7 +64,10 @@ function createMockPty(): IPty {
       onPtyData = cb;
       return { dispose: () => {} };
     },
-    onExit: () => ({ dispose: () => {} }),
+    onExit: (cb: (event: { exitCode: number; signal?: number }) => void) => {
+      onPtyExit = cb;
+      return { dispose: () => {} };
+    },
   };
   return pty as IPty;
 }
@@ -112,6 +123,8 @@ stubProcessKillForFile(600);
 afterEach(() => {
   for (const terminal of terminals.splice(0)) terminal.dispose();
   onPtyData = null;
+  onPtyExit = null;
+  timeline = [];
 });
 
 describe("TerminalProcess submission output (#16210), in-thread mirror", () => {
@@ -182,8 +195,9 @@ describe("TerminalProcess submission output (#16210), worker mirror", () => {
     const start = startMessage(worker);
     expect(start).toMatchObject({ terminalId: "t1", text: "ask\n" });
     const startIndex = worker.posted.indexOf(start!);
-    const lastDataBefore = worker.posted.findLastIndex((msg) => msg.type === "data");
-    expect(lastDataBefore).toBeLessThan(startIndex);
+    const prompt = worker.posted.findIndex((msg) => msg.type === "data" && msg.data.includes("$ "));
+    expect(prompt).toBeGreaterThanOrEqual(0);
+    expect(prompt).toBeLessThan(startIndex);
 
     worker.emit({
       type: "submission-capture",
@@ -226,13 +240,35 @@ describe("TerminalProcess submission output (#16210), worker mirror", () => {
     expect(terminal.getSubmission("tok-1")?.output?.text).toBe("partial");
   });
 
-  it("asks the worker to close the capture before the next submission writes", async () => {
-    const { terminal, worker } = createWorkerTerminal();
+  it("asks the worker to close the capture before the next submission writes anything", async () => {
+    const { terminal } = createWorkerTerminal();
     await sendAndWait(terminal, "ask\n", "tok-1");
     await sendAndWait(terminal, "next\n");
-    const types = worker.posted.map((msg) => msg.type);
-    expect(types.indexOf("submission-capture-close")).toBeGreaterThan(
-      types.indexOf("submission-capture-start")
+    const start = timeline.indexOf("post:submission-capture-start");
+    const close = timeline.indexOf("post:submission-capture-close");
+    const nextBody = timeline.findIndex(
+      (event) => event.startsWith("pty:") && event.includes("next")
     );
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(close).toBeGreaterThan(start);
+    expect(nextBody).toBeGreaterThan(close);
+  });
+
+  it("closes the capture ahead of the exit's final snapshot and the slot's release", async () => {
+    const { terminal } = createWorkerTerminal();
+    await sendAndWait(terminal, "ask\n", "tok-1");
+    timeline = [];
+    onPtyExit!({ exitCode: 0 });
+    await vi.waitFor(() => expect(timeline).toContain("post:submission-capture-close"));
+    const close = timeline.indexOf("post:submission-capture-close");
+    const later = timeline.findIndex((event) => event === "post:request" || event === "post:free");
+    if (later !== -1) expect(close).toBeLessThan(later);
+  });
+
+  it("settles an open capture as lost when no worker is left to host the terminal", async () => {
+    const { terminal } = createWorkerTerminal();
+    await sendAndWait(terminal, "ask\n", "tok-1");
+    (terminal as unknown as { analysis: { handleDetached(): void } }).analysis.handleDetached();
+    expect(terminal.getSubmission("tok-1")?.output?.state).toBe("lost");
   });
 });

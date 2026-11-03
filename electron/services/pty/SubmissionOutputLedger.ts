@@ -7,6 +7,13 @@ import {
 import { redactSecrets } from "../redactSecrets.js";
 import { cutToBytes } from "./SubmissionOutputCapture.js";
 
+/**
+ * Capture ids, unique across every terminal in this process: a terminal
+ * replaced under the same id must not take a final its predecessor's worker
+ * session sends late.
+ */
+let nextCaptureId = 1;
+
 interface Entry {
   captureId: number;
   writtenAt: number;
@@ -27,13 +34,12 @@ interface Entry {
 export class SubmissionOutputLedger {
   private readonly entries = new Map<string, Entry>();
   private readonly tokensByCapture = new Map<number, string>();
-  private nextCaptureId = 1;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** Open an entry for a submission whose Enter was just written; returns its capture id. */
   begin(token: string, now = Date.now()): number {
     this.forget(token);
-    const captureId = this.nextCaptureId++;
+    const captureId = nextCaptureId++;
     this.entries.set(token, {
       captureId,
       writtenAt: now,
@@ -57,10 +63,13 @@ export class SubmissionOutputLedger {
     if (entry === undefined || entry.output.state !== "capturing") return;
     const redacted = redactSecrets(output.text);
     const text = cutToBytes(redacted, SUBMISSION_OUTPUT_MAX_BYTES);
+    // Redaction markers can outgrow the text they replace; reaching the cap
+    // that way ends the capture like reaching it any other way.
+    const cut = text.length < redacted.length;
     entry.output = {
       text,
-      truncated: output.truncated || text.length < redacted.length,
-      state: output.state,
+      truncated: output.truncated || cut,
+      state: cut && output.state === "capturing" ? "closed" : output.state,
     };
   }
 

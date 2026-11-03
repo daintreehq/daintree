@@ -14,6 +14,7 @@ import type { TerminalInfo } from "../types.js";
 import { installHeadlessResponder } from "../headlessResponder.js";
 import { headlessMirrorScheduler } from "../HeadlessMirrorScheduler.js";
 import {
+  ParseBarrier,
   SubmissionCaptureHost,
   type SubmissionCapturePublish,
 } from "../SubmissionOutputCapture.js";
@@ -153,6 +154,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
   /** Created by the first submission capture (#16210); a terminal never sent to pays nothing. */
   private submissionCaptures: SubmissionCaptureHost | undefined;
   private capturePublish: SubmissionCapturePublish | undefined;
+  private readonly parseBarrier = new ParseBarrier();
 
   constructor(private readonly deps: InThreadAnalysisDeps) {
     this.id = deps.terminalId;
@@ -236,6 +238,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
       // are still queued (scheduler hold + xterm's async parser both count —
       // the callback fires only after the chunk has actually parsed).
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      this.parseBarrier.noteFed();
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
         this.parserTail.feed(data);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
@@ -245,6 +248,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
         this.viewportSnapshotCache.invalidate();
         this.noteAgentOutputActivity();
         this.submissionCaptures?.sync();
+        this.parseBarrier.noteParsed();
         this.scheduleOutputProgressSample();
       });
     } else {
@@ -256,10 +260,12 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      this.parseBarrier.noteFed();
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
         this.parserTail.feed(prelude);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         this.submissionCaptures?.sync();
+        this.parseBarrier.noteParsed();
         this.scheduleOutputProgressSample();
       });
     }
@@ -512,7 +518,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     ));
     // Behind every slice still queued for this mirror, so the rows on screen
     // at the write are the ones the capture treats as already there.
-    headlessMirrorScheduler.flush(this.id, mirror, () => {
+    this.parseBarrier.after(() => {
       if (this.terminalInfo.headlessTerminal === mirror) {
         captures.start(mirror, captureId, submittedText);
       }
@@ -523,9 +529,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
   closeSubmissionCapture(): void {
     const captures = this.submissionCaptures;
     if (captures === undefined) return;
-    const mirror = this.terminalInfo.headlessTerminal;
-    if (!mirror) return captures.close();
-    headlessMirrorScheduler.flush(this.id, mirror, () => captures.close());
+    this.parseBarrier.after(() => captures.close());
   }
 
   release(): void {
@@ -533,6 +537,8 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     // Before the mirror goes, so the open capture keeps the rows on screen.
     this.submissionCaptures?.dispose();
     this.submissionCaptures = undefined;
+    // Queued parse callbacks are dropped with the mirror, so the count goes too.
+    this.parseBarrier.reset();
     this.agentOutputTemperature.reset();
     this.agentOutputContentSnapshot = undefined;
     this.viewportSnapshotCache.detach();
