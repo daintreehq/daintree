@@ -165,6 +165,17 @@ export const config: AgentConfig = {
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
   },
+  // Captured from 2.1.317 (#16189): the prompt is `❯` and a no-break space at
+  // column 0, framed by `─` rules. The generated suggestion and the static
+  // `Try "…"` placeholder are drawn by one renderer, so only the placeholder's
+  // fixed wording tells them apart.
+  inputSuggestion: {
+    label: "Claude Code",
+    style: "dim",
+    promptRowPattern: "^❯(?:\\s|$)",
+    borderPattern: "^─{3,}",
+    placeholderPatterns: ['^Try ".*"$'],
+  },
   resume: {
     kind: "session-id",
     args: (sessionId: string) => ["--resume", sessionId],

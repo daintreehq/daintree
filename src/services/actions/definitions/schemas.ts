@@ -2,6 +2,9 @@ import { z } from "zod";
 import { AwaitedReplySchema } from "@shared/types/replyWait";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 import {
+  INPUT_LINE_DESCRIPTION,
+  INPUT_LINE_TEXT_DESCRIPTION,
+  INPUT_LINE_TRUNCATED_DESCRIPTION,
   LAST_OUTPUT_CHANGE_AT_DESCRIPTION,
   LAST_TYPED_INPUT_AT_DESCRIPTION,
 } from "@shared/types/terminalStatus";
@@ -556,6 +559,15 @@ const TerminalHandbackSchema = z.object({
   truncated: z.boolean(),
 });
 
+/** What a terminal read saw in the agent's input box (#16189), on `getStatus` and `getOutput` alike. */
+export const TerminalInputLineSchema = z
+  .object({
+    state: z.enum(["empty", "typed", "suggestion", "unknown"]),
+    text: z.string().describe(INPUT_LINE_TEXT_DESCRIPTION),
+    truncated: z.literal(true).optional().describe(INPUT_LINE_TRUNCATED_DESCRIPTION),
+  })
+  .describe(INPUT_LINE_DESCRIPTION);
+
 export const TerminalStatusEntrySchema = z.object({
   terminalId: z.string(),
   agentId: z.string().nullable(),
@@ -595,6 +607,7 @@ export const TerminalStatusEntrySchema = z.object({
     ),
   lastHandback: TerminalHandbackSchema.optional().describe(LAST_HANDBACK_DESCRIPTION),
   recentOutput: z.string().nullable().optional(),
+  inputLine: TerminalInputLineSchema.optional(),
   recentOutputTruncated: z
     .boolean()
     .optional()

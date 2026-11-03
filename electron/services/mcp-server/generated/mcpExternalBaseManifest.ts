@@ -1478,6 +1478,28 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept.",
         },
+        inputLine: {
+          type: "object",
+          properties: {
+            state: {
+              type: "string",
+              enum: ["empty", "typed", "suggestion", "unknown"],
+            },
+            text: {
+              type: "string",
+              description: "Text after the prompt glyph; empty for `empty` and `unknown`.",
+            },
+            truncated: {
+              description: "`text` was cut to its first 200 characters.",
+              type: "boolean",
+              const: true,
+            },
+          },
+          required: ["state", "text"],
+          additionalProperties: false,
+          description:
+            "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.",
+        },
         error: {
           type: "string",
         },
@@ -1528,7 +1550,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         includeOutput: {
           description:
-            "`true` or options: adds `recentOutput` (last N lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed.",
+            "`true` or options: adds `recentOutput` (last N lines) and `inputLine`, plus `lastOutputChangeAt` and `lastTypedInputAt` when observed.",
           anyOf: [
             {
               type: "boolean",
@@ -1669,6 +1691,28 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               recentOutput: {
                 type: ["string", "null"],
+              },
+              inputLine: {
+                type: "object",
+                properties: {
+                  state: {
+                    type: "string",
+                    enum: ["empty", "typed", "suggestion", "unknown"],
+                  },
+                  text: {
+                    type: "string",
+                    description: "Text after the prompt glyph; empty for `empty` and `unknown`.",
+                  },
+                  truncated: {
+                    description: "`text` was cut to its first 200 characters.",
+                    type: "boolean",
+                    const: true,
+                  },
+                },
+                required: ["state", "text"],
+                additionalProperties: false,
+                description:
+                  "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.",
               },
               recentOutputTruncated: {
                 description:

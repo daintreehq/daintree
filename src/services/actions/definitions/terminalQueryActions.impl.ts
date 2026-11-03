@@ -3,7 +3,8 @@
 // every view registers at boot (#14273). Nothing here may import
 // terminalQueryActions.ts at runtime.
 import type { ActionContext } from "@shared/types/actions";
-import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
+import { readTailSnapshot } from "@shared/utils/artifactParser";
+import { captureTerminalTail } from "@shared/utils/terminalInputLine";
 import {
   boundTerminalStatusOutput,
   fitTerminalOutputResult,
@@ -160,18 +161,21 @@ export const terminalQueryActionRuns = {
     // Collapse blank padding BEFORE tailing so the last N lines are real
     // content, not the blank region bottom-padding TUIs (e.g. Codex) leave
     // below their composer (#10763). truncated/lineCount track normalized
-    // content, so trailing padding never reads as "output omitted".
-    const { content, lineCount, truncated } = tailCapturedOutput(
+    // content, so trailing padding never reads as "output omitted". The input
+    // box is read off the same screen (#16189).
+    const panel = usePanelStore.getState().panelsById[terminalId];
+    const { content, lineCount, truncated, inputLine } = captureTerminalTail(
       serializedState.data,
       effectiveMaxLines,
-      stripAnsi
+      stripAnsi,
+      panel && isPtyPanel(panel) ? (panel.detectedAgentId ?? panel.launchAgentId) : undefined
     );
 
     // Fit under the response cap here, keeping the newest lines (#12450).
     // Left to the transport, an oversized tail is cut from the end — the
     // newest lines — into JSON that will not parse, and reported as an error.
     return fitTerminalOutputResult(
-      { terminalId, content, lineCount, truncated },
+      { terminalId, content, lineCount, truncated, inputLine },
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
   },
@@ -391,8 +395,14 @@ export const terminalQueryActionRuns = {
             // Normalize before tailing (#10763) — see terminal.getOutput.
             // Without this, a bottom-padding TUI's blank rows fill the small
             // last-N window and recentOutput reads as empty even when idle.
-            const tail = tailCapturedOutput(serialized.data, effectiveLines, stripAnsi);
+            const tail = captureTerminalTail(
+              serialized.data,
+              effectiveLines,
+              stripAnsi,
+              entry.agentId
+            );
             entry.recentOutput = tail.content;
+            entry.inputLine = tail.inputLine;
             if (tail.truncated) entry.recentOutputTruncated = true;
           }
         }

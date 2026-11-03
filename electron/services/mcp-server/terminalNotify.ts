@@ -2145,10 +2145,15 @@ export class TerminalNotifyService {
     if (client?.getSerializedStateAsync === undefined) return;
     try {
       const getState = client.getSerializedStateAsync.bind(client);
-      const snapshot = await readTailSnapshot(
-        (options) => getState(entry.notice.terminalId, options),
-        REPLY_SEARCH_ROWS
-      );
+      // The record names the agent whose suggested prompt is marked in the
+      // quote (#16189), so a suggestion can't pass for the owner's words.
+      const [snapshot, info] = await Promise.all([
+        readTailSnapshot(
+          (options) => getState(entry.notice.terminalId, options),
+          REPLY_SEARCH_ROWS
+        ),
+        client.getTerminalAsync(entry.notice.terminalId).catch(() => null),
+      ]);
       if (snapshot === null) return;
       const observed = entry.observed;
       const endAt: ObservedMarker | boolean = !endAtHandback
@@ -2159,7 +2164,13 @@ export class TerminalNotifyService {
               message: observed.message,
               ...(entry.observedCode !== undefined ? { code: entry.observedCode } : {}),
             };
-      const { reply, reachedHandback } = extractReply(snapshot.data, lines, endAt);
+      const { reply, reachedHandback } = extractReply(
+        snapshot.data,
+        lines,
+        endAt,
+        undefined,
+        info?.detectedAgentId ?? info?.launchAgentId
+      );
       if (reply === null) return;
       // A read that no longer finds the marker (scrolled off, or another turn
       // on screen) keeps the quote that did, flagged when it ends at a capture

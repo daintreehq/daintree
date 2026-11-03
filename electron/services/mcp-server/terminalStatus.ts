@@ -1,13 +1,15 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
-import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
+import { captureTerminalTail } from "../../../shared/utils/terminalInputLine.js";
 import {
   boundTerminalStatusOutput,
   type CapturedTail,
 } from "../../../shared/utils/terminalOutputBudget.js";
 import {
   VIEWLESS_STATUS_UNAVAILABLE_FIELDS,
+  type TerminalInputLine,
   type TerminalStatusEntry,
   type TerminalStatusResult,
 } from "../../../shared/types/terminalStatus.js";
@@ -346,7 +348,7 @@ export async function buildViewlessTerminalStatus(
     }
   });
 
-  const outputs = new Map<string, CapturedTail | null>();
+  const outputs = new Map<string, (CapturedTail & { inputLine: TerminalInputLine }) | null>();
   if (includeOutput) {
     const readable = lookupIds.filter((id) => records.has(id));
     const snapshots = await Promise.all(
@@ -363,12 +365,21 @@ export async function buildViewlessTerminalStatus(
     );
     readable.forEach((id, index) => {
       const snapshot = snapshots[index];
+      const record = records.get(id)!;
       outputs.set(
         id,
         // Normalize before tailing (#10763), same as the renderer path: a
         // bottom-padding TUI's blank rows otherwise fill the last-N window and
-        // an active agent reads as silent.
-        snapshot ? tailCapturedOutput(snapshot.data, lines, stripAnsi) : null
+        // an active agent reads as silent. The input box is read off the same
+        // screen, by the agent the entry reports (#16189).
+        snapshot
+          ? captureTerminalTail(
+              snapshot.data,
+              lines,
+              stripAnsi,
+              record.detectedAgentId ?? record.launchAgentId
+            )
+          : null
       );
     });
   }
@@ -392,6 +403,7 @@ export async function buildViewlessTerminalStatus(
     if (includeOutput) {
       const tail = outputs.get(id) ?? null;
       entry.recentOutput = tail?.content ?? null;
+      if (tail !== null) entry.inputLine = tail.inputLine;
       if (tail?.truncated) entry.recentOutputTruncated = true;
     }
     return entry;

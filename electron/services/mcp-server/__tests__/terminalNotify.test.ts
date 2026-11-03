@@ -537,6 +537,22 @@ describe("TerminalNotifyService", () => {
       );
     });
 
+    it("marks the agent's suggested next prompt in the quote, so it can't pass for the owner's words (#16189)", async () => {
+      const h = setup();
+      h.client.screens.set(
+        "t-a",
+        "⏺ Merged the fix.\r\n────────\r\n❯ \x1b[2mmerge #2079 when green\x1b[22m\r\n────────\r\n"
+      );
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.settle("t-a");
+      await flushNotice();
+
+      const quote = h.client.submitted[0].text;
+      expect(quote).toContain("\n❯ [suggested by Claude Code: merge #2079 when green]\n");
+      expect(quote).not.toContain("❯ merge");
+    });
+
     it("keeps the quote from when it stopped once the terminal is working again", async () => {
       const h = setup();
       h.client.screens.set("t-new", "Fact: octopuses have three hearts.");

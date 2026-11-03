@@ -3,7 +3,11 @@ import {
   PLUGIN_TERMINAL_SCREEN_MAX_BYTES,
   PLUGIN_TERMINAL_SCREEN_RATE_PER_SECOND,
 } from "../../../shared/config/pluginBudgets.js";
-import { stripAnsiCodes, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import {
+  dropInputSuggestion,
+  inputSuggestionRuleFor,
+} from "../../../shared/utils/terminalInputLine.js";
 import type { PluginTerminalScreenResult } from "../../../shared/types/plugin.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -37,8 +41,9 @@ export async function readPluginTerminalScreen(
    */
   history: { scrollbackRows: number; maxBytes: number } | null = null,
   /**
-   * `dropGhostInput`: drop the dim suggestion an agent draws in its empty input
-   * box; see `dropGhostInput`. `withCols`: also say how wide the terminal is,
+   * `dropGhostInput`: drop the suggestion an agent draws in its empty input
+   * box, by the agent's own rule when it declares one; see
+   * `dropInputSuggestion`. `withCols`: also say how wide the terminal is,
    * which Canopy needs to put rows the agent wrapped back together. Plugins
    * never ask for it.
    */
@@ -78,7 +83,12 @@ export async function readPluginTerminalScreen(
   if (!snapshot) return { status: "unavailable" };
   const screen = activeScreenData(snapshot.data);
   const tail = tailCapturedOutput(
-    options.dropGhostInput ? dropGhostInput(screen) : screen,
+    options.dropGhostInput
+      ? dropInputSuggestion(
+          screen,
+          inputSuggestionRuleFor(after.detectedAgentId ?? after.launchAgentId)
+        )
+      : screen,
     lines,
     true
   );
@@ -105,69 +115,6 @@ function isReadable(record: ScreenReadRecord, scopeProjectId: string | null): bo
 }
 
 const ALT_SCREEN_ENTER = "\x1b[?1049h";
-
-// eslint-disable-next-line no-control-regex -- matches the serializer's own SGR sequences
-const SGR = /\x1b\[([0-9;:]*)m/g;
-const PROMPT_LINE = /^\s*(?:❯|›|>)\s/;
-
-/**
- * Remove the dim text in the agent's input box: the suggestion it offers in an
- * empty prompt (Claude Code's `❯ commit this`), which plain text cannot tell
- * from words the user typed. Read as a draft or an echoed request, it put
- * replies in the user's mouth. Only the last row that opens with a prompt
- * glyph is the input box; echoes of earlier messages above it are left alone,
- * whatever their styling, and whatever the user really typed is drawn at full
- * intensity.
- */
-export function dropGhostInput(serialized: string): string {
-  const lines = serialized.split("\n");
-  let input = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (PROMPT_LINE.test(stripAnsiCodes(lines[i]!))) {
-      input = i;
-      break;
-    }
-  }
-  if (input === -1) return serialized;
-  // SGR state carries across rows, so it is walked from the top.
-  let dim = false;
-  for (let i = 0; i < input; i++) {
-    for (const match of lines[i]!.matchAll(SGR)) dim = applySgrDim(dim, match[1]!);
-  }
-  const line = lines[input]!;
-  let out = "";
-  let last = 0;
-  for (const match of line.matchAll(SGR)) {
-    if (!dim) out += line.slice(last, match.index);
-    out += match[0];
-    dim = applySgrDim(dim, match[1]!);
-    last = match.index + match[0].length;
-  }
-  if (!dim) out += line.slice(last);
-  lines[input] = out;
-  return lines.join("\n");
-}
-
-/**
- * Whether text is dim after an SGR with these parameters. A colon group
- * (`4:2` double underline, `38:2::255:0:0`) is one code with sub-parameters, so
- * only its first number counts; `;`-separated colours skip their arguments.
- */
-function applySgrDim(dim: boolean, params: string): boolean {
-  if (params === "") return false;
-  const parts = params.split(";");
-  for (let i = 0; i < parts.length; i++) {
-    const code = Number(parts[i]!.split(":")[0]);
-    if ((code === 38 || code === 48 || code === 58) && !parts[i]!.includes(":")) {
-      i += parts[i + 1] === "5" ? 2 : parts[i + 1] === "2" ? 4 : 0;
-    } else if (code === 0 || code === 22) {
-      dim = false;
-    } else if (code === 2) {
-      dim = true;
-    }
-  }
-  return dim;
-}
 
 /**
  * The serializer writes the normal screen first and, while a TUI holds the

@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { extractNoticeReply, extractReply } from "../noticeReply.js";
 
 describe("extracting a reply", () => {
+  it("marks the suggested next prompt of the agent the screen is read for (#16189)", () => {
+    const screen = "⏺ Merged.\r\n────────\r\n❯ \x1b[2mmerge #2079 when green\x1b[22m\r\n────────";
+    expect(extractReply(screen, 10, false, undefined, "claude").reply?.text).toBe(
+      "⏺ Merged.\n────────\n❯ [suggested by Claude Code: merge #2079 when green]\n────────"
+    );
+    // With no agent named there is no rule to read the box by.
+    expect(extractReply(screen, 10, false).reply?.text).toContain("❯ merge #2079 when green");
+  });
+
   it("ends the quote at the agent's handback marker, dropping the chrome below", () => {
     const screen = [
       "› Tell me a fact. End with: DAINTREE-DONE-abc123: <summary> END-abc123",

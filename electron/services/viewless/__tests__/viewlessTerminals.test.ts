@@ -256,6 +256,33 @@ describe("terminal.getOutput with no frontend", () => {
     expect(content).not.toContain("\x1b");
   });
 
+  it("reads the input box by the record's agent, and as unknown when the record can't be read (#16189)", async () => {
+    const screen =
+      "⏺ Done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────\r\n  ? for shortcuts";
+    const pty = makePty(
+      { "t-1": { kind: "terminal", launchAgentId: "claude" } },
+      { "t-1": screen }
+    );
+    const { deps } = makeDeps({ getPtyReader: () => pty });
+    const read = async () =>
+      (
+        (await executeViewlessAction(
+          request("terminal.getOutput", { terminalId: "t-1" }),
+          deps
+        )) as { result: { content: string; inputLine: unknown } }
+      ).result;
+
+    const seen = await read();
+    expect(seen.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
+    expect(seen.content).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
+
+    // The output itself is still read; only the box goes unread.
+    pty.getTerminalAsync.mockRejectedValueOnce(new Error("host gone"));
+    const unread = await read();
+    expect(unread.inputLine).toEqual({ state: "unknown", text: "" });
+    expect(unread.content).toContain("\n❯ open the PR\n");
+  });
+
   it("answers another project's terminal as one that is not there", async () => {
     const pty = makePty({}, { "t-other": "secret output" });
     const { deps } = makeDeps({ getPtyReader: () => pty });

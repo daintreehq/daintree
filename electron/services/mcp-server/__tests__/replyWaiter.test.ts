@@ -298,6 +298,25 @@ describe("ReplyWaiterService", () => {
     });
   });
 
+  it("marks the agent's suggested next prompt in the reply it returns (#16189)", async () => {
+    const h = setup();
+    h.screens.set("t-a", "⏺ All done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────");
+    h.terminals.set("t-a", { agentState: "waiting", detectedAgentId: "claude", hasPty: true });
+    const wait = h.service.wait({
+      terminalId: "t-a",
+      since: Date.now(),
+      replyLines: 40,
+      timeoutMs: 60_000,
+    });
+
+    h.change("t-a");
+    await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 100);
+
+    const { reply } = await wait.promise;
+    expect(reply?.text).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
+    expect(reply?.text).not.toContain("❯ open the PR");
+  });
+
   it("returns at the timeout with the state and screen as they stand", async () => {
     const h = setup();
     h.screens.set("t-a", "still thinking");
