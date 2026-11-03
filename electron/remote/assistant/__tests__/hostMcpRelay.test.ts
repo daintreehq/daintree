@@ -1847,6 +1847,35 @@ describe("a Shell reading this host's agents' status (#16191)", () => {
     relay.dispose();
   });
 
+  it("sends every tail as each project read it: the Shell shares the room out, not the host", async () => {
+    const tail = "z".repeat(40_000);
+    const { links, relay } = harness([["link-1", "sender-a"]], {}, async () => {
+      const result = {
+        terminals: [
+          { terminalId: "t-1", agentId: "claude", agentState: "working", recentOutput: tail },
+        ],
+        source: "pty",
+        unavailableFields: [],
+      };
+      return buildToolCallResult(result, { structuredContent: result });
+    });
+    const answer = (await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({
+        projects: Array.from({ length: 6 }, (_, index) => ({
+          projectId: `project-${index}`,
+          terminalIds: ["t-1"],
+        })),
+      })
+    )) as { projects: Array<{ result: { terminals: Array<{ recentOutput: string }> } }> };
+    // Well past one relayed call's answer, and every tail whole.
+    expect(JSON.stringify(answer).length).toBeGreaterThan(MAX_RELAY_RESULT_BYTES);
+    for (const project of answer.projects) {
+      expect(project.result.terminals[0]!.recentOutput).toBe(tail);
+    }
+    relay.dispose();
+  });
+
   it("keeps no record of a read: the same project read twice runs twice", async () => {
     const { links, opened, relay } = harness([["link-1", "sender-a"]], {}, async () =>
       statusAnswer("t-1")

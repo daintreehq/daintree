@@ -480,6 +480,40 @@ describe("HostCallRuntime host.status on an older host (#16191)", () => {
     runtime.dispose();
   });
 
+  it("says why a project's agents couldn't be listed the old way, as the link said it", async () => {
+    const answers: Record<string, () => Promise<unknown>> = {
+      p1: async () => {
+        throw new AppError({ code: "RATE_LIMITED", message: "slow down" });
+      },
+      p2: async () => {
+        throw new AppError({ code: "PERMISSION", message: "who are you" });
+      },
+      p3: async () => {
+        throw new AppError({ code: "HOST_DISCONNECTED", message: "gone" });
+      },
+      p4: async () => ({ status: "refused", reason: "control-off" }),
+    };
+    const { runtime, relayCall } = setup({
+      status: async () => {
+        throw unsupported();
+      },
+      agents: (_hostId, payload) => answers[payload.projectId!]!(),
+    });
+    const result = await read(runtime, {
+      targets: ["p1", "p2", "p3", "p4"].map((projectId) => ({ hostId: "studio", projectId })),
+    });
+    expect(result.targets.map((each) => [each.outcome, each.retryAfterMs])).toEqual([
+      ["rate_limited", 1_000],
+      ["policy_rejected", null],
+      ["disconnected", null],
+      ["policy_rejected", null],
+    ]);
+    // The sender turned away and the host's own setting off read differently.
+    expect(result.targets[1]!.detail).not.toBe(result.targets[3]!.detail);
+    expect(relayCall).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
   it("reads the old way only within what is left of the host's time", async () => {
     vi.useFakeTimers();
     const { runtime, relayCall } = setup({

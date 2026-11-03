@@ -261,16 +261,16 @@ function readProjectByProject(
       ...(agents
         ? {
             readAgents: async (projectId, runMs) => {
-              const answer = await agents
-                .call(client, hostId, { projectId }, runMs)
-                .catch((error: unknown) => {
-                  if (codeOf(error) === "UNSUPPORTED") return null;
-                  throw error;
-                });
-              // A host from before agent directories could be read: it never lists them.
-              if (answer === null) return unreadAgentDirectory("unsupported");
-              if (answer.status !== "done") throw new Error("The host didn't list its agents");
-              return answer.directory;
+              try {
+                const answer = await agents.call(client, hostId, { projectId }, runMs);
+                return answer.status === "done"
+                  ? answer.directory
+                  : { status: "refused" as const, reason: answer.reason };
+              } catch (error) {
+                // A host from before agent directories could be read: it never lists them.
+                if (codeOf(error) === "UNSUPPORTED") return unreadAgentDirectory("unsupported");
+                return { status: "failed" as const, reason: linkFailureOf(error) };
+              }
             },
           }
         : {}),

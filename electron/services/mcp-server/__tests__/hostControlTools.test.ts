@@ -280,6 +280,13 @@ describe("runHostControlTool (#13493)", () => {
           ],
         },
         { targets: [{ hostId: "studio", projectId: "p2" }], includeOutput: { lines: 51 } },
+        // As the answer writes them: a control character takes six bytes there.
+        {
+          targets: Array.from({ length: 64 }, (_, index) => ({
+            hostId: "studio",
+            projectId: `${index}`.padStart(2, "0") + "\u0001".repeat(120),
+          })),
+        },
         // Every id is echoed back with its outcome, so together they are bounded.
         {
           targets: Array.from({ length: 40 }, (_, index) => ({

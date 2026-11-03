@@ -773,14 +773,16 @@ export const HOST_STATUS_TERMINALS_MAX = 256;
 export const HOST_STATUS_DEFAULT_LINES = 10;
 export const HOST_STATUS_MAX_LINES = 50;
 /**
- * Most UTF-8 bytes the hosts and projects one `host.status` names may take
- * together. Each is echoed back with its outcome, so this keeps every
+ * Most bytes the hosts and projects one `host.status` names may take
+ * together, as its answer's JSON writes them. Each is echoed back with its outcome, so this keeps every
  * target's answer inside one MCP result whatever its terminals take; 64 real
  * project ids and host ids use well under it.
  */
 export const HOST_STATUS_TARGET_ID_BYTES_MAX = 8 * 1024;
 
 const utf8 = new TextEncoder();
+/** What a string takes in the answer's JSON, escapes included, quotes not. */
+const jsonBytes = (text: string): number => utf8.encode(JSON.stringify(text)).length - 2;
 
 const HostStatusTargetSchema = z.object({
   hostId: hostIdSchema,
@@ -807,8 +809,7 @@ export const HostStatusArgsSchema = z.object({
     .refine(
       (targets) =>
         targets.reduce(
-          (sum, { hostId, projectId }) =>
-            sum + utf8.encode(hostId).length + utf8.encode(projectId).length,
+          (sum, { hostId, projectId }) => sum + jsonBytes(hostId) + jsonBytes(projectId),
           0
         ) <= HOST_STATUS_TARGET_ID_BYTES_MAX
     )

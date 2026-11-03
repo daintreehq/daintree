@@ -109,9 +109,14 @@ describe("readProjectStatuses (#16191)", () => {
 describe("createLocalMcpRelay status (#16191)", () => {
   it("redacts this machine's screens as a host's are, through the gates its calls meet", async () => {
     const opened: string[] = [];
+    const listed: Array<string | undefined> = [];
     const relay = createLocalMcpRelay({
       machineName: () => "this-mac",
       hasProject: async (projectId) => projectId === "p1",
+      readAgents: async (options) => {
+        listed.push(options.projectId);
+        return { coverage: "ok", observedAt: 1, complete: true, omitted: 0, entries: [] };
+      },
       openSession: async (spec) => {
         opened.push(spec.projectId);
         return {
@@ -149,6 +154,8 @@ describe("createLocalMcpRelay status (#16191)", () => {
       projects: [
         { projectId: "p1", terminalIds: ["t-1"] },
         { projectId: "p9", terminalIds: ["t-9"] },
+        // One it doesn't have, named without terminals: never one with no agents.
+        { projectId: "p8" },
       ],
       includeOutput: { lines: 10, stripAnsi: true },
       runMs: 5_000,
@@ -163,6 +170,8 @@ describe("createLocalMcpRelay status (#16191)", () => {
         result: { terminals: [{ recentOutput: "token [redacted]" }] },
       },
       { status: "refused", projectId: "p9", reason: "no-project" },
+      { status: "refused", projectId: "p8", reason: "no-project" },
     ]);
+    expect(listed).toEqual([]);
   });
 });

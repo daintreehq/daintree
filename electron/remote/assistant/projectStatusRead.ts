@@ -6,6 +6,7 @@ import type {
   McpCallAnswer,
   ProjectStatusAnswer,
   ProjectStatusFailure,
+  RelayRefusal,
   StatusOutput,
   StatusProject,
 } from "./linkMethods.js";
@@ -21,6 +22,12 @@ export interface ProjectStatusFailed {
   reason: ProjectStatusFailure;
 }
 
+/** A read the project's machine refused before anything ran. */
+export interface ProjectStatusRefused {
+  status: "refused";
+  reason: RelayRefusal;
+}
+
 export interface ProjectStatusReadDeps {
   /**
    * `terminal.getStatus` in one project, in a session bound to it and admitted
@@ -31,8 +38,14 @@ export interface ProjectStatusReadDeps {
     args: Record<string, unknown>,
     runMs: number
   ): Promise<McpCallAnswer | ProjectStatusFailed>;
-  /** The agents the machine's own directory lists in one project; absent, none can be listed. */
-  readAgents?(projectId: string, runMs: number): Promise<AgentDirectory>;
+  /**
+   * The agents the machine's own directory lists in one project, or why they
+   * couldn't be read; absent, none can be listed. A throw is a list that failed.
+   */
+  readAgents?(
+    projectId: string,
+    runMs: number
+  ): Promise<AgentDirectory | ProjectStatusFailed | ProjectStatusRefused>;
   /**
    * Whether the machine has the project, asked before its agents are listed,
    * so one it doesn't have never reads as one with none; absent, the status
@@ -120,9 +133,15 @@ async function readProject(
     if (!known) return { status: "refused", projectId, reason: "no-project" };
     const read = deps.readAgents;
     if (!read) return failed(projectId, "agents-unsupported");
-    const directory = await Promise.resolve()
+    const listed = await Promise.resolve()
       .then(() => read(projectId, deadline - now()))
       .catch(() => null);
+    if (listed !== null && "status" in listed) {
+      return listed.status === "refused"
+        ? { status: "refused", projectId, reason: listed.reason }
+        : failed(projectId, listed.reason);
+    }
+    const directory = listed;
     if (directory === null || directory.coverage === "unreachable") {
       return failed(projectId, "agents-unread");
     }
