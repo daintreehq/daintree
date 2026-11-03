@@ -269,11 +269,23 @@ import {
 } from "../../../utils/windowsAgentLaunch.js";
 import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
-import { buildCommandLaunchShell } from "./commandLaunch.js";
+import {
+  buildCommandLaunchShell,
+  buildRelayRemovalLaunch,
+  relayRemovalEnv,
+} from "./commandLaunch.js";
 import { scheduledRunForRecord } from "../../../../shared/utils/scheduledRunProvenance.js";
 import { admitScheduledSpawn } from "../../../services/scheduledRuns/scheduledRunAdmission.js";
 import { isHostThrowawayWorkspaceId } from "../../../../shared/config/hostThrowaway.js";
-import { isDecisionsUpdateTerminalId } from "../../../../shared/config/terminalScreenPersistence.js";
+import {
+  isDecisionsRemoveTerminalId,
+  isDecisionsUpdateTerminalId,
+} from "../../../../shared/config/terminalScreenPersistence.js";
+import { parseRelayRemovalCommand } from "../../../../shared/config/relayRemoval.js";
+import {
+  noteRelayRemovalLaunch,
+  spoilRelayRemovalLaunch,
+} from "../../../services/pty/relayRemovalLaunches.js";
 
 // Longest a Windows command launch waits for the default shell's PATH search,
 // matching the pty host's wait before it reports ready.
@@ -1302,25 +1314,39 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       const startupCommand = windowsAgentExecutable
         ? buildWindowsAgentLaunchScript(safeCommand, windowsAgentExecutable, windowsAgentEnv())
         : safeCommand;
+      // A relay removal's exit is the only word of how it went (#16202), so it
+      // runs nothing but the pinned CLI, as the PTY's own process. A removal
+      // pane without a command (a restart) is a plain shell.
+      const removalArgv =
+        isDecisionsRemoveTerminalId(id) && startupCommand.length > 0
+          ? parseRelayRemovalCommand(startupCommand)
+          : null;
+      if (isDecisionsRemoveTerminalId(id) && startupCommand.length > 0 && !removalArgv) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "A relay removal terminal runs only the relay removal",
+        });
+      }
       // A host's throwaway run (#14445) ends with its agent, so its exit is the
       // agent's. A Decisions relay update (#16201) ends with its CLI, whose exit
       // is how Settings learns it finished, so a shell that can't host the
       // wrapper (fish, nushell, Git Bash on Windows) hands it to sh or the
       // system PowerShell rather than having it typed in.
       const relayUpdate = isDecisionsUpdateTerminalId(id);
-      const commandLaunchShell =
-        buildCommandLaunchShell(
-          startupCommand,
-          quotingShell,
-          isHostThrowawayWorkspaceId(projectId) || relayUpdate ? "exit" : "keep-open"
-        ) ??
-        (relayUpdate
-          ? buildCommandLaunchShell(
-              startupCommand,
-              process.platform === "win32" ? windowsSystemTool("powershell.exe") : "/bin/sh",
-              "exit"
-            )
-          : null);
+      const commandLaunchShell = removalArgv
+        ? buildRelayRemovalLaunch(removalArgv, windowsSystemTool("cmd.exe"))
+        : (buildCommandLaunchShell(
+            startupCommand,
+            quotingShell,
+            isHostThrowawayWorkspaceId(projectId) || relayUpdate ? "exit" : "keep-open"
+          ) ??
+          (relayUpdate
+            ? buildCommandLaunchShell(
+                startupCommand,
+                process.platform === "win32" ? windowsSystemTool("powershell.exe") : "/bin/sh",
+                "exit"
+              )
+            : null));
       const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
       const spawnShell = commandLaunchShell
         ? commandLaunchShell.shell
@@ -1379,6 +1405,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         recordPluginToolsLaunch(id, pluginToolsLaunchProjectId);
       }
       armSpawnConfirmation(id);
+      // Last before the spawn: what tells the removal's watcher this incarnation
+      // is the removal. A plain shell under the id spoils that for good, so it
+      // can never be taken for the removal's, whichever spawn went first.
+      if (removalArgv) noteRelayRemovalLaunch(id);
+      else if (isDecisionsRemoveTerminalId(id)) spoilRelayRemovalLaunch(id);
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
       // the shell, so when the agent exits the shell reclaims the foreground.
@@ -1391,7 +1422,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         cols,
         rows,
         command: safeCommand || undefined,
-        env: spawnEnv,
+        env: removalArgv ? relayRemovalEnv(spawnEnv, windowsSystemTool("cmd.exe")) : spawnEnv,
         kind,
         launchAgentId,
         pluginPanelKindId: validatedOptions.pluginPanelKindId,

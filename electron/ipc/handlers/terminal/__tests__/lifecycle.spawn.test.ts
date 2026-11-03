@@ -346,6 +346,11 @@ import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
 import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
+import {
+  _resetRelayRemovalLaunchesForTesting,
+  noteRelayRemovalLaunch,
+  takeRelayRemovalLaunch,
+} from "../../../../services/pty/relayRemovalLaunches.js";
 import type { HandlerDependencies } from "../../../types.js";
 import {
   _resetScheduledRunAdmissionForTest,
@@ -1440,6 +1445,90 @@ describe("terminal spawn shell-injection hardening (#6065)", () => {
         expect(spawnArgs.postSpawnInput).toBe(`${COMMAND}\r`);
       }
     );
+  });
+
+  // Its status is the only word of how the removal went (#16202).
+  describe.skipIf(process.platform === "win32")("a Decisions relay removal", () => {
+    const id = "daintree-decisions-remove-00000000-0000-4000-8000-000000000001";
+    const command =
+      "npx --yes @daintreehq/decisions-cli@0.3.0 remove https://relay.example.workers.dev";
+
+    beforeEach(() => {
+      _resetRelayRemovalLaunchesForTesting();
+    });
+
+    async function spawnRemoval(shell: string, spawnCommand: string | null = command) {
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+      const handler = getSpawnHandler();
+      return handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          id,
+          cols: 80,
+          rows: 24,
+          cwd: "/tmp",
+          shell,
+          ...(spawnCommand !== null && { command: spawnCommand }),
+        } as unknown as Parameters<typeof handler>[1]
+      );
+    }
+
+    it.each(["/bin/zsh", "/usr/bin/fish"])(
+      "runs the CLI as the PTY's own process, whatever the shell (%s), having said so before the spawn",
+      async (shell) => {
+        let notedAtSpawn = false;
+        ptyClient.spawn.mockImplementation(() => {
+          notedAtSpawn = takeRelayRemovalLaunch(id);
+        });
+
+        await spawnRemoval(shell);
+
+        const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+        expect(spawnArgs.shell).toBe("/usr/bin/env");
+        expect(spawnArgs.args).toEqual(command.split(" "));
+        expect(spawnArgs.postSpawnInput).toBeUndefined();
+        expect(notedAtSpawn).toBe(true);
+        // npm runs the bin through a script shell that reads no startup files, whatever .npmrc says.
+        expect(spawnArgs.env).toMatchObject({
+          npm_config_script_shell: "/bin/sh",
+          NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
+        });
+      }
+    );
+
+    it("refuses anything but the relay removal under a removal id", async () => {
+      await expect(spawnRemoval("/bin/zsh", "npx --yes some-other-cli remove x")).rejects.toThrow(
+        /runs only the relay removal/
+      );
+
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(takeRelayRemovalLaunch(id)).toBe(false);
+    });
+
+    it("opens a restarted removal pane, which carries no command, as a plain shell that spoils the id", async () => {
+      // A removal sent before, whose spawn hadn't been answered yet.
+      noteRelayRemovalLaunch(id);
+      let launchAtSpawn: boolean | null = null;
+      ptyClient.spawn.mockImplementation(() => {
+        launchAtSpawn = takeRelayRemovalLaunch(id);
+      });
+
+      await spawnRemoval("/bin/zsh", null);
+
+      const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+      expect(spawnArgs.shell).not.toBe("/usr/bin/env");
+      expect(spawnArgs.env?.npm_config_script_shell).toBeUndefined();
+      expect(launchAtSpawn).toBe(false);
+    });
+
+    it("never arms a removal sent after a plain shell under the same id", async () => {
+      await spawnRemoval("/bin/zsh", null);
+      await spawnRemoval("/bin/zsh");
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+      expect(takeRelayRemovalLaunch(id)).toBe(false);
+    });
   });
 });
 

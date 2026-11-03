@@ -774,6 +774,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsPairingStartResult;
   };
+  "decisions:start-relay-removal": {
+    args: [payload: import("../decisions.js").StartDecisionsRelayRemovalPayload];
+    result: import("../decisions.js").DecisionsRelayRemoval;
+  };
   "decisions:start-setup-check": {
     args: [];
     result: import("../decisions.js").DecisionsSetupCheckStartResult;

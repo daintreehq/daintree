@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SeverityMark } from "@/lib/statusSeverity";
-import type { DecisionsStatus } from "@shared/types/decisions";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import type { DecisionsRelayCheck, DecisionsStatus } from "@shared/types/decisions";
 import { useRelayCheck } from "./useRelayCheck";
 import { useRelayIdentity } from "./useRelayIdentity";
 import {
@@ -21,7 +22,7 @@ import { DecisionsRelayDeploy } from "./DecisionsRelayDeploy";
 import { DecisionsRelayUpdate } from "./DecisionsRelayUpdate";
 import { canUpdateRelayAt, useRelayUpdateRun } from "./relayUpdate";
 import { describeRelayUpdateOutcome, relayVersionAfter } from "./relayUpdateCopy";
-import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { DecisionsRelayRemove } from "./DecisionsRelayRemove";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { onRelayUrlRequest, takePendingRelayUrlRequest } from "./relayUrlRequest";
@@ -57,6 +58,14 @@ const PROBLEM_DETAIL: Record<NonNullable<DecisionsStatus["problem"]>, string> = 
   "other-relay":
     "This computer's Decisions data came from another relay identity, so Daintree won't sync it with this one",
 };
+
+/** Check results from a relay that answered as a Decisions relay, which the guided removal can take. */
+const ANSWERED_AS_RELAY = new Set<DecisionsRelayCheck["result"]>([
+  "unclaimed",
+  "claimed",
+  "incompatible",
+  "claim-not-configured",
+]);
 
 /** A relay is set up here, but no recovery kit has been verified for it (#16007). */
 export function kitUnverified(status: DecisionsStatus): boolean {
@@ -125,7 +134,9 @@ function describeConnection(status: DecisionsStatus): {
  * (#16006); with one it checks that relay, by itself once connected, so a
  * version that has moved apart is said, and can disconnect from it. With no
  * relay set up it also offers to deploy one (#16023); with one, in a local
- * window, to update it (#16201), checking it again once the update ends.
+ * window, to update it (#16201), checking it again once the update ends. It
+ * offers to remove the relay from Cloudflare, the one set up here or one a
+ * check just found (#16202).
  */
 export function DecisionsConnectionSection({
   status,
@@ -210,6 +221,11 @@ export function DecisionsConnectionSection({
   const endedUpdateId = update?.state === "ended" ? update.id : null;
   // Any relay's: one update runs at a time in a window.
   const updateRunning = latestUpdate?.state === "running";
+  // Never an update and a removal of one relay at once (#16202), from any window.
+  const removing =
+    status.relayRemovals?.some(
+      (removal) => removal.origin === savedOrigin && removal.outcome.state === "running"
+    ) === true;
   // What the outcome reads: set with the check it started, so it reads that check.
   const [recheckedUpdateId, setRecheckedUpdateId] = useState<number | null>(null);
   const recheckAfterUpdate = useEffectEvent((origin: string, updateId: number) => {
@@ -271,6 +287,18 @@ export function DecisionsConnectionSection({
                 ? `${observation.label}. ${observation.detail}`
                 : (rowError ?? "")));
   const setupCheck = savedOrigin === null && relay.checkedUrl !== null ? check : null;
+  // The relay set up here, whatever state it's in, or else one a check found
+  // answering as a relay (claimed by someone else, or never claimed) (#16202).
+  // A check in flight may be for another address, so the last one's offer waits for it.
+  const removeTarget = remote
+    ? null
+    : (savedOrigin ??
+      (!relay.checking &&
+      setupCheck &&
+      "origin" in setupCheck &&
+      ANSWERED_AS_RELAY.has(setupCheck.result)
+        ? setupCheck.origin
+        : null));
 
   /** The guided deploy's relay: into the field, and checked, so it can be claimed. */
   const checkDeployedRelay = (url: string) => {
@@ -466,7 +494,7 @@ export function DecisionsConnectionSection({
             compatibility={compatibility}
             running={updateRunning}
             outcome={updateOutcome}
-            disabled={busy || relay.checking}
+            disabled={busy || relay.checking || removing}
             onClose={onClose}
           />
         )}
@@ -522,31 +550,42 @@ export function DecisionsConnectionSection({
           onUseRelay={checkDeployedRelay}
         />
       )}
-      {(savedOrigin !== null || keysStored) && (
+      {(savedOrigin !== null || keysStored || removeTarget !== null) && (
         <SettingsGroup>
-          <SettingsRow
-            id="decisions-disconnect"
-            label={
-              savedOrigin !== null ? "Disconnect this computer" : "Keys from an unfinished setup"
-            }
-            description={
-              savedOrigin !== null
-                ? "Removes this computer's Decisions keys and its record of the relay. The relay and its data stay as they are."
-                : "This computer holds Decisions keys no relay is recorded for, from a claim that wasn't confirmed or a setup whose settings didn't save. Claim or restore the same relay to use them, or remove them to set up another."
-            }
-            disabled={busy}
-            control={({ descriptionId, disabled }) => (
-              <Button
-                variant="ghost-danger"
-                size="sm"
-                disabled={disabled}
-                aria-describedby={descriptionId}
-                onClick={() => setDisconnectOpen(true)}
-              >
-                {savedOrigin !== null ? "Disconnect relay" : "Remove keys"}
-              </Button>
-            )}
-          />
+          {(savedOrigin !== null || keysStored) && (
+            <SettingsRow
+              id="decisions-disconnect"
+              label={
+                savedOrigin !== null ? "Disconnect this computer" : "Keys from an unfinished setup"
+              }
+              description={
+                savedOrigin !== null
+                  ? "Removes this computer's Decisions keys and its record of the relay. The relay and its data stay as they are."
+                  : "This computer holds Decisions keys no relay is recorded for, from a claim that wasn't confirmed or a setup whose settings didn't save. Claim or restore the same relay to use them, or remove them to set up another."
+              }
+              disabled={busy}
+              control={({ descriptionId, disabled }) => (
+                <Button
+                  variant="ghost-danger"
+                  size="sm"
+                  disabled={disabled}
+                  aria-describedby={descriptionId}
+                  onClick={() => setDisconnectOpen(true)}
+                >
+                  {savedOrigin !== null ? "Disconnect relay" : "Remove keys"}
+                </Button>
+              )}
+            />
+          )}
+          {removeTarget !== null && (
+            <DecisionsRelayRemove
+              key={removeTarget}
+              relayOrigin={removeTarget}
+              recorded={savedOrigin !== null}
+              disabled={busy || updateRunning}
+              onClose={onClose}
+            />
+          )}
         </SettingsGroup>
       )}
       <DecisionsDisconnectDialog

@@ -36,6 +36,7 @@ import type {
   DecisionsPolicy,
   DecisionsRelayCheck,
   DecisionsRelayDeleteResult,
+  DecisionsRelayRemoval,
   DecisionsRevokeDeviceResult,
   DecisionsRotateKeysResult,
   DecisionsSetupCheckRun,
@@ -48,8 +49,13 @@ import type {
   PreparedDecisionsRelayDeploy,
   RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
+  StartDecisionsRelayRemovalPayload,
   VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
+import {
+  isRelayRemovalTerminalId,
+  isRemovableRelayOrigin,
+} from "../../../shared/config/relayRemoval.js";
 import type {
   DecisionsHostEnrollResult,
   DecisionsHostsResult,
@@ -205,6 +211,14 @@ const deviceIdSchema = z.string().min(1).max(128);
 const exportDataSchema = z.object({ passphrase: z.string().min(1).max(1024) }).strict();
 
 const deleteRelayDataSchema = z.object({ origin: z.string().max(2048) }).strict();
+
+const startRelayRemovalSchema = z
+  .object({
+    terminalId: z.string().refine(isRelayRemovalTerminalId, "Not a relay removal terminal id"),
+    origin: z.string().refine(isRemovableRelayOrigin, "Not a relay origin the removal can take"),
+    deleteLocalHistory: z.boolean(),
+  })
+  .strict();
 
 // The library's own passphrase floor for a kit, counted as it counts it.
 const exportRecoveryKitSchema = z.object({ passphrase: z.string().min(12).max(1024) }).strict();
@@ -406,6 +420,18 @@ export const decisionsNamespace = defineIpcNamespace({
       if (!decisions) throw setupCancelled();
       return decisions.disconnectRelay();
     }),
+    // A guided removal from Cloudflare (#16202), watched from before its pane
+    // opens. Only while on: what it forgets is the running lifetime's identity.
+    startRelayRemoval: opValidated(
+      CHANNELS.DECISIONS_START_RELAY_REMOVAL,
+      startRelayRemovalSchema,
+      async (payload: StartDecisionsRelayRemovalPayload): Promise<DecisionsRelayRemoval> => {
+        refuseWhileOff("remove a relay");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.startRelayRemoval(payload);
+      }
+    ),
     // The paired devices and pairing a phone (#16009). Only while on: each
     // signs with the identity the running lifetime's key store holds.
     listDevices: op(CHANNELS.DECISIONS_LIST_DEVICES, async (): Promise<DecisionsDevicesResult> => {

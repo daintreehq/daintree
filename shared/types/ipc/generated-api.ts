@@ -423,6 +423,9 @@ export interface GeneratedElectronAPI {
     startPairing(
       ...args: IpcInvokeMap["decisions:start-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:start-pairing"]["result"]>;
+    startRelayRemoval(
+      ...args: IpcInvokeMap["decisions:start-relay-removal"]["args"]
+    ): Promise<IpcInvokeMap["decisions:start-relay-removal"]["result"]>;
     startSetupCheck(
       ...args: IpcInvokeMap["decisions:start-setup-check"]["args"]
     ): Promise<IpcInvokeMap["decisions:start-setup-check"]["result"]>;

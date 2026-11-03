@@ -179,3 +179,37 @@ export function buildCommandLaunchShell(
 
   return { shell, args };
 }
+
+/**
+ * A Decisions relay removal (#16202) runs its CLI as the PTY's own process,
+ * through no shell: the PTY's status is then the CLI's, and no startup file (an
+ * `exec tmux`, an early `exit`, a trap that turns a hangup into status 0) can
+ * stand in for it. Its PATH is main's, which was read from the login shell. On
+ * Windows npm's batch shim needs cmd, started with `/d` so no AutoRun runs first.
+ */
+export function buildRelayRemovalLaunch(
+  argv: readonly string[],
+  cmdPath: string
+): { shell: string; args: string[] } {
+  if (process.platform === "win32") return { shell: cmdPath, args: ["/d", "/c", ...argv] };
+  return { shell: "/usr/bin/env", args: [...argv] };
+}
+
+/**
+ * The removal's environment. npm runs the CLI's bin through its `script-shell`,
+ * and one the user configured (zsh, PowerShell) would read their startup files
+ * after all, so the removal names one that reads none: `sh -c`, or cmd, which
+ * npm starts with `/d`. The environment outranks every `.npmrc`, and both
+ * spellings are set, since npm reads either.
+ */
+export function relayRemovalEnv(
+  env: Readonly<Record<string, string>> | undefined,
+  cmdPath: string
+): Record<string, string> {
+  const scriptShell = process.platform === "win32" ? cmdPath : "/bin/sh";
+  return {
+    ...env,
+    npm_config_script_shell: scriptShell,
+    NPM_CONFIG_SCRIPT_SHELL: scriptShell,
+  };
+}

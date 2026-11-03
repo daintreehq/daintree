@@ -1545,6 +1545,9 @@ export const CHANNELS = {
   DECISIONS_CLAIM_DEPLOYED_RELAY: "decisions:claim-deployed-relay",
   DECISIONS_RESTORE_IDENTITY: "decisions:restore-identity",
   DECISIONS_DISCONNECT_RELAY: "decisions:disconnect-relay",
+  // Watching a guided removal of the relay from Cloudflare (#16202), so its
+  // record goes once the removal's terminal exits 0.
+  DECISIONS_START_RELAY_REMOVAL: "decisions:start-relay-removal",
   // The devices paired with this computer's relay identity, and pairing a
   // phone through a one-time invitation and matching digits (#16009).
   DECISIONS_LIST_DEVICES: "decisions:list-devices",
