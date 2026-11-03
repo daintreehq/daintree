@@ -5,7 +5,11 @@ import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
-import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
+import type {
+  AgentDirectory,
+  AgentDirectoryLiveEntry,
+  AgentDirectorySubject,
+} from "@shared/types/agentDirectory";
 import type { AssistantWorkReading } from "@shared/types/assistantWork";
 import type { GlobalAssistantView } from "@shared/types/ipc/help";
 
@@ -57,13 +61,22 @@ vi.mock("../CanopyTerminal", () => ({
     return <div data-canopy-terminal="" data-run={runId} />;
   },
 }));
-vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
+// The global assistant's composer, where the keyboard goes once it takes input; no other reply draws one.
+vi.mock("@/components/Terminal/HybridInputBar", () => ({
+  HybridInputBar: ({ terminalId }: { terminalId: string }) =>
+    terminalId === "g-1" ? (
+      <div className="cm-content" tabIndex={0} data-testid="global-composer" />
+    ) : null,
+}));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 const openInAssistantMock = vi.hoisted(() =>
   vi.fn(async (): Promise<{ ok: true } | { ok: false; reason: "ended" }> => ({ ok: true }))
 );
 const assistantApiMock = vi.hoisted(() =>
-  vi.fn((subject: unknown, _stamp?: unknown) => ({ assistantSubject: subject, dispose: vi.fn() }))
+  vi.fn((subject: AgentDirectorySubject, _stamp?: unknown) => ({
+    assistantSubject: subject,
+    dispose: vi.fn(),
+  }))
 );
 vi.mock("@/services/assistantSubject", () => ({
   openInAssistant: openInAssistantMock,
@@ -78,6 +91,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
 import { canopyReplyVoiceId, resolveCanopyReplyDictation } from "@/services/canopyReplyDictation";
+import { isMac } from "@/lib/platform";
 
 const NOW = Date.now();
 /** Past the panel's wait on the typing before it reads terminals for a search. */
@@ -162,9 +176,38 @@ function globalRunning(overrides: Partial<GlobalAssistantView> = {}): GlobalAssi
 }
 
 let globalView: GlobalAssistantView;
+let help: ReturnType<typeof makeHelp>;
+let canopyBridge: ReturnType<typeof installElectron>;
 let attachments = 0;
 /** Who holds input once a view attaches: by default the one attaching, as main hands it over. */
 let ownerOnAttach: (attachmentId: string) => string | null;
+
+function makeHelp() {
+  return {
+    onGlobalAssistantChanged: vi.fn((_listener: (state: GlobalAssistantView) => void) => () => {}),
+    attachGlobalAssistant: vi.fn(async () => {
+      const attachmentId = `attachment-${++attachments}`;
+      const owner = ownerOnAttach(attachmentId);
+      globalView = {
+        ...globalView,
+        inputOwner: owner,
+        inputEpoch: globalView.inputEpoch + (owner === globalView.inputOwner ? 0 : 1),
+      };
+      return { attachmentId, state: globalView };
+    }),
+    detachGlobalAssistant: vi.fn(async () => {}),
+    setGlobalAssistantInputEligible: vi.fn(async () => {}),
+    claimGlobalAssistantInput: vi.fn(async (attachmentId: string, _from?: string) => {
+      globalView = {
+        ...globalView,
+        inputOwner: attachmentId,
+        inputEpoch: globalView.inputEpoch + 1,
+      };
+      return globalView;
+    }),
+    ensureGlobalAssistant: vi.fn(async () => globalView),
+  };
+}
 
 function installElectron() {
   const canopy = {
@@ -187,30 +230,7 @@ function installElectron() {
     readAgentDirectory: vi.fn(async () => directory),
     readAssistantWork: vi.fn(async () => assistantWork),
   };
-  const help = {
-    onGlobalAssistantChanged: vi.fn((_listener: (state: GlobalAssistantView) => void) => () => {}),
-    attachGlobalAssistant: vi.fn(async () => {
-      const attachmentId = `attachment-${++attachments}`;
-      const owner = ownerOnAttach(attachmentId);
-      globalView = {
-        ...globalView,
-        inputOwner: owner,
-        inputEpoch: globalView.inputEpoch + (owner === globalView.inputOwner ? 0 : 1),
-      };
-      return { attachmentId, state: globalView };
-    }),
-    detachGlobalAssistant: vi.fn(async () => {}),
-    setGlobalAssistantInputEligible: vi.fn(async () => {}),
-    claimGlobalAssistantInput: vi.fn(async (attachmentId: string) => {
-      globalView = {
-        ...globalView,
-        inputOwner: attachmentId,
-        inputEpoch: globalView.inputEpoch + 1,
-      };
-      return globalView;
-    }),
-    ensureGlobalAssistant: vi.fn(async () => globalView),
-  };
+  help = makeHelp();
   Object.defineProperty(window, "electron", {
     value: { canopy, help, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
     configurable: true,
@@ -220,8 +240,7 @@ function installElectron() {
 }
 
 function electronHelp() {
-  return (window as unknown as { electron: { help: Record<string, ReturnType<typeof vi.fn>> } })
-    .electron.help;
+  return help;
 }
 
 async function settle() {
@@ -292,7 +311,7 @@ beforeEach(() => {
     roleFilter: "all",
     assistantHandbacksSeen: {},
   });
-  installElectron();
+  canopyBridge = installElectron();
 });
 
 afterEach(() => {
@@ -992,13 +1011,10 @@ describe("CanopyView's docked global assistant (#16214)", () => {
   const dock = () => document.querySelector<HTMLElement>("[data-canopy-global]");
   /** One per stream the pane opened: each mount of its terminal makes its own api. */
   const globalStreams = () =>
-    assistantApiMock.mock.calls.filter(
-      ([subject]) => (subject as { terminalId: string }).terminalId === "g-1"
-    );
-  const globalApiStamps = () =>
-    assistantApiMock.mock.calls
-      .filter(([subject]) => (subject as { terminalId: string }).terminalId === "g-1")
-      .map(([, stamp]) => stamp);
+    assistantApiMock.mock.calls.filter(([subject]) => subject.terminalId === "g-1");
+  const globalApiStamps = () => globalStreams().map(([, stamp]) => stamp);
+  const stepChord = (key: "ArrowUp" | "ArrowDown") =>
+    isMac() ? { key, metaKey: true } : { key, altKey: true };
   const buttonIn = (root: Element, label: string) =>
     [...root.querySelectorAll("button")].find((button) => button.textContent === label);
 
@@ -1012,7 +1028,6 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     await settle();
     expect(document.getElementById("canopy-detail-waiting")).not.toBeNull();
     const pane = dock()!;
-    expect(pane.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
     expect(pane.querySelector("[data-canopy-assistant-state]")!.textContent).toBe("At its prompt");
     expect(globalApiStamps().at(-1)).toEqual({ attachmentId: "attachment-1", inputEpoch: 1 });
     expect(pane.querySelector("[data-testid=help-global-input-elsewhere]")).toBeNull();
@@ -1051,12 +1066,65 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     expect(electronHelp().detachGlobalAssistant).toHaveBeenCalledWith("attachment-1");
   });
 
-  it("stays docked whatever the filters hide, and in one project's scope", async () => {
-    useCanopyStore.setState({ globalDocked: true, roleFilter: "workers", scope: "project" });
+  it("lists the global assistant in one project's scope, and stays docked whatever the filters hide", async () => {
+    window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+    try {
+      directory.entries = [
+        assistant(0),
+        assistant(1, {
+          subject: {
+            hostId: "local",
+            scope: { kind: "project", projectId: "p2" },
+            terminalId: "help-p2",
+            incarnation: 3,
+            lane: 0,
+          },
+        }),
+        assistant(0, { subject: GLOBAL_SUBJECT }),
+      ];
+      useCanopyStore.setState({ globalDocked: true, scope: "project" });
+      render(<CanopyView />);
+      await settle();
+      // This project's lane and the global assistant; never another project's.
+      expect(
+        assistantRows().map((row) => row.querySelector("[data-canopy-where]")!.textContent)
+      ).toEqual(["🌳app", "Global"]);
+
+      act(() => useCanopyStore.getState().setRoleFilter("workers"));
+      await settle();
+      expect(assistantRows()).toHaveLength(0);
+      expect(dock()!.querySelector("[data-canopy-assistant-state]")).not.toBeNull();
+    } finally {
+      delete window.__DAINTREE_INITIAL_PROJECT__;
+    }
+  });
+
+  it("keeps its stream open when the directory lists it only after it showed", async () => {
+    let answer: (read: AgentDirectory) => void = () => {};
+    canopyBridge.readAgentDirectory.mockImplementationOnce(
+      () => new Promise<AgentDirectory>((resolve) => (answer = resolve))
+    );
+    useCanopyStore.setState({ globalDocked: true });
     render(<CanopyView />);
     await settle();
-    expect(assistantRows()).toHaveLength(0);
-    expect(dock()!.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+    expect(dock()!.querySelector("[data-canopy-assistant-state]")).toBeNull();
+    expect(globalStreams()).toHaveLength(1);
+    await act(async () => answer(directory));
+    await settle();
+    expect(dock()!.querySelector("[data-canopy-assistant-state]")).not.toBeNull();
+    expect(globalStreams()).toHaveLength(1);
+  });
+
+  it("steps to the next agent from its composer with the keyboard left there", async () => {
+    useCanopyStore.setState({ globalDocked: true });
+    render(<CanopyView />);
+    await settle();
+    const composer = dock()!.querySelector<HTMLElement>("[data-testid=global-composer]")!;
+    act(() => composer.focus());
+    await act(async () => fireEvent.keyDown(composer, stepChord("ArrowDown")));
+    await settle();
+    expect(document.getElementById("canopy-detail-working")).not.toBeNull();
+    expect(document.activeElement).toBe(composer);
   });
 
   it("shows one pane for the global assistant's own row, without reopening its stream", async () => {
@@ -1117,10 +1185,13 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     expect(electronHelp().claimGlobalAssistantInput).not.toHaveBeenCalled();
     expect(globalApiStamps().at(-1)).toBeUndefined();
     const take = dock()!.querySelector<HTMLElement>("[data-testid=help-global-take-input]")!;
+    act(() => take.focus());
     await act(async () => fireEvent.click(take));
     await settle();
     expect(electronHelp().claimGlobalAssistantInput).toHaveBeenCalledWith("attachment-1");
     expect(globalApiStamps().at(-1)).toEqual({ attachmentId: "attachment-1", inputEpoch: 4 });
+    // The button went with the stream it was in; the keyboard follows to the composer.
+    expect(document.activeElement).toBe(dock()!.querySelector("[data-testid=global-composer]"));
   });
 
   it("dictates into nothing while the keyboard is in the dock, and says why", async () => {

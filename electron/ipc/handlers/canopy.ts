@@ -1533,7 +1533,10 @@ export const canopyNamespace = defineIpcNamespace({
           activeViews.delete(id);
           // A closed panel shows nothing: the next open says afresh what it lists.
           viewShown.delete(id);
-          stopTerminalWatch(id);
+          // Its pane's stream. The global assistant's is let go by its own
+          // pane, which may outlive this: Canopy moved to another host with
+          // the assistant still docked, or the Assistant panel behind it.
+          stopTerminalWatch(id, "detail");
         }
         syncActive();
         return getService().getSnapshot();

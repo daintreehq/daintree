@@ -256,6 +256,25 @@ describe("the global assistant's slot (#16214)", () => {
     expect((await worker).watchId).not.toBeNull();
   });
 
+  it("lets a newer global request overtake an older one, and a pane's stop leave it be", async () => {
+    const { pty, resolveSnapshots } = fakePty("manual");
+    const { sender } = fakeSender();
+    const older = openGlobal(pty, sender, "global-1", 300);
+    const newer = openGlobal(pty, sender, "global-1", 301);
+    const kept = openGlobal(pty, sender, "global-2", 302);
+    stopTerminalWatch(1, "detail");
+    resolveSnapshots({ data: "x", cols: 80, rows: 24 });
+    expect((await older).watchId).toBeNull();
+    expect((await newer).watchId).toBeNull();
+    expect((await kept).watchId).not.toBeNull();
+    expect(activeTerminalWatches("global").get(1)?.runId).toBe("global-2");
+    const cancelled = openGlobal(pty, sender, "global-3", 303);
+    stopTerminalWatch(1, "global");
+    resolveSnapshots({ data: "x", cols: 80, rows: 24 });
+    expect((await cancelled).watchId).toBeNull();
+    expect(activeTerminalWatches("global").size).toBe(0);
+  });
+
   it("ends one slot by its stream, or by its slot, and both when the view stops", async () => {
     const { pty, releases } = fakePty();
     const { sender } = fakeSender();

@@ -304,6 +304,30 @@ describe("GlobalAssistantService", () => {
       expect(service.canWrite(b, service.getState().inputEpoch)).toBe(true);
     });
 
+    it("moves input between one view's attachments only from the one still holding it (#16214)", () => {
+      const service = new GlobalAssistantService(makeDeps().deps);
+      const panel = service.attach(10, 1);
+      const canopy = service.attach(10, 1);
+      const other = service.attach(20, 2);
+      expect(service.getState().inputOwner).toBe(panel);
+
+      service.claimInput(canopy, 10, panel);
+      expect(service.getState().inputOwner).toBe(canopy);
+      const epoch = service.getState().inputEpoch;
+      // A transfer from an attachment that no longer holds it moves nothing.
+      service.claimInput(panel, 10, other);
+      expect(service.getState().inputOwner).toBe(canopy);
+      expect(service.getState().inputEpoch).toBe(epoch);
+
+      // Another window takes it; this view's surfaces can't pass it back between them.
+      service.claimInput(other, 20);
+      service.claimInput(panel, 10, canopy);
+      expect(service.getState().inputOwner).toBe(other);
+      // Nor take it from another window by naming it.
+      service.claimInput(panel, 10, other);
+      expect(service.getState().inputOwner).toBe(other);
+    });
+
     it("refuses a claim from a window that does not own the attachment", () => {
       const service = new GlobalAssistantService(makeDeps().deps);
       const a = service.attach(10, 1);

@@ -10,7 +10,7 @@ import { useGlobalAssistant } from "@/components/HelpPanel/useGlobalAssistant";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isSameAssistantRun } from "@shared/types/agentDirectory";
 import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
-import { CanopyAssistantPane } from "./CanopyAssistantList";
+import { CanopyAssistantPaneFrame, CanopyAssistantPaneHead } from "./CanopyAssistantList";
 import type { CanopyAssistantItem } from "./canopyAssistants";
 
 function subscribeViewCache(onChange: () => void): () => void {
@@ -132,40 +132,31 @@ export function CanopyGlobalAssistant({
     </div>
   );
 
-  if (shownItem !== null && terminal !== null) {
-    return (
-      <div
-        ref={rootRef}
-        className="flex min-h-0 flex-1 flex-col"
-        data-testid="canopy-global-assistant"
-      >
-        {errorCallout}
-        <CanopyAssistantPane
-          item={shownItem}
-          refusal={refusal?.id === shownItem.id ? refusal.text : null}
-          onOpen={() => onOpen(shownItem)}
-          showingWork={workOf === shownItem.id}
-          onShowWork={() => onShowWork(shownItem)}
-          terminal={terminal}
-        />
-      </div>
-    );
-  }
-
-  // Until the directory lists the run on screen, or while none runs: its own
-  // heading, and what stands in for the session.
+  // One tree whatever is known: the session's frame keeps its place, so the
+  // directory's row arriving after the stream opened never reopens it.
   return (
     <div
       ref={rootRef}
       className="flex min-h-0 flex-1 flex-col"
       data-testid="canopy-global-assistant"
     >
-      <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">
-        <span className="min-w-0 shrink-0 font-medium text-text-primary">Daintree Assistant</span>
-        <span className="min-w-0 flex-1 truncate text-text-secondary">Global</span>
-      </div>
       {errorCallout}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel">
+      {shownItem !== null ? (
+        <CanopyAssistantPaneHead
+          item={shownItem}
+          refusal={refusal?.id === shownItem.id ? refusal.text : null}
+          onOpen={() => onOpen(shownItem)}
+          showingWork={workOf === shownItem.id}
+          onShowWork={() => onShowWork(shownItem)}
+        />
+      ) : (
+        // Until the directory lists the run on screen, or while none runs.
+        <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">
+          <span className="min-w-0 shrink-0 font-medium text-text-primary">Daintree Assistant</span>
+          <span className="min-w-0 flex-1 truncate text-text-secondary">Global</span>
+        </div>
+      )}
+      <CanopyAssistantPaneFrame>
         {boundElsewhere ? (
           <p className="px-6 py-8 text-center text-xs text-text-secondary">
             This window runs on another host. Open the global assistant from a window on this
@@ -206,7 +197,7 @@ export function CanopyGlobalAssistant({
         ) : (
           terminal
         )}
-      </div>
+      </CanopyAssistantPaneFrame>
     </div>
   );
 }

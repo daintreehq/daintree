@@ -160,14 +160,18 @@ export function CanopyAssistantRow({
  * The selected assistant's own live session, through the exact-subject viewer,
  * and the way into its lane. Nothing it shows is read by Canopy's readers.
  */
-export function CanopyAssistantPane({
-  item,
-  refusal,
-  onOpen,
-  showingWork,
-  onShowWork,
-  terminal,
-}: {
+export function CanopyAssistantPane(props: CanopyAssistantPaneHeadProps) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
+      <CanopyAssistantPaneHead {...props} />
+      <CanopyAssistantPaneFrame>
+        <AssistantLiveTerminal item={props.item} />
+      </CanopyAssistantPaneFrame>
+    </div>
+  );
+}
+
+interface CanopyAssistantPaneHeadProps {
   item: CanopyAssistantItem;
   /** Why the last "Open in Assistant" didn't, in words. */
   refusal: string | null;
@@ -176,13 +180,23 @@ export function CanopyAssistantPane({
   showingWork: boolean;
   /** Narrow the inbox to its work, or, while it is, show the whole inbox again. */
   onShowWork: () => void;
-  /** Its live session, when the caller watches it: the global assistant, typed to under its input. */
-  terminal?: ReactNode;
-}) {
+}
+
+/**
+ * What the pane says above an assistant's session: what it is doing, where
+ * it runs, how it supervises, and what waits on the person.
+ */
+export function CanopyAssistantPaneHead({
+  item,
+  refusal,
+  onOpen,
+  showingWork,
+  onShowWork,
+}: CanopyAssistantPaneHeadProps) {
   const supervision = assistantSupervision(item);
   const status = assistantStatus(item);
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
+    <>
       {/* Wraps rather than clips where the pane is narrow, as it is docked beside an agent. */}
       <div className="flex min-h-9 min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-1 py-1 text-xs select-none">
         {/* What it is doing, as its row says it: the observation, never a verdict. */}
@@ -234,9 +248,15 @@ export function CanopyAssistantPane({
           </Callout>
         </div>
       )}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel">
-        {terminal ?? <AssistantLiveTerminal item={item} />}
-      </div>
+    </>
+  );
+}
+
+/** The frame an assistant's session sits in. */
+export function CanopyAssistantPaneFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel">
+      {children}
     </div>
   );
 }

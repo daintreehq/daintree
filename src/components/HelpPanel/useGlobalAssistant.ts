@@ -61,9 +61,11 @@ export function useGlobalAssistant(
   canType: (view: GlobalAssistantView | null) => boolean = () => true,
   /**
    * Input another surface of this same view holds comes here, and goes back
-   * to it when this lets go: it moves within the window and never to another.
-   * For a surface shown over the one that holds it (Canopy over the
-   * Assistant panel), whose holder can't type meanwhile.
+   * to that surface when this lets go: it moves within the window and never
+   * to another. For a surface shown over the one that holds it (Canopy over
+   * the Assistant panel), whose holder can't type meanwhile. Main moves it
+   * only while the surface it moves from still holds it, so a window that
+   * took it meanwhile keeps it.
    */
   keepsViewInput = false
 ): GlobalAssistantHandle {
@@ -79,11 +81,8 @@ export function useGlobalAssistant(
   }, [canType]);
   /** What main was last told of an attachment's eligibility. */
   const reportedRef = useRef<{ attachmentId: string; eligible: boolean } | null>(null);
-  // Who holds input as last heard, for the attachment's own teardown.
-  const inputOwnerRef = useRef<string | null>(null);
-  useEffect(() => {
-    inputOwnerRef.current = view?.inputOwner ?? null;
-  }, [view]);
+  // The surface of this view input was taken from, to go back to on teardown.
+  const lenderRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -91,6 +90,7 @@ export function useGlobalAssistant(
     let disposed = false;
     let attached: string | null = null;
     const asked = canTypeRef.current(null);
+    lenderRef.current = null;
     // Subscribed before attaching: the attach answer is newer than any change
     // sent before it, and every change after it arrives here.
     const off = help.onGlobalAssistantChanged((state) => {
@@ -120,12 +120,13 @@ export function useGlobalAssistant(
       off();
       if (attached !== null) {
         viewAttachments.delete(attached);
-        // Handed back before letting go, so main never passes it to another window.
-        const heir =
-          keepsViewInput && inputOwnerRef.current === attached
-            ? [...viewAttachments].at(-1)
-            : undefined;
-        if (heir !== undefined) void help.claimGlobalAssistantInput(heir).catch(() => {});
+        // Handed back before letting go, so main has no vacancy to fill from
+        // another window. Sent even with a take still unanswered: main moves
+        // it only if this one holds it by then.
+        const lender = keepsViewInput ? lenderRef.current : null;
+        if (lender !== null && viewAttachments.has(lender)) {
+          void help.claimGlobalAssistantInput(lender, attached).catch(() => {});
+        }
         void help.detachGlobalAssistant(attached).catch(() => {});
       }
       setAttachmentId(null);
@@ -204,8 +205,12 @@ export function useGlobalAssistant(
     if (!keepsViewInput || !active || attachmentId === null) return;
     if (inputOwner === null || inputOwner === attachmentId) return;
     if (!isViewGlobalAttachment(inputOwner)) return;
-    void claimInput();
-  }, [keepsViewInput, active, attachmentId, inputOwner, claimInput]);
+    lenderRef.current = inputOwner;
+    void run(
+      () => window.electron.help.claimGlobalAssistantInput(attachmentId, inputOwner),
+      "Daintree couldn't take the global assistant's input."
+    );
+  }, [keepsViewInput, active, attachmentId, inputOwner, run]);
 
   const clearError = useCallback(() => setError(null), []);
 

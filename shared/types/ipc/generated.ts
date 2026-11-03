@@ -2170,7 +2170,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./help.js").GlobalAssistantAttachment;
   };
   "help:global-assistant-claim-input": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, from?: string | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-detach": {

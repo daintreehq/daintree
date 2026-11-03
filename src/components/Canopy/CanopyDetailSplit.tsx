@@ -21,9 +21,9 @@ import { beginEdgeDrag, sameOnScreen } from "./canopyEdgeDrag";
 import { CANOPY_PANE_MIN_WIDTH } from "./canopyListWidth";
 
 /** What `.canopy-dock`'s `max-width` leaves the agent beside it: its pane's minimum and the edge's track. */
-const SPLIT_STYLE = {
+const SPLIT_STYLE: CSSProperties & Record<`--${string}`, string> = {
   "--canopy-dock-agent-room": `${CANOPY_PANE_MIN_WIDTH + RESIZE_HANDLE_INLINE_TRACK_PX}px`,
-} as CSSProperties;
+};
 
 const RESIZE_STEP = 10;
 const RESIZE_STEP_LARGE = 50;
@@ -141,10 +141,8 @@ export function CanopyDetailSplit({
   });
 
   const width = dockDrag ?? dockWidth;
-  const dockStyle =
-    paired && sideBySide && width !== null
-      ? ({ "--canopy-dock-width": `${width}px` } as CSSProperties)
-      : undefined;
+  const dockStyle: (CSSProperties & Record<`--${string}`, string>) | undefined =
+    paired && sideBySide && width !== null ? { "--canopy-dock-width": `${width}px` } : undefined;
 
   return (
     <div
