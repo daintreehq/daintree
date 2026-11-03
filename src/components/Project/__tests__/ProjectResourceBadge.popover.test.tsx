@@ -187,6 +187,28 @@ async function findProcessRowLabel(
   return null;
 }
 
+/** Unfolds the Diagnostics section, where the terminal buffer breakdown lives. */
+async function openDiagnostics(container: HTMLElement): Promise<void> {
+  const toggle = Array.from(container.querySelectorAll("button")).find(
+    (b) => b.getAttribute("aria-controls") === "resource-diagnostics"
+  );
+  expect(toggle).toBeDefined();
+  await act(async () => {
+    fireEvent.click(toggle!);
+  });
+}
+
+/** What a buffer row's label offers in its tooltip, or null when it offers none. */
+async function bufferRowHint(breakdown: Element, label: string): Promise<string | null> {
+  const trigger = Array.from(breakdown.querySelectorAll<HTMLElement>("span")).find(
+    (el) => el.textContent === label
+  );
+  expect(trigger).toBeDefined();
+  // A hint carries a reading a keyboard user needs, so it is a tab stop.
+  if (trigger!.tabIndex !== 0) return null;
+  return tooltipTextOf(trigger!);
+}
+
 function findMemoryRow(container: HTMLElement, value: string): HTMLElement | undefined {
   return Array.from(container.querySelectorAll("div")).find(
     (el) => el.children.length === 2 && el.children[1]?.textContent === value
@@ -259,7 +281,9 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     expect(appRow?.children[0]?.textContent?.toLowerCase()).toContain("daintree");
     const workloadRow = findMemoryRow(container, "900 MB");
     expect(workloadRow?.children[0]?.textContent?.toLowerCase()).toContain("terminal");
-    expect(container.textContent?.toLowerCase()).toContain("counted twice");
+    expect(container.textContent?.toLowerCase()).toContain(
+      "shared memory is counted in each process"
+    );
   });
 
   it("leaves the high-memory warning to the pressure figure, not the snapshot total (#13637)", async () => {
@@ -535,17 +559,27 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     });
 
     const container = await renderOpenBadge();
+    // Folded with the rest of the diagnostics until asked for.
+    expect(
+      container.ownerDocument.querySelector('[data-testid="terminal-buffer-breakdown"]')
+    ).toBeNull();
+    await openDiagnostics(container);
     const breakdown = container.ownerDocument.querySelector(
       '[data-testid="terminal-buffer-breakdown"]'
     );
+    expect(breakdown).not.toBeNull();
     const text = breakdown?.textContent ?? "";
 
-    expect(text).toContain("estimate");
-    // Partial coverage is named rather than passed off as the whole.
-    expect(text).toContain("Projects that reported~30 MB");
+    // Partial coverage is named rather than passed off as the whole, with the
+    // total on the heading's own line.
+    expect(text.startsWith("Terminal buffers, est. (partial)~30 MB")).toBe(true);
     expect(text).toContain("Agents~25 MB");
-    expect(text).toContain("Backgrounded · cached 2m ago~5 MB");
-    expect(text).toContain("Silent · cachedUnavailable");
+    expect(text).toContain("Backgrounded~5 MB");
+    expect(text).toContain("SilentUnavailable");
+    // A cached view's age is in its row's hint, not its label.
+    expect(await bufferRowHint(breakdown!, "Backgrounded")).toBe("Backgrounded · cached 2m ago");
+    expect(await bufferRowHint(breakdown!, "Silent")).toBe("Silent · cached");
+    expect(await bufferRowHint(breakdown!, "Agents")).toBeNull();
     // Heaviest first, the unanswered view last.
     expect(text.indexOf("Agents")).toBeLessThan(text.indexOf("Backgrounded"));
     expect(text.indexOf("Backgrounded")).toBeLessThan(text.indexOf("Silent"));
@@ -580,11 +614,17 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
       });
 
       const container = await renderOpenBadge();
-      const text =
-        container.ownerDocument.querySelector('[data-testid="terminal-buffer-breakdown"]')
-          ?.textContent ?? "";
+      await openDiagnostics(container);
+      const breakdown = container.ownerDocument.querySelector(
+        '[data-testid="terminal-buffer-breakdown"]'
+      );
+      expect(breakdown).not.toBeNull();
+      const text = breakdown?.textContent ?? "";
 
-      expect(text).toContain("Remote repo · from 2m ago~4 MB");
+      // Every view answered, so the heading claims the whole.
+      expect(text.startsWith("Terminal buffers, est.~8 MB")).toBe(true);
+      expect(text).toContain("Remote repo~4 MB");
+      expect(await bufferRowHint(breakdown!, "Remote repo")).toBe("Remote repo · from 2m ago");
       // Same bare id on another host: not this host's project.
       expect(text).toContain("Project on lab-02");
     } finally {
@@ -596,7 +636,9 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     mockGetMemorySnapshot.mockResolvedValue(makeMemorySnapshot());
 
     const container = await renderOpenBadge();
+    await openDiagnostics(container);
 
+    expect(container.querySelector("#resource-diagnostics")).not.toBeNull();
     expect(
       container.ownerDocument.querySelector('[data-testid="terminal-buffer-breakdown"]')
     ).toBeNull();

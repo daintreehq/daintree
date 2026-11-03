@@ -10,7 +10,6 @@ import {
 } from "react";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChevronRight, Coffee, List, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { projectClient, systemClient } from "@/clients";
@@ -121,10 +120,12 @@ function MemoryRow({ label, value, hint }: { label: string; value: string; hint?
   return (
     <div className="flex items-baseline justify-between gap-3 text-xs">
       {hint ? (
-        <Tooltip>
-          <TooltipTrigger asChild>{text}</TooltipTrigger>
-          <TooltipContent side="left">{hint}</TooltipContent>
-        </Tooltip>
+        // Forced on, so the hint is a tab stop as well as a hover: it carries
+        // readings (a cached view's age, what a figure counts) that must reach
+        // a keyboard user too.
+        <TruncatedTooltip content={hint} isTruncated side="left">
+          {text}
+        </TruncatedTooltip>
       ) : (
         <TruncatedTooltip content={label}>{text}</TruncatedTooltip>
       )}
@@ -133,10 +134,26 @@ function MemoryRow({ label, value, hint }: { label: string; value: string; hint?
   );
 }
 
-function SectionLabel({ children, id }: { children: ReactNode; id?: string }) {
+/**
+ * A block's heading, in the primary ink its rows' values use so it anchors the
+ * labels under it rather than reading as one more of them. A `value` is the
+ * block's total, on the heading's own line so it never reads as one more row.
+ */
+function SectionLabel({
+  children,
+  id,
+  value,
+}: {
+  children: ReactNode;
+  id?: string;
+  value?: string;
+}) {
   return (
-    <div id={id} className="text-2xs font-medium text-text-secondary">
-      {children}
+    <div className="flex items-baseline justify-between gap-3 text-xs font-medium text-text-primary">
+      <span id={id} className="min-w-0 truncate">
+        {children}
+      </span>
+      {value !== undefined && <span className="shrink-0 tabular-nums">{value}</span>}
     </div>
   );
 }
@@ -250,10 +267,12 @@ function TerminalBufferBreakdown({
             ? `cached ${formatAgo(view.ageMs)}`
             : `from ${formatAgo(view.ageMs)}`
           : cached;
-      const label = age ? `${name} · ${age}` : name;
       return {
         key: String(view.webContentsId),
-        label,
+        label: name,
+        // The age is detail about the reading, not part of the name: appended,
+        // it truncated both together.
+        hint: age ? `${name} · ${age}` : undefined,
         bytes: view.estimatedBytes,
       };
     })
@@ -266,18 +285,24 @@ function TerminalBufferBreakdown({
 
   return (
     <div className="space-y-1" data-testid="terminal-buffer-breakdown">
-      <SectionLabel>Terminal buffers (estimate)</SectionLabel>
-      <MemoryRow
-        label={slice.complete ? "All projects" : "Projects that reported"}
-        hint={BUFFER_ESTIMATE_HINT}
-        value={
-          slice.estimatedBytes !== null ? formatBufferEstimate(slice.estimatedBytes) : "Unavailable"
-        }
-      />
+      <TruncatedTooltip content={BUFFER_ESTIMATE_HINT} isTruncated side="left">
+        <div className="rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary">
+          <SectionLabel
+            value={
+              slice.estimatedBytes !== null
+                ? formatBufferEstimate(slice.estimatedBytes)
+                : "Unavailable"
+            }
+          >
+            {slice.complete ? "Terminal buffers, est." : "Terminal buffers, est. (partial)"}
+          </SectionLabel>
+        </div>
+      </TruncatedTooltip>
       {rows.map((row) => (
         <MemoryRow
           key={row.key}
           label={row.label}
+          hint={row.hint}
           value={row.bytes !== null ? formatBufferEstimate(row.bytes) : "Unavailable"}
         />
       ))}
@@ -371,10 +396,10 @@ function ProjectBreakdown({
 function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
   return (
     <div className="space-y-1">
-      <div className="flex items-baseline justify-between gap-2 text-2xs text-text-secondary">
-        <span>Daintree processes</span>
-        <span className="flex shrink-0 gap-2">
-          <span>Memory</span>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-text-primary">Daintree processes</span>
+        <span className="flex shrink-0 gap-2 text-2xs text-text-secondary">
+          <span className="w-14 text-right">Memory</span>
           <span className="w-10 text-right">CPU</span>
         </span>
       </div>
@@ -388,14 +413,11 @@ function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
             >
               {/* Always on offer, not only when clipped: the PID is what
                   matches the row to the OS's own process list. */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="min-w-0 truncate text-text-secondary">{label}</span>
-                </TooltipTrigger>
-                <TooltipContent side="left">{`${label} (${proc.pid})`}</TooltipContent>
-              </Tooltip>
-              <span className="flex shrink-0 gap-2 text-text-secondary">
-                <span>{formatMemory(proc.memoryMB)}</span>
+              <TruncatedTooltip content={`${label} (${proc.pid})`} isTruncated side="left">
+                <span className="min-w-0 truncate text-text-secondary">{label}</span>
+              </TruncatedTooltip>
+              <span className="flex shrink-0 gap-2 text-text-primary">
+                <span className="w-14 text-right">{formatMemory(proc.memoryMB)}</span>
                 <span className="w-10 text-right">{proc.cpuPercent}%</span>
               </span>
             </div>
@@ -417,12 +439,16 @@ function DiagnosticsSection({
   heapStats,
   trend,
   trendSamples,
+  bufferSlice,
+  projectNames,
 }: {
   diagnosticsInfo: DiagnosticsInfo | null;
   processMetrics: ProcessMetricEntry[] | null;
   heapStats: HeapStats | null;
   trend: TrendDirection;
   trendSamples: number[];
+  bufferSlice: RendererTerminalBufferSlice | null;
+  projectNames: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -487,6 +513,9 @@ function DiagnosticsSection({
               />
             )}
           </div>
+          {bufferSlice && (
+            <TerminalBufferBreakdown slice={bufferSlice} projectNames={projectNames} />
+          )}
           {processMetrics ? (
             <ProcessTable metrics={processMetrics} />
           ) : (
@@ -964,8 +993,10 @@ export function ProjectResourceBadge({
               ref={readoutRef}
               type="button"
               data-status-readout=""
-              aria-label={`${announcement} — open resource usage`}
-              className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-subtle transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              aria-label={`${announcement}${
+                memoryState === "critical" ? ", high app memory" : ""
+              } — open resource usage`}
+              className="group/readout px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-soft data-[state=open]:bg-overlay-soft transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <div className="flex items-center gap-2 min-w-0">
                 {/* Decorative: the working/idle state it encodes is carried in
@@ -981,7 +1012,7 @@ export function ProjectResourceBadge({
                     } animate-diagnostics-flash`}
                   />
                 </SidebarFooterGlyph>
-                <span className="text-2xs tabular-nums text-text-secondary font-medium truncate">
+                <span className="text-2xs tabular-nums text-text-secondary font-medium truncate group-hover/readout:text-text-primary group-data-[state=open]/readout:text-text-primary">
                   {/* The row shares its width with Run command, so at the 200px
                     floor the count drops its noun ("7 active") rather than
                     truncating mid-word. One string either way, so the text
@@ -998,6 +1029,17 @@ export function ProjectResourceBadge({
                     readoutLabel
                   )}
                 </span>
+                {memoryState === "critical" && (
+                  // The glyph alone on the row, inside the control it explains:
+                  // a worded chip left 320px with "4 a…", and a glyph outside the
+                  // button was a warning nothing happened on clicking.
+                  <TriangleAlert
+                    data-testid="sidebar-status-items"
+                    className="h-3 w-3 shrink-0 text-status-warning"
+                    data-resource-glyph=""
+                    aria-hidden="true"
+                  />
+                )}
               </div>
             </button>
           </PopoverTrigger>
@@ -1009,24 +1051,6 @@ export function ProjectResourceBadge({
           <span role="status" className="sr-only">
             {announcement}
           </span>
-          {memoryState === "critical" && (
-            <span
-              data-testid="sidebar-status-items"
-              title="Daintree's own memory use is high — open the readout for details"
-              className="flex items-center pl-1 pr-2 shrink-0"
-            >
-              {/* The glyph alone on the row; the words live in the popover. With
-                the count on the left and Run command on the right, a worded
-                chip left 320px with "4 a…" — the warning cost the row its
-                first answer. The triangle carries the severity colour. */}
-              <TriangleAlert
-                className="h-3 w-3 shrink-0 text-status-warning"
-                data-resource-glyph=""
-                aria-hidden="true"
-              />
-              <span className="sr-only">High app memory</span>
-            </span>
-          )}
           {trailing}
         </div>
         <PopoverContent
@@ -1052,7 +1076,7 @@ export function ProjectResourceBadge({
             handingOffRef.current = false;
             event.preventDefault();
           }}
-          className="w-72 p-3"
+          className="w-72 max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-3"
         >
           <div className="space-y-3">
             {/* First, and independent of the memory read: work that can be
@@ -1069,7 +1093,7 @@ export function ProjectResourceBadge({
             )}
             <div className="space-y-1.5">
               {popoverMemoryState === "critical" && (
-                <div className="flex items-start gap-1.5 text-2xs text-text-primary">
+                <div className="mb-1.5 flex items-start gap-1.5 text-2xs text-text-primary">
                   <TriangleAlert
                     className="mt-px h-3 w-3 shrink-0 text-status-warning"
                     data-resource-glyph=""
@@ -1105,60 +1129,60 @@ export function ProjectResourceBadge({
                 {shownWorkloads !== null && (
                   <ProjectBreakdown workloads={shownWorkloads} projectNames={projectNames} />
                 )}
-                <p className="text-2xs leading-snug text-text-secondary">
-                  Each process is counted in full, so memory two processes share is counted twice
-                  and these totals run high.
+                {/* One line, not a paragraph: the caveat has to stay visible beside
+                    the figures it qualifies, but it reads the same on every open. */}
+                <p className="-mt-2 text-2xs leading-snug text-text-secondary">
+                  Shared memory is counted in each process
                 </p>
-                {memorySnapshot?.rendererTerminalBuffers && (
-                  <TerminalBufferBreakdown
-                    slice={memorySnapshot.rendererTerminalBuffers}
-                    projectNames={projectNames}
-                  />
-                )}
               </>
             )}
             {/* Mounted unconditionally: the list is its own read, so a failed
-              memory read above must not hide the way to it. */}
-            <button
-              type="button"
-              onClick={() => {
-                handingOffRef.current = true;
-                setOpen(false);
-                setProcessesOpen(true);
-              }}
-              data-testid="open-processes-dialog"
-              className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-            >
-              <List className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">Running processes</span>
-              <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-            </button>
-            {/* The keep-awake hold used to be a coffee cup pinned to the strip.
+              memory read above must not hide the way to it. The two ways out sit
+              together under their own rule, straight after the figures. */}
+            <div className="-mt-1 space-y-0.5 border-t border-divider pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  handingOffRef.current = true;
+                  setOpen(false);
+                  setProcessesOpen(true);
+                }}
+                data-testid="open-processes-dialog"
+                className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              >
+                <List className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">Running processes</span>
+                <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+              </button>
+              {/* The keep-awake hold used to be a coffee cup pinned to the strip.
               Its state and settings route survive here as one line.
 
               Mounted unconditionally, with only its wording changing: the hold
               ends on main's schedule, so a row that appeared only while holding
               could vanish under a keyboard user mid-popover. */}
-            <button
-              type="button"
-              onClick={() =>
-                void actionService.dispatch(
-                  "app.settings.openTab",
-                  { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
-                  { source: "user" }
-                )
-              }
-              aria-label={`${
-                holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
-              } — keep-awake settings`}
-              className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-            >
-              <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">
-                {holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"}
-              </span>
-              <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-            </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
+                    { source: "user" }
+                  )
+                }
+                aria-label={`${
+                  holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
+                } — keep-awake settings`}
+                className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              >
+                <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">
+                  {holdingWakeLock
+                    ? "Keeping this machine awake"
+                    : "Not keeping this machine awake"}
+                </span>
+                <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+              </button>
+            </div>
             {popoverData && (
               <div className="border-t border-divider pt-2">
                 <DiagnosticsSection
@@ -1167,6 +1191,8 @@ export function ProjectResourceBadge({
                   heapStats={popoverData.heapStats}
                   trend={trend}
                   trendSamples={samples}
+                  bufferSlice={memorySnapshot?.rendererTerminalBuffers ?? null}
+                  projectNames={projectNames}
                 />
               </div>
             )}

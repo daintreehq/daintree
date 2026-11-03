@@ -15,6 +15,8 @@ import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Server } from "@/components/icons";
 import { HostNameText } from "@/components/Hosts/HostNameText";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
+import { LinkMark } from "@/components/Hosts/LinkMark";
+import { hostLinkTone } from "@/components/Hosts/hostModel";
 import { openProjectOnHost } from "@/components/Hosts/OpenOnHostSubmenu";
 import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
 import { isProjectThere, useProjectHosts, type ProjectHost } from "@/components/Hosts/projectHosts";
@@ -59,6 +61,7 @@ export const VISIBLE_HOSTS = 5;
 const LIST_ID = "project-hosts-list";
 const TOTALS_ID = "project-hosts-totals";
 const FOLDED_ID = "project-hosts-folded";
+const ROWS_ID = "project-hosts-rows";
 
 interface HeldMembers {
   projectId: string | null;
@@ -115,7 +118,7 @@ const ROW_CLASS = cn(
  * glyph and two digits.
  */
 const CELL_CLASS =
-  "flex w-7.5 shrink-0 items-center justify-end gap-0.5 tabular-nums @[15rem]/hosts:w-8";
+  "flex w-7 shrink-0 items-center justify-end gap-0.5 tabular-nums @[15rem]/hosts:w-7.5";
 
 /** Rows the section's own arrow keys move between, header included. */
 const NAV_SELECTOR = "[data-project-hosts-nav]";
@@ -349,18 +352,46 @@ function HostRow({ host, summary, columns, newWindowKey: key, onOpen }: HostRowP
               title={false}
               // At the sidebar's minimum the tail, which tells hosts apart, outranks the head.
               headFloor="min-w-[2ch] @[15rem]/hosts:min-w-[4ch]"
-              // Primary in every state: a host that is down is still a row you can click.
-              className="font-medium text-text-primary"
+              // Regular weight, so six names don't outweigh the worktree list above;
+              // the window's own host keeps the medium weight with its fill. A host
+              // whose link is down steps to secondary ink, still above the contrast
+              // floor and still a row you can click, so the live machines are the
+              // ones the eye lands on.
+              className={cn(
+                host.away ? "text-text-secondary" : "text-text-primary",
+                host.isCurrent ? "font-medium" : "font-normal"
+              )}
             />
           </span>
           {status.kind === "counts" && summary ? (
             <CountCells counts={summary.counts} askingBand={summary.askingBand} columns={columns} />
-          ) : status.kind === "away" || status.kind === "note" ? (
-            <span aria-hidden="true" className="shrink-0 whitespace-nowrap text-text-secondary">
+          ) : status.kind === "away" ? (
+            // No words: "Not connected" on every offline row was a wall of noise
+            // beside the hosts that are live. A plainly offline host is its
+            // dimmed name and an empty right edge, which no connected row has
+            // (they always show counts or a note); only a link that is dialling
+            // or needs a look keeps its mark. The words, with when it was last
+            // seen, stay in the row's accessible name and its tooltip.
+            hostLinkTone(host.row) === "offline" ? null : (
+              <span
+                aria-hidden="true"
+                className="ml-auto flex w-7 shrink-0 justify-end @[15rem]/hosts:w-7.5"
+              >
+                <LinkMark tone={hostLinkTone(host.row)} className="h-auto" />
+              </span>
+            )
+          ) : status.kind === "note" ? (
+            <span
+              aria-hidden="true"
+              className="min-w-0 shrink truncate whitespace-nowrap text-2xs text-text-secondary"
+            >
               {status.text}
             </span>
           ) : showChecking ? (
-            <span aria-hidden="true" className="shrink-0 whitespace-nowrap text-text-secondary">
+            <span
+              aria-hidden="true"
+              className="shrink-0 whitespace-nowrap text-2xs text-text-secondary"
+            >
               Checking…
             </span>
           ) : null}
@@ -562,7 +593,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
       {/* Always in the tree, so the header's aria-controls names it open or closed. */}
       <div id={LIST_ID} hidden={!expanded} className="flex min-h-0 flex-col">
         {expanded && (
-          <ul className="min-h-0 overflow-y-auto pb-1.5">
+          <ul id={ROWS_ID} className="min-h-0 overflow-y-auto py-1">
             {shown.map(hostRow)}
             {folds && (
               <li>
@@ -572,6 +603,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
                   data-project-hosts-row="more"
                   data-project-hosts-nav=""
                   aria-expanded={allShown}
+                  aria-controls={ROWS_ID}
                   aria-label={pluralize(folded.length, "more host", "more hosts")}
                   aria-describedby={!allShown && foldedCounted ? FOLDED_ID : undefined}
                   onClick={() => {

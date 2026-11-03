@@ -328,7 +328,10 @@ describe("ProjectHostsGroup", () => {
     hostList.hosts = [host("linux", false), host("away", false)];
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
     const row = rowFor("linux");
-    expect(row.textContent).toContain("Not connected");
+    // A plainly offline host shows neither words nor a mark; its name says why.
+    expect(row.textContent).toBe("name-linux");
+    expect(row.querySelector("[data-link-tone]")).toBeNull();
+    expect(row.getAttribute("aria-label")).toBe("name-linux, not connected");
     expect(row.querySelector("[data-band]")).toBeNull();
     // Still the copy it was matched with.
     fireEvent.click(row);
@@ -349,7 +352,11 @@ describe("ProjectHostsGroup", () => {
       host("away", false),
     ];
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
-    expect(rowFor("linux").textContent).toContain("No reply");
+    // A silent link keeps its mark, and its name carries the words.
+    expect(rowFor("linux").querySelector("[data-link-tone]")?.getAttribute("data-link-tone")).toBe(
+      "attention"
+    );
+    expect(rowFor("linux").getAttribute("aria-label")).toMatch(/^name-linux, no reply/);
     expect(countsShown(rowFor("linux"))).toBe("");
   });
 
