@@ -123,6 +123,18 @@ describe("terminal.sendKeys result honesty (#16209)", () => {
     expect(terminalClient.write).not.toHaveBeenCalled();
   });
 
+  it("stops at a lock taken while the screen was read before the keys", async () => {
+    getSerializedState.mockImplementationOnce(async () => {
+      const panel = usePanelStore.getState().panelsById.t1!;
+      usePanelStore.setState({ panelsById: { t1: { ...panel, isInputLocked: true } } });
+      return screen === null ? null : { data: screen };
+    });
+    await expect(press(["Enter"])).rejects.toThrow(
+      "Terminal t1 has its input locked. Nothing was pressed."
+    );
+    expect(terminalClient.write).not.toHaveBeenCalled();
+  });
+
   it("says how many keys went in when input is blocked partway", async () => {
     vi.mocked(terminalClient.write).mockImplementation(() => {
       gate.block = { kind: "disconnected", hostName: "studio" };

@@ -439,6 +439,26 @@ describe("AgentStateService", () => {
       expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({ kind: "ready" });
     });
 
+    it("holds a send over a draft a dialog closed into (#16209)", () => {
+      const { service, terminal } = settledOnError("approval");
+      // The draft was typed before the dialog opened, so no stamp is newer than the read.
+      terminal.lastTypedInputAt = 1_500;
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt: 3_500,
+        draftInView: true,
+      });
+
+      expect(terminal.waitingReason).toBe("prompt");
+      expect(terminal.lastForeignInputAt).toBe(3_500);
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
+        kind: "hold",
+        reason: "typing",
+      });
+    });
+
     it("still holds a send for input that landed after the screen was read", () => {
       const { service, terminal } = settledOnError();
       terminal.lastTypedInputAt = 4_000;

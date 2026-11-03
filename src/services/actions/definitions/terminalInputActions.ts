@@ -413,9 +413,16 @@ export function registerTerminalInputActions(
       const pressed: string[] = [];
       for (const [index, key] of keys.entries()) {
         if (index > 0) await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_GAP_MS));
+        // The screen reads were async: a lock taken meanwhile still stops the keys.
+        const panelNow = usePanelStore.getState().panelsById[terminalId];
+        const locked =
+          (panelNow !== undefined && isPtyPanel(panelNow) && panelNow.isInputLocked) ||
+          peekTerminalService()?.get(terminalId)?.isInputLocked;
         const blocked = getTerminalInputBlock();
-        if (blocked) {
-          const why = `Terminal ${terminalId} takes no input right now (${getTerminalInputBlockMessage(blocked)}).`;
+        if (locked || blocked) {
+          const why = blocked
+            ? `Terminal ${terminalId} takes no input right now (${getTerminalInputBlockMessage(blocked)}).`
+            : `Terminal ${terminalId} has its input locked.`;
           throw new UnactionableTargetError(
             pressed.length === 0
               ? `${why} Nothing was pressed.`

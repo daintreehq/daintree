@@ -432,8 +432,12 @@ describe("AssistantTerminalControl (#13496)", () => {
 
     it("refuses when someone types while the screen is read for a choice", async () => {
       const lane = addLane(1, "t-one", { record: approval() });
+      let reads = 0;
       deps.serializedState = async () => {
-        lane.record = approval({ lastTypedInputAt: 2_000 });
+        reads += 1;
+        // The read before the keys (#16209) comes first; the typing lands
+        // during the read for the choice, after the record was first checked.
+        if (reads === 2) lane.record = approval({ lastTypedInputAt: 2_000 });
         return { data: "❯ 1. Yes\n  2. No, exit\n" };
       };
       await expect(
@@ -443,6 +447,7 @@ describe("AssistantTerminalControl (#13496)", () => {
           generation: 3,
         })
       ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(reads).toBe(2);
       expect(mocks.write).not.toHaveBeenCalled();
     });
 

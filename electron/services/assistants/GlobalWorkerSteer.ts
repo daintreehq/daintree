@@ -434,7 +434,7 @@ export class GlobalWorkerSteer {
   }> {
     return this.exclusive(target, async () => {
       const { terminalId, inputOwner } = target;
-      let record = await this.requireWorker(target);
+      await this.requireWorker(target);
       // The window read after the keys, read before them too (#16209).
       const before = await this.readScreen(terminalId, SEND_KEYS_SCREEN_LINES).catch(() => null);
       let keys = request.keys ? [...request.keys] : undefined;
@@ -450,7 +450,7 @@ export class GlobalWorkerSteer {
         refuse("VALIDATION_ERROR", "Pass `choose` or `keys`. Nothing was pressed.");
       }
       // The reads were async: the checks below must see the worker as it is now.
-      record = await this.requireWorker(target);
+      let record = await this.requireWorker(target);
       const pressed: string[] = [];
       const stop = (code: string, why: string): never =>
         refuse(

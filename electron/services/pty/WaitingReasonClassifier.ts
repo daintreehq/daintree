@@ -224,6 +224,26 @@ function choiceDialogFootersFor(agentId: string | undefined): readonly RegExp[] 
 }
 
 /**
+ * Whether the bottom of the screen is a selector by its structure alone
+ * (#16209): a numbered option list, or an unnumbered one under the footer
+ * `agentId`'s CLI draws. Phrases ("do you want to proceed") don't count, since
+ * a draft in the input row can carry them.
+ */
+export function endsOnChoiceSelector(
+  lines: string[],
+  rows = WAITING_REASON_SCAN_LINE_COUNT,
+  agentId?: string
+): boolean {
+  const stripped = withoutTrailingChecklist(
+    lines.map((l) => stripAnsi(l)),
+    rows
+  );
+  return (
+    endsOnChoiceDialog(stripped) || endsOnFooteredChoice(stripped, choiceDialogFootersFor(agentId))
+  );
+}
+
+/**
  * Why an agent that went idle is waiting, from the bottom `rows` of its screen
  * once a trailing task checklist is set aside; `lines` may carry the checklist's
  * rows on top of them (`WAITING_REASON_CHECKLIST_ROWS`). `composerRow`, when
@@ -258,12 +278,12 @@ export function classifyWaitingReason(
   // A choice selector whose options aren't yes/no ("Which framework?" over
   // "❯ 1. React" / "  2. Vue") takes a specific choice, not free text, so it
   // is an approval wait however its question reads (#14475).
-  if (endsOnChoiceDialog(strippedLines)) {
-    return "approval";
-  }
   // An unnumbered list ("❯ Keep auto (1m tokens)") is only told from a
   // composer by the footer its own CLI draws under it (#16209).
-  if (endsOnFooteredChoice(strippedLines, choiceDialogFootersFor(agentId))) {
+  if (
+    endsOnChoiceDialog(strippedLines) ||
+    endsOnFooteredChoice(strippedLines, choiceDialogFootersFor(agentId))
+  ) {
     return "approval";
   }
 

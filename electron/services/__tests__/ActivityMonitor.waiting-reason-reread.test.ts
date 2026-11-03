@@ -247,6 +247,50 @@ describe("ActivityMonitor waiting-reason re-read (#16093)", () => {
     expect(reasonUpdates(onStateChange)).toEqual(["approval", "prompt"]);
   });
 
+  it("never reads an approval phrase in a draft as a dialog (#16209)", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "reread-draft-phrase",
+      PROMPT_SCREEN,
+      "prompt"
+    );
+
+    monitor.onData("typing");
+    show(
+      PROMPT_SCREEN.map((line) =>
+        line === INPUT_ROW ? "❯ Do you want to proceed with the migration?" : line
+      )
+    );
+    vi.advanceTimersByTime(5000);
+    expect(onStateChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves a dialog closed into a draft, marking the draft (#16209)", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "reread-dialog-draft",
+      PROMPT_SCREEN,
+      "prompt"
+    );
+
+    monitor.onData("dialog");
+    show([
+      "❯ Keep auto (1m tokens)",
+      "  Autocompact at ‹ 400k › tokens",
+      "↑/↓ choose · ←/→ change size · enter confirm · esc not now",
+    ]);
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+
+    monitor.onData("\x1b[2J redraw");
+    show(PROMPT_SCREEN.map((line) => (line === INPUT_ROW ? "❯ restored draft" : line)));
+    vi.advanceTimersByTime(5000);
+    expect(onStateChange).toHaveBeenLastCalledWith("reread-dialog-draft", 1000, "idle", {
+      trigger: "pattern",
+      waitingReason: "prompt",
+      rereadAt: expect.any(Number),
+      draftInView: true,
+    });
+  });
+
   it("changes nothing while the input row holds a draft, and reads it once emptied", () => {
     const { monitor, onStateChange, show } = settleOn("reread-draft", LIMIT_SCREEN, "error");
 
