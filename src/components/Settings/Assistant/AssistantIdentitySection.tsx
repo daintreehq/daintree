@@ -42,28 +42,44 @@ interface IdentityRowProps {
   identity: DisplayIdentity;
 }
 
+function withPersona(name: string | undefined, emoji: string | undefined): DisplayIdentity {
+  return { ...(name && { name }), ...(emoji && { emoji }) };
+}
+
 function IdentityRow({ scope, label, description, fallback, identity }: IdentityRowProps) {
   // null shows the saved name; a string is an edit not yet saved.
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const shownName = draft ?? identity.name ?? "";
 
-  const save = async (next: DisplayIdentity) => {
+  // The persona last sent and not yet answered. What the row means now is that,
+  // not the store's copy, so an emoji picked while a name is saving keeps it.
+  const sentRef = useRef<{ identity: DisplayIdentity; seq: number } | null>(null);
+  const seqRef = useRef(0);
+  const intended = (): DisplayIdentity => sentRef.current?.identity ?? identity;
+
+  const save = async (next: DisplayIdentity): Promise<void> => {
+    const seq = ++seqRef.current;
+    sentRef.current = { identity: next, seq };
     const failure = await saveIdentity(scope, next);
+    if (sentRef.current?.seq === seq) sentRef.current = null;
     setError(failure);
-    return failure === null;
+    if (failure !== null) return;
+    // Only the draft this save carried: anything typed since stays.
+    setDraft((current) =>
+      current !== null && normalizeDisplayName(current) === next.name ? null : current
+    );
   };
 
-  const commitName = async () => {
+  const commitName = () => {
     if (draft === null) return;
+    const base = intended();
     const name = normalizeDisplayName(draft);
-    if (name === identity.name) {
-      setDraft(null);
+    if (name === base.name) {
+      if (sentRef.current === null) setDraft(null);
       return;
     }
-    if (await save({ ...(name && { name }), ...(identity.emoji && { emoji: identity.emoji }) })) {
-      setDraft(null);
-    }
+    void save(withPersona(name, base.emoji));
   };
 
   // A name typed and left without a blur (the dialog closed on Escape) still
@@ -74,15 +90,14 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
   });
   useEffect(() => {
     const pending = pendingRef;
+    const sent = sentRef;
     return () => {
       const { scope: lastScope, draft: lastDraft, identity: saved } = pending.current;
       if (lastDraft === null) return;
+      const base = sent.current?.identity ?? saved;
       const name = normalizeDisplayName(lastDraft);
-      if (name === saved.name) return;
-      void saveIdentity(lastScope, {
-        ...(name && { name }),
-        ...(saved.emoji && { emoji: saved.emoji }),
-      });
+      if (name === base.name) return;
+      void saveIdentity(lastScope, withPersona(name, base.emoji));
     };
   }, []);
 
@@ -102,12 +117,12 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
           <PersonaEmojiButton
             emoji={identity.emoji}
             ariaLabel={`${label} emoji`}
+            describedBy={descriptionId}
+            invalid={error !== null}
             disabled={disabled}
             onEmojiChange={(emoji) => {
-              const name = normalizeDisplayName(draft ?? identity.name);
-              void save({ ...(name && { name }), ...(emoji && { emoji }) }).then((saved) => {
-                if (saved) setDraft(null);
-              });
+              const name = draft !== null ? normalizeDisplayName(draft) : intended().name;
+              void save(withPersona(name, emoji));
             }}
           />
           <Input
@@ -120,11 +135,11 @@ function IdentityRow({ scope, label, description, fallback, identity }: Identity
             aria-describedby={descriptionId}
             aria-invalid={error ? true : undefined}
             onChange={(event) => setDraft(event.target.value)}
-            onBlur={() => void commitName()}
+            onBlur={commitName}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                void commitName();
+                commitName();
               } else if (event.key === "Escape" && draft !== null) {
                 // Escape backs out of the edit; a second one closes the dialog.
                 event.preventDefault();

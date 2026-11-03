@@ -10,7 +10,6 @@ import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 import type { DisplayIdentity } from "@shared/types/displayIdentity";
 import {
   displayIdentityLabel,
-  isEmptyDisplayIdentity,
   normalizeDisplayIdentity,
 } from "@shared/utils/displayIdentity";
 import { pluralize } from "@/lib/pluralize";
@@ -98,8 +97,9 @@ export function assistantDisplayName(item: Pick<CanopyAssistantItem, "identity">
 export function assistantPlaceLabel(
   item: Pick<CanopyAssistantItem, "identity" | "scopeLabel">
 ): string {
-  if (isEmptyDisplayIdentity(item.identity)) return item.scopeLabel;
-  return `${displayIdentityLabel(item.identity, item.scopeLabel)} · ${item.scopeLabel}`;
+  const label = displayIdentityLabel(item.identity, item.scopeLabel);
+  // The scope follows only when a name took its place.
+  return item.identity.name ? `${label} · ${item.scopeLabel}` : label;
 }
 
 /** The exact run, as a tuple: no id part can run into the next. */
@@ -364,6 +364,9 @@ export function assistantMatches(item: CanopyAssistantItem, terms: readonly stri
   const haystack = [
     "assistant",
     item.scopeLabel,
+    // Found by the name its row shows.
+    item.identity.name ?? "",
+    item.identity.emoji ?? "",
     // The global assistant's label leaves out the host its row shows.
     item.hostName ?? "",
     item.label ?? "",

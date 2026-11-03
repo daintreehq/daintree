@@ -32,6 +32,7 @@ export interface WorktreeTerminalRestoreSnapshot {
   id: string;
   title?: string;
   titleMode?: PtyPanelData["titleMode"];
+  displayEmoji?: string;
   worktreeId?: string;
   cwd?: string;
   location: "grid" | "dock";
@@ -100,6 +101,7 @@ function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot 
     id: panel.id,
     title: panel.title,
     titleMode: panel.titleMode,
+    ...(panel.displayEmoji && { displayEmoji: panel.displayEmoji }),
     worktreeId: panel.worktreeId,
     cwd: panel.cwd,
     location: panel.location === "dock" ? "dock" : "grid",
@@ -221,6 +223,7 @@ export async function restoreClosedTerminals(
         kind: "terminal",
         title: snap.title,
         titleMode: snap.titleMode,
+        ...(snap.displayEmoji && { displayEmoji: snap.displayEmoji }),
         worktreeId: snap.worktreeId,
         worktreeIdSource: "explicit",
         cwd: snap.cwd,

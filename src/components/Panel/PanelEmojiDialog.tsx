@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { usePanelStore } from "@/store/panelStore";
@@ -8,17 +9,31 @@ interface PanelEmojiDialogProps {
   title: string;
   isOpen: boolean;
   onClose: () => void;
+  /** Where focus goes back to: the menu that opened it is gone by then. */
+  restoreFocusTo?: RefObject<HTMLElement | null>;
 }
 
 /**
  * Gives an agent panel a persona emoji (#16213), shown beside its name in
  * the header, tabs, dock, palettes and notifications. Display only.
  */
-export function PanelEmojiDialog({ panelId, title, isOpen, onClose }: PanelEmojiDialogProps) {
+export function PanelEmojiDialog({
+  panelId,
+  title,
+  isOpen,
+  onClose,
+  restoreFocusTo,
+}: PanelEmojiDialogProps) {
   const emoji = usePanelStore((s) => s.panelsById[panelId]?.displayEmoji);
   const setDisplayEmoji = usePanelStore((s) => s.setDisplayEmoji);
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="sm" data-testid="panel-emoji-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="sm"
+      restoreFocusTo={restoreFocusTo}
+      data-testid="panel-emoji-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title>Choose an emoji for {title}</AppDialog.Title>
         <AppDialog.CloseButton />

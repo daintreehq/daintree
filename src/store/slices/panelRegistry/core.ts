@@ -119,6 +119,7 @@ export const createCorePanelActions = (
   | "flushSpawnBatch"
   | "removePanel"
   | "updateTitle"
+  | "setDisplayEmoji"
   | "updateLastObservedTitle"
   | "updateAgentState"
   | "noteAgentObservation"

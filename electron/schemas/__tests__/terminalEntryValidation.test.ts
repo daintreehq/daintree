@@ -875,9 +875,11 @@ describe("panel persona emoji (#16213)", () => {
     location: "grid",
   };
 
-  it("keeps one emoji as saved", () => {
-    const parsed = TerminalSnapshotSchema.safeParse({ ...panel, displayEmoji: "🦊" });
-    expect(parsed.success && parsed.data.displayEmoji).toBe("🦊");
+  it("keeps one emoji as saved, and adds none to a panel that has none", () => {
+    const parsed = TerminalSnapshotSchema.safeParse({ ...panel, displayEmoji: "👩‍💻" });
+    expect(parsed.success && parsed.data.displayEmoji).toBe("👩‍💻");
+    const bare = TerminalSnapshotSchema.safeParse(panel);
+    expect(bare.success && "displayEmoji" in bare.data).toBe(false);
   });
 
   it.each([42, "fox", "🦊🐶"])("drops a damaged emoji %j and keeps the panel", (displayEmoji) => {

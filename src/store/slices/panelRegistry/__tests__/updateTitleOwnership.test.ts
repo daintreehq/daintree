@@ -314,7 +314,11 @@ describe("setDisplayEmoji (#16213)", () => {
 
   it("gives a panel an emoji apart from its title, and takes it away again", async () => {
     usePanelStore.getState().updateTitle("t1", "Dwight", "user");
+    const { saveNormalized } = await import("../persistence");
+    vi.mocked(saveNormalized).mockClear();
     usePanelStore.getState().setDisplayEmoji("t1", " 🌱 ");
+    // Saved with the layout, so it outlives a restart.
+    expect(vi.mocked(saveNormalized).mock.calls.at(-1)?.[0].t1?.displayEmoji).toBe("🌱");
     expect(getPtyPanel("t1")).toMatchObject({
       title: "Dwight",
       titleMode: "user",

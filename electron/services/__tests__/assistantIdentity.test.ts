@@ -107,6 +107,22 @@ describe("assistant identities (#16213)", () => {
     expect(after.projects.new).toEqual({ name: "newest" });
   });
 
+  it("counts a project renamed again as the newest, not the oldest", () => {
+    const projects = Object.fromEntries(
+      Array.from({ length: PROJECT_IDENTITIES_MAX }, (_, i) => [`p${i}`, { name: `n${i}` }])
+    );
+    fakeStore.reset({ helpAssistant: { identities: { projects } } });
+
+    writeAssistantIdentity({ scope: { kind: "project", projectId: "p0" }, identity: { name: "again" } });
+    const after = writeAssistantIdentity({
+      scope: { kind: "project", projectId: "new" },
+      identity: { name: "newest" },
+    });
+
+    expect(after.projects.p0).toEqual({ name: "again" });
+    expect(after.projects.p1).toBeUndefined();
+  });
+
   it("reads a damaged store as safe personas, never a prototype key", () => {
     const stored = JSON.parse(
       '{"global":{"name":5,"emoji":"🐶"},"projects":{"__proto__":{"name":"x"},"p1":"bad","p2":{"name":" ok "}}}'

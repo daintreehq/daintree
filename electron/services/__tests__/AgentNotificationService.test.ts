@@ -77,6 +77,7 @@ import {
   getEndpointRegistry,
 } from "../../ipc/endpointRegistry.js";
 import { setPtyClientRef } from "../../window/serviceRefs.js";
+import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 
 /** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
 const OWNER = 101;
@@ -1897,6 +1898,45 @@ describe("AgentNotificationService", () => {
       );
       expect(call?.[1]).toBe("🦊 Auth refactor finished its task");
       expect(call?.[2]).toMatchObject({ panelTitle: "🦊 Auth refactor" });
+    });
+
+    it.each([
+      ["a project's", PROJECT_ID, "🌱 Dwight"],
+      ["the global", "daintree:global-assistant", "Assistant to the Regional Manager"],
+    ])("names %s assistant by the persona its scope wears (#16213)", (_which, projectId, label) => {
+      const helpTerminal = vi
+        .spyOn(getAgentAvailabilityStore(), "isHelpTerminal")
+        .mockImplementation((id) => id === "term-1");
+      setPtyClientRef({ getTerminalProjectId: () => projectId } as never);
+      try {
+        mockStore({ completedEnabled: true }, { terminals: [] });
+        const notificationGet = storeMock.get.getMockImplementation()!;
+        storeMock.get.mockImplementation((key: string) =>
+          key === "helpAssistant"
+            ? {
+                identities: {
+                  global: { name: "Assistant to the Regional Manager" },
+                  projects: { [PROJECT_ID]: { name: "Dwight", emoji: "🌱" } },
+                },
+              }
+            : notificationGet(key)
+        );
+        events.emit("agent:state-changed", {
+          state: "completed" as const,
+          previousState: "working" as const,
+          terminalId: "term-1",
+          agentId: "claude",
+          timestamp: Date.now(),
+          trigger: "heuristic" as const,
+          confidence: 1,
+        });
+        vi.advanceTimersByTime(5000);
+        const call = vi.mocked(notificationServiceMock.showWatchNotification).mock.calls.at(-1);
+        expect(call?.[1]).toBe(`${label} finished its task`);
+      } finally {
+        helpTerminal.mockRestore();
+        setPtyClientRef(null);
+      }
     });
   });
 

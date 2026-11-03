@@ -16,6 +16,10 @@ describe("normalizeDisplayName", () => {
     );
   });
 
+  it("turns a control into a space and drops hidden formatting", () => {
+    expect(normalizeDisplayName("Dw\u0007ight\u200b!")).toBe("Dw ight!");
+  });
+
   it("unsets an empty or non-text name", () => {
     expect(normalizeDisplayName("   ")).toBeUndefined();
     expect(normalizeDisplayName(42)).toBeUndefined();
@@ -34,7 +38,7 @@ describe("normalizeDisplayEmoji", () => {
     expect(normalizeDisplayEmoji(` ${emoji} `)).toBe(emoji);
   });
 
-  it.each(["A", "🐶🐱", "🐶 dog", "", "\u202e🐶"])("refuses %j", (value) => {
+  it.each(["A", "🐶🐱", "🐶 dog", "", "\u202e🐶", "\n🦊", "🦊\t"])("refuses %j", (value) => {
     expect(normalizeDisplayEmoji(value)).toBeUndefined();
   });
 });
@@ -43,6 +47,10 @@ describe("normalizeDisplayIdentity", () => {
   it("drops unknown and invalid fields and keeps the valid ones", () => {
     expect(normalizeDisplayIdentity({ name: " Dot ", emoji: "dog", extra: 1 })).toEqual({
       name: "Dot",
+    });
+    expect(normalizeDisplayIdentity({ name: "Dot", emoji: "🐶" })).toEqual({
+      name: "Dot",
+      emoji: "🐶",
     });
     expect(normalizeDisplayIdentity(null)).toEqual({});
   });
@@ -64,5 +72,9 @@ describe("display labels", () => {
       name: "P",
     });
     expect(assistantIdentityFor(identities, { kind: "project", projectId: "p2" })).toEqual({});
+    // Only a project's own entry: never one Object.prototype lends it.
+    expect(
+      assistantIdentityFor(identities, { kind: "project", projectId: "constructor" })
+    ).toEqual({});
   });
 });

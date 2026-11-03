@@ -527,6 +527,20 @@ describe("assistant personas (#16213)", () => {
     expect(assistantPlaceLabel(plain!)).toBe(plain!.scopeLabel);
   });
 
+  it("leaves the scope alone when the persona is only an emoji, and finds a row by its name", () => {
+    const [emojiOnly, named] = buildAssistantItems(
+      directory([
+        live(undefined, { personaEmoji: "🐶" }, null),
+        live(0, { personaName: "Dwight" }),
+      ]),
+      options
+    );
+
+    expect(assistantPlaceLabel(emojiOnly!)).toBe("🐶 Global");
+    expect(assistantMatches(named!, ["dwight"])).toBe(true);
+    expect(assistantMatches(emojiOnly!, ["dwight"])).toBe(false);
+  });
+
   it("keeps only what a persona can be from another machine's directory", () => {
     const [item] = buildAssistantItems(
       directory([live(0, { personaName: "Dot\u202e", personaEmoji: "not an emoji" })]),

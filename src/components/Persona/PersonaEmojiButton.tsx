@@ -13,6 +13,9 @@ interface PersonaEmojiButtonProps {
   /** Says whose emoji this is, e.g. "Global assistant emoji". */
   ariaLabel: string;
   disabled?: boolean;
+  /** The row's description and error, so a failed save is read with the button. */
+  describedBy?: string;
+  invalid?: boolean;
   className?: string;
 }
 
@@ -26,6 +29,8 @@ export function PersonaEmojiButton({
   onEmojiChange,
   ariaLabel,
   disabled = false,
+  describedBy,
+  invalid = false,
   className,
 }: PersonaEmojiButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -35,6 +40,8 @@ export function PersonaEmojiButton({
         <button
           type="button"
           aria-label={`${ariaLabel}, ${emoji ? `currently ${emoji}` : "none"}`}
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
           disabled={disabled}
           data-testid="persona-emoji-button"
           className={cn(

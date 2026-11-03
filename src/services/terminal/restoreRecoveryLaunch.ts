@@ -83,6 +83,7 @@ export function buildRestoreRecoveryLaunchOptions(
     launchAgentId: agentId,
     title: panel.title,
     titleMode: panel.titleMode,
+    ...(panel.displayEmoji && { displayEmoji: panel.displayEmoji }),
     // An agent that reopens a conversation only where it began resumes there;
     // a fresh start runs where the pane now lives (#13509).
     cwd:

@@ -4,6 +4,19 @@ import type { AssistantIdentities } from "@shared/types/displayIdentity";
 
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn(), logError: vi.fn() }));
 
+const resync = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  return {
+    onHostResync: vi.fn((listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    fire: () => [...listeners].forEach((listener) => listener()),
+    size: () => listeners.size,
+  };
+});
+vi.mock("@/store/hostResyncSignal", () => ({ onHostResync: resync.onHostResync }));
+
 import { initAssistantIdentitySync } from "../assistantIdentitySync";
 import { useAssistantIdentityStore } from "@/store/assistantIdentityStore";
 import { EMPTY_ASSISTANT_IDENTITIES } from "@shared/utils/displayIdentity";
@@ -55,6 +68,8 @@ describe("initAssistantIdentitySync (#16213)", () => {
 
     listener?.(named("Pushed"));
     expect(useAssistantIdentityStore.getState().identities.global.name).toBe("Pushed");
+    listener?.(named("Pushed again"));
+    expect(useAssistantIdentityStore.getState().identities.global.name).toBe("Pushed again");
     dispose();
   });
 
@@ -68,10 +83,25 @@ describe("initAssistantIdentitySync (#16213)", () => {
     dispose();
   });
 
+  it("reads again when a remote view's link comes back, and only the latest read lands", async () => {
+    const dispose = initAssistantIdentitySync();
+    const first = resolveRead;
+    resync.fire();
+    const second = resolveRead;
+    second(named("After resync"));
+    first(named("Before resync"));
+    await settle();
+
+    expect(bridge.getIdentities).toHaveBeenCalledTimes(2);
+    expect(useAssistantIdentityStore.getState().identities.global.name).toBe("After resync");
+    dispose();
+  });
+
   it("stops listening once disposed", async () => {
     const dispose = initAssistantIdentitySync();
     dispose();
     expect(listener).toBeNull();
+    expect(resync.size()).toBe(0);
     resolveRead(named("Late"));
     await settle();
 

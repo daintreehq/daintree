@@ -56,6 +56,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     // Without this a custom-titled relaunch reverts to detection-driven
     // titling, so the name the user chose is silently overwritten.
     titleMode: panel.titleMode,
+    ...(panel.displayEmoji && { displayEmoji: panel.displayEmoji }),
     cwd: panel.cwd ?? "",
     worktreeId: panel.worktreeId,
     location: panel.location === "dock" ? "dock" : "grid",

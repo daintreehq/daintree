@@ -1007,8 +1007,12 @@ describe("assistant personas (#16213)", () => {
       projects: {},
     });
     storeMock.get.mockReturnValue({
-      identities: { global: { name: "Dot" } },
+      identities: { global: { name: "Dot" }, projects: { p1: { emoji: "🌱" } } },
     } as Partial<HelpAssistantSettings>);
+    expect(await ipcMainMock._handlers.get("help-assistant:get-identities")!(null)).toEqual({
+      global: { name: "Dot" },
+      projects: { p1: { emoji: "🌱" } },
+    });
     const settings = await ipcMainMock._handlers.get(GET_CHANNEL)!(null);
     expect(settings).not.toHaveProperty("identities");
   });

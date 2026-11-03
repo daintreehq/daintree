@@ -314,6 +314,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       // Reopen-last restores the same terminal — the ownership rung carries
       // verbatim so a renamed title stays pinned across close/reopen.
       titleMode: panel.titleMode,
+      ...(panel.displayEmoji && { displayEmoji: panel.displayEmoji }),
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
@@ -364,6 +365,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       launchAgentId: panel.launchAgentId,
       title: panel.title,
       titleMode: panel.titleMode,
+      ...(panel.displayEmoji && { displayEmoji: panel.displayEmoji }),
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
@@ -450,6 +452,7 @@ export async function buildPanelDuplicateOptions(
       // Keep explicit names pinned on the copy — without this, detection
       // rewrites "X (copy)" back to the registry name moments after spawn.
       titleMode: presetWasStale ? undefined : duplicateTitleMode(sourcePanel),
+      ...(sourcePanel.displayEmoji && { displayEmoji: sourcePanel.displayEmoji }),
       cwd: resolveInheritedPanelCwd(sourcePanel),
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
@@ -506,6 +509,7 @@ export async function buildPanelDuplicateOptions(
       cwd: resolveInheritedPanelCwd(sourcePanel),
       title: sourcePanel.title,
       titleMode: duplicateTitleMode(sourcePanel),
+      ...(sourcePanel.displayEmoji && { displayEmoji: sourcePanel.displayEmoji }),
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,

@@ -26,6 +26,8 @@ export function useGlobalAssistantIdentity(): DisplayIdentity {
 /** This project's assistant persona; empty without a project or a persona. */
 export function useProjectAssistantIdentity(projectId: string | null | undefined): DisplayIdentity {
   return useAssistantIdentityStore((state) =>
-    projectId ? (state.identities.projects[projectId] ?? NO_IDENTITY) : NO_IDENTITY
+    projectId && Object.hasOwn(state.identities.projects, projectId)
+      ? (state.identities.projects[projectId] ?? NO_IDENTITY)
+      : NO_IDENTITY
   );
 }

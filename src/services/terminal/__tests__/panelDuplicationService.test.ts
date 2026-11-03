@@ -154,6 +154,20 @@ describe("buildPanelSnapshotOptions", () => {
     });
   });
 
+  it("reopens a closed agent pane with its persona emoji (#16213)", () => {
+    const agent = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude-cmd",
+      title: "Auth worker",
+      displayEmoji: "🦊",
+    });
+    expect(buildPanelSnapshotOptions(agent)?.displayEmoji).toBe("🦊");
+    expect(buildPanelSnapshotOptions(makePanel({ command: "bash" }))).not.toHaveProperty(
+      "displayEmoji"
+    );
+  });
+
   it("does not include location in the snapshot", () => {
     const panel = makePanel({ location: "dock" });
     const result = buildPanelSnapshotOptions(panel);
@@ -261,6 +275,18 @@ describe("panelDuplicationService", () => {
       isInputLocked: true,
       command: "bash",
     });
+  });
+
+  it("gives a copy the source's persona emoji, agent or plain terminal (#16213)", async () => {
+    const agent = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude-cmd",
+      displayEmoji: "🦊",
+    });
+    expect((await buildPanelDuplicateOptions(agent, "grid")).displayEmoji).toBe("🦊");
+    const plain = makePanel({ command: "bash", displayEmoji: "🐚" });
+    expect((await buildPanelDuplicateOptions(plain, "grid")).displayEmoji).toBe("🐚");
   });
 
   it("uses target location rather than source location", async () => {

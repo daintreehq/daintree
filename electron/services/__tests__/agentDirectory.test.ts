@@ -161,7 +161,11 @@ describe("collectAgentDirectory (#14160)", () => {
           ...(slot ? {} : {}),
         }),
         assistantIdentity: (scope) =>
-          scope.kind === "global" ? { name: "Assistant to the Regional Manager" } : {},
+          scope.kind === "global"
+            ? { name: "Assistant to the Regional Manager" }
+            : scope.projectId === "p1"
+              ? { name: "Dwight", emoji: "🌱" }
+              : {},
       })
     );
 
@@ -173,7 +177,7 @@ describe("collectAgentDirectory (#14160)", () => {
     );
     expect(personas).toEqual([
       ["assistant", "global", "Assistant to the Regional Manager", undefined],
-      ["assistant", "project", undefined, undefined],
+      ["assistant", "project", "Dwight", "🌱"],
       ["worker", "project", undefined, undefined],
       ["worker", "project", undefined, undefined],
     ]);

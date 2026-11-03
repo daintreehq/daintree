@@ -40,9 +40,11 @@ export function normalizeDisplayName(value: unknown): string | undefined {
 /** Exactly one emoji (ZWJ sequences, flags, keycaps and skin tones included), or nothing. */
 export function normalizeDisplayEmoji(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
+  // Checked before the trim, which would otherwise take a newline or tab away
+  // and let the rest through.
+  if (value.replace(CONTROLS, "").replace(HIDDEN_FORMATTING, "") !== value) return undefined;
   const text = value.trim();
   if (!text || text.length > DISPLAY_EMOJI_MAX_UNITS) return undefined;
-  if (text.replace(CONTROLS, "").replace(HIDDEN_FORMATTING, "") !== text) return undefined;
   if (!PICTOGRAPHIC.test(text)) return undefined;
   return graphemeList(text).length === 1 ? text : undefined;
 }
@@ -89,5 +91,9 @@ export function assistantIdentityFor(
   scope: AssistantIdentityScope
 ): DisplayIdentity {
   if (!identities) return {};
-  return scope.kind === "global" ? identities.global : (identities.projects[scope.projectId] ?? {});
+  if (scope.kind === "global") return identities.global;
+  // Own entries only: a project id like "constructor" must not read Object's.
+  return Object.hasOwn(identities.projects, scope.projectId)
+    ? (identities.projects[scope.projectId] ?? {})
+    : {};
 }

@@ -1,4 +1,6 @@
 import { Check } from "lucide-react";
+import { usePanelStore } from "@/store";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { cn } from "@/lib/utils";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -23,6 +25,8 @@ export function HiddenTabMenuItem({ tab, onSelect }: { tab: TabInfo; onSelect: (
     getTerminalAgentDisplayState(tab.chrome, tab.agentState)
   );
   const StateIcon = state ? SESSION_ICONS[state] : null;
+  // As the tab itself shows it: the emoji is what tells two same-named tabs apart.
+  const displayEmoji = usePanelStore((s) => s.panelsById[tab.id]?.displayEmoji);
 
   return (
     <DropdownMenuItem
@@ -40,7 +44,7 @@ export function HiddenTabMenuItem({ tab, onSelect }: { tab: TabInfo; onSelect: (
           brandColor={tab.presetColor ?? tab.chrome.color}
         />
       </span>
-      <span className="mr-3 truncate">{tab.title}</span>
+      <span className="mr-3 truncate">{withDisplayEmoji(tab.title, displayEmoji)}</span>
       {state && <span className="sr-only">, {SESSION_LABELS[state]}</span>}
       {tab.isActive && (
         <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
