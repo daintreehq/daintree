@@ -57,10 +57,11 @@ export function relayUpdateCommand(
 
 /**
  * How an update's pane ended: its command exited with `exitCode` (the CLI's
- * own, since the pane's shell ends with it), or the pane was closed or
- * restarted before the command ended.
+ * own, since the pane's shell ends with it), its terminal was refused or never
+ * started, or the pane was closed or restarted before the command ended.
  */
-export type RelayUpdateEnd = { reason: "exited"; exitCode: number | null } | { reason: "closed" };
+export type RelayUpdateEnd =
+  { reason: "exited"; exitCode: number | null } | { reason: "not-started" } | { reason: "closed" };
 
 interface RelayUpdateRunBase {
   /** Rises with every update started in this window, so a later one never reads as an earlier one. */
@@ -116,10 +117,11 @@ export function useRelayUpdateRun(): RelayUpdateRun | null {
 
 /**
  * What the pane shows of its command's end, or null while it may still be
- * running. A spawn error isn't an end: one reported while the host was slow
- * to confirm is cleared when the host turns out to have started it. Nor is a
- * restart being asked for, which can still be refused; only one that went
- * ahead (its restart key moved on), replacing the process, is.
+ * running. A failed spawn is an end, but not a spawn error alone: one
+ * reported while the host was slow to confirm is cleared when the host turns
+ * out to have started it. Nor is a restart being asked for, which can still
+ * be refused; only one that went ahead (its restart key moved on), replacing
+ * the process, is.
  */
 function endOf(panel: PanelInstance | undefined, restarts: number): RelayUpdateEnd | null {
   if (!panel || !isPtyPanel(panel) || (panel.restartKey ?? 0) !== restarts) {
@@ -128,6 +130,7 @@ function endOf(panel: PanelInstance | undefined, restarts: number): RelayUpdateE
   if (panel.runtimeStatus === "exited") {
     return { reason: "exited", exitCode: panel.exitCode ?? null };
   }
+  if (panel.spawnStatus === "failed") return { reason: "not-started" };
   return null;
 }
 

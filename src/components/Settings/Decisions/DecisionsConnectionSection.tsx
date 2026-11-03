@@ -204,27 +204,27 @@ export function DecisionsConnectionSection({
     if (recheckedFor.current === updateId) return;
     recheckedFor.current = updateId;
     setRecheckedUpdateId(updateId);
-    // A claim or restore's own check is older than what the update left.
-    identity.reset();
     relay.run(origin);
   });
   // Connected or not: an update can leave a relay this computer can't reach
-  // yet. Not while a claim, restore or disconnect is settling, whose result
-  // the reset would drop; it runs once that has.
+  // yet. Not while a claim, restore or disconnect is settling, which may yet
+  // set this relay aside; it runs once that has.
   useEffect(() => {
     if (endedUpdateId !== null && savedOrigin && !busy) {
       recheckAfterUpdate(savedOrigin, endedUpdateId);
     }
   }, [endedUpdateId, savedOrigin, busy]);
 
-  // A setup reruns the check, and what it saw then is newer than the last one shown.
-  const check = identity.recheck ?? relay.check;
+  const updateRechecked = update?.state === "ended" && recheckedUpdateId === update.id;
+  // A setup reruns the check, and what it saw then is newer than the last one
+  // shown, unless an update has ended since and been checked after.
+  const check = updateRechecked ? relay.check : (identity.recheck ?? relay.check);
   const observation = check ? describeRelayCheck(check) : null;
   const compatibility = check && "compatibility" in check ? check.compatibility : null;
   const versions = compatibility ? describeCompatibility(compatibility, updateRoute) : null;
   const updateOutcome =
     update?.state === "ended" &&
-    recheckedUpdateId === update.id &&
+    updateRechecked &&
     !relay.checking &&
     (relay.check !== null || relay.error !== null)
       ? describeRelayUpdateOutcome(update.end, update.fromVersion, relayVersionAfter(relay.check))

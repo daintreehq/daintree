@@ -251,12 +251,21 @@ describe("relay update terminal", () => {
   it("keeps following through a spawn error the host later takes back", async () => {
     const id = await openRunning();
 
-    setPanel(id, { runtimeStatus: "error", spawnStatus: "failed" });
+    // A confirmation that timed out: the spawn itself is still being settled.
+    setPanel(id, { runtimeStatus: "error", spawnStatus: "spawning" });
     expect(getRelayUpdateRun()?.state).toBe("running");
-    setPanel(id, { runtimeStatus: undefined });
+    setPanel(id, { runtimeStatus: undefined, spawnStatus: "ready" });
 
     setPanel(id, { runtimeStatus: "exited", exitCode: 1 });
     expect(getRelayUpdateRun()).toMatchObject({ end: { reason: "exited", exitCode: 1 } });
+  });
+
+  it("ends the run when its pane's spawn failed for good", async () => {
+    const id = await openRunning();
+
+    setPanel(id, { runtimeStatus: "error", spawnStatus: "failed" });
+
+    expect(getRelayUpdateRun()).toMatchObject({ state: "ended", end: { reason: "not-started" } });
   });
 
   it("measures a restart from the pane as it opened", async () => {

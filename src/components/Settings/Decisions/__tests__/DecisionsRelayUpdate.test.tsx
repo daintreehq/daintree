@@ -26,6 +26,20 @@ vi.mock("@/store/panelStore", async () => {
     usePanelStore: create(() => ({ panelsById: {} as Record<string, unknown>, addPanel })),
   };
 });
+// The confirm itself is ConfirmDialog's; here only what the section does with it.
+vi.mock("../DecisionsDisconnectDialog", () => ({
+  DecisionsDisconnectDialog: (props: {
+    isOpen: boolean;
+    error: string | null;
+    onConfirm: () => void;
+  }) =>
+    props.isOpen ? (
+      <div role="alertdialog">
+        {props.error && <p role="alert">{props.error}</p>}
+        <button onClick={props.onConfirm}>Confirm</button>
+      </div>
+    ) : null,
+}));
 vi.mock("@/hooks/app/useHomeDir", () => ({ useHomeDir: () => ({ homeDir: view.homeDir }) }));
 vi.mock("@/hooks/useHostPlatform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useHostPlatform")>()),
@@ -57,6 +71,7 @@ const DAINTREE: DecisionsRelayVersions = { protocolMin: 1, protocolMax: 2, worke
 const CONNECTED: DecisionsStatus = { state: "connected", relayOrigin: ORIGIN };
 
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
+const disconnectRelay = vi.fn<() => Promise<DecisionsStatus>>();
 
 function claimedAt(
   workerVersion: string,
@@ -161,6 +176,7 @@ describe("Decisions relay update", () => {
     });
     checkRelay.mockReset();
     onChanged.mockReset();
+    disconnectRelay.mockReset();
     Object.assign(view, {
       remote: false,
       homeDir: "/home/me",
@@ -171,6 +187,7 @@ describe("Decisions relay update", () => {
       value: {
         decisions: {
           checkRelay,
+          disconnectRelay,
           getSetupCheck: () => Promise.resolve(null),
           startSetupCheck: vi.fn(),
           cancelSetupCheck: () => Promise.resolve(null),
@@ -417,6 +434,35 @@ describe("Decisions relay update", () => {
 
     await rerenderSection(section, { state: "reconnecting", relayOrigin: ORIGIN });
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    expect(within(outcomeRow()!).getByText("Relay updated to 0.3.0")).toBeTruthy();
+  });
+
+  it("checks after a disconnect settles, and keeps what that disconnect said", async () => {
+    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+    await renderSection();
+    const pane = await startUpdate();
+
+    let refuse!: (reason: Error) => void;
+    disconnectRelay.mockImplementationOnce(() => new Promise((_, reject) => (refuse = reject)));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disconnect relay" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    });
+    expect(disconnectRelay).toHaveBeenCalledOnce();
+
+    checkRelay.mockClear();
+    checkRelay.mockResolvedValue(claimedAt("0.3.0"));
+    await endPane(pane, { runtimeStatus: "exited", exitCode: 0 });
+    expect(checkRelay).not.toHaveBeenCalled();
+
+    await act(async () => {
+      refuse(new Error("The keychain refused"));
+    });
+
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    expect(screen.getByRole("alert").textContent).toBe("The keychain refused");
     expect(within(outcomeRow()!).getByText("Relay updated to 0.3.0")).toBeTruthy();
   });
 

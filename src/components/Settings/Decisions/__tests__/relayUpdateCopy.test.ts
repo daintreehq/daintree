@@ -75,6 +75,14 @@ describe("relay update outcome", () => {
     );
   });
 
+  it("says an update whose terminal never started didn't run", () => {
+    const outcome = describeRelayUpdateOutcome({ reason: "not-started" }, "0.2.0", "0.2.0");
+
+    expect(outcome.severity).toBe("error");
+    expect(outcome.detail).toMatch(/didn't run/);
+    expect(outcome.detail).toMatch(/still runs 0\.2\.0/);
+  });
+
   it("says the version couldn't be read rather than guessing at one", () => {
     for (const end of [
       { reason: "exited", exitCode: 0 },

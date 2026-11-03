@@ -29,6 +29,13 @@ export function describeRelayUpdateOutcome(
   fromVersion: string,
   toVersion: string | null
 ): RelayObservation {
+  if (end.reason === "not-started") {
+    return {
+      severity: "error",
+      label: "The relay update didn't start",
+      detail: `Its terminal couldn't start, so the update didn't run. ${versionNow(fromVersion, toVersion)}`,
+    };
+  }
   if (end.reason === "closed") {
     return {
       severity: "warning",
