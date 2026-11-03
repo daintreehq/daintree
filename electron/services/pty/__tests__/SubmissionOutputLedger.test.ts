@@ -91,18 +91,6 @@ describe("SubmissionOutputLedger", () => {
     ledger.dispose();
   });
 
-  it("settles open captures on what they last published, in the state given, and leaves ended ones", () => {
-    const ledger = new SubmissionOutputLedger();
-    const open = ledger.begin("open");
-    const ended = ledger.begin("ended");
-    ledger.publish(open, capturing("partial"));
-    ledger.publish(ended, { text: "done", truncated: false, state: "closed" });
-    ledger.settleOpen("lost");
-    expect(ledger.read("open")).toEqual({ text: "partial", truncated: false, state: "lost" });
-    expect(ledger.read("ended")?.state).toBe("closed");
-    ledger.dispose();
-  });
-
   it("never reuses a capture id across ledgers", () => {
     const first = new SubmissionOutputLedger();
     const second = new SubmissionOutputLedger();

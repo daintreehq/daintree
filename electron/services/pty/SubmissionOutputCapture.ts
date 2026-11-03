@@ -54,9 +54,9 @@ const ANCHOR_MIN_CHARS = 24;
 const CONTEXT_ROWS = 64;
 
 /**
- * Rows above the screen a realignment searches. At a resize everything that
- * scrolled off has been read, so the last line read sits at the end of
- * scrollback; this only bounds the cost of a pane being dragged.
+ * Rows before the expected boundary a realignment searches from. The marker
+ * moves with a reflow's inserted and deleted rows, so the boundary sits near
+ * it; this only bounds the cost of a pane being dragged.
  */
 const REALIGN_SCAN_ROWS = 2000;
 
@@ -99,14 +99,13 @@ function readLines(
   let next = row;
   while (row < limit) {
     let end = row;
-    let text = "";
-    // A row the line continues past keeps every cell, so a soft wrap that
-    // lands on the space between two words keeps the space.
+    // Trimming drops only cells nothing was written to, such as the padding
+    // before a wide character that wrapped; a written space at a wrap stays.
+    let text = buffer.getLine(row)?.translateToString(true) ?? "";
     while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped === true) {
-      text += buffer.getLine(end)?.translateToString(false) ?? "";
       end += 1;
+      text += buffer.getLine(end)?.translateToString(true) ?? "";
     }
-    text += buffer.getLine(end)?.translateToString(true) ?? "";
     if (complete && end >= to) break;
     lines.push({ text: text.trimEnd(), endRow: end });
     row = end + 1;
@@ -294,9 +293,9 @@ export class SubmissionOutputCapture {
     // At the resize itself, after the reflow and before any later output can
     // scroll unread lines into scrollback beside the ones already read.
     this.resizeHandler = terminal.onResize(() => {
-      if (this.state === "capturing" && this.columnsChanged() && this.realign() === undefined) {
-        this.finish("lost");
-      }
+      if (this.state !== "capturing" || !this.columnsChanged()) return;
+      // A realignment that committed a capped replay closed the capture.
+      if (this.realign() === undefined && this.state === "capturing") this.finish("lost");
     });
     this.purgeHandler = terminal.parser.registerCsiHandler({ final: "J" }, (params) => {
       if (params[0] === 3 && terminal.buffer.active.type === "normal") this.notePurge();
@@ -361,7 +360,7 @@ export class SubmissionOutputCapture {
     if (from === undefined) {
       from = this.realign();
       if (from === undefined) {
-        if (!tolerant) this.finish("lost");
+        if (!tolerant && this.state === "capturing") this.finish("lost");
         return;
       }
     }
@@ -421,17 +420,29 @@ export class SubmissionOutputCapture {
     }
     const buffer = this.terminal.buffer.normal;
     const matcher = new AnchorMatcher(anchor);
+    // Where the marker says the boundary is. A reflow moves it with the rows
+    // it inserts and deletes, so the true boundary is the match nearest it;
+    // without it, read lines are the ones that scrolled off.
+    const marker = this.marker;
+    const expected = marker !== undefined && !marker.isDisposed ? marker.line + 1 : undefined;
+    let from = Math.max(0, Math.min(expected ?? buffer.baseY, buffer.baseY) - REALIGN_SCAN_ROWS);
+    while (from > 0 && buffer.getLine(from)?.isWrapped === true) from -= 1;
+    let nearest: number | undefined;
     let inScrollback: number | undefined;
     let onScreen: number | undefined;
-    const scanFrom = Math.max(0, buffer.baseY - REALIGN_SCAN_ROWS);
-    for (const line of readLines(buffer, scanFrom, buffer.length, false).lines) {
+    for (const line of readLines(buffer, from, buffer.length, false).lines) {
       if (matcher.feed(line.text) < 0) continue;
-      // What was read scrolled off, so a match there beats a later one on
-      // screen, which may be unread output that happens to repeat it.
-      if (line.endRow < buffer.baseY) inScrollback = line.endRow + 1;
-      else onScreen ??= line.endRow + 1;
+      const next = line.endRow + 1;
+      if (
+        expected !== undefined &&
+        (nearest === undefined || Math.abs(next - expected) < Math.abs(nearest - expected))
+      ) {
+        nearest = next;
+      }
+      if (line.endRow < buffer.baseY) inScrollback = next;
+      else onScreen ??= next;
     }
-    const next = inScrollback ?? onScreen;
+    const next = nearest ?? inScrollback ?? onScreen;
     if (next !== undefined) this.markReadUpTo(next);
     return next;
   }

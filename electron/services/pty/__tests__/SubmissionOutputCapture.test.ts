@@ -631,3 +631,64 @@ describe("SubmissionOutputCapture, second review (#16210)", () => {
     expect(capture.snapshot()).toMatchObject({ truncated: true, state: "closed" });
   });
 });
+
+describe("SubmissionOutputCapture, third review (#16210)", () => {
+  it("keeps a wide character that wrapped intact across a column change", async () => {
+    const terminal = mirror(10, 4);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    await write(terminal, "go\r\n123456789界\r\n" + numbered("n", 6), capture);
+    terminal.resize(20, 4);
+    await write(terminal, numbered("m", 6), capture);
+
+    const output = capture.snapshot();
+    expect(output.state).toBe("capturing");
+    expect(output.text.split("\n")[1]).toBe("123456789界");
+    expect(output.text).toContain("m 6");
+  });
+
+  it("finds the boundary behind a long unread line when a narrowing pushes it far back", async () => {
+    const terminal = mirror(10, 5, 5000);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    await write(terminal, "go\r\nthe answer starts here\r\n", capture);
+    await write(terminal, numbered("x", 6), capture);
+    // Still reaching the screen, so not read yet.
+    await write(terminal, "y".repeat(11_000), capture);
+    terminal.resize(5, 5);
+    await write(terminal, "\r\n" + numbered("z", 6), capture);
+
+    const output = capture.snapshot();
+    expect(output.state).toBe("capturing");
+    const lines = output.text.split("\n");
+    expect(lines.slice(0, 2)).toEqual(["$ go", "the answer starts here"]);
+    expect(lines.filter((line) => line === "x 1")).toHaveLength(1);
+  });
+
+  it("does not read repeated lines twice when a resize pulls them back on screen", async () => {
+    const terminal = mirror(40, 6);
+    await write(terminal, "$ ");
+    const capture = new SubmissionOutputCapture(terminal, "go");
+    const same = Array.from({ length: 100 }, () => "the same line\r\n").join("");
+    await write(terminal, `go\r\n${same}`, capture);
+    terminal.resize(41, 150);
+    await write(terminal, "end\r\n", capture);
+
+    const lines = capture.close().text.split("\n");
+    expect(lines.filter((line) => line === "the same line")).toHaveLength(100);
+    expect(lines.at(-1)).toBe("end");
+  });
+
+  it("stays closed when a column change commits a replay that reached the cap", async () => {
+    const terminal = mirror(60, 10);
+    const question = "please list the permissions you still need";
+    const capture = new SubmissionOutputCapture(terminal, question);
+    await replay(
+      terminal,
+      [`› ${question}`, ...rows("• line", SUBMISSION_OUTPUT_MAX_LINES + 20)],
+      capture
+    );
+    terminal.resize(70, 10);
+    expect(capture.snapshot()).toMatchObject({ truncated: true, state: "closed" });
+  });
+});

@@ -209,7 +209,12 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     });
   }
 
-  unregister(terminalId: string): void {
+  /**
+   * With `backend`, only while it is still the one registered: a terminal
+   * replaced under the same id has registered its own.
+   */
+  unregister(terminalId: string, backend?: WorkerAnalysisBackend): void {
+    if (backend !== undefined && this.backends.get(terminalId) !== backend) return;
     this.backends.delete(terminalId);
     const slot = this.assignments.get(terminalId);
     if (slot) {

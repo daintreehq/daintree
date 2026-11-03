@@ -268,6 +268,26 @@ describe("TerminalProcess submission output (#16210), worker mirror", () => {
     if (request !== -1) expect(request).toBeGreaterThan(close);
   });
 
+  it("takes the worker's final after the slot is released at exit", async () => {
+    const { terminal, worker } = createWorkerTerminal();
+    await sendAndWait(terminal, "ask\n", "tok-1");
+    const start = startMessage(worker)!;
+    onPtyExit!({ exitCode: 1 });
+    await vi.waitFor(() => expect(timeline).toContain("post:free"));
+
+    worker.emit({
+      type: "submission-capture",
+      terminalId: "t1",
+      captureId: start.captureId,
+      output: { text: "$ ask\nthe last words", truncated: false, state: "closed" },
+    });
+    expect(terminal.getSubmission("tok-1")?.output).toEqual({
+      text: "$ ask\nthe last words",
+      truncated: false,
+      state: "closed",
+    });
+  });
+
   it("settles an open capture as lost when no worker is left to host the terminal", async () => {
     const { terminal } = createWorkerTerminal();
     await sendAndWait(terminal, "ask\n", "tok-1");

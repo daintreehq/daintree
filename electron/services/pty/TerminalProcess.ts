@@ -860,8 +860,6 @@ export class TerminalProcess {
       this.samplingFinalFrame = false;
     }
     this.analysis.release();
-    // A capture whose start never reached the mirror has nothing more coming.
-    this.submissionOutputs.settleOpen("closed");
   }
 
   private snapshotAndDisposePreserved(): void {

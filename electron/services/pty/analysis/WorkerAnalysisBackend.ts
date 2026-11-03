@@ -92,6 +92,13 @@ export interface WorkerBackendSpec {
 }
 
 /** The pool surface a backend needs; implemented by AnalysisWorkerPool. */
+/**
+ * How long a released slot waits for a capture's final (#16210). The worker
+ * answers in message order behind output it had not parsed yet, so this
+ * covers a backlog, not just the round trip.
+ */
+const CAPTURE_FINAL_GRACE_MS = 5_000;
+
 export interface AnalysisPoolHost {
   /** Returns true when the message was actually handed to a live worker. */
   post(terminalId: string, msg: HostToWorkerMessage): boolean;
@@ -100,13 +107,16 @@ export interface AnalysisPoolHost {
     op: AnalysisRequestOp,
     tailRows?: number
   ): Promise<AnalysisRequestResult>;
-  unregister(terminalId: string): void;
+  /** With `backend`, only while it is still the one registered under the id. */
+  unregister(terminalId: string, backend?: WorkerAnalysisBackend): void;
 }
 
 export class WorkerAnalysisBackend implements AnalysisBackend {
   readonly kind = "worker" as const;
 
   private released = false;
+  /** Set between a release with captures pending and their final (#16210). */
+  private releaseTimer: ReturnType<typeof setTimeout> | undefined;
   /**
    * Submission captures the worker has yet to send a final for (#16210): the
    * open one, and one it has been told to end. Each keeps what it last
@@ -415,6 +425,16 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     if (!sent) this.settleCaptures("lost");
   }
 
+  private takeCaptureEvent(
+    msg: Extract<WorkerToHostMessage, { type: "submission-capture" }>
+  ): void {
+    const capture = this.captures.get(msg.captureId);
+    if (capture === undefined) return;
+    capture.last = msg.output;
+    if (msg.output.state !== "capturing") this.captures.delete(msg.captureId);
+    capture.publish(msg.captureId, msg.output);
+  }
+
   /** End every capture on what it last published: the worker will send no more for them. */
   private settleCaptures(state: "closed" | "lost"): void {
     const pending = [...this.captures];
@@ -549,7 +569,6 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   release(): void {
     if (this.released) return;
     this.released = true;
-    this.settleCaptures("closed");
     this.stopProcessStatePush();
     this.monitorSpec = null;
     // Drop any host-side hold (up to the hard cap) — no future ack will arrive
@@ -562,11 +581,31 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
         terminalId: this.spec.terminalId,
       });
     }
-    this.pool.unregister(this.spec.terminalId);
+    if (this.captures.size === 0 || this.detached) {
+      this.finishRelease();
+      return;
+    }
+    // The worker sends a capture's final as it frees the session, after any
+    // close already posted, so its last frame is listened for a little while
+    // longer rather than settled on what was published up to 250 ms before.
+    this.releaseTimer = setTimeout(() => this.finishRelease(), CAPTURE_FINAL_GRACE_MS);
+    this.releaseTimer.unref?.();
+  }
+
+  private finishRelease(): void {
+    if (this.releaseTimer !== undefined) clearTimeout(this.releaseTimer);
+    this.releaseTimer = undefined;
+    this.settleCaptures("closed");
+    this.pool.unregister(this.spec.terminalId, this);
   }
 
   handleWorkerEvent(msg: WorkerToHostMessage): void {
-    if (this.released) return;
+    if (this.released) {
+      if (msg.type !== "submission-capture" || this.releaseTimer === undefined) return;
+      this.takeCaptureEvent(msg);
+      if (this.captures.size === 0) this.finishRelease();
+      return;
+    }
     switch (msg.type) {
       case "data-ack":
         this.handleDataAck(msg.epoch, msg.bytes);
@@ -583,14 +622,9 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       case "pty-response":
         this.delegate.onPtyResponse(msg.data);
         return;
-      case "submission-capture": {
-        const capture = this.captures.get(msg.captureId);
-        if (capture === undefined) return;
-        capture.last = msg.output;
-        if (msg.output.state !== "capturing") this.captures.delete(msg.captureId);
-        capture.publish(msg.captureId, msg.output);
+      case "submission-capture":
+        this.takeCaptureEvent(msg);
         return;
-      }
       case "viewport":
         this.viewportLines = msg.lines;
         this.cursorLine = msg.cursorLine;
@@ -610,7 +644,14 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
    * buffer, so the fresh empty buffer can't clobber a good on-disk snapshot.
    */
   handleWorkerLost(): void {
-    if (this.released) return;
+    if (this.released) {
+      // A capture's final can no longer come.
+      if (this.releaseTimer !== undefined) {
+        this.settleCaptures("lost");
+        this.finishRelease();
+      }
+      return;
+    }
     // The dead worker's queued messages (and their acks) are gone — the ledger
     // reset and epoch bump happen in rebuildFreshSlot.
     this.rebuildFreshSlot();

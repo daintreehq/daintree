@@ -73,16 +73,6 @@ export class SubmissionOutputLedger {
     };
   }
 
-  /**
-   * Settle every capture still open as `state`: the mirror behind it is gone,
-   * so nothing more will arrive. What it published last is kept.
-   */
-  settleOpen(state: "closed" | "lost"): void {
-    for (const entry of this.entries.values()) {
-      if (entry.output.state === "capturing") entry.output = { ...entry.output, state };
-    }
-  }
-
   read(token: string, now = Date.now()): TerminalSubmissionOutput | undefined {
     const entry = this.entries.get(token);
     if (entry === undefined) return undefined;
