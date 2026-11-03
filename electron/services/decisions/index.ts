@@ -777,7 +777,9 @@ export async function claimDeployedRelay(
 ): Promise<DecisionsConnectResult> {
   const outcome = await relayDeploys.claim(payload);
   // The claim's own status was read before the deploy recorded how it ended.
-  return outcome.result === "saved" ? { result: "saved", status: await getDecisionsStatus() } : outcome;
+  return outcome.result === "saved"
+    ? { result: "saved", status: await getDecisionsStatus() }
+    : outcome;
 }
 
 /** Restores the owner identity of a claimed relay from its recovery kit (#16006). */

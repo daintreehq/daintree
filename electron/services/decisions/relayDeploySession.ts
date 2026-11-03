@@ -66,7 +66,9 @@ function claimError(error: unknown): DecisionsRelayDeployClaimFailure {
   return {
     result: "error",
     message:
-      error instanceof AppError ? error.message : "The claim stopped before Daintree heard how it went",
+      error instanceof AppError
+        ? error.message
+        : "The claim stopped before Daintree heard how it went",
   };
 }
 
@@ -122,7 +124,8 @@ export class RelayDeploySessions {
     if (this.run?.claiming) {
       throw new AppError({
         code: "CANCELLED",
-        message: "Daintree is still claiming the relay the last deploy created. Try again once it has",
+        message:
+          "Daintree is still claiming the relay the last deploy created. Try again once it has",
       });
     }
     this.drop();

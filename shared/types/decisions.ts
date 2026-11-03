@@ -233,8 +233,7 @@ export interface DecisionsRelayDeploy {
  * message of main's own when it couldn't make the claim at all.
  */
 export type DecisionsRelayDeployClaimFailure =
-  | Exclude<DecisionsConnectResult, { result: "saved" }>
-  | { result: "error"; message: string };
+  Exclude<DecisionsConnectResult, { result: "saved" }> | { result: "error"; message: string };
 
 export type DecisionsRelayDeployClaim =
   | { state: "claiming" }
