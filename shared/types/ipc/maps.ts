@@ -1563,6 +1563,8 @@ export interface IpcEventMap {
   "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
   "host-mode:event": import("./hostMode.js").HostModeEvent;
   "device-answer:event": import("./deviceAnswer.js").DeviceAnswerEvent;
+  /** Every assistant persona as stored, after any write (#16213). */
+  "help-assistant:identities-changed": import("../displayIdentity.js").AssistantIdentities;
   "drive-lease:event": import("./driveLease.js").DriveLeaseEvent;
   "operations:event": import("./operations.js").OperationsEvent;
   "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;

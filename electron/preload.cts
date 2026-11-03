@@ -3293,7 +3293,12 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.MCP_TURN_OUTCOME_ALERT, callback),
     },
 
-    helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
+    helpAssistant: {
+      ...buildHelpAssistantPreloadBindings(_unwrappingInvoke),
+      onIdentitiesChanged: (
+        callback: (identities: IpcEventMap["help-assistant:identities-changed"]) => void
+      ) => _typedOn("help-assistant:identities-changed", callback),
+    },
 
     mcpBridge: {
       onGetManifestRequest: (callback: (requestId: string) => void) =>

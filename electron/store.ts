@@ -17,6 +17,7 @@ import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
 import type { DecisionsSettings } from "../shared/types/decisions.js";
 import type { DecisionsHostRecord } from "../shared/types/decisionsHosts.js";
 import type { EditorConfig } from "../shared/types/editor.js";
+import type { DisplayIdentity } from "../shared/types/displayIdentity.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -441,6 +442,15 @@ export interface StoreSchema {
      * `electron/services/agentDefaults.ts`, never by `helpAssistant.setSettings`.
      */
     agentId?: string | null;
+    /**
+     * The personas the person gave the global assistant and each project's
+     * assistant (#16213). Absent means none. Sanitized at read time and
+     * written only through `electron/services/assistantIdentity.ts`.
+     */
+    identities?: {
+      global?: DisplayIdentity;
+      projects?: Record<string, DisplayIdentity>;
+    };
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;

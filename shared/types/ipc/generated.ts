@@ -2123,6 +2123,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "help-assistant:get-identities": {
+    args: [];
+    result: import("../displayIdentity.js").AssistantIdentities;
+  };
   "help-assistant:get-live-session-status": {
     args: [__1: { sessionId: string }];
     result: import("./api.js").HelpSessionLiveStatus;
@@ -2130,6 +2134,10 @@ export interface GeneratedIpcInvokeMap {
   "help-assistant:get-settings": {
     args: [];
     result: import("./api.js").HelpAssistantSettings;
+  };
+  "help-assistant:set-identity": {
+    args: [request: import("../displayIdentity.js").SetAssistantIdentityRequest];
+    result: import("../displayIdentity.js").AssistantIdentities;
   };
   "help-assistant:set-settings": {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];

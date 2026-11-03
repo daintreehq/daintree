@@ -20,6 +20,16 @@ import { AppError } from "../../utils/errorTypes.js";
 import { isHelpAssistantDaintreeConfirmations as isValidDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { applyModelIdPatch, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
+import type {
+  AssistantIdentities,
+  SetAssistantIdentityRequest,
+} from "../../../shared/types/displayIdentity.js";
+import {
+  readAssistantIdentities,
+  writeAssistantIdentity,
+} from "../../services/assistantIdentity.js";
+import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer } from "../utils.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
 
@@ -303,6 +313,19 @@ export const helpAssistantNamespace = defineIpcNamespace({
         };
       },
       { withContext: true }
+    ),
+    getIdentities: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.getIdentities,
+      async (): Promise<AssistantIdentities> => readAssistantIdentities()
+    ),
+    setIdentity: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.setIdentity,
+      async (request: SetAssistantIdentityRequest): Promise<AssistantIdentities> => {
+        const identities = writeAssistantIdentity(request);
+        // Every view names the assistant, and only the one that saved knows it changed.
+        broadcastToRenderer(CHANNELS.HELP_ASSISTANT_IDENTITIES_CHANGED, identities);
+        return identities;
+      }
     ),
   },
 });

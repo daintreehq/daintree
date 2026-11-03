@@ -963,6 +963,9 @@ export const CHANNELS = {
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",
   HELP_ASSISTANT_SET_SETTINGS: "help-assistant:set-settings",
   HELP_ASSISTANT_GET_LIVE_SESSION_STATUS: "help-assistant:get-live-session-status",
+  HELP_ASSISTANT_GET_IDENTITIES: "help-assistant:get-identities",
+  HELP_ASSISTANT_SET_IDENTITY: "help-assistant:set-identity",
+  HELP_ASSISTANT_IDENTITIES_CHANGED: "help-assistant:identities-changed",
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
