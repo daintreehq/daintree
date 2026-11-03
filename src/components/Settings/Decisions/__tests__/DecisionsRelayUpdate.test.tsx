@@ -62,7 +62,11 @@ function claimedAt(workerVersion: string): DecisionsRelayCheck {
   return {
     result: "claimed",
     origin: ORIGIN,
-    compatibility: { relay, daintree: DAINTREE, diverges: workerVersion !== DAINTREE.workerVersion },
+    compatibility: {
+      relay,
+      daintree: DAINTREE,
+      diverges: workerVersion !== DAINTREE.workerVersion,
+    },
   };
 }
 
@@ -127,7 +131,12 @@ describe("Decisions relay update", () => {
       return id;
     });
     checkRelay.mockReset();
-    Object.assign(view, { remote: false, homeDir: "/home/me", project: true, activeWorktreeId: "wt-1" });
+    Object.assign(view, {
+      remote: false,
+      homeDir: "/home/me",
+      project: true,
+      activeWorktreeId: "wt-1",
+    });
     Object.defineProperty(window, "electron", {
       value: {
         decisions: {

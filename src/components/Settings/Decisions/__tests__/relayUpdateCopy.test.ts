@@ -18,7 +18,12 @@ describe("relay update outcome", () => {
 
     expect(relayVersionAfter(claimed)).toBe("0.3.0");
     expect(
-      relayVersionAfter({ result: "unreachable", origin: ORIGIN, endpoint: "health", reason: "dns" })
+      relayVersionAfter({
+        result: "unreachable",
+        origin: ORIGIN,
+        endpoint: "health",
+        reason: "dns",
+      })
     ).toBeNull();
     expect(relayVersionAfter(null)).toBeNull();
   });

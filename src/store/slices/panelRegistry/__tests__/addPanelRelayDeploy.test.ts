@@ -123,19 +123,22 @@ describe("addPanel — a relay deploy pane (#16023)", () => {
       "daintree-decisions-update-1",
       "npx --yes @daintreehq/decisions-cli@0.3.0 update --url https://r.example.dev --protocol 1",
     ],
-  ])("spawns running the %s, and the pane keeps no command to run again", async (_label, id, command) => {
-    await usePanelStore.getState().addPanel({
-      kind: "terminal",
-      requestedId: id,
-      cwd: "/home/me",
-      command,
-      title: "Decisions relay",
-    });
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+  ])(
+    "spawns running the %s, and the pane keeps no command to run again",
+    async (_label, id, command) => {
+      await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        requestedId: id,
+        cwd: "/home/me",
+        command,
+        title: "Decisions relay",
+      });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
 
-    expect(spawn.mock.calls[0]![0]).toMatchObject({ id, command });
-    expect(ptyPanel(id)?.command).toBeUndefined();
-  });
+      expect(spawn.mock.calls[0]![0]).toMatchObject({ id, command });
+      expect(ptyPanel(id)?.command).toBeUndefined();
+    }
+  );
 
   it("keeps any other pane's command, as before", async () => {
     await usePanelStore.getState().addPanel({

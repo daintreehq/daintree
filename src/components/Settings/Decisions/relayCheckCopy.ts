@@ -171,7 +171,8 @@ const UPDATE_THE_RELAY: Record<RelayUpdateRoute, string> = {
 };
 
 const OR_UPDATE_THE_RELAY: Record<RelayUpdateRoute, string> = {
-  offered: "Update Daintree, or use Update relay to move the relay to a release that works with it.",
+  offered:
+    "Update Daintree, or use Update relay to move the relay to a release that works with it.",
   host: "Update Daintree, or update the relay from Daintree on the Host.",
   cli: "Update Daintree, or update the relay with decisions update from the Decisions CLI.",
 };

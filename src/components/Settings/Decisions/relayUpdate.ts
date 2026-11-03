@@ -61,9 +61,7 @@ export function relayUpdateCommand(
  * it was closed or restarted before the command ended.
  */
 export type RelayUpdateEnd =
-  | { reason: "exited"; exitCode: number | null }
-  | { reason: "not-started" }
-  | { reason: "closed" };
+  { reason: "exited"; exitCode: number | null } | { reason: "not-started" } | { reason: "closed" };
 
 interface RelayUpdateRunBase {
   /** Rises with every update started in this window, so a later one never reads as an earlier one. */
@@ -120,7 +118,8 @@ export function useRelayUpdateRun(): RelayUpdateRun | null {
 /** What the pane shows of its command's end, or null while it may still be running. */
 function endOf(panel: PanelInstance | undefined): RelayUpdateEnd | null {
   if (!panel || !isPtyPanel(panel) || panel.isRestarting) return { reason: "closed" };
-  if (panel.runtimeStatus === "exited") return { reason: "exited", exitCode: panel.exitCode ?? null };
+  if (panel.runtimeStatus === "exited")
+    return { reason: "exited", exitCode: panel.exitCode ?? null };
   if (panel.runtimeStatus === "error") return { reason: "not-started" };
   return null;
 }
