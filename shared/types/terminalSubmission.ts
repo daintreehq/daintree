@@ -83,7 +83,47 @@ export interface TerminalSubmissionRecord {
    * re-sending safe on its own.
    */
   outputChangeAfterWriteAt?: number;
+  /**
+   * `pty_written` only: what the terminal rendered after the Enter (#16210),
+   * so a caller can read the answer to its own send once it has scrolled off.
+   * Daintree cannot tell an answer from whatever follows it, so this is the
+   * output after the write, kept from its start and ended by the cap, the
+   * next submission to this terminal, or its exit.
+   */
+  output?: TerminalSubmissionOutput;
 }
+
+/**
+ * How a submission's output capture stands (#16210).
+ *
+ * - `capturing`: still collecting; a later read can hold more.
+ * - `closed`: collection ended, at the cap, the next submission or the exit.
+ * - `lost`: the terminal's history was rewritten under the capture (a
+ *   scrollback purge it could not line back up with, or a mirror that missed
+ *   output), so only the text read before that is kept.
+ */
+export type TerminalSubmissionOutputState = "capturing" | "closed" | "lost";
+
+export interface TerminalSubmissionOutput {
+  /** Rendered rows, secret-redacted, newest last. Never terminal escapes. */
+  text: string;
+  /** True when the cap cut it: later output was not kept. */
+  truncated: boolean;
+  state: TerminalSubmissionOutputState;
+}
+
+/** Logical lines one submission's output keeps (#16210). */
+export const SUBMISSION_OUTPUT_MAX_LINES = 200;
+
+/** UTF-8 bytes one submission's output keeps (#16210). */
+export const SUBMISSION_OUTPUT_MAX_BYTES = 16 * 1024;
+
+/**
+ * How long a submission's output stays readable (#16210), measured from its
+ * Enter and never refreshed by a read. Its record leaving the retained window
+ * ends it sooner.
+ */
+export const SUBMISSION_OUTPUT_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /**
  * One terminal's answer to a submission-token lookup.
