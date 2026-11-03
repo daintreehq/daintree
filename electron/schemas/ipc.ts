@@ -8,6 +8,7 @@ import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 import { TERMINAL_SPAWN_SOURCES } from "../../shared/types/panel.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
 import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
+import { normalizeDisplayEmoji } from "../../shared/utils/displayIdentity.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
 import {
@@ -174,6 +175,12 @@ export const TerminalSnapshotSchema = z
     launchAgentId: LaunchAgentIdSchema.optional(),
     title: z.string(),
     titleMode: TitleModeSchema.optional(),
+    // A damaged persona is dropped, never the panel wearing it.
+    displayEmoji: z
+      .string()
+      .optional()
+      .transform((value) => normalizeDisplayEmoji(value))
+      .catch(undefined),
     cwd: z.string().optional(),
     worktreeId: z.string().optional(),
     location: TerminalLocationSchema,

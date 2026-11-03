@@ -317,6 +317,8 @@ interface BasePanelData {
   title: string;
   /** How the title is owned. Absent = "default". */
   titleMode?: PanelTitleMode;
+  /** The emoji the person gave this panel as a persona (#16213); absent when none. Display only. */
+  displayEmoji?: string;
   /** Location in the UI - grid (main view) or dock (minimized) */
   location: PanelLocation;
   /**
@@ -1377,6 +1379,8 @@ export interface TerminalInstance {
   title: string;
   /** How the title is owned. Absent = "default". */
   titleMode?: PanelTitleMode;
+  /** The emoji the person gave this panel as a persona (#16213); absent when none. Display only. */
+  displayEmoji?: string;
   /** Last meaningful OSC title observed from the running agent — survives the trash window for display. */
   lastObservedTitle?: string;
   /** Working directory - only present for PTY panels */

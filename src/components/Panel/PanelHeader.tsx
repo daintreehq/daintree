@@ -76,7 +76,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { PluginPanelActivityIndicator } from "@/components/Panel/PluginPanelActivity";
 import { TerminalPluginStatusChips } from "@/components/Terminal/TerminalPluginStatusChips";
-import { BellDot, FolderGit2, NotebookPen } from "@/components/icons";
+import { BellDot, FolderGit2, NotebookPen, SmilePlus } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import {
@@ -101,6 +101,7 @@ import { PopoverAnchor } from "@/components/ui/popover";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
+import { PanelEmojiDialog } from "./PanelEmojiDialog";
 import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
 import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
@@ -513,6 +514,10 @@ function PanelHeaderComponent({
   // The panel's own worktree, not the selected one: a panel can sit in a
   // worktree other than the one the sidebar has active.
   const currentWorktreeId = usePanelStore((state) => state.panelsById[id]?.worktreeId);
+  const displayEmoji = usePanelStore((state) => state.panelsById[id]?.displayEmoji);
+  const [isEmojiDialogOpen, setIsEmojiDialogOpen] = useState(false);
+  // Mounted on first use, so a header that never opens it carries no picker.
+  const [hasOpenedEmojiDialog, setHasOpenedEmojiDialog] = useState(false);
   // The kind the panel was created as. A PTY-backed plugin panel renders
   // through TerminalPane, which hands this header "terminal", but only the
   // stored kind says whether Duplicate has a recipe to run.
@@ -1274,6 +1279,17 @@ function PanelHeaderComponent({
                 brandColor={presetColor ?? chrome.color}
               />
             </span>
+            {displayEmoji && (
+              // The persona the person gave the pane; the brand mark beside it
+              // still says which agent runs it.
+              <span
+                aria-hidden="true"
+                data-testid="panel-persona-emoji"
+                className="-ml-1 shrink-0 select-none text-xs leading-6"
+              >
+                {displayEmoji}
+              </span>
+            )}
 
             {isEditingTitle ? (
               // The field takes exactly the box the static title had: an
@@ -1819,6 +1835,18 @@ function PanelHeaderComponent({
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
                   </DropdownMenuItem>
+                  {chrome.isAgent && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        setHasOpenedEmojiDialog(true);
+                        setIsEmojiDialogOpen(true);
+                      }}
+                      data-testid="panel-choose-emoji"
+                    >
+                      <SmilePlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      {displayEmoji ? "Change emoji…" : "Choose emoji…"}
+                    </DropdownMenuItem>
+                  )}
                   {(scratchpadState === "hidden" || scratchpadState === "collapsed") && (
                     <DropdownMenuItem
                       onSelect={() => showScratchpad(id)}
@@ -2124,6 +2152,14 @@ function PanelHeaderComponent({
           isOpen={isMovePickerOpen}
           onOpenChange={handleMovePickerOpenChange}
           returnFocusRef={overflowButtonRef}
+        />
+      )}
+      {hasOpenedEmojiDialog && (
+        <PanelEmojiDialog
+          panelId={id}
+          title={title}
+          isOpen={isEmojiDialogOpen}
+          onClose={() => setIsEmojiDialogOpen(false)}
         />
       )}
     </AppPalettePopover>

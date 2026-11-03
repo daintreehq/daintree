@@ -170,6 +170,11 @@ export interface PanelRegistrySlice {
    * `newTitle` resets to the identity-derived default and unlocks.
    */
   updateTitle: (id: string, newTitle: string, source?: "user" | "automation") => void;
+  /**
+   * Give a panel a persona emoji (#16213), or none with `undefined`. Display
+   * only and apart from the title, so neither one resets the other.
+   */
+  setDisplayEmoji: (id: string, emoji: string | undefined) => void;
   updateLastObservedTitle: (id: string, title: string) => void;
   updateAgentState: (
     id: string,
