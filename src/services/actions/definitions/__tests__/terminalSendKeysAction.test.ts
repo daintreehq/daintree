@@ -49,6 +49,18 @@ function sendKeys(args: Record<string, unknown>): Promise<unknown> {
   return Promise.resolve(run(args, {}));
 }
 
+function agentPanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
+  return {
+    id: "t1",
+    title: "t1",
+    kind: "terminal",
+    detectedAgentId: "claude",
+    location: "grid",
+    hasPty: true,
+    ...overrides,
+  } as PtyPanelData;
+}
+
 let screen: string | null;
 const getSerializedState = vi.fn(async () => (screen === null ? null : { data: screen }));
 
@@ -74,19 +86,7 @@ describe("terminal.sendKeys result honesty (#16209)", () => {
     (window as unknown as { electron: unknown }).electron = {
       terminal: { getSerializedState },
     };
-    usePanelStore.setState({
-      panelsById: {
-        t1: {
-          id: "t1",
-          title: "t1",
-          kind: "terminal",
-          detectedAgentId: "claude",
-          location: "grid",
-          hasPty: true,
-        } as PtyPanelData,
-      },
-      panelIds: ["t1"],
-    });
+    usePanelStore.setState({ panelsById: { t1: agentPanel() }, panelIds: ["t1"] });
   });
 
   afterEach(() => {
@@ -125,8 +125,7 @@ describe("terminal.sendKeys result honesty (#16209)", () => {
 
   it("stops at a lock taken while the screen was read before the keys", async () => {
     getSerializedState.mockImplementationOnce(async () => {
-      const panel = usePanelStore.getState().panelsById.t1!;
-      usePanelStore.setState({ panelsById: { t1: { ...panel, isInputLocked: true } } });
+      usePanelStore.setState({ panelsById: { t1: agentPanel({ isInputLocked: true }) } });
       return screen === null ? null : { data: screen };
     });
     await expect(press(["Enter"])).rejects.toThrow(

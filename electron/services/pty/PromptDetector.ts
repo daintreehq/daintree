@@ -109,25 +109,6 @@ export function findEmptyComposerRow(
   lines: readonly string[],
   promptPatterns: readonly RegExp[]
 ): number | undefined {
-  return findComposerRow(lines, promptPatterns, true);
-}
-
-/**
- * {@link findEmptyComposerRow} without asking the row to be empty: the
- * agent's input row between its frame rules, a draft in it or not (#16209).
- */
-export function findFramedComposerRow(
-  lines: readonly string[],
-  promptPatterns: readonly RegExp[]
-): number | undefined {
-  return findComposerRow(lines, promptPatterns, false);
-}
-
-function findComposerRow(
-  lines: readonly string[],
-  promptPatterns: readonly RegExp[],
-  empty: boolean
-): number | undefined {
   const clean = lines.map((line) => stripAnsi(line));
   let bottom = clean.length - 1;
   while (bottom >= 0 && !COMPOSER_FRAME_ROW.test(clean[bottom]!)) bottom--;
@@ -140,7 +121,7 @@ function findComposerRow(
       match?.index !== undefined &&
       match[0].trim().length > 0 &&
       row.slice(0, match.index).trim() === "" &&
-      (!empty || row.slice(match.index + match[0].length).trim() === "")
+      row.slice(match.index + match[0].length).trim() === ""
     ) {
       return rowIndex;
     }

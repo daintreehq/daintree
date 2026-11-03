@@ -264,7 +264,7 @@ describe("ActivityMonitor waiting-reason re-read (#16093)", () => {
     expect(onStateChange).not.toHaveBeenCalled();
   });
 
-  it("leaves a dialog closed into a draft, marking the draft (#16209)", () => {
+  it("holds a dialog closed into a draft at approval until the input row is empty (#16209)", () => {
     const { monitor, onStateChange, show } = settleOn(
       "reread-dialog-draft",
       PROMPT_SCREEN,
@@ -280,15 +280,16 @@ describe("ActivityMonitor waiting-reason re-read (#16093)", () => {
     vi.advanceTimersByTime(5000);
     expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
 
+    // A send over the draft would merge into it, so the reading stays.
     monitor.onData("\x1b[2J redraw");
     show(PROMPT_SCREEN.map((line) => (line === INPUT_ROW ? "❯ restored draft" : line)));
     vi.advanceTimersByTime(5000);
-    expect(onStateChange).toHaveBeenLastCalledWith("reread-dialog-draft", 1000, "idle", {
-      trigger: "pattern",
-      waitingReason: "prompt",
-      rereadAt: expect.any(Number),
-      draftInView: true,
-    });
+    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+
+    monitor.onData("\x15");
+    show(PROMPT_SCREEN);
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual(["approval", "prompt"]);
   });
 
   it("changes nothing while the input row holds a draft, and reads it once emptied", () => {

@@ -86,7 +86,7 @@ export function isAtChoiceDialog(snapshot: WakeGateSnapshot): boolean {
 
 /** What a refused send says, wherever it was refused. */
 export function choiceDialogRefusalMessage(terminalId: string): string {
-  return `Terminal '${terminalId}' was observed waiting on a choice dialog, which would take the text. Nothing was sent. Read its screen and answer it with keys, or send once it is gone.`;
+  return `Terminal '${terminalId}' was last observed waiting on a choice dialog, which would take the text. Nothing was sent. Read its screen and answer it with keys. A dialog closed into a draft reads this way until the input row is empty or the agent next settles.`;
 }
 
 /**

@@ -31,7 +31,6 @@ import {
   detectPrompt,
   detectPromptLexeme,
   findEmptyComposerRow,
-  findFramedComposerRow,
   DEFAULT_PROMPT_PATTERNS,
   type PromptDetectorConfig,
 } from "./pty/PromptDetector.js";
@@ -208,12 +207,6 @@ export interface ActivityStateMetadata {
    * it.
    */
   rereadAt?: number;
-  /**
-   * With `rereadAt` only (#16209): a choice dialog closed into the agent's
-   * input row with a draft in it. The send gate takes the draft as typed at
-   * the reread, so the new settle never admits a line over it.
-   */
-  draftInView?: true;
 }
 
 export class ActivityMonitor {
@@ -1042,9 +1035,9 @@ export class ActivityMonitor {
   //
   // A dialog drawn after the settle takes that row's place (#16209), so a
   // selector the screen shows by its structure is published without it; a
-  // phrase alone could be a draft. Closed into a draft, the input row is back
-  // with text in it: the reason it shows goes out marked so, and the send gate
-  // reads that draft as typed at the new settle.
+  // phrase alone could be a draft. A dialog closed into a draft leaves the
+  // reading at approval until the input row is empty again or the agent next
+  // settles, so no send lands over the draft meanwhile.
   private rereadWaitingReason(now: number): void {
     if (this.state !== "idle" || this.completionTimer.emitted || !this.getVisibleLines) return;
     const changedAt = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
@@ -1075,25 +1068,17 @@ export class ActivityMonitor {
       promptResult.isPrompt
     );
     if (reason === this.idleWaitingReason) return;
-    let draftInView = false;
-    if (composerRow === undefined) {
-      if (reason === "approval") {
-        if (!endsOnChoiceSelector(read, rows, this.agentId)) return;
-      } else if (
-        this.idleWaitingReason === "approval" &&
-        findFramedComposerRow(read, this.promptDetectorConfig.promptPatterns) !== undefined
-      ) {
-        draftInView = true;
-      } else {
-        return;
-      }
+    if (
+      composerRow === undefined &&
+      !(reason === "approval" && endsOnChoiceSelector(read, rows, this.agentId))
+    ) {
+      return;
     }
     this.idleWaitingReason = reason;
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "pattern",
       waitingReason: reason,
       rereadAt: now,
-      ...(draftInView ? { draftInView: true } : {}),
     });
   }
 
