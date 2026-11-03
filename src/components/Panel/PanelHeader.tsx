@@ -102,6 +102,7 @@ import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
 import { PanelEmojiDialog } from "./PanelEmojiDialog";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
 import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
@@ -748,7 +749,11 @@ function PanelHeaderComponent({
       panelPty?.agentState === "waiting" ||
       panelPty?.agentState === "exited"
     ) {
-      fireWatchNotification(id, panel?.title ?? id, panelPty.agentState);
+      fireWatchNotification(
+        id,
+        withDisplayEmoji(panel?.title ?? id, panel?.displayEmoji),
+        panelPty.agentState
+      );
     } else {
       watchPanel(id);
     }

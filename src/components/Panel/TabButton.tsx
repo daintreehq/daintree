@@ -18,6 +18,7 @@ import {
   documentTabClassName,
 } from "@/components/ui/document-tab";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { usePanelStore } from "@/store/panelStore";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import {
   SESSION_COLORS,
@@ -120,6 +121,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
 ) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
+  // Every tab is a panel; its persona emoji sits beside the title, never in it,
+  // so a rename starts from the title alone.
+  const displayEmoji = usePanelStore((state) => state.panelsById[id]?.displayEmoji);
   const inputRef = useRef<HTMLInputElement>(null);
   const labelRef = useRef<HTMLSpanElement>(null);
   // Where the rename field sits: over the label's own box. The field is a
@@ -368,6 +372,15 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                   brandColor={presetColor ?? chrome.color}
                 />
               </span>
+              {displayEmoji && (
+                <span
+                  aria-hidden="true"
+                  data-testid="tab-persona-emoji"
+                  className="shrink-0 select-none text-xs leading-none"
+                >
+                  {displayEmoji}
+                </span>
+              )}
 
               <span
                 ref={labelRef}

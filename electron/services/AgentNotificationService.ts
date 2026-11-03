@@ -15,6 +15,7 @@ import { PanelRecordIndex, type PanelRecord } from "./agentNotificationPanels.js
 import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
+import { normalizeDisplayEmoji, withDisplayEmoji } from "../../shared/utils/displayIdentity.js";
 import { getOsDndService } from "./OsDndService.js";
 import type { UserPresence } from "./userPresence.js";
 import { shouldPlayUiFeedbackSound } from "../utils/uiFeedbackSound.js";
@@ -1445,10 +1446,12 @@ class AgentNotificationService {
    */
   private getLabel(agentId: string | undefined, terminal?: PanelRecord): string {
     const title = terminal?.title?.trim();
-    if (title && (terminal?.titleMode === "user" || terminal?.titleMode === "custom")) {
-      return title;
-    }
-    return (agentId ? getEffectiveRegistry()[agentId]?.name?.trim() : undefined) || "Agent";
+    const name =
+      title && (terminal?.titleMode === "user" || terminal?.titleMode === "custom")
+        ? title
+        : (agentId ? getEffectiveRegistry()[agentId]?.name?.trim() : undefined) || "Agent";
+    // The persona the person gave the pane leads, as it does on the pane.
+    return withDisplayEmoji(name, normalizeDisplayEmoji(terminal?.displayEmoji));
   }
 
   /** A banner's click target, with the panel's worktree and title as it is saved now. */

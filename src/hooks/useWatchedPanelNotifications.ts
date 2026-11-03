@@ -4,6 +4,7 @@ import { exitProjectHome } from "@/store/storeAccessors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { isPtyPanel } from "@shared/types/panel";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 
 const NOTIFICATION_STAGGER_MS = 250;
 export const MAX_STAGGER_QUEUE_LENGTH = 50;
@@ -122,7 +123,7 @@ export function useWatchedPanelNotifications(): void {
 
           // Capture values for closure
           const capturedPanelId = panelId;
-          const capturedTitle = terminal.title ?? panelId;
+          const capturedTitle = withDisplayEmoji(terminal.title ?? panelId, terminal.displayEmoji);
           const capturedState = currentState;
 
           enqueueNotification(() => {

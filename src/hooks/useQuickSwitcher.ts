@@ -14,6 +14,7 @@ import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/ter
 import { usePluginSearch, type PluginSearchHit, type PluginSearchStatus } from "./usePluginSearch";
 import { openPluginSearchHit } from "@/components/QuickSwitcher/openPluginSearchHit";
 import { SEARCH_PROVIDER_BLENDED_TOTAL } from "@shared/config/pluginSearchProviders";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import type { PluginSearchProviderInfo } from "@shared/types/plugin";
 
 export type QuickSwitcherItemType = "terminal" | "worktree" | "plugin";
@@ -158,7 +159,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       result.push({
         id: `terminal:${t.id}`,
         type: "terminal",
-        title: t.title,
+        title: withDisplayEmoji(t.title, t.displayEmoji),
         subtitle: isBackground
           ? baseSubtitle
             ? `${baseSubtitle} · Backgrounded`

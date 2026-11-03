@@ -126,6 +126,7 @@ import { isScratchpadElement } from "@/lib/terminalScratchpad";
 import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
 import { pluralize } from "@/lib/pluralize";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { DockChipLabel } from "./DockChipLabel";
 
 import { useRevealDockChipOnOpen } from "./useRevealDockChipOnOpen";
@@ -831,12 +832,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               {showTitleTip ? (
                 <Tooltip open={titleTip.open} onOpenChange={titleTip.onOpenChange}>
                   <TooltipTrigger asChild onPointerEnter={titleTip.onPointerEnter}>
-                    <DockChipLabel title={displayTitle} />
+                    <DockChipLabel title={withDisplayEmoji(displayTitle, activePanel.displayEmoji)} />
                   </TooltipTrigger>
                   <TooltipContent side="top">{titleTooltip}</TooltipContent>
                 </Tooltip>
               ) : (
-                <DockChipLabel title={displayTitle} />
+                <DockChipLabel title={withDisplayEmoji(displayTitle, activePanel.displayEmoji)} />
               )}
               <DockChipBadge model={badge} />
 
@@ -1109,9 +1110,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                 />
                               </span>
                               <span className="mr-3 truncate">
-                                {getTerminalDisplayTitle(panel, "compact", {
-                                  showTask: showAgentTaskTitles,
-                                })}
+                                {withDisplayEmoji(
+                                  getTerminalDisplayTitle(panel, "compact", {
+                                    showTask: showAgentTaskTitles,
+                                  }),
+                                  panel.displayEmoji
+                                )}
                               </span>
                               {isActive && (
                                 <Check

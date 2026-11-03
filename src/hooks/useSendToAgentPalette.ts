@@ -24,6 +24,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { requestPaneFocus } from "@/components/Terminal/paneFocusRequest";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { useWorktreeStoreOptional } from "./useWorktreeStore";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import type { WorktreeSnapshot } from "@shared/types";
 
 /**
@@ -250,7 +251,7 @@ export function useSendToAgentPalette() {
 
       result.push({
         id: t.id,
-        title,
+        title: withDisplayEmoji(title, t.displayEmoji),
         subtitle: subtitleFor(title, chrome.label, !!t.isInputLocked, undefined),
         terminalKind: t.kind,
         chrome,
