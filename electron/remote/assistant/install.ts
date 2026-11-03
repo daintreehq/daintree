@@ -455,6 +455,8 @@ export function installRetiredSendsNotice(
 export interface HostControlLinkClientInstallDeps {
   /** The host's open session, connecting it if need be; null when it can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
+  /** The host's session if one is open now, never connecting it or marking it used. */
+  openSession?(hostId: HostId): LinkSession | null;
   onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
   /** Hosts this Shell still knows; a removed host's credential goes with it. */
   knownHosts(): HostId[];
@@ -515,6 +517,7 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
     credential: (hostId) => credentials.credential(hostId),
     existingCredential: (hostId) => credentials.existing(hostId),
     session: deps.session,
+    ...(deps.openSession ? { openSession: deps.openSession } : {}),
     onSessionOpened: deps.onSessionOpened,
     noticeReceiver: () => getRemoteService("hostCallRelayClient"),
     approvalReceiver: () => getRemoteService("hostCallRelayClient"),

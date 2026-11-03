@@ -194,7 +194,7 @@ export interface HostCallRuntimeDeps {
   /** Read at each call: the client is installed with the database and may come later. */
   client():
     | (Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> &
-        Partial<Pick<HostControlLinkClient, "throwawayRelease" | "agents">>)
+        Partial<Pick<HostControlLinkClient, "throwawayRelease" | "agents" | "agentsOnOpenLink">>)
     | null;
   /**
    * Whether a help session's assistant works through one of this machine's own
@@ -1970,8 +1970,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
 
   /**
    * One host's agents for an agent watch's arm to name those already waiting
-   * (#16188): the read `host.list` makes with `includeAgents`, but over a link
-   * already up only, and only what was read now, never one kept from before.
+   * (#16188): the read `host.list` makes with `includeAgents`, but only over a
+   * link already up, never touched, dialled or given a new credential, and
+   * only what was read now, never one kept from before.
    */
   private async watchAgentsRead(
     hostId: HostId,
@@ -1991,7 +1992,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);
     if (!host || host.connection.status !== "connected") return { status: "link-down" };
     const client = this.deps.client();
-    const read = client?.agents;
+    const read = client?.agentsOnOpenLink;
     if (!client || !read) return { status: "unread" };
     const payload = options.projectId === undefined ? {} : { projectId: options.projectId };
     const answer = await withinMs(

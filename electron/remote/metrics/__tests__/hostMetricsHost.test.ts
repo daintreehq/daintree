@@ -638,6 +638,34 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
+  it("keeps the person's cooldown while every wait still reaches the watches, in order", async () => {
+    const server = new FakeServer();
+    const d = deps({ shellDecides: () => true, now: () => 0 });
+    const dispose = installHostMetricsHostWith(server, d);
+    const a = await pair();
+    server.attach(a.host, "a");
+    const order: string[] = [];
+    a.client.registerCallHandler(
+      MetricsLinkMethod.AGENT_WAITING,
+      AgentWaitingPayloadSchema,
+      (b) => {
+        order.push(`wait:${b.seenAt}`);
+        return null;
+      }
+    );
+    a.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, () => {
+      order.push("page");
+      return null;
+    });
+    const base = { kind: "waiting", projectId: null, projectName: null, agentName: null } as const;
+    // Two stops of one agent inside its cooldown.
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "t1" }, { seen: { seenAt: 1 } }));
+    d.fireWaiting(waitingEvent({ ...base, terminalId: "t1" }, { seen: { seenAt: 2 } }));
+    await waitFor(() => order.length === 3);
+    expect(order).toEqual(["wait:1", "page", "wait:2"]);
+    dispose();
+  });
+
   it("pages a person only for an agent that stopped working, never for a refined reason", async () => {
     const server = new FakeServer();
     const d = deps({ shellDecides: () => true, now: () => 0 });

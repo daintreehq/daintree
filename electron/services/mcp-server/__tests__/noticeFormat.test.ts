@@ -352,7 +352,7 @@ describe("the agent watch line (#16188)", () => {
         omitted: 3,
       },
     });
-    expect(line).not.toMatch(/[\u0000-\u001f\u202e]/);
+    expect([...line].some((char) => char.charCodeAt(0) < 0x20 || char === "\u202e")).toBe(false);
     expect(line).toContain("saw 5 agents start waiting");
     expect(line).toContain(
       "incarnation 3, agentIncarnation 1) waiting on an approval at 2026-11-03T10:00:00.000Z by that host's clock"
@@ -377,5 +377,37 @@ describe("the agent watch line (#16188)", () => {
     expect(formatHostWatchLine({ ...base, event: "expired" })).toContain(
       "watch hw-1 on every host you control expired without seeing an agent start waiting for any reason in project p1."
     );
+    expect(formatHostWatchLine({ ...base, event: "lost", lostReason: "control-off" })).toContain(
+      "watch hw-1 on every host you control ended because assistant control for that host was turned off, so no notice will come for an agent start waiting for any reason in project p1."
+    );
+  });
+
+  it("bounds every string another machine sent, however long or hostile", () => {
+    const hostile = `x\u0007\u202e${"y".repeat(5_000)}`;
+    const line = formatHostWatchLine({
+      hostName: null,
+      watchId: "hw-1",
+      event: "fired",
+      condition: {
+        ...condition,
+        agentsWaiting: { waitingReasons: ["approval" as const], projectId: hostile },
+      },
+      armedAt: 0,
+      observed: null,
+      agents: {
+        seen: [
+          {
+            ...agent,
+            hostName: hostile,
+            projectId: hostile,
+            worktreeId: hostile,
+            terminalId: hostile,
+          },
+        ],
+        omitted: 0,
+      },
+    });
+    expect([...line].some((char) => char.charCodeAt(0) < 0x20 || char === "\u202e")).toBe(false);
+    expect(line.length).toBeLessThan(1_000);
   });
 });

@@ -45,6 +45,11 @@ export interface HostControlLinkClientDeps {
   existingCredential?(hostId: HostId): string | null;
   /** The host's open session, connecting it if need be; null when the host can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
+  /**
+   * The host's session if one is open now: never connecting it, and never
+   * marking it used. Absent, nothing is read over a link without touching it.
+   */
+  openSession?(hostId: HostId): LinkSession | null;
   onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
   /** Takes what a host saw of terminals this Shell's assistants asked it about (#13500). */
   noticeReceiver?: () => RelayNoticeReceiver | undefined;
@@ -346,6 +351,42 @@ export class HostControlLinkClient {
       if (isUnknownOutcome(error)) throw unreachable(hostId);
       throw error;
     }
+    return this.readAgents(hostId, session, payload, timeoutMs);
+  }
+
+  /**
+   * The same read for an agent `host.watch` arm (#16188), over a link only
+   * if it is open now: it never connects the host or marks its link used,
+   * and presents a credential only if one is already kept, never minting one.
+   * Unreachable when there is no such link or credential.
+   */
+  async agentsOnOpenLink(
+    hostId: HostId,
+    payload: AgentsPayload,
+    timeoutMs?: number
+  ): Promise<AgentsAnswer> {
+    const session = this.deps.openSession?.(hostId) ?? null;
+    if (!session || !session.isOpen) throw unreachable(hostId);
+    if (!this.authenticated.has(session)) {
+      const credential = this.deps.existingCredential?.(hostId) ?? null;
+      if (credential === null) throw unreachable(hostId);
+      try {
+        await this.call(hostId, session, AssistantLinkMethod.AUTHENTICATE, { credential });
+      } catch (error) {
+        if (isUnknownOutcome(error)) throw unreachable(hostId);
+        throw error;
+      }
+      this.authenticated.add(session);
+    }
+    return this.readAgents(hostId, session, payload, timeoutMs);
+  }
+
+  private async readAgents(
+    hostId: HostId,
+    session: LinkSession,
+    payload: AgentsPayload,
+    timeoutMs: number | undefined
+  ): Promise<AgentsAnswer> {
     const parsed = AgentsAnswerSchema.safeParse(
       await this.call(hostId, session, AssistantLinkMethod.AGENTS, payload, timeoutMs)
     );

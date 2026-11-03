@@ -399,6 +399,11 @@ function startClient(options: StartRemoteHostsOptions): void {
         const session = client.sessionFor(hostId);
         return session?.isOpen ? session : null;
       },
+      // An agent watch's arm reads over a link only while it is up (#16188).
+      openSession: (hostId) => {
+        const session = client.sessionFor(hostId);
+        return session?.isOpen ? session : null;
+      },
       onSessionOpened: (listener) => client.manager.onSessionOpened(listener),
       knownHosts: () => client.registry.list().map((host) => host.id),
       onHostsChanged: (listener) => client.registry.onChange(listener),

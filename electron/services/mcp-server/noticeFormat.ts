@@ -5,11 +5,12 @@ import {
   displayNoticeHostName,
   displayNoticeTerminalId,
 } from "../../../shared/types/terminalNotify.js";
-import type {
-  HostWatchAgent,
-  HostWatchCondition,
-  HostWatchLostReason,
-  HostWatchObserved,
+import {
+  HOST_WATCH_AGENTS_MAX,
+  type HostWatchAgent,
+  type HostWatchCondition,
+  type HostWatchLostReason,
+  type HostWatchObserved,
 } from "../../../shared/types/hostControl.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
@@ -311,8 +312,9 @@ export interface HostWatchNotice {
   note?: string;
   lostReason?: HostWatchLostReason;
   /**
-   * The agents an agent watch fired on (#16188), and how many more it saw.
-   * Kept to those whose host the run may still reach as it is typed.
+   * The agents an agent watch fired on (#16188), and how many more it saw
+   * without keeping them. Kept to those whose host the run may still reach as
+   * it is typed; the line names the first few.
    */
   agents?: { seen: HostWatchNoticeAgent[]; omitted: number };
 }
@@ -414,16 +416,20 @@ function formatAgentWatchFired(
   notice: HostWatchNotice,
   agents: NonNullable<HostWatchNotice["agents"]>
 ): string {
-  const named = agents.seen.map(describeWatchedAgent);
-  const more = agents.omitted > 0 ? `; and ${agents.omitted} more` : "";
+  const shown = agents.seen.slice(0, HOST_WATCH_AGENTS_MAX);
+  const rest = agents.seen.length - shown.length + agents.omitted;
+  const named =
+    shown.length === 0
+      ? "too many to name here"
+      : `${shown.map(describeWatchedAgent).join("; ")}${rest > 0 ? `; and ${rest} more` : ""}`;
   const note = notice.note !== undefined ? ` Your note: "${notice.note}".` : "";
-  const remote = agents.seen.some((agent) => agent.hostId !== LOCAL_HOST_ID);
+  const remote = agents.omitted > 0 || agents.seen.some((agent) => agent.hostId !== LOCAL_HOST_ID);
   const read = remote
     ? "Read each one's status and screen with terminal.getStatus, through host.call for a host,"
     : "Read each one's status and screen with terminal.getStatus";
   const count = agents.seen.length + agents.omitted;
   const what = count === 1 ? "an agent start waiting" : `${count} agents start waiting`;
-  return `Daintree: watch ${notice.watchId} (armed ${iso(notice.armedAt)}) saw ${what}: ${named.join("; ")}${more}.${note} Observations only; it may have moved on, and the reason is a reading of its screen. ${read} before acting, and arm the watch again to keep hearing.`;
+  return `Daintree: watch ${notice.watchId} (armed ${iso(notice.armedAt)}) saw ${what}: ${named}.${note} Observations only; it may have moved on, and the reason is a reading of its screen. ${read} before acting, and arm the watch again to keep hearing.`;
 }
 
 /**

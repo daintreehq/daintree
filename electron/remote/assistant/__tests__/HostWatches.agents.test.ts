@@ -9,7 +9,7 @@ import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
 import { formatHostWatchLine } from "../../../services/mcp-server/noticeFormat.js";
 import type { AgentWaitingHeard, AgentWaitingListener } from "../../metrics/agentWaiting.js";
 import type { ObservedHost, OpenRun } from "../HostCallRuntime.js";
-import { HostWatches, type AgentWatchRead } from "../HostWatches.js";
+import { HostWatches, type AgentWatchRead, type HostWatchListener } from "../HostWatches.js";
 
 const RUN: OpenRun = {
   projectId: "global",
@@ -79,8 +79,10 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
   let now: number;
   let hosts: ObservedHost[];
   let control: Set<string>;
-  let running: boolean;
+  /** The launch generations of the runs alive now. */
+  let live: Set<number>;
   let listener: AgentWaitingListener | null;
+  let hostListener: HostWatchListener | null;
   let agentSubscriptions: number;
   let linkSubscriptions: number;
   let reads: Map<string, AgentWatchRead | Promise<AgentWatchRead>>;
@@ -92,10 +94,12 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
     new HostWatches({
       hosts: () => hosts,
       controlOn: (hostId) => hostId === "local" || control.has(hostId),
-      stillRunning: () => running,
-      observe: () => {
+      stillRunning: (run) => live.has(run.launchGeneration),
+      observe: (next) => {
+        hostListener = next;
         linkSubscriptions += 1;
         return () => {
+          hostListener = null;
           linkSubscriptions -= 1;
         };
       },
@@ -117,6 +121,11 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
   const arm = (args: Partial<HostWatchArgs> = {}) =>
     watches.armAgents(RUN, { operation: "arm", agentsWaiting: true, ...args });
 
+  /** Lets the reads a test just finished land, with no timer moved. */
+  const settleReads = async () => {
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+  };
+
   const advance = (ms: number) => {
     now += ms;
     vi.advanceTimersByTime(ms);
@@ -127,8 +136,9 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
     now = Date.parse("2026-11-03T10:00:00Z");
     hosts = [host("studio", "studio-01")];
     control = new Set(["studio"]);
-    running = true;
+    live = new Set([RUN.launchGeneration]);
     listener = null;
+    hostListener = null;
     agentSubscriptions = 0;
     linkSubscriptions = 0;
     reads = new Map<string, AgentWatchRead>([
@@ -232,9 +242,14 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
       { hostId: "down", name: "down-box", hears: "link-down" },
       { hostId: "mute", name: "mute-box", hears: "unread" },
     ]);
-    // No notice comes for those already waiting.
+    // It armed all the same, and no notice comes for those already waiting.
+    expect(result.armed).toBe(true);
     advance(NOTIFY_TARGET_SETTLE_MS * 2);
     expect(queued).toHaveLength(0);
+    // The next agent to start waiting is told, while those still wait.
+    listener?.("studio", heard("t-new"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued[0]!.hostWatch!.agents?.seen.map((agent) => agent.terminalId)).toEqual(["t-new"]);
   });
 
   it("names nobody from a directory read before, or a host switched off while it was read", async () => {
@@ -409,13 +424,77 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
     );
   });
 
+  it("holds an older host's attention while its read runs, and lets go of it once it's newer", async () => {
+    hosts = [host("old", "old-box"), host("slow", "slow-box")];
+    control = new Set(["old", "slow"]);
+    let finishOld!: (read: AgentWatchRead) => void;
+    let finishSlow!: (read: AgentWatchRead) => void;
+    reads.set(
+      "old",
+      new Promise((resolve) => {
+        finishOld = resolve;
+      })
+    );
+    reads.set(
+      "slow",
+      new Promise((resolve) => {
+        finishSlow = resolve;
+      })
+    );
+    const legacy = (terminalId: string) =>
+      heard(terminalId, {
+        source: "attention",
+        waitingReason: null,
+        incarnation: null,
+        agentIncarnation: null,
+        worktreeId: null,
+        seenAt: null,
+      });
+    const pending = arm({ waitingReasons: ["any"] });
+    // It arrives before the host's own read says what it is, and another host is still slow.
+    listener?.("old", legacy("t-early"));
+    finishOld({ status: "unsupported" });
+    await settleReads();
+    listener?.("old", legacy("t-later"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued[0]!.hostWatch!.agents?.seen.map((agent) => agent.terminalId)).toEqual([
+      "t-early",
+      "t-later",
+    ]);
+    finishSlow({ status: "read", directory: directory([]), waitingEvents: true });
+    await pending;
+
+    // Updated since: a new arm reads it sending its own, and its attention no longer counts.
+    reads.set("old", { status: "read", directory: directory([]), waitingEvents: true });
+    reads.set("slow", { status: "read", directory: directory([]), waitingEvents: true });
+    queued = [];
+    const again = await arm({ waitingReasons: ["any"] });
+    expect(again.agents?.hosts).toContainEqual({ hostId: "old", name: "old-box", hears: "events" });
+    listener?.("old", legacy("t-attention"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued).toHaveLength(0);
+    // And the person's notice never replaces the host's own, fuller one.
+    reads.set("old", { status: "unsupported" });
+    await arm({ waitingReasons: ["any"] });
+    listener?.("old", heard("t-both", { agentIncarnation: 4 }));
+    listener?.("old", legacy("t-both"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued[0]!.hostWatch!.agents?.seen).toEqual([
+      expect.objectContaining({
+        terminalId: "t-both",
+        waitingReason: "approval",
+        agentIncarnation: 4,
+      }),
+    ]);
+  });
+
   it("is lost with its one host's control, and on every host stops hearing the one switched off", async () => {
     const scoped = await arm({ hostId: "studio" });
     expect(scoped.watches[0]).toMatchObject({ hostId: "studio", hostName: "studio-01" });
     control.delete("studio");
-    // Its next look, here the timer's, finds the switch off.
-    advance(30 * 60_000);
+    hostListener?.changed();
     expect(queued[0]!.hostWatch).toMatchObject({ event: "lost", lostReason: "control-off" });
+    expect(formatHostWatchLine(queued[0]!.hostWatch!)).toMatch(/assistant control/);
 
     queued = [];
     control.add("studio");
@@ -479,12 +558,94 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
     expect(agentSubscriptions).toBe(0);
   });
 
-  it("forgets a watch whose run was replaced, and never tells the successor", async () => {
-    await arm();
-    running = false;
+  it("belongs to the run that armed it: its successor neither sees, cancels nor hears it", async () => {
+    const armed = await arm();
+    const successor: OpenRun = { ...RUN, launchGeneration: 2 };
+    live = new Set([successor.launchGeneration]);
+    expect(watches.run(successor, { operation: "list" }).watches).toEqual([]);
+    expect(
+      watches.run(successor, { operation: "cancel", watchId: armed.watches[0]!.watchId })
+    ).toMatchObject({ outcome: "not_found" });
     listener?.("studio", heard("t-1"));
     advance(NOTIFY_TARGET_SETTLE_MS);
     expect(queued).toHaveLength(0);
     expect(agentSubscriptions).toBe(0);
+  });
+
+  it("answers an arm whose session ended while it read as unarmed, holding nothing", async () => {
+    let finish!: (read: AgentWatchRead) => void;
+    reads.set(
+      "studio",
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = arm();
+    watches.endSession(RUN.sessionId);
+    finish({ status: "read", directory: directory([]), waitingEvents: true });
+    await expect(pending).resolves.toMatchObject({ outcome: "unsupported", armed: false });
+    expect(watches.isActive()).toBe(false);
+  });
+
+  it("replaces a wait inside the settle with its latest reason, run and time", async () => {
+    await arm({ waitingReasons: ["any"] });
+    listener?.(
+      "studio",
+      heard("t-1", { waitingReason: "prompt", agentIncarnation: 0, seenAt: 5_000 })
+    );
+    advance(500);
+    listener?.(
+      "studio",
+      heard("t-1", { waitingReason: "approval", refined: true, agentIncarnation: 1, seenAt: 5_500 })
+    );
+    advance(NOTIFY_TARGET_SETTLE_MS - 500);
+    expect(queued[0]!.hostWatch!.agents?.seen).toEqual([
+      expect.objectContaining({
+        terminalId: "t-1",
+        waitingReason: "approval",
+        agentIncarnation: 1,
+        seenAt: 5_500,
+      }),
+    ]);
+
+    await arm();
+    listener?.("studio", heard("t-2", { waitingReason: "question" }));
+    listener?.("studio", heard("t-2", { waitingReason: "approval", refined: true }));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued[1]!.hostWatch!.agents?.seen).toEqual([
+      expect.objectContaining({ terminalId: "t-2", waitingReason: "approval" }),
+    ]);
+  });
+
+  it("counts each agent past those it keeps once, and keeps every one kept through delivery", async () => {
+    await arm();
+    for (let index = 0; index < 256; index += 1) {
+      listener?.("studio", heard(`t-${index}`));
+    }
+    // Past those kept: counted once each, however often their reason changes.
+    listener?.("studio", heard("t-over-1"));
+    listener?.("studio", heard("t-over-1", { waitingReason: "question", refined: true }));
+    listener?.("studio", heard("t-over-2"));
+    listener?.("local", heard("t-local"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    const wake = queued[0]!;
+    expect(wake.hostWatch!.agents).toMatchObject({ omitted: 3 });
+    expect(wake.hostWatch!.agents!.seen).toHaveLength(256);
+    expect(formatHostWatchLine(wake.hostWatch!)).toContain("saw 259 agents start waiting");
+    expect(formatHostWatchLine(wake.hostWatch!)).toContain("; and 251 more.");
+  });
+
+  it("keeps this machine's wait when the host whose agents fill the line loses its control", async () => {
+    await arm();
+    for (let index = 0; index < 8; index += 1) listener?.("studio", heard(`t-${index}`));
+    listener?.("local", heard("t-local"));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    control.delete("studio");
+    const wake = queued[0]!;
+    expect(wake.recheck()).toEqual({ kind: "ready" });
+    expect(wake.hostWatch!.agents).toEqual({
+      seen: [expect.objectContaining({ hostId: "local", terminalId: "t-local" })],
+      omitted: 0,
+    });
   });
 });

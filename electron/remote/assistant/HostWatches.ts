@@ -1,7 +1,6 @@
 import {
   HOST_WATCHES_PER_RUN_MAX,
   HOST_WATCHES_TOTAL_MAX,
-  HOST_WATCH_AGENTS_MAX,
   HOST_WATCH_CONNECTION_SETTLE_MS,
   HOST_WATCH_DEFAULT_WAITING_REASONS,
   HOST_WATCH_EXPIRES_DEFAULT_S,
@@ -21,7 +20,10 @@ import {
   type HostWatchStatus,
   type HostWatchWaitingReasons,
 } from "../../../shared/types/hostControl.js";
-import type { AgentDirectory } from "../../../shared/types/agentDirectory.js";
+import {
+  AGENT_DIRECTORY_ENTRIES_MAX,
+  type AgentDirectory,
+} from "../../../shared/types/agentDirectory.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import {
   NOTIFY_TARGET_SETTLE_MS,
@@ -122,16 +124,26 @@ interface AgentsRecord extends BaseRecord {
   hostName: string | null;
   reasons: HostWatchWaitingReasons;
   projectId: string | null;
-  /** Hosts its arm read as too old to send their agents' waits: "any" hears their attention instead. */
+  /**
+   * Hosts its latest arm read as too old to send their agents' waits: "any"
+   * hears their attention instead. Each host's read sets it as it lands.
+   */
   olderHosts: Set<HostId>;
-  /** What the settle has gathered, by host and terminal: each one's latest. */
+  /** Arms that read its hosts; only the latest one's reads classify them. */
+  reads: number;
+  /**
+   * Hosts whose read is still running, with the attention they sent meanwhile:
+   * heard once the read says the host is too old, dropped otherwise.
+   */
+  unclassified: Map<HostId, AgentWaitingHeard[]>;
+  /** What the settle has gathered, by host and terminal: each one's latest, matching reason. */
   pending: Map<string, HostWatchAgent>;
-  /** Matching agents the settle had no room for. */
-  pendingOmitted: number;
+  /** Matching agents the settle had no room to keep, by host and terminal: only counted. */
+  overflow: Map<string, HostId>;
   /** When the settle ends, by this Shell's clock; null while none runs. */
   flushAt: number | null;
-  /** What it fired on. */
-  fired: { seen: HostWatchAgent[]; omitted: number } | null;
+  /** What it fired on, every one kept until its notice is typed. */
+  fired: { seen: HostWatchAgent[]; overflow: HostId[] } | null;
 }
 
 type WatchRecord = HostRecord | AgentsRecord;
@@ -161,8 +173,12 @@ const AGENTS_ARMED_DETAIL =
 const AGENTS_ENDED_DETAIL =
   "It was armed and has already ended; see its status. Those already waiting are in agents.matches.";
 
-/** Agents a settle keeps, so a burst of waits across a fleet stays bounded. */
-const PENDING_AGENTS_MAX = HOST_WATCH_AGENTS_MAX * 4;
+/** Agents a settle keeps in full: as many as one host's directory names. */
+const PENDING_AGENTS_MAX = AGENT_DIRECTORY_ENTRIES_MAX;
+/** Agents past those it counts, so a burst across a fleet stays bounded. */
+const OVERFLOW_AGENTS_MAX = 4 * AGENT_DIRECTORY_ENTRIES_MAX;
+/** Attention one host may send while its arm read runs. */
+const UNCLASSIFIED_HELD_MAX = 32;
 
 function runKey(run: OpenRun): string {
   return `${run.sessionId}\u0000${run.terminalId}\u0000${run.launchGeneration}`;
@@ -427,8 +443,10 @@ export class HostWatches {
         reasons: agents.waitingReasons,
         projectId: agents.projectId,
         olderHosts: new Set(),
+        reads: 0,
+        unclassified: new Map(),
         pending: new Map(),
-        pendingOmitted: 0,
+        overflow: new Map(),
         flushAt: null,
         fired: null,
         ...(note !== undefined ? { note } : {}),
@@ -444,6 +462,10 @@ export class HostWatches {
       this.acquire();
     }
     const current = await this.readCurrent(caller, record);
+    // Gone while it read, as when the session ended: nothing watches for it now.
+    if (this.disposed || this.watches.get(record.watchId) !== record) {
+      return this.refuse("unsupported", UNSUPPORTED_DETAIL);
+    }
     const armed = record.status === "armed";
     return this.answer(
       "ok",
@@ -484,13 +506,24 @@ export class HostWatches {
               .map((host) => ({ hostId: host.hostId, name: host.name })),
           ];
     const options = record.projectId === null ? {} : { projectId: record.projectId };
+    record.reads += 1;
+    const pass = record.reads;
+    for (const target of targets) {
+      if (target.hostId !== LOCAL_HOST_ID && !record.unclassified.has(target.hostId)) {
+        record.unclassified.set(target.hostId, []);
+      }
+    }
     const reads = await Promise.all(
       targets.map((target): Promise<AgentWatchRead> =>
-        read === undefined
-          ? Promise.resolve({ status: "unread" })
+        (read === undefined
+          ? Promise.resolve<AgentWatchRead>({ status: "unread" })
           : Promise.resolve()
               .then(() => read(target.hostId, options))
               .catch((): AgentWatchRead => ({ status: "unread" }))
+        ).then((answer) => {
+          this.classify(record, pass, target.hostId, answer);
+          return answer;
+        })
       )
     );
     const matches: HostWatchAgent[] = [];
@@ -500,9 +533,6 @@ export class HostWatches {
       if (!this.reachable(target.hostId)) return;
       const answer = reads[index] ?? { status: "unread" };
       hosts.push(this.coverage(record, target, answer));
-      if (answer.status === "unsupported" || (answer.status === "read" && !answer.waitingEvents)) {
-        record.olderHosts.add(target.hostId);
-      }
       if (answer.status !== "read" || answer.directory.coverage !== "ok") return;
       for (const entry of answer.directory.entries) {
         if (entry.state !== "live" || entry.agentState !== "waiting") continue;
@@ -528,6 +558,34 @@ export class HostWatches {
       }
     });
     return { matches, omitted, hosts };
+  }
+
+  /**
+   * One host's read landed: whether its attention stands in for waits it
+   * can't send, as of the latest arm's read, and what it sent meanwhile.
+   */
+  private classify(
+    record: AgentsRecord,
+    pass: number,
+    hostId: HostId,
+    answer: AgentWatchRead
+  ): void {
+    if (hostId === LOCAL_HOST_ID || record.reads !== pass) return;
+    const older =
+      answer.status === "unsupported" || (answer.status === "read" && !answer.waitingEvents);
+    if (older) record.olderHosts.add(hostId);
+    else record.olderHosts.delete(hostId);
+    const held = record.unclassified.get(hostId) ?? [];
+    record.unclassified.delete(hostId);
+    if (!older || held.length === 0) return;
+    if (this.disposed || record.status !== "armed" || this.watches.get(record.watchId) !== record) {
+      return;
+    }
+    const now = this.deps.now();
+    for (const heard of held) {
+      if (this.hears(record, hostId, heard)) this.take(record, hostId, heard, now);
+    }
+    this.release();
   }
 
   private coverage(
@@ -686,7 +744,8 @@ export class HostWatches {
    * An agent was seen starting to wait, or its reason changed while it
    * waited. The first one a watch's reasons match starts its settle; others
    * that land before it ends go in the same notice, each with its latest
-   * reason, so a prompt that becomes an approval is told as the approval.
+   * reason, so a prompt that becomes an approval is told as the approval,
+   * and one whose reason changed to another it doesn't watch drops out.
    */
   private onAgent(hostId: HostId, heard: AgentWaitingHeard): void {
     if (this.disposed) return;
@@ -694,25 +753,13 @@ export class HostWatches {
     for (const record of this.watches.values()) {
       if (record.kind !== "agents" || record.status !== "armed") continue;
       if (!this.hears(record, hostId, heard)) continue;
-      const key = agentKey(hostId, heard.terminalId);
-      const matches = reasonMatches(record.reasons, heard.waitingReason);
-      // One the settle holds whose reason changed to another it doesn't watch is kept, and dropped as it ends.
-      if (!matches && !record.pending.has(key)) continue;
-      if (!record.pending.has(key) && record.pending.size >= PENDING_AGENTS_MAX) {
-        record.pendingOmitted += 1;
+      if (heard.source === "attention" && !record.olderHosts.has(hostId)) {
+        // Its read hasn't said yet whether this host sends its own waits.
+        const held = record.unclassified.get(hostId);
+        if (held !== undefined && held.length < UNCLASSIFIED_HELD_MAX) held.push(heard);
         continue;
       }
-      record.pending.set(key, {
-        hostId,
-        projectId: heard.projectId,
-        worktreeId: heard.worktreeId,
-        terminalId: heard.terminalId,
-        incarnation: heard.incarnation,
-        agentIncarnation: heard.agentIncarnation,
-        waitingReason: heard.waitingReason,
-        seenAt: heard.seenAt,
-      });
-      if (matches && record.flushAt === null) record.flushAt = now + NOTIFY_TARGET_SETTLE_MS;
+      this.take(record, hostId, heard, now);
     }
     this.release();
   }
@@ -724,23 +771,49 @@ export class HostWatches {
     if (isCallerTerminal(record.run, hostId, heard.terminalId)) return false;
     // The person's notice stands in only for a host too old to send its own.
     if (heard.source === "attention") {
-      return anyReason(record.reasons) && record.olderHosts.has(hostId);
+      return (
+        anyReason(record.reasons) &&
+        (record.olderHosts.has(hostId) || record.unclassified.has(hostId))
+      );
     }
     return true;
   }
 
+  private take(record: AgentsRecord, hostId: HostId, heard: AgentWaitingHeard, now: number): void {
+    const key = agentKey(hostId, heard.terminalId);
+    if (!reasonMatches(record.reasons, heard.waitingReason)) {
+      record.pending.delete(key);
+      record.overflow.delete(key);
+      return;
+    }
+    // The person's notice, which names no reason, run or time, never replaces the host's own.
+    if (heard.source === "attention" && record.pending.has(key)) return;
+    if (record.pending.has(key) || record.pending.size < PENDING_AGENTS_MAX) {
+      record.pending.set(key, {
+        hostId,
+        projectId: heard.projectId,
+        worktreeId: heard.worktreeId,
+        terminalId: heard.terminalId,
+        incarnation: heard.incarnation,
+        agentIncarnation: heard.agentIncarnation,
+        waitingReason: heard.waitingReason,
+        seenAt: heard.seenAt,
+      });
+    } else if (record.overflow.has(key) || record.overflow.size < OVERFLOW_AGENTS_MAX) {
+      record.overflow.set(key, hostId);
+    }
+    record.flushAt ??= now + NOTIFY_TARGET_SETTLE_MS;
+  }
+
   /** The settle ended: it fires on what still matches, or keeps watching when nothing does. */
   private flush(record: AgentsRecord): void {
-    const seen = [...record.pending.values()].filter(
-      (agent) => reasonMatches(record.reasons, agent.waitingReason) && this.reachable(agent.hostId)
-    );
-    const unheld = record.pendingOmitted;
+    const seen = [...record.pending.values()].filter((agent) => this.reachable(agent.hostId));
+    const overflow = [...record.overflow.values()].filter((hostId) => this.reachable(hostId));
     record.pending.clear();
-    record.pendingOmitted = 0;
+    record.overflow.clear();
     record.flushAt = null;
-    if (seen.length === 0) return;
-    const shown = seen.slice(0, HOST_WATCH_AGENTS_MAX);
-    record.fired = { seen: shown, omitted: seen.length - shown.length + unheld };
+    if (seen.length === 0 && overflow.length === 0) return;
+    record.fired = { seen, overflow };
     this.end(record, "fired");
   }
 
@@ -755,6 +828,8 @@ export class HostWatches {
       delete record.holdingSince;
     } else {
       record.pending.clear();
+      record.overflow.clear();
+      record.unclassified.clear();
       record.flushAt = null;
     }
     if (detail.observed !== undefined) record.observed = detail.observed;
@@ -769,6 +844,17 @@ export class HostWatches {
     if (queue === undefined) return;
     record.delivery = "queued";
     const fired = record.kind === "agents" ? record.fired : null;
+    // Only what a host the run may still reach showed, every time it is asked.
+    const shown = (): NonNullable<HostWatchNotice["agents"]> | null =>
+      fired === null
+        ? null
+        : {
+            seen: fired.seen
+              .filter((agent) => this.reachable(agent.hostId))
+              .map((agent) => ({ ...agent, hostName: this.nameOf(agent.hostId) })),
+            omitted: fired.overflow.filter((hostId) => this.reachable(hostId)).length,
+          };
+    const agents = shown();
     const notice: HostWatchNotice = {
       hostName: record.hostName,
       watchId: record.watchId,
@@ -778,14 +864,7 @@ export class HostWatches {
       observed: record.observed,
       ...(record.note !== undefined ? { note: record.note } : {}),
       ...(record.lostReason !== null ? { lostReason: record.lostReason } : {}),
-      ...(fired !== null
-        ? {
-            agents: {
-              seen: fired.seen.map((agent) => ({ ...agent, hostName: this.nameOf(agent.hostId) })),
-              omitted: fired.omitted,
-            },
-          }
-        : {}),
+      ...(agents !== null ? { agents } : {}),
     };
     const live = (): boolean =>
       !this.disposed &&
@@ -800,9 +879,10 @@ export class HostWatches {
         if (record.delivery === "withdrawn") return { kind: "unavailable", reason: "cancelled" };
         if (!live()) return { kind: "unavailable", reason: "relaunched" };
         // What a host showed is never typed once the person turned its control off.
-        if (notice.agents !== undefined) {
-          notice.agents.seen = notice.agents.seen.filter((agent) => this.reachable(agent.hostId));
-          if (notice.agents.seen.length === 0) {
+        const current = shown();
+        if (current !== null) {
+          notice.agents = current;
+          if (current.seen.length === 0 && current.omitted === 0) {
             return { kind: "unavailable", reason: "control-off" };
           }
         }

@@ -690,6 +690,54 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("hears a host's agents by the link they came on, past the person's spent notice budget", async () => {
+    const watched = { ...descriptor("loud", true), assistantControlEnabled: true };
+    const h = harness([watched]);
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    const page = {
+      kind: "waiting",
+      projectId: null,
+      projectName: null,
+      agentName: null,
+      quiet: false,
+    };
+    for (let index = 0; index < 20; index += 1) {
+      await loud.host.call(MetricsLinkMethod.ATTENTION, { ...page, terminalId: `p-${index}` });
+    }
+    // The person's share of notices from this host is spent.
+    expect(h.attention.length).toBeLessThan(20);
+    const heard: Array<[string, string]> = [];
+    h.client.onAgentWaiting((hostId, event) => heard.push([hostId, event.terminalId]));
+    await loud.host.call(MetricsLinkMethod.AGENT_WAITING, {
+      hostId: "someone-else",
+      terminalId: "t1",
+      projectId: null,
+      worktreeId: null,
+      incarnation: null,
+      agentIncarnation: null,
+      waitingReason: "question",
+      refined: false,
+      seenAt: 1,
+    });
+    await expect(
+      loud.host.call(MetricsLinkMethod.AGENT_WAITING, {
+        terminalId: "x".repeat(300),
+        projectId: null,
+        worktreeId: null,
+        incarnation: null,
+        agentIncarnation: null,
+        waitingReason: null,
+        refined: false,
+        seenAt: 1,
+      })
+    ).rejects.toBeDefined();
+    expect(heard).toEqual([["loud", "t1"]]);
+    h.client.dispose();
+  });
+
   it("tells every view a host's worktree list changed, whether or not its notifications are on", async () => {
     const h = harness([descriptor("quiet")]);
     h.client.start();

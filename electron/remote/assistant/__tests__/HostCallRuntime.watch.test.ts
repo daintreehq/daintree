@@ -126,7 +126,9 @@ describe("HostCallRuntime host.watch on agents (#16188)", () => {
   const host = (hostId: string, connected: boolean): ObservedHost => ({
     hostId,
     name: `${hostId}-name`,
-    connection: connected ? { status: "connected", rttMs: 3 } : { status: "disconnected" },
+    connection: (connected
+      ? { status: "connected", rttMs: 3 }
+      : { status: "disconnected" }) as ObservedHost["connection"],
     lastSeenAt: null,
     summary: null,
   });
@@ -134,11 +136,13 @@ describe("HostCallRuntime host.watch on agents (#16188)", () => {
   let agentListener: AgentWaitingListener | null;
   let answers: Map<string, AgentsAnswer | Error>;
   let agents: ReturnType<typeof vi.fn<(hostId: string) => Promise<AgentsAnswer>>>;
+  let dialingAgents: ReturnType<typeof vi.fn>;
   let connect: ReturnType<typeof vi.fn<(hostId: string, timeoutMs: number) => Promise<unknown>>>;
   let runtime: HostCallRuntime;
 
   beforeEach(() => {
     agentListener = null;
+    dialingAgents = vi.fn();
     answers = new Map<string, AgentsAnswer | Error>([
       ["fresh", { status: "done", directory: WAITING, waitingEvents: true }],
       ["older", { status: "done", directory: { ...WAITING, entries: [] } }],
@@ -159,7 +163,9 @@ describe("HostCallRuntime host.watch on agents (#16188)", () => {
         ({
           relayCall: vi.fn(),
           throwawayCall: vi.fn(),
-          agents,
+          // host.list's read, which may touch or dial a link: an arm never uses it.
+          agents: dialingAgents,
+          agentsOnOpenLink: agents,
         }) as never,
       hosts: () => [
         host("fresh", true),
@@ -172,6 +178,7 @@ describe("HostCallRuntime host.watch on agents (#16188)", () => {
       controlEnabled: () => true,
       connect,
       queueNotice: () => {},
+      watchHosts: () => () => {},
       watchAgents: (next) => {
         agentListener = next;
         return () => {
@@ -223,10 +230,13 @@ describe("HostCallRuntime host.watch on agents (#16188)", () => {
       "shy",
     ]);
     expect(connect).not.toHaveBeenCalled();
+    expect(dialingAgents).not.toHaveBeenCalled();
     expect(agentListener).not.toBeNull();
 
     // Only an arm on agents reads them: a link watch never does.
-    await runtime.watch("a", { operation: "arm", hostId: "down", connection: "connected" });
+    await expect(
+      runtime.watch("a", { operation: "arm", hostId: "down", connection: "connected" })
+    ).resolves.toMatchObject({ ok: true, value: { armed: true } });
     expect(agents).toHaveBeenCalledTimes(4);
   });
 
