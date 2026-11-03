@@ -1,6 +1,8 @@
 import type { AgentState } from "../../../../shared/types/agent.js";
 import type { ActivityStateMetadata } from "../../ActivityMonitor.js";
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
+import type { SubmissionCapturePublish } from "../SubmissionOutputCapture.js";
+import type { TerminalSubmissionOutput } from "../../../../shared/types/terminalSubmission.js";
 import type {
   AnalysisBackend,
   AnalysisFinalCapture,
@@ -90,6 +92,13 @@ export interface WorkerBackendSpec {
 }
 
 /** The pool surface a backend needs; implemented by AnalysisWorkerPool. */
+/**
+ * How long a released slot waits for a capture's final (#16210). The worker
+ * answers in message order behind output it had not parsed yet, so this
+ * covers a backlog, not just the round trip.
+ */
+const CAPTURE_FINAL_GRACE_MS = 5_000;
+
 export interface AnalysisPoolHost {
   /** Returns true when the message was actually handed to a live worker. */
   post(terminalId: string, msg: HostToWorkerMessage): boolean;
@@ -98,13 +107,27 @@ export interface AnalysisPoolHost {
     op: AnalysisRequestOp,
     tailRows?: number
   ): Promise<AnalysisRequestResult>;
-  unregister(terminalId: string): void;
+  /** With `backend`, only while it is still the one registered under the id. */
+  unregister(terminalId: string, backend?: WorkerAnalysisBackend): void;
+  /** Whether `backend` is the one registered under the id. */
+  owns?(terminalId: string, backend: WorkerAnalysisBackend): boolean;
 }
 
 export class WorkerAnalysisBackend implements AnalysisBackend {
   readonly kind = "worker" as const;
 
   private released = false;
+  /** Set between a release with captures pending and their final (#16210). */
+  private releaseTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Submission captures the worker has yet to send a final for (#16210): the
+   * open one, and one it has been told to end. Each keeps what it last
+   * published, so a slot lost under it can settle it on what was read.
+   */
+  private readonly captures = new Map<
+    number,
+    { publish: SubmissionCapturePublish; last: TerminalSubmissionOutput }
+  >();
   private detached = false;
   // After a worker respawn the fresh empty buffer must not clobber previously
   // persisted scrollback: persistence-oriented serialization returns null
@@ -226,6 +249,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       // is a hole in the mirror no later snapshot can be fenced across.
       this.continuityLost = true;
       this.continuousSince = Date.now();
+      this.settleCaptures("lost");
     }
     return sent;
   }
@@ -367,6 +391,59 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     this.pool.post(this.spec.terminalId, { type: "focus", terminalId: this.spec.terminalId });
   }
 
+  startSubmissionCapture(
+    captureId: number,
+    submittedText: string,
+    publish: SubmissionCapturePublish
+  ): boolean {
+    // With its `create` dropped there is no session to start in, and the start
+    // would be dropped with nothing ever answering it.
+    if (this.inactive() || this.sessionCreatePending) return false;
+    // The worker orders messages per terminal, so with the hold posted first
+    // the start lands behind every byte fed before the write.
+    if (!this.flushHeldFeed()) return false;
+    const sent = this.pool.post(this.spec.terminalId, {
+      type: "submission-capture-start",
+      terminalId: this.spec.terminalId,
+      captureId,
+      text: submittedText,
+    });
+    if (!sent) return false;
+    this.captures.set(captureId, {
+      publish,
+      last: { text: "", truncated: false, state: "capturing" },
+    });
+    return true;
+  }
+
+  closeSubmissionCapture(): void {
+    if (this.captures.size === 0 || this.inactive()) return;
+    if (!this.flushHeldFeed()) return this.settleCaptures("lost");
+    const sent = this.pool.post(this.spec.terminalId, {
+      type: "submission-capture-close",
+      terminalId: this.spec.terminalId,
+    });
+    // Unclosed, the capture would take the next submission's output as its own.
+    if (!sent) this.settleCaptures("lost");
+  }
+
+  private takeCaptureEvent(
+    msg: Extract<WorkerToHostMessage, { type: "submission-capture" }>
+  ): void {
+    const capture = this.captures.get(msg.captureId);
+    if (capture === undefined) return;
+    capture.last = msg.output;
+    if (msg.output.state !== "capturing") this.captures.delete(msg.captureId);
+    capture.publish(msg.captureId, msg.output);
+  }
+
+  /** End every capture on what it last published: the worker will send no more for them. */
+  private settleCaptures(state: "closed" | "lost"): void {
+    const pending = [...this.captures];
+    this.captures.clear();
+    for (const [id, capture] of pending) capture.publish(id, { ...capture.last, state });
+  }
+
   notifySubmission(): void {
     if (this.inactive() || !this.monitorSpec) return;
     this.pool.post(this.spec.terminalId, {
@@ -493,6 +570,18 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
 
   release(): void {
     if (this.released) return;
+    // A capture still open gets its last frame first (#16210): the hold goes
+    // to the worker, the close behind it, and the session is freed once the
+    // final comes back, since freeing would close it on whatever had parsed.
+    const awaitFinal =
+      this.captures.size > 0 &&
+      !this.detached &&
+      !this.sessionCreatePending &&
+      this.flushHeldFeed() &&
+      this.pool.post(this.spec.terminalId, {
+        type: "submission-capture-close",
+        terminalId: this.spec.terminalId,
+      });
     this.released = true;
     this.stopProcessStatePush();
     this.monitorSpec = null;
@@ -500,17 +589,36 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     // to flush it once the slot is freed.
     this.heldFeed = null;
     this.outstandingFeedBytes = 0;
-    if (!this.detached) {
+    if (!awaitFinal) {
+      this.finishRelease();
+      return;
+    }
+    this.releaseTimer = setTimeout(() => this.finishRelease(), CAPTURE_FINAL_GRACE_MS);
+    this.releaseTimer.unref?.();
+  }
+
+  private finishRelease(): void {
+    if (this.releaseTimer !== undefined) clearTimeout(this.releaseTimer);
+    this.releaseTimer = undefined;
+    this.settleCaptures("closed");
+    // A terminal registered under the same id since has replaced this
+    // session with its own, which a `free` would now delete.
+    if (!this.detached && (this.pool.owns?.(this.spec.terminalId, this) ?? true)) {
       this.pool.post(this.spec.terminalId, {
         type: "free",
         terminalId: this.spec.terminalId,
       });
     }
-    this.pool.unregister(this.spec.terminalId);
+    this.pool.unregister(this.spec.terminalId, this);
   }
 
   handleWorkerEvent(msg: WorkerToHostMessage): void {
-    if (this.released) return;
+    if (this.released) {
+      if (msg.type !== "submission-capture" || this.releaseTimer === undefined) return;
+      this.takeCaptureEvent(msg);
+      if (this.captures.size === 0) this.finishRelease();
+      return;
+    }
     switch (msg.type) {
       case "data-ack":
         this.handleDataAck(msg.epoch, msg.bytes);
@@ -526,6 +634,9 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
         return;
       case "pty-response":
         this.delegate.onPtyResponse(msg.data);
+        return;
+      case "submission-capture":
+        this.takeCaptureEvent(msg);
         return;
       case "viewport":
         this.viewportLines = msg.lines;
@@ -546,7 +657,14 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
    * buffer, so the fresh empty buffer can't clobber a good on-disk snapshot.
    */
   handleWorkerLost(): void {
-    if (this.released) return;
+    if (this.released) {
+      // A capture's final can no longer come.
+      if (this.releaseTimer !== undefined) {
+        this.settleCaptures("lost");
+        this.finishRelease();
+      }
+      return;
+    }
     // The dead worker's queued messages (and their acks) are gone — the ledger
     // reset and epoch bump happen in rebuildFreshSlot.
     this.rebuildFreshSlot();
@@ -594,6 +712,8 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // (and the dropped hold) can't debit the new one.
   private rebuildFreshSlot(): void {
     const carriesBracketedPaste = this.bracketedPasteMode || this.bracketedPasteSeedPending;
+    // The fresh slot starts with an empty mirror, so the capture lost its rows.
+    this.settleCaptures("lost");
     this.continuityLost = true;
     this.continuousSince = Date.now();
     this.feedEpoch++;
@@ -652,8 +772,17 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
 
   /** No workers left to host this terminal — degrade to inert analysis. */
   handleDetached(): void {
-    if (this.released) return;
+    if (this.released) {
+      // No worker is left to send a capture's final.
+      if (this.releaseTimer !== undefined) {
+        this.detached = true;
+        this.settleCaptures("lost");
+        this.finishRelease();
+      }
+      return;
+    }
     this.detached = true;
+    this.settleCaptures("lost");
     this.stopProcessStatePush();
     // No worker to flush a hold into — drop it and zero the ledger.
     this.heldFeed = null;

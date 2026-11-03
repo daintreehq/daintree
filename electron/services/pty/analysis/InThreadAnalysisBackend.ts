@@ -13,6 +13,11 @@ import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
 import type { TerminalInfo } from "../types.js";
 import { installHeadlessResponder } from "../headlessResponder.js";
 import { headlessMirrorScheduler } from "../HeadlessMirrorScheduler.js";
+import {
+  ParseBarrier,
+  SubmissionCaptureHost,
+  type SubmissionCapturePublish,
+} from "../SubmissionOutputCapture.js";
 import { Osc94Parser } from "../Osc94Parser.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
 import {
@@ -146,6 +151,12 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
   private readonly parserTail = new PartialEscapeTracker();
+  /** Created by the first submission capture (#16210); a terminal never sent to pays nothing. */
+  private submissionCaptures: SubmissionCaptureHost | undefined;
+  private capturePublish: SubmissionCapturePublish | undefined;
+  private readonly parseBarrier = new ParseBarrier();
+  /** Captures asked for whose start is still waiting on the parse barrier. */
+  private readonly pendingCaptureStarts = new Set<number>();
 
   constructor(private readonly deps: InThreadAnalysisDeps) {
     this.id = deps.terminalId;
@@ -229,6 +240,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
       // are still queued (scheduler hold + xterm's async parser both count —
       // the callback fires only after the chunk has actually parsed).
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      const parsed = this.parseBarrier.noteFed();
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
         this.parserTail.feed(data);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
@@ -237,6 +249,8 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
         // subscribes to, and a stale hit here would diff a pre-parse snapshot.
         this.viewportSnapshotCache.invalidate();
         this.noteAgentOutputActivity();
+        this.submissionCaptures?.sync();
+        parsed();
         this.scheduleOutputProgressSample();
       });
     } else {
@@ -248,9 +262,12 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      const parsed = this.parseBarrier.noteFed();
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
         this.parserTail.feed(prelude);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+        this.submissionCaptures?.sync();
+        parsed();
         this.scheduleOutputProgressSample();
       });
     }
@@ -490,8 +507,47 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     }
   }
 
+  startSubmissionCapture(
+    captureId: number,
+    submittedText: string,
+    publish: SubmissionCapturePublish
+  ): boolean {
+    const mirror = this.terminalInfo.headlessTerminal;
+    if (!mirror) return false;
+    this.capturePublish = publish;
+    const captures = (this.submissionCaptures ??= new SubmissionCaptureHost((id, output) =>
+      this.capturePublish?.(id, output)
+    ));
+    // Behind every slice still queued for this mirror, so the rows on screen
+    // at the write are the ones the capture treats as already there.
+    this.pendingCaptureStarts.add(captureId);
+    this.parseBarrier.after(() => {
+      this.pendingCaptureStarts.delete(captureId);
+      if (this.terminalInfo.headlessTerminal === mirror) {
+        captures.start(mirror, captureId, submittedText);
+      }
+    });
+    return true;
+  }
+
+  closeSubmissionCapture(): void {
+    const captures = this.submissionCaptures;
+    if (captures === undefined) return;
+    this.parseBarrier.after(() => captures.close());
+  }
+
   release(): void {
     const terminal = this.terminalInfo;
+    // Before the mirror goes, so the open capture keeps the rows on screen.
+    this.submissionCaptures?.dispose();
+    this.submissionCaptures = undefined;
+    // Their start never reached the mirror, so nothing was observed for them.
+    for (const captureId of this.pendingCaptureStarts) {
+      this.capturePublish?.(captureId, { text: "", truncated: false, state: "closed" });
+    }
+    this.pendingCaptureStarts.clear();
+    // Queued parse callbacks are dropped with the mirror, so the count goes too.
+    this.parseBarrier.reset();
     this.agentOutputTemperature.reset();
     this.agentOutputContentSnapshot = undefined;
     this.viewportSnapshotCache.detach();

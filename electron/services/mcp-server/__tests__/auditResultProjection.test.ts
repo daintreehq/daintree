@@ -129,6 +129,42 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
     expect(JSON.stringify(projected)).not.toContain("SENTINEL");
   });
 
+  it("reduces a submission's captured output to its shape and keeps the record (#16210)", () => {
+    const answer = "SENTINEL the answer the worker wrote";
+    const projected = projectAuditResult("terminal.getStatus", {
+      terminals: [
+        {
+          terminalId: "t1",
+          submission: {
+            token: "tok-1",
+            phase: "pty_written",
+            at: 5,
+            output: { text: answer, truncated: true, state: "capturing" },
+          },
+        },
+        { terminalId: "t2", submission: { token: "tok-1", phase: "unknown" } },
+      ],
+      source: "pty",
+    });
+
+    expect(projected).toEqual({
+      terminals: [
+        {
+          terminalId: "t1",
+          submission: {
+            token: "tok-1",
+            phase: "pty_written",
+            at: 5,
+            output: { textChars: answer.length, truncated: true, state: "capturing" },
+          },
+        },
+        { terminalId: "t2", submission: { token: "tok-1", phase: "unknown" } },
+      ],
+      source: "pty",
+    });
+    expect(JSON.stringify(projected)).not.toContain("SENTINEL");
+  });
+
   it("reduces the handback on a single wait and on each batched row", () => {
     const single = projectAuditResult("terminal.waitUntilIdle", {
       terminalId: "t1",

@@ -43,6 +43,19 @@ export const TerminalSubmissionRecordSchema = z.object({
     .describe(
       "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen."
     ),
+  // #16210: the answer to the caller's own send, read back by its token.
+  output: z
+    .object({
+      text: z.string(),
+      truncated: z.boolean(),
+      state: z
+        .enum(["capturing", "closed", "lost"])
+        .describe("`lost`: history was rewritten under it; earlier text is kept."),
+    })
+    .optional()
+    .describe(
+      "pty_written only: what rendered after the Enter, from the start, redacted, ≤200 lines/16 KB. Not only the reply."
+    ),
 });
 
 /** Wire shape of `TerminalHandback` (#12488). */

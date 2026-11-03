@@ -1,5 +1,6 @@
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
 import type { AnalysisChunkFlags } from "../analysisWorkerProtocol.js";
+import type { SubmissionCapturePublish } from "../SubmissionOutputCapture.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
@@ -73,6 +74,21 @@ export interface AnalysisBackend {
 
   getViewportLines(n: number): string[];
   getCursorLine(): string | null;
+
+  /**
+   * Start capturing what the mirror renders after a submission's Enter
+   * (#16210), ending the capture before it. Ordered behind every byte already
+   * fed, so the rows on screen at the write are told apart from what follows.
+   * `publish` takes the output as it grows and once more when it ends.
+   * Returns false when no mirror reads this terminal's output.
+   */
+  startSubmissionCapture(
+    captureId: number,
+    submittedText: string,
+    publish: SubmissionCapturePublish
+  ): boolean;
+  /** End the open capture once everything already fed has parsed. */
+  closeSubmissionCapture(): void;
   /**
    * Whether the program reading this PTY has turned bracketed paste on
    * (DECSET 2004), as far as the mirror has parsed. False when no mirror reads

@@ -97,10 +97,36 @@ function reduceHandback(value: unknown): unknown {
   };
 }
 
+/**
+ * A submission record with its captured output (#16210) reduced to the same
+ * kind of shape: how much there was and how the capture stood, never the text.
+ */
+function reduceSubmission(value: unknown): unknown {
+  const submission = asRecord(value);
+  if (submission === null || !Object.hasOwn(submission, "output")) return value;
+  const output = asRecord(submission.output);
+  return {
+    ...submission,
+    output:
+      output === null
+        ? null
+        : {
+            textChars: typeof output.text === "string" ? output.text.length : null,
+            truncated: output.truncated === true,
+            state: typeof output.state === "string" ? output.state : null,
+          },
+  };
+}
+
 function withReducedHandback(entry: unknown): unknown {
   const record = asRecord(entry);
-  if (record === null || !Object.hasOwn(record, "lastHandback")) return entry;
-  return { ...record, lastHandback: reduceHandback(record.lastHandback) };
+  if (record === null) return entry;
+  const reduced = Object.hasOwn(record, "lastHandback")
+    ? { ...record, lastHandback: reduceHandback(record.lastHandback) }
+    : record;
+  return Object.hasOwn(record, "submission")
+    ? { ...reduced, submission: reduceSubmission(record.submission) }
+    : reduced;
 }
 
 /**
