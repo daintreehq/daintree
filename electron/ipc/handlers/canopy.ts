@@ -75,6 +75,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import { CANOPY_METHOD_CHANNELS } from "./canopy.preload.js";
 import {
+  assistantWatchSlot,
   beginWatchRequest,
   isCurrentWatchRequest,
   followDriveLeaseChange,
@@ -1616,10 +1617,12 @@ export const canopyNamespace = defineIpcNamespace({
         // A viewer serves another machine's reader, which never holds this one's input.
         const stamp = isViewer(ctx) ? null : parseGlobalAssistantInputStamp(inputStamp);
         const viewId = ctx.webContentsId;
-        const ticket = beginWatchRequest(viewId);
+        // The global session streams beside the run a pane selected, never in its place.
+        const slot = assistantWatchSlot(subject);
+        const ticket = beginWatchRequest(viewId, slot);
         watchView(ctx);
         const binding = await resolveLiveAssistant(subject, await liveAssistantSources(), stamp);
-        if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
+        if (!isCurrentWatchRequest(viewId, ticket, slot)) return { watchId: null, snapshot: null };
         const ptyClient = requirePtyClient();
         const { terminalId } = binding.subject;
         return watchTerminal(
@@ -1632,7 +1635,9 @@ export const canopyNamespace = defineIpcNamespace({
           // Resize authority follows input: a global session's other windows only read it,
           // and a viewer follows the size this machine's own window gave the terminal.
           isViewer(ctx) ? () => false : () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
-          binding
+          binding,
+          false,
+          slot
         );
       },
       { withContext: true }
@@ -1730,8 +1735,11 @@ export const canopyNamespace = defineIpcNamespace({
     unwatchTerminal: op(
       CANOPY_METHOD_CHANNELS.unwatchTerminal,
       async (ctx, watchId?: number): Promise<void> => {
+        // No stream named: the pane's selected run, as an All hosts pane lets
+        // go of a host it moved off. The global assistant beside it is let go
+        // only by its own stream.
         if (watchId === undefined) {
-          stopTerminalWatch(ctx.webContentsId);
+          stopTerminalWatch(ctx.webContentsId, "detail");
           return;
         }
         if (!Number.isSafeInteger(watchId)) throw new Error("Invalid watch");
