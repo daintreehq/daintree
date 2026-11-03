@@ -221,6 +221,11 @@ export function DecisionsConnectionSection({
   const endedUpdateId = update?.state === "ended" ? update.id : null;
   // Any relay's: one update runs at a time in a window.
   const updateRunning = latestUpdate?.state === "running";
+  // Never an update and a removal of one relay at once (#16202), from any window.
+  const removing =
+    status.relayRemovals?.some(
+      (removal) => removal.origin === savedOrigin && removal.outcome.state === "running"
+    ) === true;
   // What the outcome reads: set with the check it started, so it reads that check.
   const [recheckedUpdateId, setRecheckedUpdateId] = useState<number | null>(null);
   const recheckAfterUpdate = useEffectEvent((origin: string, updateId: number) => {
@@ -489,7 +494,7 @@ export function DecisionsConnectionSection({
             compatibility={compatibility}
             running={updateRunning}
             outcome={updateOutcome}
-            disabled={busy || relay.checking}
+            disabled={busy || relay.checking || removing}
             onClose={onClose}
           />
         )}
@@ -577,7 +582,7 @@ export function DecisionsConnectionSection({
               key={removeTarget}
               relayOrigin={removeTarget}
               recorded={savedOrigin !== null}
-              disabled={busy}
+              disabled={busy || updateRunning}
               onClose={onClose}
             />
           )}
