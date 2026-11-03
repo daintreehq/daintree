@@ -238,6 +238,8 @@ export function installHostMcpRelay(
         return {
           status: "done",
           directory: fitAgentDirectory(directory, AGENT_DIRECTORY_BYTES_MAX),
+          // Its metrics host sends every attached Shell its agents' waits (#16188).
+          waitingEvents: true,
         };
       }
     );

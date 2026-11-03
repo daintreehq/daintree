@@ -29,6 +29,7 @@ import { stampNow, type ElapsedStamp } from "../link/elapsed.js";
 import type { LinkSession } from "../link/session.js";
 import type { FleetCaller } from "./hostOps.js";
 import {
+  AgentWaitingPayloadSchema,
   AttentionPayloadSchema,
   FleetTargetListSchema,
   LinkActivitySchema,
@@ -41,6 +42,7 @@ import { boundProcessInventory } from "./processInventoryWire.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
 import { receiveSummary, type SummaryReceipt } from "./summaryReceipt.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
+import type { AgentWaitingHeard, AgentWaitingListener } from "./agentWaiting.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import { connectionKey } from "../client/connection.js";
 import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
@@ -230,6 +232,8 @@ export class HostMetricsClient {
   private readonly disposers: Array<() => void> = [];
   /** Told of every recorded summary; empty unless something in main asked (#14463). */
   private readonly summaryListeners = new Set<(hostId: HostId) => void>();
+  /** This Shell's assistants' armed agent watches, the only ones told of a host's agents' waits. */
+  private readonly agentWaitingListeners = new Set<AgentWaitingListener>();
   private stopLocal: (() => void) | null = null;
   private stopLocalWorktrees: (() => void) | null = null;
   private localWorktrees: WorktreeChangeWatch | null = null;
@@ -265,6 +269,30 @@ export class HostMetricsClient {
     return () => {
       this.summaryListeners.delete(listener);
     };
+  }
+
+  /**
+   * Hosts' agents seen starting to wait (#16188), for an armed `host.watch`
+   * only: none of the person's notification choices apply, and nothing here
+   * dials a host to hear them. Told only for a host with assistant control on.
+   */
+  onAgentWaiting(listener: AgentWaitingListener): () => void {
+    this.agentWaitingListeners.add(listener);
+    return () => {
+      this.agentWaitingListeners.delete(listener);
+    };
+  }
+
+  private hearAgentWaiting(hostId: HostId, heard: AgentWaitingHeard): void {
+    if (this.agentWaitingListeners.size === 0) return;
+    if (this.options.registry.get(hostId)?.assistantControlEnabled !== true) return;
+    for (const listener of [...this.agentWaitingListeners]) {
+      try {
+        listener(hostId, heard);
+      } catch (error) {
+        logger.warn("An agent watch couldn't take a host's agent", { hostId, error });
+      }
+    }
   }
 
   getSnapshots(): HostMetricsSnapshot[] {
@@ -529,7 +557,29 @@ export class HostMetricsClient {
     session.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (frame) =>
       this.record(hostId, frame, session)
     );
+    session.registerCallHandler(
+      MetricsLinkMethod.AGENT_WAITING,
+      AgentWaitingPayloadSchema,
+      (payload) => {
+        this.hearAgentWaiting(hostId, { ...payload, source: "event" });
+        return null;
+      }
+    );
     session.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (payload) => {
+      // Before the person's choices: a host too old to send its agents' waits
+      // is heard this way by an agent watch that takes any reason.
+      this.hearAgentWaiting(hostId, {
+        source: "attention",
+        terminalId: payload.terminalId,
+        projectId: payload.projectId ?? null,
+        worktreeId: null,
+        role: null,
+        incarnation: null,
+        agentIncarnation: null,
+        waitingReason: null,
+        refined: false,
+        seenAt: null,
+      });
       const descriptor = this.options.registry.get(hostId);
       // Opt-in per host, and off until the user turns it on.
       if (descriptor?.notificationsEnabled !== true) return null;

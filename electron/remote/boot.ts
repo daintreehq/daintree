@@ -382,6 +382,9 @@ function startClient(options: StartRemoteHostsOptions): void {
           for (const off of offs) off();
         };
       },
+      // What an agent `host.watch` hears of hosts (#16188): only links already up.
+      watchHostAgents: (listener) =>
+        getRemoteService("hostMetrics")?.onAgentWaiting(listener) ?? (() => {}),
     })
   );
   // The sender each session proves to a host before a call is relayed there.

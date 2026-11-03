@@ -188,7 +188,9 @@ async function buildHostListener(
   // Each attached Shell's own alert choices, for what this host sends its views (#14701).
   teardowns.push(installNotificationPolicyHost(server));
   // Summaries to every attached Shell, and the overview's and fleet's session methods.
-  teardowns.push(await installHostMetricsHost(server));
+  teardowns.push(
+    await installHostMetricsHost(server, () => getHelpAssistantSettings().acceptRemoteControl)
+  );
   // Canopy for Shells reading this host from a view bound elsewhere.
   teardowns.push(installCanopyHost(server));
   // Devices paired with those Shells answering this host's agents, under its own lease.

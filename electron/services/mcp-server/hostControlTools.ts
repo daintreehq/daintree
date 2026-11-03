@@ -58,7 +58,10 @@ export interface HostControlRuntimeHandle {
     helpSessionId: string,
     args: HostSettingsArgs
   ): Promise<HostControlOutcome<HostSettingsResult>>;
-  /** Arms, cancels or lists the calling run's one-shot watches on a host's link or capacity (#14463). */
+  /**
+   * Arms, cancels or lists the calling run's one-shot watches on a host's link
+   * or capacity (#14463), or on agents starting to wait (#16188).
+   */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>>;
   /** Tries to bring back a host whose link is down, waking and starting it where it can (#16170). */
   bringBack(
@@ -163,23 +166,30 @@ function settingsArgsFit(args: HostSettingsArgs): boolean {
   }
 }
 
-/** An arm names a host and one kind of condition; cancel and list take only their own. */
+/**
+ * An arm names one kind of condition, and a host unless it watches agents,
+ * which may cover every host; cancel and list take only their own.
+ */
 function watchArgsFit(args: HostWatchArgs): boolean {
   const capacity =
     args.memoryAvailableBytesAtLeast !== undefined ||
     args.cpuIdleCoresAtLeast !== undefined ||
     args.memoryPressureAtMost !== undefined;
+  const agents = args.agentsWaiting === true;
+  const agentFilters = args.waitingReasons !== undefined || args.projectId !== undefined;
   const armOnly =
     capacity ||
+    agents ||
+    agentFilters ||
     args.connection !== undefined ||
     args.expiresInSeconds !== undefined ||
     args.note !== undefined;
   switch (args.operation) {
     case "arm":
+      if (args.watchId !== undefined) return false;
+      if (agents) return args.connection === undefined && !capacity;
       return (
-        args.hostId !== undefined &&
-        args.watchId === undefined &&
-        (args.connection !== undefined) !== capacity
+        args.hostId !== undefined && !agentFilters && (args.connection !== undefined) !== capacity
       );
     case "cancel":
       return args.watchId !== undefined && args.hostId === undefined && !armOnly;

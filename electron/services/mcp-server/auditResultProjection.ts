@@ -4,6 +4,7 @@ import {
   HOST_WATCH_DELIVERIES,
   HOST_WATCH_LOST_REASONS,
   HOST_WATCH_STATUSES,
+  HOST_WATCH_WAITING_REASONS,
 } from "../../../shared/types/hostControl.js";
 import { HANDBACK_REPORTS } from "../../../shared/types/handback.js";
 import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
@@ -197,6 +198,7 @@ function projectPanelCapture(result: unknown): Record<string, unknown> {
 const WATCH_STATUSES: ReadonlySet<string> = new Set(HOST_WATCH_STATUSES);
 const WATCH_LOST_REASONS: ReadonlySet<string> = new Set(HOST_WATCH_LOST_REASONS);
 const WATCH_DELIVERIES: ReadonlySet<string> = new Set(HOST_WATCH_DELIVERIES);
+const WATCH_WAITING_REASONS: ReadonlySet<string> = new Set([...HOST_WATCH_WAITING_REASONS, "any"]);
 
 const WATCH_ID_PATTERN = /^hw-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -211,7 +213,14 @@ function projectHostWatch(value: unknown): Record<string, unknown> {
   return {
     watchId: auditWatchId(watch?.watchId),
     hostId: auditHostId(watch?.hostId),
-    on: condition === null ? null : condition.connection != null ? "connection" : "capacity",
+    on:
+      condition === null
+        ? null
+        : condition.connection != null
+          ? "connection"
+          : condition.agentsWaiting != null
+            ? "agents"
+            : "capacity",
     status: fromSet(watch?.status, WATCH_STATUSES),
     lostReason: fromSet(watch?.lostReason, WATCH_LOST_REASONS),
     delivery: fromSet(watch?.delivery, WATCH_DELIVERIES),
@@ -358,6 +367,13 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
         memoryAvailableBytesAtLeast: finiteNumber(record?.memoryAvailableBytesAtLeast),
         cpuIdleCoresAtLeast: finiteNumber(record?.cpuIdleCoresAtLeast),
         memoryPressureAtMost: pressure === "normal" || pressure === "warn" ? pressure : null,
+        agentsWaiting: record?.agentsWaiting === true,
+        waitingReasons: Array.isArray(record?.waitingReasons)
+          ? record.waitingReasons.filter((reason): reason is string =>
+              WATCH_WAITING_REASONS.has(reason as string)
+            )
+          : null,
+        projectId: typeof record?.projectId === "string" ? record.projectId : null,
         expiresInSeconds: finiteNumber(record?.expiresInSeconds),
         noted: typeof record?.note === "string",
         watchId: auditWatchId(record?.watchId),

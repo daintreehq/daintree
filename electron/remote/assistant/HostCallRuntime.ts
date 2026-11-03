@@ -43,7 +43,8 @@ import {
 } from "../../../shared/types/hostThrowaway.js";
 import type { HostBringBackAnswer } from "../../../shared/types/hostWake.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
-import { HostWatches, type HostWatchListener } from "./HostWatches.js";
+import { HostWatches, type AgentWatchRead, type HostWatchListener } from "./HostWatches.js";
+import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { runHostBringBack } from "./hostBringBack.js";
 import { ThrowawaySession } from "./throwawaySession.js";
 import {
@@ -278,6 +279,12 @@ export interface HostCallRuntimeDeps {
    * It never dials, holds or wakes a host. Absent, no watch is armed.
    */
   watchHosts?(listener: HostWatchListener): () => void;
+  /**
+   * Hears this machine's and its hosts' agents starting to wait, for
+   * `host.watch` on agents (#16188); subscribed only while one is armed. It
+   * never dials, holds or wakes a host. Absent, no agent watch is armed.
+   */
+  watchAgents?(listener: AgentWaitingListener): () => void;
   now?: () => number;
   /** This machine's clocks, for how old a sample is; `now` and the monotonic clock by default. */
   clock?: () => ElapsedStamp;
@@ -945,6 +952,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       controlOn: (hostId) => this.controlOn(hostId),
       stillRunning: (run) => this.stillRunning(run),
       ...(deps.watchHosts ? { observe: deps.watchHosts } : {}),
+      ...(deps.watchAgents
+        ? {
+            observeAgents: deps.watchAgents,
+            readAgents: (hostId: HostId, options: { projectId?: string }) =>
+              this.watchAgentsRead(hostId, options),
+          }
+        : {}),
+      ...(deps.local ? { localName: () => deps.local!.name() } : {}),
       ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
       clock: () => this.clock(),
@@ -1944,9 +1959,52 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     );
   }
 
-  /** Arms, cancels or lists the calling run's own host watches (#14463). */
+  /** Arms, cancels or lists the calling run's own host watches (#14463), agent watches too (#16188). */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>> {
-    return this.settle(helpSessionId, async (caller) => this.hostWatches.run(caller, args));
+    return this.settle(helpSessionId, async (caller) =>
+      args.operation === "arm" && args.agentsWaiting === true
+        ? this.hostWatches.armAgents(caller, args)
+        : this.hostWatches.run(caller, args)
+    );
+  }
+
+  /**
+   * One host's agents for an agent watch's arm to name those already waiting
+   * (#16188): the read `host.list` makes with `includeAgents`, but over a link
+   * already up only, and only what was read now, never one kept from before.
+   */
+  private async watchAgentsRead(
+    hostId: HostId,
+    options: { projectId?: string }
+  ): Promise<AgentWatchRead> {
+    if (hostId === LOCAL_HOST_ID) {
+      const local = this.deps.local;
+      if (!local) return { status: "unread" };
+      // This machine's own transitions are always heard; the read only names who waits now.
+      return { status: "read", directory: await this.localAgents(local, options), waitingEvents: true };
+    }
+    if (!this.controlOn(hostId)) return { status: "unread" };
+    const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);
+    if (!host || host.connection.status !== "connected") return { status: "link-down" };
+    const client = this.deps.client();
+    const read = client?.agents;
+    if (!client || !read) return { status: "unread" };
+    const payload = options.projectId === undefined ? {} : { projectId: options.projectId };
+    const answer = await withinMs(
+      Promise.resolve()
+        .then(() => read.call(client, hostId, payload, PROJECTS_READ_MS))
+        .catch((error: unknown) => (codeOf(error) === "UNSUPPORTED" ? "unsupported" : null)),
+      PROJECTS_READ_MS,
+      null
+    );
+    if (answer === null) return { status: "unread" };
+    if (answer === "unsupported") return { status: "unsupported" };
+    if (answer.status === "refused") return { status: "refused" };
+    return {
+      status: "read",
+      directory: agentDirectoryAs(hostId, fitAgentDirectory(capEntries(answer.directory))),
+      waitingEvents: answer.waitingEvents === true,
+    };
   }
 
   bringBack(
