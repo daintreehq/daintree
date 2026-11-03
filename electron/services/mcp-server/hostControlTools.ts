@@ -6,12 +6,14 @@ import {
   HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
   HostBringBackArgsSchema,
   HostCallArgsSchema,
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
   HostSettingsArgsSchema,
+  HostStatusArgsSchema,
   HostWatchArgsSchema,
   type HostBringBackArgs,
   type HostBringBackResult,
@@ -26,6 +28,8 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostStatusArgs,
+  type HostStatusResult,
   type HostWatchArgs,
   type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
@@ -68,6 +72,12 @@ export interface HostControlRuntimeHandle {
     helpSessionId: string,
     args: HostBringBackArgs
   ): Promise<HostControlOutcome<HostBringBackResult>>;
+  /** `terminal.getStatus` in many projects on many hosts, in one answer (#16191). */
+  status(
+    helpSessionId: string,
+    args: HostStatusArgs,
+    context: HostCallContext
+  ): Promise<HostControlOutcome<HostStatusResult>>;
   /** The hosts and projects the global assistant starts knowing (#14547); never dials a host. */
   inventory?(): Promise<HostInventorySnapshot>;
 }
@@ -243,6 +253,12 @@ async function dispatch(
     case HOST_BRING_BACK_TOOL: {
       const parsed = HostBringBackArgsSchema.safeParse(raw);
       return parsed.success ? runtime.bringBack(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_STATUS_TOOL: {
+      // Each project is read at the tier the call was admitted at here, as `host.call` is.
+      if (context === undefined) return notEligible();
+      const parsed = HostStatusArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.status(helpSessionId, parsed.data, context) : invalidArgs();
     }
     default:
       return invalidArgs();

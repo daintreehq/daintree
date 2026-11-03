@@ -6,11 +6,13 @@ import type { LinkSession } from "../link/session.js";
 import {
   AgentsAnswerSchema,
   AssistantLinkMethod,
+  MAX_STATUS_RUN_MS,
   McpCallAnswerSchema,
   RelayApprovePayloadSchema,
   RelayApproveTimedPayloadSchema,
   RelayNoticeStatusAnswerSchema,
   RelayNoticesPayloadSchema,
+  StatusAnswerSchema,
   ThrowawayCallAnswerSchema,
   type AgentsAnswer,
   type AgentsPayload,
@@ -22,6 +24,8 @@ import {
   type RelayNoticeStatusAnswer,
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
+  type StatusAnswer,
+  type StatusPayload,
   type ThrowawayCallAnswer,
   type ThrowawayCallPayload,
   type ThrowawayReleasePayload,
@@ -391,6 +395,34 @@ export class HostControlLinkClient {
       await this.call(hostId, session, AssistantLinkMethod.AGENTS, payload, timeoutMs)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.AGENTS);
+    return parsed.data;
+  }
+
+  /**
+   * `terminal.getStatus` in several of the host's projects in one exchange
+   * (#16191), for `host.status`. A host from before this answers UNSUPPORTED.
+   */
+  async status(
+    hostId: HostId,
+    payload: Omit<StatusPayload, "runMs">,
+    timeoutMs: number
+  ): Promise<StatusAnswer> {
+    const startedAt = Date.now();
+    const session = await this.open(hostId);
+    try {
+      await this.authenticate(hostId, session);
+    } catch (error) {
+      if (isUnknownOutcome(error)) throw unreachable(hostId);
+      throw error;
+    }
+    // The host is given what is left of the wait once the link is proved, so it answers inside it.
+    const leftMs = timeoutMs - (Date.now() - startedAt);
+    if (leftMs < 1) throw unreachable(hostId);
+    const runMs = Math.min(MAX_STATUS_RUN_MS, Math.floor(leftMs));
+    const parsed = StatusAnswerSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.STATUS, { ...payload, runMs }, leftMs)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.STATUS);
     return parsed.data;
   }
 

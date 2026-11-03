@@ -29,6 +29,8 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostStatusArgs,
+  type HostStatusResult,
   type HostWatchArgs,
   type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
@@ -46,6 +48,8 @@ import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettin
 import { HostWatches, type AgentWatchRead, type HostWatchListener } from "./HostWatches.js";
 import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { runHostBringBack } from "./hostBringBack.js";
+import { runHostStatus } from "./hostStatus.js";
+import { STATUS_READ_TOOL } from "./projectStatusRead.js";
 import { ThrowawaySession } from "./throwawaySession.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
@@ -109,7 +113,9 @@ import {
   type RelayNoticeStatusAnswer,
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
+  type ProjectStatusAnswer,
   type RelayRefusal,
+  type StatusPayload,
   type ThrowawayCallAnswer,
   type ThrowawayCallPayload,
 } from "./linkMethods.js";
@@ -171,6 +177,8 @@ export interface LocalHostReach {
   throwawayCall?(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
   agents?(options: { projectId?: string }): Promise<AgentDirectory>;
+  /** `terminal.getStatus` in several of its projects, for `host.status` (#16191). */
+  status?(payload: StatusPayload): Promise<ProjectStatusAnswer[]>;
 }
 
 /** The run a help session is answering in, as `host.call` pins what it arms to. */
@@ -194,7 +202,9 @@ export interface HostCallRuntimeDeps {
   /** Read at each call: the client is installed with the database and may come later. */
   client():
     | (Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> &
-        Partial<Pick<HostControlLinkClient, "throwawayRelease" | "agents" | "agentsOnOpenLink">>)
+        Partial<
+          Pick<HostControlLinkClient, "throwawayRelease" | "agents" | "agentsOnOpenLink" | "status">
+        >)
     | null;
   /**
    * Whether a help session's assistant works through one of this machine's own
@@ -2026,6 +2036,46 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         args
       )
     );
+  }
+
+  /**
+   * `terminal.getStatus` in many projects on many hosts in one answer
+   * (#16191): each host read at once, in one exchange where it can, each
+   * project through the gates `host.call` meets there.
+   */
+  status(
+    helpSessionId: string,
+    args: HostStatusArgs,
+    context: { tier: "core" | "full" }
+  ): Promise<HostControlOutcome<HostStatusResult>> {
+    return this.settle(helpSessionId, (caller) => {
+      const global = isGlobalAssistantId(caller.projectId);
+      return runHostStatus(
+        {
+          callerProjectId: caller.projectId,
+          global,
+          mayRelay: !global || globalAssistantMayRelay(STATUS_READ_TOOL),
+          tier: context.tier,
+          hostIds: () => this.deps.hosts().map((host) => host.hostId),
+          controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
+          ...(this.deps.local ? { local: this.deps.local } : {}),
+          client: () => this.deps.client(),
+          // Read as a call is: the link is held while it runs.
+          holdHost: (hostId) => {
+            this.callsOut.set(hostId, (this.callsOut.get(hostId) ?? 0) + 1);
+            return () => {
+              const left = (this.callsOut.get(hostId) ?? 1) - 1;
+              if (left > 0) this.callsOut.set(hostId, left);
+              else this.callsOut.delete(hostId);
+            };
+          },
+          newId: this.newId,
+          now: this.now,
+        },
+        helpSessionId,
+        args
+      );
+    });
   }
 
   list(

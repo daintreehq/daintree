@@ -144,7 +144,11 @@ import {
   WORKER_STEER_REFUSALS,
   type AgentReadQuotaResult,
 } from "../../../shared/types/assistantControl.js";
-import { HOST_CALL_TOOL, HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
+import {
+  HOST_CALL_TOOL,
+  HOST_CONTROL_TOOL_IDS,
+  HOST_STATUS_TOOL,
+} from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
 import {
   AssistantTargetError,
@@ -2362,14 +2366,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // `host.call` carries the tier it was admitted at here: all it may have on the host.
             // Its record says when what it ran there ran under this machine's
             // own skip preference (#15698), which only this machine decides.
+            // `host.status` reads each project at that tier too (#16191), and asks nobody.
             const callContext =
-              actionId === HOST_CALL_TOOL && (tier === "core" || tier === "full")
-                ? {
-                    tier,
-                    noteSkipPreference: () => {
-                      dispatchAuthorization = "skip-preference";
-                    },
-                  }
+              tier === "core" || tier === "full"
+                ? actionId === HOST_CALL_TOOL
+                  ? {
+                      tier,
+                      noteSkipPreference: () => {
+                        dispatchAuthorization = "skip-preference";
+                      },
+                    }
+                  : actionId === HOST_STATUS_TOOL
+                    ? { tier }
+                    : undefined
                 : undefined;
             const settled = await runHostControlTool(
               actionId,

@@ -265,6 +265,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
     receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
     throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
+    readAgents: (options) => getLocalAgentDirectory().read(options),
   });
   // The global assistant has no window of its own: it is asked in one that
   // shows it, never the focused one, and not at all while none does.
@@ -352,6 +353,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       relayCall: (payload) => local.relayCall(payload),
       throwawayCall: (payload) => local.throwawayCall(payload),
       agents: (options) => getLocalAgentDirectory().read(options),
+      status: (payload) => local.status(payload),
     },
   });
   // A help session that won't run again holds nothing it made in another

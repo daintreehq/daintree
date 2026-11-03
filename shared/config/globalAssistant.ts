@@ -3,6 +3,7 @@ import {
   HOST_CALL_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
 } from "../types/hostControl.js";
 
@@ -36,7 +37,9 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * names hosts, never a project, and every change it makes the person approves.
  * `host.watch` names a host and only listens, so the coordinator that held
  * work for one hears when it comes back (#14463), and `host.bringBack` names
- * one to wake or start where the person set that up (#16170).
+ * one to wake or start where the person set that up (#16170). `host.status`
+ * reads `terminal.getStatus` in many projects on many hosts at once, each as
+ * `host.call` would read it there (#16191).
  */
 export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
@@ -44,6 +47,7 @@ export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
   HOST_BRING_BACK_TOOL,
+  HOST_STATUS_TOOL,
 ]);
 
 /**

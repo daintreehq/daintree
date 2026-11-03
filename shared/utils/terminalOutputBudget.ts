@@ -154,10 +154,11 @@ const TRUNCATED_FLAG_BYTES = utf8ByteLength(',"recentOutputTruncated":true');
  * overrun the cap, and the transport cap handles the rest as before. That needs
  * a narrower query, which no tail budget can stand in for.
  */
-export function boundTerminalStatusOutput<T extends { terminals: TerminalStatusEntry[] }>(
-  result: T,
-  maxBytes: number
-): T {
+export function boundTerminalStatusOutput<
+  T extends {
+    terminals: Array<Pick<TerminalStatusEntry, "recentOutput" | "recentOutputTruncated">>;
+  },
+>(result: T, maxBytes: number): T {
   if (utf8ByteLength(JSON.stringify(result)) <= maxBytes) return result;
 
   const tails = result.terminals.map((entry) =>

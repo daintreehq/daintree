@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import type { LinkSession } from "../link/session.js";
+import type { AgentDirectory } from "../../../shared/types/agentDirectory.js";
 import type {
   McpCallAnswer,
+  ProjectStatusAnswer,
   RelayApproveAnswer,
   RelayApprovePayload,
   RelayApproveTimedPayload,
   RelayCallRequest,
   RelayNoticesPayload,
+  StatusPayload,
   ThrowawayCallAnswer,
   ThrowawayCallPayload,
 } from "./linkMethods.js";
@@ -17,6 +20,7 @@ import {
   type RelayMcpSessionSpec,
 } from "./mcpRelayExecutor.js";
 import { askShellApproval } from "./relayApprovals.js";
+import { readProjectStatuses, STATUS_READ_TOOL } from "./projectStatusRead.js";
 import { createThrowawayRelay, type HostThrowawayExecutor } from "./throwawayRelay.js";
 
 /**
@@ -43,11 +47,18 @@ export interface LocalMcpRelayDeps extends Pick<
   ): Promise<RelayApproveAnswer>;
   /** This machine's throwaway runs (#14445), read at each call; absent or null, they are off. */
   throwawayRuns?(): HostThrowawayExecutor | null;
+  /** This machine's agent directory, for a status read that names no terminals (#16191). */
+  readAgents?(options: { projectId?: string }): Promise<AgentDirectory>;
   newId?: () => string;
 }
 
 export interface LocalMcpRelay {
   relayCall(request: RelayCallRequest): Promise<McpCallAnswer>;
+  /**
+   * `terminal.getStatus` in several of this machine's projects (#16191), each
+   * through the gates `relayCall` meets there, screens redacted as a host's are.
+   */
+  status(payload: StatusPayload): Promise<ProjectStatusAnswer[]>;
   /** A throwaway tool on this machine (#14446), with no project, session or view. */
   throwawayCall(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /**
@@ -90,40 +101,66 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     call: async (_method, payload) => deps.receiveApproval(payload as RelayApproveTimedPayload),
   };
   let disposed = false;
+  // One spec for each principal and project, whichever call opens its session first.
+  const specFor = (
+    target: { helpSessionId: string; projectId: string; tier: "core" | "full" },
+    global: boolean
+  ): RelayMcpSessionSpec => ({
+    linkSessionId: LOCAL_RELAY_LINK_SESSION_ID,
+    senderId: LOCAL_RELAY_SENDER_ID,
+    helpSessionId: target.helpSessionId,
+    projectId: target.projectId,
+    tier: target.tier,
+    shellName: deps.machineName(),
+    local: true,
+    ...(global ? { global: true as const } : {}),
+    deliverNotices: (fired) => {
+      if (disposed || fired.length === 0) return;
+      deps.receiveNotices({
+        notices: fired.map((notice) => ({
+          noticeId: newId(),
+          helpSessionId: notice.helpSessionId,
+          callId: notice.callId,
+          terminalId: notice.terminalId,
+          observation: notice.observation,
+          ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+          lastTransitionAt: notice.lastTransitionAt,
+        })),
+      });
+    },
+    requestApproval: (ask) =>
+      askShellApproval(disposed ? null : approvals, {
+        ...ask,
+        helpSessionId: target.helpSessionId,
+        projectId: target.projectId,
+      }),
+  });
   return {
     relayCall: async (payload) => {
       if (disposed) return { status: "refused", reason: "server-off" };
-      const spec: RelayMcpSessionSpec = {
-        linkSessionId: LOCAL_RELAY_LINK_SESSION_ID,
-        senderId: LOCAL_RELAY_SENDER_ID,
-        helpSessionId: payload.helpSessionId,
-        projectId: payload.projectId,
-        tier: payload.tier,
-        shellName: deps.machineName(),
-        local: true,
-        ...(payload.global === true ? { global: true as const } : {}),
-        deliverNotices: (fired) => {
-          if (disposed || fired.length === 0) return;
-          deps.receiveNotices({
-            notices: fired.map((notice) => ({
-              noticeId: newId(),
-              helpSessionId: notice.helpSessionId,
-              callId: notice.callId,
-              terminalId: notice.terminalId,
-              observation: notice.observation,
-              ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
-              lastTransitionAt: notice.lastTransitionAt,
-            })),
-          });
+      return executor.call(specFor(payload, payload.global === true), payload);
+    },
+    status: async (payload) => {
+      const read = deps.readAgents;
+      return readProjectStatuses(
+        {
+          getStatus: async (projectId, args, runMs) =>
+            disposed
+              ? { status: "refused", reason: "server-off" }
+              : executor.read(
+                  specFor(
+                    { helpSessionId: payload.helpSessionId, projectId, tier: payload.tier },
+                    payload.global === true
+                  ),
+                  { tool: STATUS_READ_TOOL, args, runMs }
+                ),
+          ...(read ? { readAgents: (projectId) => read({ projectId }) } : {}),
+          ...(deps.now ? { now: deps.now } : {}),
         },
-        requestApproval: (ask) =>
-          askShellApproval(disposed ? null : approvals, {
-            ...ask,
-            helpSessionId: payload.helpSessionId,
-            projectId: payload.projectId,
-          }),
-      };
-      return executor.call(spec, payload);
+        payload.projects,
+        payload.includeOutput,
+        payload.runMs
+      );
     },
     throwawayCall: async (payload) => {
       if (disposed) return { status: "refused", reason: "throwaway-off" };

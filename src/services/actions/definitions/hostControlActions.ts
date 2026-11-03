@@ -10,6 +10,8 @@ import {
   HostListResultSchema,
   HostSettingsArgsSchema,
   HostSettingsResultSchema,
+  HostStatusArgsSchema,
+  HostStatusResultSchema,
   HostWatchArgsSchema,
   HostWatchResultSchema,
 } from "@shared/types/hostControl";
@@ -33,8 +35,9 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * messaging run through `host.call` (#13496), and a host's own named settings
  * are read and changed through `host.settings` (#14167), `host.watch`
  * wakes an assistant once a host's link or capacity is seen to change (#14463),
- * and `host.bringBack` tries to bring back a host whose link is down (#16170).
- * `run()` throws if the renderer ever invokes it directly.
+ * `host.bringBack` tries to bring back a host whose link is down (#16170), and
+ * `host.status` reads agents' status and screens across projects and hosts in
+ * one call (#16191). `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
   actions.set("host.list", () => ({
@@ -195,5 +198,29 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.bringBack"),
+  }));
+
+  actions.set("host.status", () => ({
+    id: "host.status",
+    title: "Read agents' status across hosts",
+    description:
+      "terminal.getStatus for many projects on many hosts in one call: each target's agent states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
+    category: "help",
+    kind: "query",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "status", "screen", "agent", "state", "waiting"],
+    palette: { mode: "hidden" },
+    argsSchema: HostStatusArgsSchema,
+    resultSchema: HostStatusResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.status"),
   }));
 }

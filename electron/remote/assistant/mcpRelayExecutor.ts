@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
@@ -114,6 +115,15 @@ export interface McpRelayExecutorDeps {
 export interface McpRelayExecutor {
   /** Runs one relayed call, at most once per sender and callId. */
   call(spec: RelayMcpSessionSpec, payload: McpCallPayload): Promise<McpCallAnswer>;
+  /**
+   * Runs one read that arms nothing, through the same admission as `call`, with
+   * no record kept: nobody resends it, and what it read isn't held for a resend
+   * (#16191). A call that would arm a notice is refused as one this can't run.
+   */
+  read(
+    spec: RelayMcpSessionSpec,
+    read: { tool: string; args: Record<string, unknown>; runMs: number }
+  ): Promise<McpCallAnswer>;
   /** Whether this host holds anything more for each of a sender's calls (#13930). */
   noticeStatus(
     senderId: string,
@@ -627,6 +637,26 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       if (answer.status === "unknown") return { status: "unknown" } satisfies McpCallAnswer;
       if (answer.status === "conflict") return { status: "conflict" } satisfies McpCallAnswer;
       return answer.value;
+    },
+    read: async (spec, { tool, args, runMs }) => {
+      if (relayCallArmsNotice(tool, args)) {
+        return { status: "done", result: errorResult(new Error("A read can't ask for notices")) };
+      }
+      const release = holdPrincipal(spec.senderId, spec.helpSessionId);
+      try {
+        return await executeHeld(spec, {
+          helpSessionId: spec.helpSessionId,
+          projectId: spec.projectId,
+          tier: spec.tier,
+          callId: randomUUID(),
+          resend: false,
+          tool,
+          args,
+          runMs,
+        });
+      } finally {
+        release();
+      }
     },
     noticeStatus,
     noticesDropped: (senderId, callIds) => {

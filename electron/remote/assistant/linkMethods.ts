@@ -2,6 +2,12 @@ import { z } from "zod";
 import { EXCHANGE_STATES } from "../exchange/types.js";
 import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
 import {
+  HOST_STATUS_MAX_LINES,
+  HOST_STATUS_PROJECT_TERMINALS_MAX,
+  HOST_STATUS_TARGETS_MAX,
+} from "../../../shared/types/hostControl.js";
+import { TerminalStatusResultSchema } from "../../../shared/types/terminalStatusSchemas.js";
+import {
   HOST_THROWAWAY_FAILURES,
   HOST_THROWAWAY_REFUSALS,
   HostThrowawayCallSchema,
@@ -90,6 +96,14 @@ export const AssistantLinkMethod = {
    * UNSUPPORTED.
    */
   AGENTS: "assistant.agents",
+  /**
+   * Shell → Host: `terminal.getStatus` in several of this host's projects in
+   * one exchange, for `host.status` (#16191). Each project is read in a session
+   * the host admits for it, as MCP_CALL's is, and screens and handback
+   * messages are redacted here before they leave. A host from before this
+   * answers UNSUPPORTED, and the Shell reads each project with MCP_CALL.
+   */
+  STATUS: "assistant.status",
 } as const;
 
 /** What a v0.44 Shell calls for the exchanges it sent, answered from retired records (#13496). */
@@ -324,6 +338,128 @@ export const AgentsAnswerSchema = z.discriminatedUnion("status", [
     .strip(),
 ]);
 export type AgentsAnswer = z.infer<typeof AgentsAnswerSchema>;
+
+/** Longest a host may take over a STATUS read: well past any Shell's own wait for one. */
+export const MAX_STATUS_RUN_MS = 60_000;
+
+export const StatusOutputSchema = z
+  .object({
+    lines: z.number().int().min(1).max(HOST_STATUS_MAX_LINES),
+    stripAnsi: z.boolean(),
+  })
+  .strict();
+export type StatusOutput = z.infer<typeof StatusOutputSchema>;
+
+export const StatusProjectSchema = z
+  .object({
+    projectId: id,
+    /** Absent: every agent the host's own directory lists in the project. */
+    terminalIds: z.array(id).min(1).max(HOST_STATUS_PROJECT_TERMINALS_MAX).optional(),
+  })
+  .strict();
+export type StatusProject = z.infer<typeof StatusProjectSchema>;
+
+export const StatusPayloadSchema = z
+  .object({
+    /** The Shell assistant's own help session, as MCP_CALL names it. */
+    helpSessionId: id,
+    tier: z.enum(["core", "full"]),
+    /**
+     * The Shell's global Assistant (#14545), from the Shell runtime's own lane.
+     * A field here, not a method as GLOBAL_MCP_CALL is: every host that knows
+     * this method knows a global Assistant's sessions.
+     */
+    global: z.literal(true).optional(),
+    projects: z.array(StatusProjectSchema).min(1).max(HOST_STATUS_TARGETS_MAX),
+    /** Null for state alone. */
+    includeOutput: StatusOutputSchema.nullable(),
+    /** How long the host may take before answering with what it has read. */
+    runMs: z.number().int().min(1).max(MAX_STATUS_RUN_MS),
+  })
+  .strict();
+export type StatusPayload = z.infer<typeof StatusPayloadSchema>;
+
+/**
+ * Why one project's read gave nothing: its answer was an error or couldn't be
+ * read as a status (`unreadable`), its agents couldn't be listed when no
+ * terminals were named (`agents-unread`), or it didn't answer in time
+ * (`timeout`). A Shell reading an older host project by project also meets a
+ * link it can't use (`unreachable`) and a host that runs no tools for other
+ * machines' assistants (`unsupported`).
+ */
+export const PROJECT_STATUS_FAILURES = [
+  "unreadable",
+  "agents-unread",
+  "timeout",
+  "unreachable",
+  "unsupported",
+] as const;
+export type ProjectStatusFailure = (typeof PROJECT_STATUS_FAILURES)[number];
+
+export const ProjectStatusAnswerSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("done"),
+      projectId: id,
+      /** As `terminal.getStatus` answered there, its text redacted; null when it lists no agents. */
+      result: TerminalStatusResultSchema.nullable(),
+      /** Every agent was listed: always true for named terminals. */
+      complete: z.boolean(),
+      /** Agents the directory left out, for its cap. */
+      omitted: z.number().int().min(0),
+    })
+    .strip(),
+  z
+    .object({
+      status: z.literal("refused"),
+      projectId: id,
+      reason: z.union([
+        z.enum(RELAY_REFUSALS),
+        z
+          .string()
+          .max(64)
+          .transform(() => "server-off" as const),
+      ]),
+    })
+    .strip(),
+  z
+    .object({
+      status: z.literal("failed"),
+      projectId: id,
+      reason: z.union([
+        z.enum(PROJECT_STATUS_FAILURES),
+        z
+          .string()
+          .max(64)
+          .transform(() => "unreadable" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type ProjectStatusAnswer = z.infer<typeof ProjectStatusAnswerSchema>;
+
+export const StatusAnswerSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("done"),
+      projects: z.array(ProjectStatusAnswerSchema).max(HOST_STATUS_TARGETS_MAX),
+    })
+    .strip(),
+  /** This host doesn't take work from other machines' assistants; nothing was read. */
+  z
+    .object({
+      status: z.literal("refused"),
+      reason: z.union([
+        z.literal("control-off"),
+        z
+          .string()
+          .max(64)
+          .transform(() => "control-off" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type StatusAnswer = z.infer<typeof StatusAnswerSchema>;
 
 /** Notices one relay-notices call carries; the host sends the rest in the next. */
 export const MAX_RELAY_NOTICES_PER_CALL = 32;
