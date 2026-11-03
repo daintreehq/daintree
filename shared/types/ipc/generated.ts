@@ -340,6 +340,8 @@ export interface GeneratedIpcInvokeMap {
                 }
               | null
               | undefined;
+            personaName?: string | undefined;
+            personaEmoji?: string | undefined;
           }
         | {
             state: "resumable";
