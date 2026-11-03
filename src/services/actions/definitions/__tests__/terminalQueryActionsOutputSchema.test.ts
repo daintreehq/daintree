@@ -182,10 +182,17 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
   });
 
   it("terminal.getStatus keeps which marker the agent printed, and the waits accept it (#16190)", () => {
-    const handback = { message: "approve the deploy", report: "needs-you", observedAt: 1, truncated: false };
+    const handback = {
+      message: "approve the deploy",
+      report: "needs-you",
+      observedAt: 1,
+      truncated: false,
+    };
     // Dispatch strips undeclared keys, so the report has to be declared to arrive.
     const parsed = TerminalStatusResultSchema.parse({
-      terminals: [{ terminalId: "t1", agentId: null, agentState: "waiting", lastHandback: handback }],
+      terminals: [
+        { terminalId: "t1", agentId: null, agentState: "waiting", lastHandback: handback },
+      ],
       source: "renderer",
       unavailableFields: [],
     });

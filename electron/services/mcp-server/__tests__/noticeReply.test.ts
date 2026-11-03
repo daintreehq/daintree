@@ -115,7 +115,10 @@ describe("extracting a reply", () => {
       "",
       "› Ask Codex to do anything",
     ].join("\n");
-    const extracted = extractReply(screen, 40, { message: "approve the deployment", code: "abc123" });
+    const extracted = extractReply(screen, 40, {
+      message: "approve the deployment",
+      code: "abc123",
+    });
     expect(extracted.reachedHandback).toBe(true);
     expect(extracted.reply?.text.endsWith("approve the deployment END-abc123")).toBe(true);
   });

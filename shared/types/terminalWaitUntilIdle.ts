@@ -1,10 +1,6 @@
 import type { WaitingReason } from "./agent.js";
 import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "./terminalStatus.js";
-import {
-  HANDBACK_REPORTS,
-  LAST_HANDBACK_DESCRIPTION,
-  type TerminalHandback,
-} from "./handback.js";
+import { HANDBACK_REPORTS, LAST_HANDBACK_DESCRIPTION, type TerminalHandback } from "./handback.js";
 
 /**
  * Default wait is a bounded long-poll, not an open-ended block. A tool call

@@ -369,8 +369,8 @@ describe("keepFirstObservation (#13128)", () => {
 
   it("takes a capture whose report alone changed, keeping the first observation (#16190)", () => {
     const done = { ...held, report: "done" as const };
-    expect(
-      keepFirstObservation(done, { ...done, report: "needs-you", observedAt: 2_000 })
-    ).toEqual({ ...done, report: "needs-you" });
+    expect(keepFirstObservation(done, { ...done, report: "needs-you", observedAt: 2_000 })).toEqual(
+      { ...done, report: "needs-you" }
+    );
   });
 });

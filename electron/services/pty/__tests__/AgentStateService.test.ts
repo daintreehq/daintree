@@ -1539,7 +1539,12 @@ describe("AgentStateService handback detection (#12488)", () => {
 
   it("keeps the first observation when the capture changed since mid-turn", () => {
     const service = new AgentStateService();
-    const early = { message: "fixed the race", report: "done" as const, observedAt: 1, truncated: false };
+    const early = {
+      message: "fixed the race",
+      report: "done" as const,
+      observedAt: 1,
+      truncated: false,
+    };
     const terminal = askedTerminal([MARKER], {
       lastHandback: early,
       lastHandbackUnpublished: true,
