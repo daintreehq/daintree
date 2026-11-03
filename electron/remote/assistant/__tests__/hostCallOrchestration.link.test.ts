@@ -75,6 +75,8 @@ import type {
  */
 
 const HOST_ID = "studio";
+/** A token in a shape the redactor knows, to show it never leaves the host whole. */
+const STATUS_SECRET = "ghp_" + "Z9y8X7w6V5u4T3s2R1q0P9o8";
 const PROJECT = "proj-2";
 const CREDENTIAL = "C".repeat(43);
 /** The owner the host keeps what a Shell's assistant made under: its sender and help session. */
@@ -120,6 +122,7 @@ function entry(
 
 const MANIFEST: ActionManifestEntry[] = [
   entry("terminal.list", "query"),
+  entry("terminal.getStatus", "query"),
   entry("agent.launch"),
   entry("terminal.closeOwned"),
   entry("terminal.interruptOwned"),
@@ -169,6 +172,8 @@ class Destination {
     unpushedCommits: 0,
   };
   readonly submissions = new Map<string, string[]>();
+  /** Status reads as they reach the project's tools, after the host's own admission. */
+  readonly statusReads: Array<{ projectId: string; global: boolean; args: unknown }> = [];
   accepts = true;
   /** Set to hold the next change until released, as a slow host would. */
   gate: { reached: (callId: string) => void; release: Promise<void> } | null = null;
@@ -264,6 +269,30 @@ class Destination {
       ({ result: { ok: false, error: { code, message } } }) as never;
     if (actionId === "terminal.list") {
       return ok({ terminals: [...this.terminals].map((id) => ({ id })) });
+    }
+    if (actionId === "terminal.getStatus") {
+      this.statusReads.push({ projectId: spec.projectId, global: spec.global === true, args });
+      return ok({
+        terminals: (args.terminalIds as string[]).map((terminalId) =>
+          this.terminals.has(terminalId)
+            ? {
+                terminalId,
+                agentId: "claude",
+                agentState: "waiting",
+                waitingReason: "prompt",
+                lastTransitionAt: 5,
+                recentOutput: `GITHUB_TOKEN=${STATUS_SECRET}\n❯ continue?`,
+              }
+            : {
+                terminalId,
+                agentId: null,
+                agentState: null,
+                error: "Terminal not found or status unavailable",
+              }
+        ),
+        source: "renderer",
+        unavailableFields: [],
+      });
     }
     if (actionId === "worktree.delete") {
       // With no view here, the person at the Shell is asked about this very call (#13501).
@@ -550,7 +579,7 @@ const agentReads: Array<{ projectId?: string }> = [];
 const agentReadFails = { value: false };
 
 /** Relayed calls as they arrive on the host, before its ledger or anything else sees them. */
-const arrivals = { mcpCalls: 0, projectReads: 0, sessionsOpened: 0 };
+const arrivals = { mcpCalls: 0, statusCalls: 0, projectReads: 0, sessionsOpened: 0 };
 
 function hostSource(link: LinkSession) {
   const session = new Proxy(link, {
@@ -562,6 +591,7 @@ function hostSource(link: LinkSession) {
             schema as never,
             ((payload: unknown) => {
               if (method === AssistantLinkMethod.MCP_CALL) arrivals.mcpCalls++;
+              if (method === AssistantLinkMethod.STATUS) arrivals.statusCalls++;
               return handler(payload);
             }) as never
           );
@@ -644,6 +674,7 @@ beforeEach(async () => {
   destination = new Destination();
   throwaways = new ThrowawayRuns();
   arrivals.mcpCalls = 0;
+  arrivals.statusCalls = 0;
   arrivals.projectReads = 0;
   arrivals.sessionsOpened = 0;
   agentReads.length = 0;
@@ -1309,5 +1340,72 @@ describe("host.list reading a host's agents over the link (#14455)", () => {
     control.add(HOST_ID);
     agentReadFails.value = true;
     expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
+  });
+});
+
+describe("host.status over a real link (#16191)", () => {
+  it("reads the host's projects in one exchange through its own gates, and redacts there", async () => {
+    await launchWorker();
+    const relayedBefore = arrivals.mcpCalls;
+    const outcome = await shell.runtime.status(
+      "help-a",
+      {
+        targets: [
+          { hostId: HOST_ID, projectId: PROJECT, terminalIds: ["w-1", "w-elsewhere"] },
+          { hostId: HOST_ID, projectId: "proj-gone", terminalIds: ["w-2"] },
+        ],
+        includeOutput: true,
+      },
+      { tier: "core" }
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // One exchange for the host, and no project call relayed one at a time.
+    expect(arrivals.statusCalls).toBe(1);
+    expect(arrivals.mcpCalls).toBe(relayedBefore);
+    expect(destination.statusReads).toEqual([
+      {
+        projectId: PROJECT,
+        global: false,
+        args: {
+          terminalIds: ["w-1", "w-elsewhere"],
+          includeOutput: { lines: 10, stripAnsi: true },
+        },
+      },
+    ]);
+    expect(outcome.value.targets.map((target) => [target.projectId, target.outcome])).toEqual([
+      [PROJECT, "ok"],
+      ["proj-gone", "not_found"],
+    ]);
+    expect(outcome.value.terminals).toMatchObject([
+      {
+        hostId: HOST_ID,
+        projectId: PROJECT,
+        terminalId: "w-1",
+        agentState: "waiting",
+        recentOutput: "GITHUB_TOKEN=[redacted]\n❯ continue?",
+      },
+      {
+        hostId: HOST_ID,
+        projectId: PROJECT,
+        terminalId: "w-elsewhere",
+        error: "Terminal not found or status unavailable",
+      },
+    ]);
+    expect(JSON.stringify(outcome.value)).not.toContain(STATUS_SECRET);
+    // A read is no effect on the host.
+    expect(destination.count("terminal.getStatus")).toBe(0);
+  });
+
+  it("reads nothing once the person turns assistant control off for the host", async () => {
+    control.delete(HOST_ID);
+    const outcome = await shell.runtime.status(
+      "help-a",
+      { targets: [{ hostId: HOST_ID, projectId: PROJECT, terminalIds: ["w-1"] }] },
+      { tier: "core" }
+    );
+    expect(outcome.ok && outcome.value.targets[0]!.outcome).toBe("opted_out");
+    expect(arrivals.statusCalls).toBe(0);
+    expect(destination.statusReads).toEqual([]);
   });
 });

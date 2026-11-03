@@ -458,6 +458,79 @@ describe("HostControlLinkClient.agentsOnOpenLink (#16188)", () => {
   });
 });
 
+describe("HostControlLinkClient.status (#16191)", () => {
+  const STATUS = {
+    helpSessionId: "help-1",
+    tier: "core" as const,
+    projects: [{ projectId: "p1" }, { projectId: "p2", terminalIds: ["t-2"] }],
+    includeOutput: null,
+  };
+
+  it("proves the sender, then asks once for every project, giving the host what is left of the wait", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.STATUS
+        ? {
+            status: "done",
+            projects: [
+              { status: "done", projectId: "p1", result: null, complete: true, omitted: 0 },
+              { status: "failed", projectId: "p2", reason: "a reason from later" },
+            ],
+          }
+        : null
+    );
+    await expect(relay.status("studio", STATUS, 5_000)).resolves.toEqual({
+      status: "done",
+      projects: [
+        { status: "done", projectId: "p1", result: null, complete: true, omitted: 0 },
+        // A failure this Shell doesn't know reads as one it couldn't read.
+        { status: "failed", projectId: "p2", reason: "unreadable" },
+      ],
+    });
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.STATUS,
+    ]);
+    const sent = calls[1]!;
+    expect(sent.payload).toMatchObject(STATUS);
+    const { runMs } = sent.payload as { runMs: number };
+    // Never more than the wait, and the host is told to answer inside it.
+    expect(runMs).toBeLessThanOrEqual(5_000);
+    expect(sent.timeoutMs).toBeGreaterThanOrEqual(runMs);
+  });
+
+  it("names a host from before it unsupported, and an unreadable answer invalid", async () => {
+    const old = client((method) => {
+      if (method === AssistantLinkMethod.STATUS) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return null;
+    });
+    await expect(old.relay.status("studio", STATUS, 5_000)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+
+    const garbled = client((method) =>
+      method === AssistantLinkMethod.STATUS
+        ? {
+            status: "done",
+            projects: [
+              {
+                status: "done",
+                projectId: "p1",
+                result: { terminals: "everything", source: "pty", unavailableFields: [] },
+                complete: true,
+                omitted: 0,
+              },
+            ],
+          }
+        : null
+    );
+    await expect(garbled.relay.status("studio", STATUS, 5_000)).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+  });
+});
+
 describe("HostControlLinkClient relay notices (#13500)", () => {
   type Receiver = RelayNoticeReceiver;
 

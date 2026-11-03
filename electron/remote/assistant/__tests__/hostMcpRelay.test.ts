@@ -1497,3 +1497,309 @@ describe("a Shell listing this host's agents (#14455)", () => {
     big.relay.dispose();
   });
 });
+
+describe("a Shell reading this host's agents' status (#16191)", () => {
+  /** A token and a key, each in a shape the redactor knows. */
+  const GITHUB_TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2";
+  const API_KEY = "sk-proj-" + "abcdefghijklmnopqrstu";
+
+  const statusAnswer = (terminalId: string): CallToolResult => {
+    const result = {
+      terminals: [
+        {
+          terminalId,
+          agentId: "claude",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          lastTransitionAt: 10,
+          lastTypedInputAt: 4,
+          agentIncarnation: 2,
+          lastHandback: {
+            message: `pushed with ${API_KEY}`,
+            observedAt: 9,
+            truncated: false,
+          },
+          recentOutput: `export GITHUB_TOKEN=${GITHUB_TOKEN}\n❯ approve?`,
+        },
+      ],
+      source: "pty",
+      unavailableFields: ["armed", "lastCheckResult", "exitCode"],
+    };
+    return buildToolCallResult(result, { structuredContent: result });
+  };
+
+  const payload = (overrides: Record<string, unknown> = {}) => ({
+    helpSessionId: "help-1",
+    tier: "core",
+    projects: [
+      { projectId: "project-1", terminalIds: ["t-1"] },
+      { projectId: "project-2", terminalIds: ["t-2"] },
+    ],
+    includeOutput: { lines: 10, stripAnsi: true },
+    runMs: 5_000,
+    ...overrides,
+  });
+
+  const LIVE = {
+    state: "live" as const,
+    agentId: "claude",
+    agentState: "idle" as const,
+    waitingReason: null,
+    since: null,
+    label: null,
+    attached: null,
+    handback: null,
+  };
+  const live = (terminalId: string, projectId: string, role: "worker" | "assistant") => ({
+    ...LIVE,
+    role,
+    subject: {
+      hostId: "local",
+      scope: { kind: "project" as const, projectId },
+      terminalId,
+      incarnation: 1,
+    },
+  });
+
+  it("reads each project in its own bound session in one exchange, and redacts what the screens showed", async () => {
+    const answers = [statusAnswer("t-1"), statusAnswer("t-2")];
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {}, async () =>
+      answers.shift()!
+    );
+    const answer = await links[0]!.ask(AssistantLinkMethod.STATUS, payload({ global: true }));
+
+    expect(opened.map((session) => session.spec.projectId).sort()).toEqual([
+      "project-1",
+      "project-2",
+    ]);
+    for (const session of opened) {
+      // Admitted for the Shell's sender and help session, as its global Assistant.
+      expect(session.spec).toMatchObject({
+        linkSessionId: "link-1",
+        senderId: "sender-a",
+        helpSessionId: "help-1",
+        tier: "core",
+        global: true,
+      });
+      expect(session.calls).toHaveLength(1);
+      expect(session.calls[0]).toMatchObject({
+        tool: "terminal.getStatus",
+        args: {
+          terminalIds: [session.spec.projectId === "project-1" ? "t-1" : "t-2"],
+          includeOutput: { lines: 10, stripAnsi: true },
+        },
+      });
+    }
+    const text = JSON.stringify(answer);
+    expect(text).not.toContain(GITHUB_TOKEN);
+    expect(text).not.toContain(API_KEY);
+    expect(answer).toMatchObject({
+      status: "done",
+      projects: [
+        {
+          status: "done",
+          projectId: "project-1",
+          complete: true,
+          omitted: 0,
+          result: {
+            source: "pty",
+            terminals: [
+              {
+                terminalId: "t-1",
+                agentState: "waiting",
+                lastTypedInputAt: 4,
+                agentIncarnation: 2,
+                lastHandback: { message: "pushed with [redacted]", observedAt: 9 },
+                recentOutput: "export GITHUB_TOKEN=[redacted]\n❯ approve?",
+              },
+            ],
+          },
+        },
+        { status: "done", projectId: "project-2" },
+      ],
+    });
+    // What crossed the link is the redacted answer, and it encodes whole.
+    expect(JSON.stringify(decodeValue(encodeValue(answer)))).not.toContain(GITHUB_TOKEN);
+    relay.dispose();
+  });
+
+  it("opens the session a later call reuses, so its notices and approvals still reach the Shell", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {}, async () =>
+      statusAnswer("t-1")
+    );
+    await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({ global: true, projects: [{ projectId: "project-1", terminalIds: ["t-1"] }] })
+    );
+    await links[0]!.ask(AssistantLinkMethod.GLOBAL_MCP_CALL, {
+      helpSessionId: "help-1",
+      projectId: "project-1",
+      tier: "core",
+      callId: "call-1",
+      resend: false,
+      tool: "terminal.list",
+      args: {},
+      runMs: 90_000,
+    });
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.calls.map((call) => call.tool)).toEqual([
+      "terminal.getStatus",
+      "terminal.list",
+    ]);
+    relay.dispose();
+  });
+
+  it("names a project's agents from its own directory when no terminals are named", async () => {
+    const readAgents = vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 7,
+      complete: true,
+      omitted: 0,
+      entries: [
+        live("t-a", "project-1", "worker"),
+        live("t-b", "project-1", "assistant"),
+        live("t-c", "project-9", "worker"),
+      ],
+    }));
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { readAgents }, async () =>
+      statusAnswer("t-a")
+    );
+    const answer = await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({ projects: [{ projectId: "project-1" }, { projectId: "project-2" }] })
+    );
+    expect(readAgents).toHaveBeenCalledWith({ projectId: "project-1" });
+    // project-2 lists no agents of its own: it is answered whole, with nothing to read.
+    expect(opened.map((session) => session.spec.projectId)).toEqual(["project-1"]);
+    expect(opened[0]!.calls[0]!.args).toMatchObject({ terminalIds: ["t-a", "t-b"] });
+    expect(answer).toMatchObject({
+      status: "done",
+      projects: [
+        { status: "done", projectId: "project-1", complete: true },
+        { status: "done", projectId: "project-2", result: null, complete: true, omitted: 0 },
+      ],
+    });
+    relay.dispose();
+  });
+
+  it("says a project's agents couldn't be listed, and a partial list is no whole one", async () => {
+    const none = harness([["link-1", "sender-a"]]);
+    await expect(
+      none.links[0]!.ask(
+        AssistantLinkMethod.STATUS,
+        payload({ projects: [{ projectId: "project-1" }] })
+      )
+    ).resolves.toEqual({
+      status: "done",
+      projects: [{ status: "failed", projectId: "project-1", reason: "agents-unread" }],
+    });
+    expect(none.opened).toHaveLength(0);
+    none.relay.dispose();
+
+    const stale = harness(
+      [["link-1", "sender-a"]],
+      {
+        readAgents: async () => ({
+          coverage: "stale" as const,
+          observedAt: 7,
+          complete: false,
+          omitted: 3,
+          entries: [live("t-a", "project-1", "worker")],
+        }),
+      },
+      async () => statusAnswer("t-a")
+    );
+    await expect(
+      stale.links[0]!.ask(
+        AssistantLinkMethod.STATUS,
+        payload({ projects: [{ projectId: "project-1" }] })
+      )
+    ).resolves.toMatchObject({
+      projects: [{ status: "done", projectId: "project-1", complete: false, omitted: 3 }],
+    });
+    stale.relay.dispose();
+  });
+
+  it("refuses without reading while this host's own setting is off, or once it goes off", async () => {
+    const off = harness([["link-1", "sender-a"]], { acceptsRemoteControl: () => false });
+    await expect(off.links[0]!.ask(AssistantLinkMethod.STATUS, payload())).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    expect(off.opened).toHaveLength(0);
+    off.relay.dispose();
+
+    let consent = true;
+    const revoked = harness(
+      [["link-1", "sender-a"]],
+      { acceptsRemoteControl: () => consent },
+      async () => {
+        consent = false;
+        return statusAnswer("t-1");
+      }
+    );
+    await expect(revoked.links[0]!.ask(AssistantLinkMethod.STATUS, payload())).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    revoked.relay.dispose();
+  });
+
+  it("reads nothing for a session that proved no sender", async () => {
+    const { links, opened, relay } = harness([["link-1", null]]);
+    await expect(links[0]!.ask(AssistantLinkMethod.STATUS, payload())).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("answers each project for itself: missing, an error, not a status, or out of time", async () => {
+    const answers: Array<() => Promise<CallToolResult>> = [
+      async () => buildToolError({ code: "TIER_NOT_PERMITTED", message: "no" }),
+      async () => ({ content: [{ type: "text", text: "not a status" }] }),
+      () => new Promise<CallToolResult>(() => {}),
+    ];
+    const { links, relay } = harness(
+      [["link-1", "sender-a"]],
+      { hasProject: async (projectId) => projectId !== "project-0" },
+      () => answers.shift()!()
+    );
+    const answer = await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({
+        projects: [
+          { projectId: "project-0", terminalIds: ["t-0"] },
+          { projectId: "project-1", terminalIds: ["t-1"] },
+          { projectId: "project-2", terminalIds: ["t-2"] },
+          { projectId: "project-3", terminalIds: ["t-3"] },
+        ],
+        runMs: 500,
+      })
+    );
+    expect(answer).toEqual({
+      status: "done",
+      projects: [
+        { status: "refused", projectId: "project-0", reason: "no-project" },
+        { status: "failed", projectId: "project-1", reason: "unreadable" },
+        { status: "failed", projectId: "project-2", reason: "unreadable" },
+        { status: "failed", projectId: "project-3", reason: "timeout" },
+      ],
+    });
+    relay.dispose();
+  });
+
+  it("keeps no record of a read: the same project read twice runs twice", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {}, async () =>
+      statusAnswer("t-1")
+    );
+    const once = payload({ projects: [{ projectId: "project-1", terminalIds: ["t-1"] }] });
+    await links[0]!.ask(AssistantLinkMethod.STATUS, once);
+    await links[0]!.ask(AssistantLinkMethod.STATUS, once);
+    expect(opened).toHaveLength(1);
+    const [first, second] = opened[0]!.calls;
+    expect(second).toBeDefined();
+    expect(first!.callId).not.toBe(second!.callId);
+    relay.dispose();
+  });
+});
