@@ -781,7 +781,7 @@ const HostStatusTargetSchema = z.object({
     .min(1)
     .max(HOST_STATUS_PROJECT_TERMINALS_MAX)
     .optional()
-    .describe("Terminals in that project. Omit for every agent it lists."),
+    .describe("1-256 terminals in that project. Omit for every agent it lists."),
 });
 
 export const HostStatusArgsSchema = z.object({
@@ -842,10 +842,13 @@ export const HostStatusTargetResultSchema = z.object({
 });
 export type HostStatusTargetResult = z.infer<typeof HostStatusTargetResultSchema>;
 
-export const HostStatusTerminalSchema = TerminalStatusEntrySchema.extend({
-  hostId: z.string(),
-  projectId: z.string(),
-});
+/** An entry as `terminal.getStatus` reads it there; never a `submission`, since no token is asked after. */
+export const HostStatusTerminalSchema = TerminalStatusEntrySchema.omit({ submission: true }).extend(
+  {
+    hostId: z.string(),
+    projectId: z.string(),
+  }
+);
 export type HostStatusTerminal = z.infer<typeof HostStatusTerminalSchema>;
 
 export const HostStatusResultSchema = z.object({

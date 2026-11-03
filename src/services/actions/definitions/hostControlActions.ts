@@ -204,7 +204,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.status",
     title: "Read agents' status across hosts",
     description:
-      "terminal.getStatus for many projects on many hosts in one call: each target's agent states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
+      "Read agents' status in many projects on many hosts in one call, as each project's own status read answers it: states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
     category: "help",
     kind: "query",
     danger: "safe",

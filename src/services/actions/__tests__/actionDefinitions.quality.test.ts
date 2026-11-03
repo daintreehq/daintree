@@ -584,7 +584,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // (a wake, then a start where Host mode is on), that it is bounded, that
   // repeat calls join, and that it answers with observations. Assistant-only,
   // off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 25_350;
+  // 25_350 → 25_650 for `host.status` (#16191), measured at 25_623 B (+287 over
+  // develop's 25_336). It has to say it reads many projects on many hosts at
+  // once, that it answers as each project's own status read would, that screen
+  // tails are redacted, and that it is the read to make before steering an
+  // agent. Assistant-only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 25_650;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1641,6 +1646,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
       "host.watch": { operation: "list" },
       "host.bringBack": { hostId: "h-placeholder" },
+      "host.status": { targets: [{ hostId: "h-placeholder", projectId: "p-placeholder" }] },
       "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },

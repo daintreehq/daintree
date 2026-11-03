@@ -1264,7 +1264,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "terminal.getStatus for many projects on many hosts in one call: each target's agent states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
+      "Read agents' status in many projects on many hosts in one call, as each project's own status read answers it: states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
     enabled: true,
     id: "host.status",
     inputSchema: {
@@ -1291,7 +1291,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                 description: "A projectId from the host list.",
               },
               terminalIds: {
-                description: "Terminals in that project. Omit for every agent it lists.",
+                description: "1-256 terminals in that project. Omit for every agent it lists.",
                 minItems: 1,
                 maxItems: 256,
                 type: "array",
@@ -1581,33 +1581,6 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                 description:
                   "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface.",
                 type: "boolean",
-              },
-              submission: {
-                description:
-                  "Delivery record for the named token. Absent without a token or when the terminal could not be read, which differs from holding no record.",
-                type: "object",
-                properties: {
-                  token: {
-                    type: "string",
-                  },
-                  phase: {
-                    type: "string",
-                    enum: ["queued", "writing", "pty_written", "failed", "cancelled", "unknown"],
-                    description:
-                      "`pty_written`: the text and its Enter reached the pty; it does NOT mean the agent read or acted on them. `queued`/`writing`: in progress. `failed`/`cancelled`: not sent whole and part may sit in the composer, so re-sending is not safe. `unknown`: no record, including tokens older than the last 32.",
-                  },
-                  at: {
-                    description: "Epoch ms the phase was entered. Absent for `unknown`.",
-                    type: "number",
-                  },
-                  outputChangeAfterWriteAt: {
-                    description:
-                      "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen.",
-                    type: "number",
-                  },
-                },
-                required: ["token", "phase"],
-                additionalProperties: false,
               },
               error: {
                 description:
