@@ -7,6 +7,12 @@ import type {
   AgentDirectorySubject,
 } from "@shared/types/agentDirectory";
 import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
+import type { DisplayIdentity } from "@shared/types/displayIdentity";
+import {
+  displayIdentityLabel,
+  isEmptyDisplayIdentity,
+  normalizeDisplayIdentity,
+} from "@shared/utils/displayIdentity";
 import { pluralize } from "@/lib/pluralize";
 import { agoPhrase } from "@/lib/projectRowStatus";
 
@@ -47,6 +53,8 @@ export interface CanopyAssistantItem {
   agentId: string | null;
   /** The agent it runs on (Claude, Codex…): never its role, which is always Daintree Assistant. */
   agentName: string | null;
+  /** The name and emoji the person gave it (#16213); empty when none. */
+  identity: DisplayIdentity;
   /** Where it runs: its project, host and session, or the global assistant. */
   scopeLabel: string;
   projectId: string | null;
@@ -80,6 +88,19 @@ export interface CanopyAssistantItem {
 
 /** The handbacks the person has had in front of them, by assistant id. */
 export type AssistantHandbacksSeen = Readonly<Record<string, number>>;
+
+/** What an assistant is called: its persona, or its role when it has none. */
+export function assistantDisplayName(item: Pick<CanopyAssistantItem, "identity">): string {
+  return displayIdentityLabel(item.identity, "Daintree Assistant");
+}
+
+/** Its persona ahead of where it runs, for a list that names it by place. */
+export function assistantPlaceLabel(
+  item: Pick<CanopyAssistantItem, "identity" | "scopeLabel">
+): string {
+  if (isEmptyDisplayIdentity(item.identity)) return item.scopeLabel;
+  return `${displayIdentityLabel(item.identity, item.scopeLabel)} · ${item.scopeLabel}`;
+}
 
 /** The exact run, as a tuple: no id part can run into the next. */
 export function canopyAssistantId(subject: AgentDirectorySubject): string {
@@ -170,6 +191,8 @@ export function buildAssistantItems(
       subject,
       agentId: entry.agentId,
       agentName: entry.agentId ? getAgentDisplayTitle(entry.agentId) : null,
+      // Another machine wrote it: kept only as a persona can be.
+      identity: normalizeDisplayIdentity(entry.identity),
       scopeLabel,
       projectId,
       projectName,

@@ -88,6 +88,7 @@ export {
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Settings2, // managing a list of things in Settings — hosts, presets — kept apart from Settings, which is project settings
   Shuffle, // a refactor branch (refactor/) — paths rearranged, kept apart from the worktree overview's Layers
+  SmilePlus, // an assistant or agent with no persona emoji yet — choosing one gives it a face beside its name
   Sprout, // origin / first step (main worktree, first agent launch)
   SquareDashedMousePointer, // the dev preview's Element Picker — pick an element on the page to hand to an agent, on its toolbar button and its plugin tile alike
   SquareTerminal, // a scheduled run's terminal still in the grid — Open brings that pane forward

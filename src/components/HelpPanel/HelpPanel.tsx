@@ -87,6 +87,11 @@ import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  useGlobalAssistantIdentity,
+  useProjectAssistantIdentity,
+} from "@/store/assistantIdentityStore";
+import { displayIdentityName } from "@shared/utils/displayIdentity";
 
 // Loaded on first open: the picker reads the panel store and the agents'
 // history, none of which the panel needs until someone asks for it.
@@ -873,9 +878,12 @@ export function HelpPanel({
   }, []);
   const projectActivity = useMemo(() => summarizeLaneActivity(sessionTabs), [sessionTabs]);
   const globalAgentState = useGlobalAssistantActivity(isOpen && isVisible && !globalSelected);
+  const projectIdentity = useProjectAssistantIdentity(activeWorkspaceId);
+  const globalIdentity = useGlobalAssistantIdentity();
+  const globalAssistantName = displayIdentityName(globalIdentity, "Global assistant");
   const globalActivity = useMemo(
-    () => summarizeLaneActivity([{ label: "Global assistant", agentState: globalAgentState }]),
-    [globalAgentState]
+    () => summarizeLaneActivity([{ label: globalAssistantName, agentState: globalAgentState }]),
+    [globalAssistantName, globalAgentState]
   );
   // The header slot the global pane draws its agent and menu into.
   const [globalControlsHost, setGlobalControlsHost] = useState<HTMLDivElement | null>(null);
@@ -1184,6 +1192,8 @@ export function HelpPanel({
         globalControlsRef={setGlobalControlsHost}
         projectActivity={projectActivity}
         globalActivity={globalActivity}
+        projectIdentity={projectIdentity}
+        globalIdentity={globalIdentity}
         canRestartConversation={
           !globalSelected && (Boolean(terminalId && agentId) || pausedLane !== null)
         }
@@ -1260,7 +1270,7 @@ export function HelpPanel({
         id={sessionBodyId}
         // The strip's panel only while the strip is there; the global run has no tab.
         role={globalSelected ? "region" : "tabpanel"}
-        aria-label={globalSelected ? "Global assistant" : undefined}
+        aria-label={globalSelected ? globalAssistantName : undefined}
         aria-labelledby={globalSelected ? undefined : helpSessionTabId(tabIdBase, activeSlot)}
         className="flex-1 flex flex-col min-h-0 relative"
       >
