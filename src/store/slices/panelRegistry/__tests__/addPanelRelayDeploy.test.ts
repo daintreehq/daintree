@@ -1,7 +1,7 @@
 /**
- * A Decisions relay deploy pane (#16023) runs its command once at spawn and
- * keeps none of it, so nothing that replays a pane's command runs the deploy
- * again under the same Worker name.
+ * A Decisions relay deploy pane (#16023), or update pane (#16201), runs its
+ * command once at spawn and keeps none of it, so nothing that replays a pane's
+ * command runs the deploy again under the same Worker name, or the update again.
  */
 
 import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
@@ -111,19 +111,30 @@ describe("addPanel — a relay deploy pane (#16023)", () => {
     usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
   });
 
-  it("spawns running the deploy, and the pane keeps no command to run again", async () => {
-    const command = "npx --yes @daintreehq/decisions-cli@0.1.0 deploy --name n --bucket n";
+  it.each([
+    [
+      "deploy",
+      "daintree-decisions-deploy-1",
+      "npx --yes @daintreehq/decisions-cli@0.1.0 deploy --name n --bucket n",
+    ],
+    // #16201: an update nobody asked for again is as wrong as a second deploy.
+    [
+      "update",
+      "daintree-decisions-update-1",
+      "npx --yes @daintreehq/decisions-cli@0.3.0 update --url https://r.example.dev --protocol 1",
+    ],
+  ])("spawns running the %s, and the pane keeps no command to run again", async (_label, id, command) => {
     await usePanelStore.getState().addPanel({
       kind: "terminal",
-      requestedId: "daintree-decisions-deploy-1",
+      requestedId: id,
       cwd: "/home/me",
       command,
-      title: "Deploy Decisions relay",
+      title: "Decisions relay",
     });
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
 
-    expect(spawn.mock.calls[0]![0]).toMatchObject({ id: "daintree-decisions-deploy-1", command });
-    expect(ptyPanel("daintree-decisions-deploy-1")?.command).toBeUndefined();
+    expect(spawn.mock.calls[0]![0]).toMatchObject({ id, command });
+    expect(ptyPanel(id)?.command).toBeUndefined();
   });
 
   it("keeps any other pane's command, as before", async () => {

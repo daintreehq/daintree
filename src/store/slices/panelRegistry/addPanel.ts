@@ -47,7 +47,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { countPanelLimitUsage, countsTowardPanelLimit } from "./panelCount";
 import { reservePanelSlots } from "./panelSlotReservations";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
-import { isDecisionsDeployTerminalId } from "@shared/config/terminalScreenPersistence";
+import { isDecisionsRelayTerminalId } from "@shared/config/terminalScreenPersistence";
 import {
   commitPtyPanel,
   isHeldForRecovery,
@@ -365,10 +365,11 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       ...(location === "background" && {
         backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
       }),
-      // A relay deploy runs its command once, from the spawn options, and the pane
-      // never keeps it: a restart, duplicate, restore or recipe would otherwise
-      // run the deploy again under the same Worker name (#16023).
-      command: isDecisionsDeployTerminalId(id) ? undefined : options.command,
+      // A relay deploy or update runs its command once, from the spawn options,
+      // and the pane never keeps it: a restart, duplicate, restore or recipe
+      // would otherwise run the deploy again under the same Worker name
+      // (#16023), or start an update nobody asked for (#16201).
+      command: isDecisionsRelayTerminalId(id) ? undefined : options.command,
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted
       isVisible: location === "grid" ? true : false,

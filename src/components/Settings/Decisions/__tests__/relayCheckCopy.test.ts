@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DecisionsRelayCompatibility, DecisionsRelayVersions } from "@shared/types/decisions";
-import { describeCompatibility, describeRelayCheck, protocolRange } from "../relayCheckCopy";
+import {
+  describeCompatibility,
+  describeRelayCheck,
+  protocolRange,
+  relayIsBehind,
+} from "../relayCheckCopy";
 
 const DAINTREE: DecisionsRelayVersions = { protocolMin: 1, protocolMax: 2, workerVersion: "0.3.0" };
 
@@ -17,7 +22,7 @@ function compare(relay: Partial<DecisionsRelayVersions>): DecisionsRelayCompatib
 }
 
 describe("relay check copy", () => {
-  it("prompts for whichever side is behind, never claiming Daintree updates the relay", () => {
+  it("prompts for whichever side is behind", () => {
     expect(describeCompatibility(compare({ workerVersion: "0.10.0" }))).toMatchObject({
       label: "The relay is newer than Daintree",
       detail: expect.stringContaining("Update Daintree"),
@@ -25,7 +30,28 @@ describe("relay check copy", () => {
 
     const older = describeCompatibility(compare({ workerVersion: "0.2.9" }));
     expect(older.label).toBe("The relay needs an update");
-    expect(older.detail).toContain("Daintree never updates it for you");
+    expect(older.detail).not.toMatch(/never updates/);
+  });
+
+  it.each([
+    ["offered", /Update relay/],
+    ["host", /on the Host/],
+    ["cli", /decisions update/],
+  ] as const)("points an older relay's update at where it comes from: %s", (route, where) => {
+    const older = describeCompatibility(compare({ workerVersion: "0.2.9" }), route);
+    const unordered = describeCompatibility(compare({ workerVersion: "dev" }), route);
+
+    expect(older.detail).toMatch(where);
+    expect(unordered.detail).toMatch(where);
+    expect(unordered.detail).toContain("Update Daintree");
+  });
+
+  it("names the relay as behind only when updating it is what would close the gap", () => {
+    expect(relayIsBehind(compare({ workerVersion: "0.2.9" }))).toBe(true);
+    expect(relayIsBehind(compare({ workerVersion: "dev", protocolMax: 1 }))).toBe(true);
+    expect(relayIsBehind(compare({ workerVersion: "0.10.0" }))).toBe(false);
+    expect(relayIsBehind(compare({ workerVersion: "dev" }))).toBe(false);
+    expect(relayIsBehind(compare({}))).toBe(false);
   });
 
   it.each([

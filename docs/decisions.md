@@ -23,7 +23,7 @@ With it on, the page shows Connection, Devices, Questions, Policy, Voice and Dat
 
 ### 2. Deploy or enter a relay
 
-If you already have a relay, enter its address in **Relay URL** (for example `https://decisions.example.workers.dev`) and press **Check**. Daintree reads the relay's `/health` and `/api/v1/info` and reports what it found: `<host> is ready to claim`, `<host> is claimed`, `<host> has no claim secret set`, `<host> speaks a protocol Daintree doesn't`, `<host> isn't a Decisions relay`, `Couldn't reach <host>` or `<host> answered with an error`. The check accepts only `https://` addresses, apart from plain `http://` to `localhost` or `127.0.0.1` for a relay you run on this computer with `wrangler dev`. It compares the relay's protocol and version with Daintree's, reports them incompatible when their protocol ranges don't overlap, and says which side to update when it can tell. Daintree never updates a deployed relay.
+If you already have a relay, enter its address in **Relay URL** (for example `https://decisions.example.workers.dev`) and press **Check**. Daintree reads the relay's `/health` and `/api/v1/info` and reports what it found: `<host> is ready to claim`, `<host> is claimed`, `<host> has no claim secret set`, `<host> speaks a protocol Daintree doesn't`, `<host> isn't a Decisions relay`, `Couldn't reach <host>` or `<host> answered with an error`. The check accepts only `https://` addresses, apart from plain `http://` to `localhost` or `127.0.0.1` for a relay you run on this computer with `wrangler dev`. It compares the relay's protocol and version with Daintree's, reports them incompatible when their protocol ranges don't overlap, and says which side to update when it can tell. Once the relay is connected, **Update relay** updates it (see [Updating the relay](#updating-the-relay)).
 
 If you don't have one, **Don't have a relay yet?** offers two ways to deploy one:
 
@@ -77,6 +77,12 @@ Back in Connection, press **Check setup** on the **Setup check** row. It runs th
 The test question, **Daintree setup check: did this question reach you?**, has one choice, **Received**. Answer it on your phone within five minutes. Your answer is typed into a diagnostic terminal shown in Connection, which runs no agent and no process, so nothing typed into it can run. Keep Settings open until the check ends: closing it cancels a check it started, though switching to another Settings tab doesn't. Once a kit is verified and this check passes, the **Setup isn't finished** warning goes away. Press **Check again** whenever you want to rerun it; a failed run makes setup unfinished again.
 
 The check proves one round trip at the time it ran. It doesn't prove that every notification will appear on your lock screen.
+
+### Updating the relay
+
+Connection offers **Update relay** for the connected relay, prominently when its check finds the relay older than Daintree expects, and otherwise to look for a newer release. It needs a check that read the relay's version, so press **Check** first if the relay isn't connected. Settings closes and a terminal titled **Update Decisions relay** opens in the active worktree, running the Decisions CLI's `update` against the relay from your home folder, limited to releases that speak a protocol this Daintree does. Wrangler signs you in to Cloudflare in your browser; the CLI then shows the relay's version, the release it would move to and what changed, and asks before it changes anything. It keeps the relay's claim, paired devices, questions and answers, bucket, secrets and settings. The pane's banner, **Open Decisions settings**, takes you back.
+
+When the update's command ends, Settings checks the relay again and says what happened: the version it moved to, that it was left as it was (already current, nothing compatible, or cancelled, which the terminal tells apart), or that the update failed or was stopped, with the version the relay answers with now. Nothing about the connection changes either way. A Remote Hosts window doesn't offer **Update relay**, since its relay belongs to the Host.
 
 ## Agents
 

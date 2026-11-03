@@ -148,7 +148,11 @@ import {
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
 import { RelayDeployBanner } from "./RelayDeployBanner";
-import { isDecisionsDeployTerminalId } from "@shared/config/terminalScreenPersistence";
+import { RelayUpdateBanner } from "./RelayUpdateBanner";
+import {
+  isDecisionsDeployTerminalId,
+  isDecisionsUpdateTerminalId,
+} from "@shared/config/terminalScreenPersistence";
 import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -1372,6 +1376,7 @@ function TerminalPaneComponent({
   const canopyOffer = useCanopyPaneOffer(id, askedOn !== null);
   const [blockedBannerDismissed, setBlockedBannerDismissed] = useState(false);
   const [relayDeployBannerDismissed, setRelayDeployBannerDismissed] = useState(false);
+  const [relayUpdateBannerDismissed, setRelayUpdateBannerDismissed] = useState(false);
   // Folding and unfolding swap the control the keyboard is on; hand focus to
   // its counterpart once the swap has painted, unless it already moved on.
   const keepBlockedNoticeFocus = (label: string) => {
@@ -1846,6 +1851,10 @@ function TerminalPaneComponent({
 
         <BannerSlot visible={isDecisionsDeployTerminalId(id) && !relayDeployBannerDismissed}>
           <RelayDeployBanner onDismiss={() => setRelayDeployBannerDismissed(true)} />
+        </BannerSlot>
+
+        <BannerSlot visible={isDecisionsUpdateTerminalId(id) && !relayUpdateBannerDismissed}>
+          <RelayUpdateBanner onDismiss={() => setRelayUpdateBannerDismissed(true)} />
         </BannerSlot>
       </div>
 

@@ -150,12 +150,41 @@ function versionsOf(side: DecisionsRelayVersions): string {
   return `${side.workerVersion}, ${protocolRange(side)}`;
 }
 
+/** Whether the relay is the side that's behind, so updating it is what would bring them together. */
+export function relayIsBehind(compatibility: DecisionsRelayCompatibility): boolean {
+  return compatibility.diverges && newerSide(compatibility) === "daintree";
+}
+
+/**
+ * Where an update to the relay comes from, for the words that point at it:
+ * `offered` is Update relay in this Settings (#16201); `host` is a remote
+ * window's, whose relay belongs to the Host; `cli` is anywhere else, such as a
+ * relay checked before it's connected here.
+ */
+export type RelayUpdateRoute = "offered" | "host" | "cli";
+
+const UPDATE_THE_RELAY: Record<RelayUpdateRoute, string> = {
+  offered:
+    "Update relay finds a release that works with this Daintree and asks before changing anything.",
+  host: "Update it from Daintree on the Host, where it's set up.",
+  cli: "Update it with decisions update from the Decisions CLI.",
+};
+
+const OR_UPDATE_THE_RELAY: Record<RelayUpdateRoute, string> = {
+  offered: "Update Daintree, or use Update relay to move the relay to a release that works with it.",
+  host: "Update Daintree, or update the relay from Daintree on the Host.",
+  cli: "Update Daintree, or update the relay with decisions update from the Decisions CLI.",
+};
+
 /**
  * The relay's versions beside the ones this Daintree expects, and when they
- * diverge, what would bring them together. Daintree never updates the relay
- * itself, so the prompt names what the person would do.
+ * diverge, what would bring them together, pointing at where the relay's
+ * update comes from.
  */
-export function describeCompatibility(compatibility: DecisionsRelayCompatibility): {
+export function describeCompatibility(
+  compatibility: DecisionsRelayCompatibility,
+  route: RelayUpdateRoute = "cli"
+): {
   label: string;
   detail: string;
 } {
@@ -176,12 +205,12 @@ export function describeCompatibility(compatibility: DecisionsRelayCompatibility
     case "daintree":
       return {
         label: "The relay needs an update",
-        detail: `${versions} Deploy the new release to it the same way it was deployed; Daintree never updates it for you.`,
+        detail: `${versions} ${UPDATE_THE_RELAY[route]}`,
       };
     default:
       return {
         label: "Relay and Daintree versions differ",
-        detail: `${versions} Update Daintree or the relay so they match; Daintree never updates the relay for you.`,
+        detail: `${versions} ${OR_UPDATE_THE_RELAY[route]}`,
       };
   }
 }

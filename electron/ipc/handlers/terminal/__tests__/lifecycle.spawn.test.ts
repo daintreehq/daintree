@@ -1394,6 +1394,53 @@ describe("terminal spawn shell-injection hardening (#6065)", () => {
       expect(spawnArgs.args[1]).toContain("exec '/tmp/o'\\''hare/zsh' -l");
     }
   );
+
+  describe("a Decisions relay update (#16201)", () => {
+    const UPDATE_ID = "daintree-decisions-update-6f1c2c4e";
+    const COMMAND =
+      "npx --yes @daintreehq/decisions-cli@0.3.0 update --url https://r.example.dev --protocol 1";
+
+    async function spawnUpdate(shell: string, id = UPDATE_ID) {
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      await getSpawnHandler()(
+        {} as Electron.IpcMainInvokeEvent,
+        { id, cols: 80, rows: 24, cwd: "/tmp", shell, command: COMMAND } as unknown as Parameters<
+          ReturnType<typeof getSpawnHandler>
+        >[1]
+      );
+      return ptyClient.spawn.mock.calls[0][1];
+    }
+
+    it.skipIf(process.platform === "win32")(
+      "ends its shell with the CLI, so the pane's exit is the update's",
+      async () => {
+        const spawnArgs = await spawnUpdate("/bin/zsh");
+
+        expect(spawnArgs.args).toEqual(["-lic", `trap : INT\n${COMMAND}\nexit`]);
+        expect(spawnArgs.postSpawnInput).toBeUndefined();
+      }
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "runs under sh when the configured shell can't host the wrapper",
+      async () => {
+        const spawnArgs = await spawnUpdate("/usr/bin/nu");
+
+        expect(spawnArgs.shell).toBe("/bin/sh");
+        expect(spawnArgs.args).toEqual(["-i", "-c", `trap : INT\n${COMMAND}\nexit`]);
+        expect(spawnArgs.postSpawnInput).toBeUndefined();
+      }
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "leaves any other pane's command to its interactive shell",
+      async () => {
+        const spawnArgs = await spawnUpdate("/usr/bin/nu", "daintree-decisions-deploy-6f1c2c4e");
+
+        expect(spawnArgs.postSpawnInput).toBe(`${COMMAND}\r`);
+      }
+    );
+  });
 });
 
 describe("terminal spawn rate limiting (#5352)", () => {

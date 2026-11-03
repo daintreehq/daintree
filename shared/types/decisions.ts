@@ -257,8 +257,8 @@ export interface DecisionsRelayVersions {
 /**
  * The relay's versions beside Daintree's own: the protocol range it speaks and
  * the relay release its Decisions libraries came with. `diverges` is whether
- * any of the three differ, compatible or not. Daintree never updates a relay;
- * it only says so.
+ * any of the three differ, compatible or not. Daintree updates a relay only
+ * when asked, through Update relay's terminal, where the CLI asks too (#16201).
  */
 export interface DecisionsRelayCompatibility {
   relay: DecisionsRelayVersions;

@@ -8,11 +8,20 @@ import { SeverityMark } from "@/lib/statusSeverity";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { useRelayCheck } from "./useRelayCheck";
 import { useRelayIdentity } from "./useRelayIdentity";
-import { describeCompatibility, describeInvalidUrl, describeRelayCheck } from "./relayCheckCopy";
+import {
+  describeCompatibility,
+  describeInvalidUrl,
+  describeRelayCheck,
+  type RelayUpdateRoute,
+} from "./relayCheckCopy";
 import { describeConnectResult } from "./relayIdentityCopy";
 import { DecisionsRelaySetup } from "./DecisionsRelaySetup";
 import { DecisionsDisconnectDialog } from "./DecisionsDisconnectDialog";
 import { DecisionsRelayDeploy } from "./DecisionsRelayDeploy";
+import { DecisionsRelayUpdate } from "./DecisionsRelayUpdate";
+import { canUpdateRelayAt, useRelayUpdateRun } from "./relayUpdate";
+import { describeRelayUpdateOutcome, relayVersionAfter } from "./relayUpdateCopy";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { onRelayUrlRequest, takePendingRelayUrlRequest } from "./relayUrlRequest";
@@ -115,7 +124,8 @@ function describeConnection(status: DecisionsStatus): {
  * a URL, and once checked, claims it or restores its owner's identity
  * (#16006); with one it checks that relay, by itself once connected, so a
  * version that has moved apart is said, and can disconnect from it. With no
- * relay set up it also offers to deploy one (#16023).
+ * relay set up it also offers to deploy one (#16023); with one, in a local
+ * window, to update it (#16201), checking it again once the update ends.
  */
 export function DecisionsConnectionSection({
   status,
@@ -132,7 +142,7 @@ export function DecisionsConnectionSection({
    * main's answer when it changed the identity, null when it didn't say.
    */
   onChanged?: (status: DecisionsStatus | null) => void;
-  /** Closes Settings, for a guided deploy the user watches in its pane. */
+  /** Closes Settings, for a guided deploy or update the user watches in its pane. */
   onClose?: SettingsTabClose;
   /** Takes the person to the recovery kit, which finishes setup. */
   onFinishSetup?: () => void;
@@ -175,11 +185,39 @@ export function DecisionsConnectionSection({
     if (connected && savedOrigin && !locked) checkSaved(savedOrigin);
   }, [connected, savedOrigin, locked]);
 
+  // A remote window's relay is the Host's, so only the Host updates it.
+  const remote = isRemoteWindow();
+  const updateOffered =
+    savedOrigin !== null && status.state !== "revoked" && !remote && canUpdateRelayAt(savedOrigin);
+  const updateRoute: RelayUpdateRoute = updateOffered ? "offered" : remote ? "host" : "cli";
+  const latestUpdate = useRelayUpdateRun();
+  const update = updateOffered && latestUpdate?.origin === savedOrigin ? latestUpdate : null;
+  const endedUpdateId = update?.state === "ended" ? update.id : null;
+  // The update whose end this opening has checked the relay for, so its outcome reads that check.
+  const [recheckedUpdateId, setRecheckedUpdateId] = useState<number | null>(null);
+  const recheckAfterUpdate = useEffectEvent((origin: string, updateId: number) => {
+    if (recheckedUpdateId === updateId) return;
+    setRecheckedUpdateId(updateId);
+    // A claim or restore's own check is older than what the update left.
+    identity.reset();
+    relay.run(origin);
+  });
+  // Connected or not: an update can leave a relay this computer can't reach yet.
+  useEffect(() => {
+    if (endedUpdateId !== null && savedOrigin && !locked) {
+      recheckAfterUpdate(savedOrigin, endedUpdateId);
+    }
+  }, [endedUpdateId, savedOrigin, locked]);
+
   // A setup reruns the check, and what it saw then is newer than the last one shown.
   const check = identity.recheck ?? relay.check;
   const observation = check ? describeRelayCheck(check) : null;
   const compatibility = check && "compatibility" in check ? check.compatibility : null;
-  const versions = compatibility ? describeCompatibility(compatibility) : null;
+  const versions = compatibility ? describeCompatibility(compatibility, updateRoute) : null;
+  const updateOutcome =
+    update?.state === "ended" && recheckedUpdateId === update.id && !relay.checking
+      ? describeRelayUpdateOutcome(update.end, update.fromVersion, relayVersionAfter(relay.check))
+      : null;
   // An address that was never sent, or a check main couldn't make: the row's own error.
   const rowError =
     check?.result === "invalid-url"
@@ -204,7 +242,11 @@ export function DecisionsConnectionSection({
         : outcome
           ? `${outcome.label}. ${outcome.detail}`
           : (outcomeError ??
-            (observation ? `${observation.label}. ${observation.detail}` : (rowError ?? "")));
+            (updateOutcome
+              ? `${updateOutcome.label}. ${updateOutcome.detail}`
+              : observation
+                ? `${observation.label}. ${observation.detail}`
+                : (rowError ?? "")));
   const setupCheck = savedOrigin === null && relay.checkedUrl !== null ? check : null;
 
   const submitDraft = () => {
@@ -384,6 +426,16 @@ export function DecisionsConnectionSection({
               ) : undefined
             }
             description={versions.detail}
+          />
+        )}
+        {updateOffered && savedOrigin !== null && (
+          <DecisionsRelayUpdate
+            origin={savedOrigin}
+            compatibility={compatibility}
+            run={update}
+            outcome={updateOutcome}
+            disabled={busy || relay.checking}
+            onClose={onClose}
           />
         )}
         {setupCheck && relay.checkedUrl !== null && (
