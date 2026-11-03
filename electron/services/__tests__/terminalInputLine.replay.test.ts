@@ -41,16 +41,19 @@ describe("input line on captured Claude Code screens", () => {
     ["blurred", CAPTURE, "suggestion-blurred"],
     ["after Ctrl+U clears a draft", CAPTURE, "cleared"],
     ["with a painted cursor", PAINTED, "suggestion"],
-  ])("reads the suggestion %s as the CLI's, and marks it in the plain text", async (_, path, at) => {
-    const screen = await serializeCastAt(path, at);
-    const tail = captureTerminalTail(screen, 20, true, "claude");
-    expect(tail.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
-    expect(spaced(tail.content)).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
-    // The earlier prompts echoed above the box are left as they were drawn.
-    expect(spaced(tail.content)).toContain(
-      "❯ Without using any tools, reply with one short sentence proposing that I open a PR next."
-    );
-  });
+  ])(
+    "reads the suggestion %s as the CLI's, and marks it in the plain text",
+    async (_, path, at) => {
+      const screen = await serializeCastAt(path, at);
+      const tail = captureTerminalTail(screen, 20, true, "claude");
+      expect(tail.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
+      expect(spaced(tail.content)).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
+      // The earlier prompts echoed above the box are left as they were drawn.
+      expect(spaced(tail.content)).toContain(
+        "❯ Without using any tools, reply with one short sentence proposing that I open a PR next."
+      );
+    }
+  );
 
   it("reads text typed over the suggestion as typed, unmarked", async () => {
     const screen = await serializeCastAt(CAPTURE, "typed");

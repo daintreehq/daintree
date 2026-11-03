@@ -317,10 +317,7 @@ export async function runTerminalGetOutput(
   // can't be read leaves the box `unknown`, never the output unread.
   const [serialized, record] = await Promise.all([
     stripAnsi
-      ? readTailSnapshot(
-          (options) => pty.getSerializedStateAsync(terminalId, options),
-          maxLines
-        )
+      ? readTailSnapshot((options) => pty.getSerializedStateAsync(terminalId, options), maxLines)
       : pty.getSerializedStateAsync(terminalId),
     pty.getTerminalAsync(terminalId).catch(() => null),
   ]);

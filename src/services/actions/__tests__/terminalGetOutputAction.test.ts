@@ -180,7 +180,8 @@ describe("terminal.getOutput action", () => {
   });
 
   it("reports the input box by the panel's agent and marks its suggestion (#16189)", async () => {
-    const screen = "⏺ Done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────\r\n  ? for shortcuts";
+    const screen =
+      "⏺ Done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────\r\n  ? for shortcuts";
     mockGetSerializedState.mockResolvedValue(snapshotOf(screen));
 
     const actions = await createRegistry();

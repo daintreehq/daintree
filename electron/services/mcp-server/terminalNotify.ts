@@ -2152,7 +2152,10 @@ export class TerminalNotifyService {
       // The record names the agent whose suggested prompt is marked in the
       // quote (#16189), so a suggestion can't pass for the owner's words.
       const [snapshot, info] = await Promise.all([
-        readTailSnapshot((options) => getState(entry.notice.terminalId, options), REPLY_SEARCH_ROWS),
+        readTailSnapshot(
+          (options) => getState(entry.notice.terminalId, options),
+          REPLY_SEARCH_ROWS
+        ),
         client.getTerminalAsync(entry.notice.terminalId).catch(() => null),
       ]);
       if (snapshot === null) return;

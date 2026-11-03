@@ -1,4 +1,7 @@
-import { getEffectiveAgentConfig, type AgentInputSuggestionConfig } from "../config/agentRegistry.js";
+import {
+  getEffectiveAgentConfig,
+  type AgentInputSuggestionConfig,
+} from "../config/agentRegistry.js";
 import type { TerminalInputLine } from "../types/terminalStatus.js";
 import { expandCursorForward, stripAnsiCodes, tailCapturedOutput } from "./artifactParser.js";
 
@@ -19,7 +22,8 @@ const ALT_SCREEN_ENTER = "\x1b[?1049h";
 const SGR = /\x1b\[([0-9;:]*)m/g;
 
 // eslint-disable-next-line no-control-regex -- walks the serializer's own escape sequences
-const TOKEN = /\x1b\[([0-9;:]*)m|\x1b\[(\d*)C|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;:?<=>]*[ -/]*[@-~]|\x1b[^[\]]|[^\x1b]/gu;
+const TOKEN =
+  /\x1b\[([0-9;:]*)m|\x1b\[(\d*)C|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;:?<=>]*[ -/]*[@-~]|\x1b[^[\]]|[^\x1b]/gu;
 
 /** The rows the generic drop treats as an input box: any prompt glyph, then a gap. */
 const GENERIC_PROMPT_ROW = /^\s*(?:❯|›|>)\s/;
@@ -86,7 +90,10 @@ function rowCells(row: string, state: SgrState): { cells: Cell[]; state: SgrStat
       current = applySgr(current, match[1]);
     } else if (match[2] !== undefined) {
       const parsed = match[2] === "" ? 1 : Number.parseInt(match[2], 10);
-      const count = Math.min(Number.isFinite(parsed) && parsed > 0 ? parsed : 1, MAX_CURSOR_FORWARD);
+      const count = Math.min(
+        Number.isFinite(parsed) && parsed > 0 ? parsed : 1,
+        MAX_CURSOR_FORWARD
+      );
       for (let i = 0; i < count; i++) {
         cells.push({ char: " ", dim: current.dim, inverse: false, start: index, end: index });
       }
@@ -327,10 +334,7 @@ export function observeInputLine(
  * otherwise every dim run on the last row that opens with a prompt glyph, the
  * generic drop every other agent keeps.
  */
-export function dropInputSuggestion(
-  serialized: string,
-  rule?: AgentInputSuggestionConfig
-): string {
+export function dropInputSuggestion(serialized: string, rule?: AgentInputSuggestionConfig): string {
   const reading = read(serialized, rule);
   if (reading.box !== null && reading.screen !== null) {
     const rows = [...reading.screen.rows];

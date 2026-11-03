@@ -99,7 +99,10 @@ describe("observeInputLine", () => {
   it("brackets a suggestion that wraps across box rows as one", () => {
     const box = "❯ \x1b[2mopen the PR and tell me\x1b[22m\r\n  \x1b[2mwhat is left\x1b[22m";
     const { inputLine, marked } = observeInputLine(screen(box), claude);
-    expect(inputLine).toEqual({ state: "suggestion", text: "open the PR and tell me\nwhat is left" });
+    expect(inputLine).toEqual({
+      state: "suggestion",
+      text: "open the PR and tell me\nwhat is left",
+    });
     expect(plain(marked)).toContain(
       "❯ [suggested by Claude Code: open the PR and tell me\r\n  what is left]\r\n"
     );

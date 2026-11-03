@@ -257,8 +257,12 @@ describe("terminal.getOutput with no frontend", () => {
   });
 
   it("reads the input box by the record's agent, and as unknown when the record can't be read (#16189)", async () => {
-    const screen = "⏺ Done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────\r\n  ? for shortcuts";
-    const pty = makePty({ "t-1": { kind: "terminal", launchAgentId: "claude" } }, { "t-1": screen });
+    const screen =
+      "⏺ Done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────\r\n  ? for shortcuts";
+    const pty = makePty(
+      { "t-1": { kind: "terminal", launchAgentId: "claude" } },
+      { "t-1": screen }
+    );
     const { deps } = makeDeps({ getPtyReader: () => pty });
     const read = async () =>
       (

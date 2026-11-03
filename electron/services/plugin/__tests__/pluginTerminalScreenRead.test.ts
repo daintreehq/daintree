@@ -276,7 +276,9 @@ describe("screen text from a real headless terminal", () => {
     const output =
       "⏺ Done.\r\n\x1b[38;2;136;136;136m──────\x1b[39m\r\n❯ \x1b[7mm\x1b[27m\x1b[2merge #2079 when green\x1b[22m\r\n──────\r\n  ? for shortcuts";
     const result = await screenRead(6, output, 20, { dropGhostInput: true }, "claude");
-    expect(result.status === "ok" && result.text).toBe("⏺ Done.\n──────\n❯\n──────\n  ? for shortcuts");
+    expect(result.status === "ok" && result.text).toBe(
+      "⏺ Done.\n──────\n❯\n──────\n  ? for shortcuts"
+    );
     // Typed text under the painted cursor is the person's and stays.
     const typed = await screenRead(
       6,
