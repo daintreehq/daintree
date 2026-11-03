@@ -593,12 +593,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // someone typed, with the `truncated` flag its bounded text needs. Both
   // result schemas are closed, so the field must be advertised on each; its
   // descriptions were trimmed first.
-  // 59_000 → 60_000 for #16187, measured at EXT_MEASURED B: the owned send's
-  // receipt and the status read advertise a send held for a busy worker's
-  // next prompt (its token, expiry and what became of it). Both result
-  // schemas are closed, so the fields must be listed for a client's validator
-  // to accept the answer, though only the global Assistant can hold one; the
-  // arguments that hold and read one are withheld from this tier.
+  // 59_000 → 60_000 for #16187, measured at 59_928 B (+979 over develop's
+  // 58_949): the owned send's receipt and the status read advertise a send held
+  // for a busy worker's next prompt (its token, expiry and what became of it).
+  // Both result schemas are closed, so the fields must be listed for a client's
+  // validator to accept the answer, though only the global Assistant can hold
+  // one; the arguments that hold and read one are withheld from this tier.
   // Descriptions were trimmed to a clause or dropped first.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 60_000;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
@@ -1009,13 +1009,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // what `lastTypedInputAt`, `agentIncarnation` or `inputLine` mean. The entry
   // leaves out `submission`, which no token here asks for. Assistant-only, so
   // the external ceiling does not move.
-  // 185_600 → 188_300 for #16187, measured at COHORT_MEASURED B: the global
-  // Assistant can hold a send for a busy worker's next prompt. `whenBusy` and
-  // `queueTtlSeconds` on the owned send, `queuedSendToken` on the status read,
-  // the held fields on both results, and `terminal.cancelQueuedSend` to
-  // withdraw one, whose answer is the held record. The record is the larger
-  // part, listed on the status read and the cancel because both results are
-  // closed. The external share is the raise above.
+  // 185_600 → 188_300 for #16187, measured at 188_212 B (+2_678 over develop's
+  // 185_534): the global Assistant can hold a send for a busy worker's next
+  // prompt. `whenBusy` and `queueTtlSeconds` on the owned send,
+  // `queuedSendToken` on the status read, the held fields on both results, and
+  // `terminal.cancelQueuedSend` to withdraw one, whose answer is the held
+  // record. The record is the larger part, listed on the status read and the
+  // cancel because both results are closed. The external share is the raise
+  // above.
   const MAX_COHORT_PAYLOAD_BYTES = 188_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
