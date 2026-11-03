@@ -96,8 +96,8 @@ const GESTURE_EVENTS = [
   "input",
   "compositionend",
   "paste",
+  // A release belongs to the press before it, so the drag follow takes it.
   "mousedown",
-  "mouseup",
   "wheel",
 ] as const;
 
@@ -538,6 +538,38 @@ export function CanopyTerminal({
         : setTimeout(end, 0);
     };
     for (const type of GESTURE_EVENTS) frame.addEventListener(type, markGesture, true);
+    // A press the program reports has xterm follow its motion and release at the
+    // document, so they arrive wherever the pointer goes. Without them a
+    // fullscreen Claude Code reads a drag as a click, and a release outside the
+    // view leaves its button held. Captured, to run before xterm's own listeners.
+    let dragDocument: Document | null = null;
+    const endDrag = () => {
+      dragDocument?.removeEventListener("mousemove", followDrag, true);
+      dragDocument?.removeEventListener("mouseup", followDrag, true);
+      dragDocument = null;
+    };
+    const followDrag = (event: globalThis.MouseEvent) => {
+      // A release the document never saw, as off the window's edge.
+      if (event.type === "mousemove" && event.buttons === 0) return endDrag();
+      markGesture(event);
+      if (event.type === "mouseup" && event.buttons === 0) endDrag();
+    };
+    const startDrag = () => {
+      if (dragDocument === frame.ownerDocument) return;
+      endDrag();
+      dragDocument = frame.ownerDocument;
+      dragDocument.addEventListener("mousemove", followDrag, true);
+      dragDocument.addEventListener("mouseup", followDrag, true);
+    };
+    frame.addEventListener("mousedown", startDrag, true);
+    // Hover, for a program that asks for every motion (mode 1003). Motion with a
+    // button held is a drag, which counts only when it began here: one begun
+    // elsewhere can cross the view while xterm still follows a drag whose
+    // release never arrived.
+    const markHover = (event: globalThis.MouseEvent) => {
+      if (event.buttons === 0) markGesture(event);
+    };
+    frame.addEventListener("mousemove", markHover, true);
     // A sideways gesture over a grid wider than the pane scrolls the pane. xterm
     // swallows every wheel event while the program reports the mouse — and would
     // pass a diagonal one on as vertical wheel input — so it is taken first.
@@ -799,6 +831,9 @@ export function CanopyTerminal({
       unsubscribeFont();
       unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
+      frame.removeEventListener("mousedown", startDrag, true);
+      frame.removeEventListener("mousemove", markHover, true);
+      endDrag();
       frame.removeEventListener("wheel", sideways, true);
       if (gestureTimer !== null) clearTimeout(gestureTimer);
       resizeObserver.disconnect();
