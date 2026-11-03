@@ -51,6 +51,9 @@ const PLAIN = {
   iconId: "terminal",
 };
 
+// Tests stub the store's refresh; each starts from the real one.
+const REFRESH = useCliAvailabilityStore.getState().refresh;
+
 function setAvailability(
   availability: CliAvailability,
   { hasRealData = true, error = null as string | null } = {}
@@ -93,6 +96,7 @@ describe("DecisionsAgentsSection (#16012)", () => {
     cleanup();
     clearPluginAgentRegistryForTests();
     setAvailability({}, { hasRealData: false });
+    useCliAvailabilityStore.setState({ refresh: REFRESH });
   });
 
   it("splits installed agents by whether a launch hands them ask_human, leaving out the missing and the unknown", () => {
@@ -197,8 +201,9 @@ describe("DecisionsAgentsSection (#16012)", () => {
     setAvailability(INSTALLED);
     const { container } = render(<DecisionsAgentsSection status={NO_RELAY} />);
 
-    expect(notice()).toMatch(/No relay is connected, so agents launch without ask_human/);
+    expect(notice()).toMatch(/No relay.*without ask_human/);
     expect(notice()).toMatch(/Connection/);
+    expect(container.textContent).toMatch(/launched while a relay is connected/);
     expect(namesUnder("Get ask_human")).toBeNull();
     expect(namesUnder("Get ask_human once connected")).toEqual(namesOf(["claude", "codex"]));
     expect(namesUnder("Not supported yet")).toEqual(namesOf(["cursor", "grok"]));
@@ -214,11 +219,11 @@ describe("DecisionsAgentsSection (#16012)", () => {
       { state: "not-connected", relayOrigin: ORIGIN, problem: "other-relay" },
       { state: "revoked", relayOrigin: ORIGIN },
     ];
-    const { rerender } = render(<DecisionsAgentsSection status={stopped[0]} />);
+    const { rerender } = render(<DecisionsAgentsSection status={CONNECTED} />);
     for (const status of stopped) {
       rerender(<DecisionsAgentsSection status={status} />);
-      expect(notice()).toMatch(/The relay isn't connected, so agents launch without ask_human/);
-      expect(notice()).toMatch(/Connection, above, shows why/);
+      expect(notice()).toMatch(/relay isn't connected.*without ask_human/);
+      expect(notice()).toMatch(/Connection.*why/);
       expect(namesUnder("Get ask_human once connected")).toEqual(namesOf(["claude", "codex"]));
       expect(namesUnder("Not supported yet")).toEqual(namesOf(["cursor", "grok"]));
     }
