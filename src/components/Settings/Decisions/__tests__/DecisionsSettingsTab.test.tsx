@@ -148,9 +148,8 @@ describe("DecisionsSettingsTab recovery kit", () => {
       claim: { state: "claiming" },
     } as const;
     getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1, relayDeploy: deploy });
-    (window.electron.decisions as unknown as Record<string, unknown>).listDevices = async () => ({
-      result: "listed",
-      devices: [],
+    Object.assign(window.electron.decisions, {
+      listDevices: async () => ({ result: "listed", devices: [] }),
     });
     await renderTab();
 

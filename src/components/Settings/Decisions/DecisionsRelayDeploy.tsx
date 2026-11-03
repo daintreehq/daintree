@@ -70,6 +70,10 @@ export function DecisionsRelayDeployOutcome({
     setError(null);
     const askedAgainst = claim;
     let status: DecisionsStatus | null = null;
+    const settled = () => {
+      setFinishing(false);
+      onClaimSettled?.(status);
+    };
     window.electron.decisions
       .claimDeployedRelay({
         deployId: deploy.id,
@@ -85,10 +89,7 @@ export function DecisionsRelayDeployOutcome({
             message: formatErrorMessage(failure, "Try again in a moment."),
           })
       )
-      .then(() => {
-        setFinishing(false);
-        onClaimSettled?.(status);
-      });
+      .then(settled, settled);
   };
 
   const act = () => {
