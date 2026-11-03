@@ -273,6 +273,7 @@ import { buildCommandLaunchShell } from "./commandLaunch.js";
 import { scheduledRunForRecord } from "../../../../shared/utils/scheduledRunProvenance.js";
 import { admitScheduledSpawn } from "../../../services/scheduledRuns/scheduledRunAdmission.js";
 import { isHostThrowawayWorkspaceId } from "../../../../shared/config/hostThrowaway.js";
+import { isDecisionsUpdateTerminalId } from "../../../../shared/config/terminalScreenPersistence.js";
 
 // Longest a Windows command launch waits for the default shell's PATH search,
 // matching the pty host's wait before it reports ready.
@@ -1301,12 +1302,25 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       const startupCommand = windowsAgentExecutable
         ? buildWindowsAgentLaunchScript(safeCommand, windowsAgentExecutable, windowsAgentEnv())
         : safeCommand;
-      // A host's throwaway run (#14445) ends with its agent, so its exit is the agent's.
-      const commandLaunchShell = buildCommandLaunchShell(
-        startupCommand,
-        quotingShell,
-        isHostThrowawayWorkspaceId(projectId) ? "exit" : "keep-open"
-      );
+      // A host's throwaway run (#14445) ends with its agent, so its exit is the
+      // agent's. A Decisions relay update (#16201) ends with its CLI, whose exit
+      // is how Settings learns it finished, so a shell that can't host the
+      // wrapper (fish, nushell, Git Bash on Windows) hands it to sh or the
+      // system PowerShell rather than having it typed in.
+      const relayUpdate = isDecisionsUpdateTerminalId(id);
+      const commandLaunchShell =
+        buildCommandLaunchShell(
+          startupCommand,
+          quotingShell,
+          isHostThrowawayWorkspaceId(projectId) || relayUpdate ? "exit" : "keep-open"
+        ) ??
+        (relayUpdate
+          ? buildCommandLaunchShell(
+              startupCommand,
+              process.platform === "win32" ? windowsSystemTool("powershell.exe") : "/bin/sh",
+              "exit"
+            )
+          : null);
       const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
       const spawnShell = commandLaunchShell
         ? commandLaunchShell.shell

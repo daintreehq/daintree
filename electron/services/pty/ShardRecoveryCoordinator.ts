@@ -37,7 +37,7 @@ import type { ResourceProfile } from "../../../shared/types/resourceProfile.js";
 import { deriveAgentObservationLevel } from "../../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../../window/powerPolicy.js";
 import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
-import { isDecisionsDeployTerminalId } from "../../../shared/config/terminalScreenPersistence.js";
+import { isDecisionsRelayTerminalId } from "../../../shared/config/terminalScreenPersistence.js";
 
 /**
  * Stamp main's current PATH onto a Windows spawn message.
@@ -316,12 +316,13 @@ export class ShardRecoveryCoordinator {
    * would start a fresh agent nobody launched. Nor does a Decisions relay
    * deploy (#16023): its shell outlives the deploy, so a replay would run it
    * again under the same Worker name, updating that Worker or giving it a new
-   * claim secret. Dropped before any replay, and reported lost so their panes
-   * and inventory let them go.
+   * claim secret. Nor a relay update (#16201), which nobody asked to run
+   * again. Dropped before any replay, and reported lost so their panes and
+   * inventory let them go.
    */
   private dropNeverReplayedSpawns(shard: PtyShard): void {
     for (const id of [...this.deps.pendingSpawns.keys()]) {
-      const neverReplayed = isHostThrowawayTerminalId(id) || isDecisionsDeployTerminalId(id);
+      const neverReplayed = isHostThrowawayTerminalId(id) || isDecisionsRelayTerminalId(id);
       if (!neverReplayed || this.deps.ownerKey(id) !== shard.key) continue;
       this.deps.pendingSpawns.delete(id);
       this.deps.displacedSpawns.delete(id);
