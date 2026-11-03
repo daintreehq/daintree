@@ -560,7 +560,7 @@ export const HostWatchArgsSchema = z.object({
   hostId: hostIdSchema
     .optional()
     .describe(
-      "For arm: the host; with agentsWaiting, omit for every host you control, local too. For list: only that host."
+      "For arm: the host; with agentsWaiting, omit for all, local too. For list: only that host."
     ),
   connection: z
     .enum(["connected", "disconnected"])
@@ -578,14 +578,14 @@ export const HostWatchArgsSchema = z.object({
     .literal(true)
     .optional()
     .describe(
-      "Arm on agents instead: fires when one is seen starting to wait. Arm also names those already waiting."
+      "Arm on agents instead: fires as one starts to wait. Arm names those already waiting."
     ),
   waitingReasons: z
     .array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"]))
     .min(1)
     .max(HOST_WATCH_WAITING_REASONS.length + 1)
     .optional()
-    .describe('Default approval, question. "any" also hears older hosts that send no reason.'),
+    .describe('Up to 5. Default approval, question. "any" also hears older hosts that send none.'),
   projectId: z.string().min(1).max(256).optional().describe("With agentsWaiting: only that project."),
   expiresInSeconds: z
     .number()
@@ -604,10 +604,10 @@ const hostWatchConditionSchema = z.object({
   memoryAvailableBytesAtLeast: z.number().nullable(),
   cpuIdleCoresAtLeast: z.number().nullable(),
   memoryPressureAtMost: z.enum(["normal", "warn"]).nullable(),
-  /** An agent watch: the reasons it fires on, or "any", and the one project it hears, if any. */
+  /** An agent watch: the reasons it fires on (`["any"]`: every one), and its one project, if any. */
   agentsWaiting: z
     .object({
-      waitingReasons: z.union([z.array(waitingReasonSchema), z.literal("any")]),
+      waitingReasons: z.array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"])),
       projectId: z.string().nullable(),
     })
     .nullable(),
@@ -626,7 +626,6 @@ export const HostWatchAgentSchema = z.object({
   projectId: z.string().nullable(),
   worktreeId: z.string().nullable(),
   terminalId: z.string(),
-  role: z.enum(["worker", "assistant"]).nullable(),
   /** The terminal's PTY launch, as the agent directory names it; null when not said. */
   incarnation: z.number().nullable(),
   /** The agent run inside it, as `terminal.getStatus` answers it; null when not said. */
@@ -640,12 +639,15 @@ export type HostWatchAgent = z.infer<typeof HostWatchAgentSchema>;
 
 /**
  * How an agent watch hears one host. `events`: every waiting transition, with
- * its reason. `attention`: a host too old to send them, heard only by "any",
- * once a minute per agent at most, with no reason. `none`: not heard now.
- * `unknown`: its link is up, but it didn't answer whether it sends them.
+ * its reason. `attention`: a host too old to send them, heard by "any" alone
+ * through the person's notices, once a minute per agent at most, with no
+ * reason. Not heard now: `link-down` (watch its connection too),
+ * `host-refused` (it takes no assistants' work), `older-host` (only "any"
+ * hears it). `unread`: its link is up, but it didn't say whether it sends them.
  */
-export const HOST_WATCH_HEARING = ["events", "attention", "none", "unknown"] as const;
-export const HOST_WATCH_UNHEARD_REASONS = [
+export const HOST_WATCH_HEARING = [
+  "events",
+  "attention",
   "link-down",
   "host-refused",
   "older-host",
@@ -655,8 +657,6 @@ export const HostWatchHostCoverageSchema = z.object({
   hostId: z.string(),
   name: z.string(),
   hears: z.enum(HOST_WATCH_HEARING),
-  /** link-down: watch its connection too. host-refused: that host takes no assistants' work. */
-  why: z.enum(HOST_WATCH_UNHEARD_REASONS).nullable(),
 });
 export type HostWatchHostCoverage = z.infer<typeof HostWatchHostCoverageSchema>;
 
@@ -710,10 +710,6 @@ export const HostWatchSchema = z.object({
   lostReason: z.enum(HOST_WATCH_LOST_REASONS).nullable(),
   /** What it fired, expired or was lost on; null while armed or once cancelled. */
   observed: HostWatchObservedSchema.nullable(),
-  /** The agents an agent watch fired on, and how many more it saw; null otherwise. */
-  agents: z
-    .object({ seen: z.array(HostWatchAgentSchema), omitted: z.number().int().nonnegative() })
-    .nullable(),
   delivery: z.enum(HOST_WATCH_DELIVERIES),
 });
 export type HostWatch = z.infer<typeof HostWatchSchema>;
@@ -733,7 +729,8 @@ export const HostWatchResultSchema = z.object({
   agents: z
     .object({
       matches: z.array(HostWatchAgentSchema),
-      omitted: z.number().int().nonnegative(),
+      /** Matches past the cap. */
+      omitted: z.number(),
       hosts: z.array(HostWatchHostCoverageSchema),
     })
     .optional(),

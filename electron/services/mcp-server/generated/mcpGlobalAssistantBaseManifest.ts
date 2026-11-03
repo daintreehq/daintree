@@ -1264,7 +1264,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "One notice when a host's link, or a fresh load sample, is first seen meeting your condition, so you can end your turn. It only observes: never dials or holds the host, never acts. Watches expire; cancel or list yours.",
+      "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
     enabled: true,
     id: "host.watch",
     inputSchema: {
@@ -1278,7 +1278,8 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "arm: one notice when first observed. cancel: end one. list: yours, armed and ended.",
         },
         hostId: {
-          description: "For arm: the host. For list: only that host.",
+          description:
+            "For arm: the host; with agentsWaiting, omit for all, local too. For list: only that host.",
           type: "string",
           minLength: 1,
           maxLength: 64,
@@ -1303,6 +1304,29 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
           type: "string",
           enum: ["normal", "warn"],
         },
+        agentsWaiting: {
+          description:
+            "Arm on agents instead: fires as one starts to wait. Arm names those already waiting.",
+          type: "boolean",
+          const: true,
+        },
+        waitingReasons: {
+          description:
+            'Up to 5. Default approval, question. "any" also hears older hosts that send none.',
+          minItems: 1,
+          maxItems: 5,
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["approval", "question", "prompt", "error", "any"],
+          },
+        },
+        projectId: {
+          description: "With agentsWaiting: only that project.",
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+        },
         expiresInSeconds: {
           description: "Default 1800.",
           type: "integer",
@@ -1323,7 +1347,18 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
       },
       required: ["operation"],
     },
-    keywords: ["host", "remote", "watch", "notify", "reconnect", "capacity", "wake"],
+    keywords: [
+      "host",
+      "remote",
+      "watch",
+      "notify",
+      "reconnect",
+      "capacity",
+      "wake",
+      "agents",
+      "waiting",
+      "approval",
+    ],
     kind: "command",
     mcpAnnotations: {
       readOnlyHint: false,
@@ -1370,10 +1405,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                 type: "string",
               },
               hostId: {
-                type: "string",
+                type: ["string", "null"],
               },
               hostName: {
-                type: "string",
+                type: ["string", "null"],
               },
               condition: {
                 type: "object",
@@ -1406,12 +1441,37 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                       },
                     ],
                   },
+                  agentsWaiting: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          waitingReasons: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              enum: ["approval", "question", "prompt", "error", "any"],
+                            },
+                          },
+                          projectId: {
+                            type: ["string", "null"],
+                          },
+                        },
+                        required: ["waitingReasons", "projectId"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
                 },
                 required: [
                   "connection",
                   "memoryAvailableBytesAtLeast",
                   "cpuIdleCoresAtLeast",
                   "memoryPressureAtMost",
+                  "agentsWaiting",
                 ],
                 additionalProperties: false,
               },
@@ -1599,6 +1659,94 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               type: "null",
             },
           ],
+        },
+        agents: {
+          type: "object",
+          properties: {
+            matches: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  hostId: {
+                    type: "string",
+                  },
+                  projectId: {
+                    type: ["string", "null"],
+                  },
+                  worktreeId: {
+                    type: ["string", "null"],
+                  },
+                  terminalId: {
+                    type: "string",
+                  },
+                  incarnation: {
+                    type: ["number", "null"],
+                  },
+                  agentIncarnation: {
+                    type: ["number", "null"],
+                  },
+                  waitingReason: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        enum: ["approval", "question", "prompt", "error"],
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                  seenAt: {
+                    type: ["number", "null"],
+                  },
+                },
+                required: [
+                  "hostId",
+                  "projectId",
+                  "worktreeId",
+                  "terminalId",
+                  "incarnation",
+                  "agentIncarnation",
+                  "waitingReason",
+                  "seenAt",
+                ],
+                additionalProperties: false,
+              },
+            },
+            omitted: {
+              type: "number",
+            },
+            hosts: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  hostId: {
+                    type: "string",
+                  },
+                  name: {
+                    type: "string",
+                  },
+                  hears: {
+                    type: "string",
+                    enum: [
+                      "events",
+                      "attention",
+                      "link-down",
+                      "host-refused",
+                      "older-host",
+                      "unread",
+                    ],
+                  },
+                },
+                required: ["hostId", "name", "hears"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["matches", "omitted", "hosts"],
+          additionalProperties: false,
         },
       },
       required: ["outcome", "detail", "retryAfterMs", "armed", "watches", "observed"],

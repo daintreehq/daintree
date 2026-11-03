@@ -436,7 +436,7 @@ vi.mock("../projects/hostInstall.js", () => ({
 }));
 const metrics = vi.hoisted(() => ({
   installHostMetricsClient: vi.fn((_options: unknown) => () => {}),
-  installHostMetricsHost: vi.fn(async (_server: unknown) => () => {}),
+  installHostMetricsHost: vi.fn(async (_server: unknown, _acceptsRemoteControl: unknown) => () => {}),
 }));
 vi.mock("../metrics/clientInstall.js", () => ({
   installHostMetricsClient: metrics.installHostMetricsClient,
@@ -1139,7 +1139,7 @@ describe("startRemoteHosts", () => {
     ]);
     expect(m.initRemoteHostsHost).toHaveBeenCalledWith(m.server);
     // Every attached Shell gets this host's summaries.
-    expect(metrics.installHostMetricsHost).toHaveBeenCalledWith(m.server);
+    expect(metrics.installHostMetricsHost).toHaveBeenCalledWith(m.server, expect.any(Function));
     // And can read its Canopy from a view bound elsewhere.
     expect(canopy.installCanopyHost).toHaveBeenCalledWith(m.server);
     expect(getRemoteService("hostServer")).toBe(m.server);

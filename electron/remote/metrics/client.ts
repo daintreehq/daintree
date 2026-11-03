@@ -573,7 +573,6 @@ export class HostMetricsClient {
         terminalId: payload.terminalId,
         projectId: payload.projectId ?? null,
         worktreeId: null,
-        role: null,
         incarnation: null,
         agentIncarnation: null,
         waitingReason: null,

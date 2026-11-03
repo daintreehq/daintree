@@ -649,6 +649,56 @@ describe("host.watch audit (#14463)", () => {
       JSON.stringify(projectAuditArgs("host.watch", { note: "NOTE-SENTINEL", operation: 5 }))
     ).not.toContain("SENTINEL");
   });
+
+  it("records an agent watch as one, never who it named waiting or where (#16188)", () => {
+    const result = projectAuditResult("host.watch", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      armed: true,
+      watches: [
+        {
+          watchId: "hw-0b7a1c2e-0000-4000-8000-000000000002",
+          hostId: null,
+          hostName: null,
+          condition: {
+            connection: null,
+            memoryAvailableBytesAtLeast: null,
+            cpuIdleCoresAtLeast: null,
+            memoryPressureAtMost: null,
+            agentsWaiting: { waitingReasons: ["approval"], projectId: "PROJECT-SENTINEL" },
+          },
+          status: "armed",
+          lostReason: null,
+          delivery: "none",
+        },
+      ],
+      observed: null,
+      agents: {
+        matches: [{ terminalId: "TERMINAL-SENTINEL", worktreeId: "/PATH-SENTINEL" }],
+        omitted: 0,
+        hosts: [{ hostId: "studio", name: "NAME-SENTINEL", hears: "events" }],
+      },
+    });
+    const args = projectAuditArgs("host.watch", {
+      operation: "arm",
+      agentsWaiting: true,
+      waitingReasons: ["approval", "REASON-SENTINEL", "any"],
+      projectId: "p1",
+      note: "NOTE-SENTINEL",
+    });
+
+    expect(result).toMatchObject({ watches: [{ hostId: null, on: "agents", status: "armed" }] });
+    expect(args).toMatchObject({
+      operation: "arm",
+      agentsWaiting: true,
+      waitingReasons: ["approval", "any"],
+      projectId: "p1",
+      noted: true,
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+  });
 });
 
 describe("host.bringBack audit (#16170)", () => {

@@ -338,10 +338,13 @@ function describeWatchCondition(condition: HostWatchCondition): string {
   if (condition.connection !== null) return `its link ${condition.connection}`;
   const agents = condition.agentsWaiting;
   if (agents !== null) {
+    const named = agents.waitingReasons.flatMap((reason) =>
+      reason === "any" ? [] : [WAITING_ON[reason]]
+    );
     const why =
-      agents.waitingReasons === "any"
+      agents.waitingReasons.includes("any") || named.length === 0
         ? "for any reason"
-        : `on ${agents.waitingReasons.map((reason) => WAITING_ON[reason]).join(" or ")}`;
+        : `on ${named.join(" or ")}`;
     // A project id is another machine's text, spelled out as a bounded plain line.
     const where =
       agents.projectId !== null ? ` in project ${displayNoticeTerminalId(agents.projectId)}` : "";
@@ -391,7 +394,6 @@ function describeWatchedAgent(agent: HostWatchNoticeAgent): string {
   const facts = [
     agent.projectId !== null ? `project ${displayNoticeTerminalId(agent.projectId)}` : null,
     agent.worktreeId !== null ? `worktree ${displayNoticeTerminalId(agent.worktreeId)}` : null,
-    agent.role === "assistant" ? "an assistant" : null,
     agent.incarnation !== null ? `incarnation ${agent.incarnation}` : null,
     agent.agentIncarnation !== null ? `agentIncarnation ${agent.agentIncarnation}` : null,
   ].filter((fact): fact is string => fact !== null);

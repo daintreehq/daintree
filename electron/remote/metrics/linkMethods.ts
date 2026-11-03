@@ -97,12 +97,11 @@ export const AgentWaitingPayloadSchema = z
     terminalId: id,
     projectId: id.nullable(),
     worktreeId: z.string().min(1).max(4096).nullable(),
-    /** A reading a later host adds is read as unknown, never refused. */
-    role: z.enum(["worker", "assistant"]).nullable().catch(null),
     /** The terminal's PTY launch, as the agent directory names it. */
     incarnation: generation.nullable(),
     /** The agent run inside that PTY, as `terminal.getStatus` answers it. */
     agentIncarnation: generation.nullable(),
+    /** A reason a later host adds is read as unknown, never refused. */
     waitingReason: z.enum(["prompt", "question", "approval", "error"]).nullable().catch(null),
     /** It was already waiting, and only its reason changed. */
     refined: z.boolean(),

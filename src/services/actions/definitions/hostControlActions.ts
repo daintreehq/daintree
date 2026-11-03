@@ -140,7 +140,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.watch",
     title: "Watch a host",
     description:
-      "One notice when a host's link or a fresh load sample is first seen meeting your condition, or an agent here or on a host is first seen starting to wait on an approval or question, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire; cancel or list yours.",
+      "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
     category: "help",
     kind: "command",
     danger: "safe",

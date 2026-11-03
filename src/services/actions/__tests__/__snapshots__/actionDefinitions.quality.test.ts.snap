@@ -3112,7 +3112,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "One notice when a host's link, or a fresh load sample, is first seen meeting your condition, so you can end your turn. It only observes: never dials or holds the host, never acts. Watches expire; cancel or list yours.",
+    "description": "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
     "examples": undefined,
     "id": "host.watch",
     "keywords": [
@@ -3123,6 +3123,9 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
       "reconnect",
       "capacity",
       "wake",
+      "agents",
+      "waiting",
+      "approval",
     ],
     "kind": "command",
     "requiresArgs": true,

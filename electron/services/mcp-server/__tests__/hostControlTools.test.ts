@@ -291,6 +291,46 @@ describe("runHostControlTool (#13493)", () => {
     for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
+  it("arms an agent watch on every host or one, and keeps its filters to it (#16188)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const accepted = [
+      { operation: "arm", agentsWaiting: true },
+      { operation: "arm", agentsWaiting: true, hostId: "local", waitingReasons: ["any"] },
+      {
+        operation: "arm",
+        agentsWaiting: true,
+        hostId: "h",
+        projectId: "p1",
+        waitingReasons: ["approval", "error"],
+        expiresInSeconds: 600,
+        note: "cover it",
+      },
+    ];
+    for (const args of accepted) await runHostControlTool("host.watch", args, access);
+    const refused = await Promise.all(
+      [
+        // One watch is one kind of condition.
+        { operation: "arm", agentsWaiting: true, connection: "connected", hostId: "h" },
+        { operation: "arm", agentsWaiting: true, cpuIdleCoresAtLeast: 2 },
+        // Its filters belong to it alone.
+        { operation: "arm", hostId: "h", connection: "connected", waitingReasons: ["approval"] },
+        { operation: "arm", hostId: "h", connection: "connected", projectId: "p1" },
+        { operation: "arm", waitingReasons: ["approval"] },
+        { operation: "arm", agentsWaiting: true, waitingReasons: [] },
+        { operation: "arm", agentsWaiting: true, waitingReasons: ["maybe"] },
+        { operation: "arm", agentsWaiting: false },
+        { operation: "cancel", watchId: "hw-1", agentsWaiting: true },
+        { operation: "list", projectId: "p1" },
+      ].map((args) => runHostControlTool("host.watch", args, access))
+    );
+    uninstall();
+    expect(runtime.watch).toHaveBeenCalledTimes(accepted.length);
+    expect(runtime.watch).toHaveBeenCalledWith("hub", accepted[2]);
+    for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
   it("refuses with no access at all", async () => {
     await expect(runHostControlTool("host.list", {}, undefined)).resolves.toMatchObject({
       ok: false,

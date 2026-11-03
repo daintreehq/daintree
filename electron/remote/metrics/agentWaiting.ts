@@ -4,9 +4,7 @@ import type { AgentWaitingPayload } from "./linkMethods.js";
 /** What this machine's pty client says of a terminal, read with no screen. */
 export interface WaitingTerminalFacts {
   getTerminalProjectId(id: string): string | null;
-  getTerminalLaunchAttribution(
-    id: string
-  ): { worktreeId?: string; isAssistantTerminal?: boolean } | null;
+  getTerminalLaunchAttribution(id: string): { worktreeId?: string } | null;
   getLiveGeneration(id: string): number | null;
 }
 
@@ -23,13 +21,11 @@ export function agentWaitingOf(
   if (payload.state !== "waiting") return null;
   const terminalId = payload.terminalId;
   if (!terminalId) return null;
-  const attribution = facts?.getTerminalLaunchAttribution(terminalId) ?? null;
   return {
     terminalId,
     projectId: facts?.getTerminalProjectId(terminalId) ?? null,
-    worktreeId: payload.worktreeId || attribution?.worktreeId || null,
-    role:
-      attribution === null ? null : attribution.isAssistantTerminal === true ? "assistant" : "worker",
+    worktreeId:
+      payload.worktreeId || facts?.getTerminalLaunchAttribution(terminalId)?.worktreeId || null,
     incarnation: facts?.getLiveGeneration(terminalId) ?? null,
     agentIncarnation: typeof payload.agentIncarnation === "number" ? payload.agentIncarnation : null,
     waitingReason: payload.waitingReason ?? null,

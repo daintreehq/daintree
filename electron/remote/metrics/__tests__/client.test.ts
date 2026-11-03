@@ -623,6 +623,73 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("hands a host's agents' waits to armed agent watches only, past every alert choice (#16188)", async () => {
+    const watched = { ...descriptor("studio"), assistantControlEnabled: true };
+    const h = harness([watched, descriptor("plain")], { waitingPolicy: () => "silent" });
+    h.client.start();
+    const studio = await openSessionPair(dir);
+    const plain = await openSessionPair(dir);
+    open.push(studio.host, studio.client, plain.host, plain.client);
+    h.openSession("studio", studio.client);
+    h.openSession("plain", plain.client);
+    const wait = {
+      terminalId: "t1",
+      projectId: "p1",
+      worktreeId: "/work/app",
+      incarnation: 2,
+      agentIncarnation: 0,
+      waitingReason: "approval",
+      refined: false,
+      seenAt: 5,
+    };
+    // Nothing listens while no watch is armed.
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+
+    const heard: Array<[string, unknown]> = [];
+    const off = h.client.onAgentWaiting((hostId, event) => heard.push([hostId, event]));
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, {
+      ...wait,
+      waitingReason: "a reason from a later build",
+    });
+    // A host the person hasn't given assistant control is never heard.
+    await plain.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+    // An older host's attention stands in, with no reason, whatever this
+    // screen's alert choices and the host's notifications switch say.
+    await studio.host.call(MetricsLinkMethod.ATTENTION, {
+      kind: "waiting",
+      terminalId: "t2",
+      projectId: "p1",
+      projectName: "app",
+      agentName: "Claude",
+      quiet: false,
+    });
+    expect(heard).toEqual([
+      ["studio", { ...wait, waitingReason: null, source: "event" }],
+      [
+        "studio",
+        {
+          source: "attention",
+          terminalId: "t2",
+          projectId: "p1",
+          worktreeId: null,
+          incarnation: null,
+          agentIncarnation: null,
+          waitingReason: null,
+          refined: false,
+          seenAt: null,
+        },
+      ],
+    ]);
+    // None of it reached a person, nor dialled a host.
+    expect(h.attention).toEqual([]);
+    expect(h.connect).not.toHaveBeenCalled();
+
+    off();
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+    expect(heard).toHaveLength(2);
+    h.client.dispose();
+  });
+
   it("tells every view a host's worktree list changed, whether or not its notifications are on", async () => {
     const h = harness([descriptor("quiet")]);
     h.client.start();

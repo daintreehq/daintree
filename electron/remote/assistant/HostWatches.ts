@@ -168,11 +168,15 @@ function runKey(run: OpenRun): string {
   return `${run.sessionId}\u0000${run.terminalId}\u0000${run.launchGeneration}`;
 }
 
-/** The reasons named, in one order and once each; "any" anywhere means every one, and none. */
+/** The reasons named, in one order and once each; "any" anywhere is `["any"]`: every one, and none. */
 function reasonsOf(named: HostWatchArgs["waitingReasons"]): HostWatchWaitingReasons {
   if (named === undefined) return [...HOST_WATCH_DEFAULT_WAITING_REASONS];
-  if (named.includes("any")) return "any";
+  if (named.includes("any")) return ["any"];
   return HOST_WATCH_WAITING_REASONS.filter((reason) => named.includes(reason));
+}
+
+function anyReason(reasons: HostWatchWaitingReasons): boolean {
+  return reasons.includes("any");
 }
 
 function conditionOf(args: HostWatchArgs): HostWatchCondition {
@@ -189,7 +193,6 @@ function conditionOf(args: HostWatchArgs): HostWatchCondition {
 }
 
 function sameReasons(a: HostWatchWaitingReasons, b: HostWatchWaitingReasons): boolean {
-  if (a === "any" || b === "any") return a === b;
   return a.length === b.length && a.every((reason, index) => b[index] === reason);
 }
 
@@ -213,7 +216,7 @@ function reasonMatches(
   reasons: HostWatchWaitingReasons,
   reason: HostWatchAgent["waitingReason"]
 ): boolean {
-  return reasons === "any" || (reason !== null && reasons.includes(reason));
+  return anyReason(reasons) || (reason !== null && reasons.includes(reason));
 }
 
 /** The arming run's own pane: it is never told it waits itself. */
@@ -518,7 +521,6 @@ export class HostWatches {
           projectId,
           worktreeId: null,
           terminalId: entry.subject.terminalId,
-          role: entry.role,
           incarnation: entry.subject.incarnation,
           agentIncarnation: null,
           waitingReason: entry.waitingReason,
@@ -536,18 +538,18 @@ export class HostWatches {
   ): HostWatchHostCoverage {
     const base = { hostId: target.hostId, name: target.name };
     // An older host's waits come only as the person's attention, which names no reason.
-    const older = { ...base, hears: record.reasons === "any" ? "attention" : "none", why: "older-host" } as const;
+    const older = { ...base, hears: anyReason(record.reasons) ? "attention" : "older-host" } as const;
     switch (answer.status) {
       case "read":
-        return answer.waitingEvents ? { ...base, hears: "events", why: null } : older;
+        return answer.waitingEvents ? { ...base, hears: "events" } : older;
       case "unsupported":
         return older;
       case "link-down":
-        return { ...base, hears: "none", why: "link-down" };
+        return { ...base, hears: "link-down" };
       case "refused":
-        return { ...base, hears: "none", why: "host-refused" };
+        return { ...base, hears: "host-refused" };
       case "unread":
-        return { ...base, hears: "unknown", why: "unread" };
+        return { ...base, hears: "unread" };
     }
   }
 
@@ -703,7 +705,6 @@ export class HostWatches {
         projectId: heard.projectId,
         worktreeId: heard.worktreeId,
         terminalId: heard.terminalId,
-        role: heard.role,
         incarnation: heard.incarnation,
         agentIncarnation: heard.agentIncarnation,
         waitingReason: heard.waitingReason,
@@ -721,7 +722,7 @@ export class HostWatches {
     if (isCallerTerminal(record.run, hostId, heard.terminalId)) return false;
     // The person's notice stands in only for a host too old to send its own.
     if (heard.source === "attention") {
-      return record.reasons === "any" && record.olderHosts.has(hostId);
+      return anyReason(record.reasons) && record.olderHosts.has(hostId);
     }
     return true;
   }
@@ -976,7 +977,6 @@ export class HostWatches {
   }
 
   private view(record: WatchRecord): HostWatch {
-    const fired = record.kind === "agents" ? record.fired : null;
     return {
       watchId: record.watchId,
       hostId: record.hostId,
@@ -989,14 +989,6 @@ export class HostWatches {
       endedAt: record.endedAt,
       lostReason: record.lostReason,
       observed: record.observed,
-      // A host whose control went off since shows nothing of its agents.
-      agents:
-        fired === null
-          ? null
-          : {
-              seen: fired.seen.filter((agent) => this.reachable(agent.hostId)),
-              omitted: fired.omitted,
-            },
       delivery: record.delivery,
     };
   }
