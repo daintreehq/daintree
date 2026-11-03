@@ -865,3 +865,24 @@ describe("portable project plugin kinds (#12280)", () => {
     ).toBe(true);
   });
 });
+
+describe("panel persona emoji (#16213)", () => {
+  const panel = {
+    id: "t1",
+    title: "Claude",
+    kind: "terminal",
+    cwd: "/repo",
+    location: "grid",
+  };
+
+  it("keeps one emoji as saved", () => {
+    const parsed = TerminalSnapshotSchema.safeParse({ ...panel, displayEmoji: "🦊" });
+    expect(parsed.success && parsed.data.displayEmoji).toBe("🦊");
+  });
+
+  it.each([42, "fox", "🦊🐶"])("drops a damaged emoji %j and keeps the panel", (displayEmoji) => {
+    const parsed = TerminalSnapshotSchema.safeParse({ ...panel, displayEmoji });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.displayEmoji).toBeUndefined();
+  });
+});

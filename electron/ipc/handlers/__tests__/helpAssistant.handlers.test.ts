@@ -24,6 +24,7 @@ const storeMock = vi.hoisted(() => ({
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 const utilsMock = vi.hoisted(() => ({
+  broadcastToRenderer: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -957,5 +958,58 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
     await expect(handler(CTX, { sessionId: "" })).rejects.toThrow();
     await expect(handler(CTX, {})).rejects.toThrow();
     expect(mcpServiceMock.getHelpSessionLiveStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("assistant personas (#16213)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcMainMock._handlers.clear();
+    storeMock.get.mockReturnValue(undefined);
+  });
+
+  it("saves a persona and tells every view what is stored now", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get("help-assistant:set-identity")!;
+
+    const result = await handler(null, {
+      scope: { kind: "global" },
+      identity: { name: "Assistant to the Regional Manager", emoji: "🐻" },
+    });
+
+    const expected = {
+      global: { name: "Assistant to the Regional Manager", emoji: "🐻" },
+      projects: {},
+    };
+    expect(result).toEqual(expected);
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.identities", expected);
+    expect(utilsMock.broadcastToRenderer).toHaveBeenCalledWith(
+      "help-assistant:identities-changed",
+      expected
+    );
+  });
+
+  it("tells no view anything when the persona is refused", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get("help-assistant:set-identity")!;
+
+    await expect(
+      handler(null, { scope: { kind: "global" }, identity: { emoji: "bear" } })
+    ).rejects.toThrow(/single emoji/);
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(utilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+  });
+
+  it("reads none from a store that has none, and never mixes them into the settings", async () => {
+    registerHelpAssistantHandlers();
+    expect(await ipcMainMock._handlers.get("help-assistant:get-identities")!(null)).toEqual({
+      global: {},
+      projects: {},
+    });
+    storeMock.get.mockReturnValue({
+      identities: { global: { name: "Dot" } },
+    } as Partial<HelpAssistantSettings>);
+    const settings = await ipcMainMock._handlers.get(GET_CHANNEL)!(null);
+    expect(settings).not.toHaveProperty("identities");
   });
 });

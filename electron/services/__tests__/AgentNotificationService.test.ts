@@ -1882,6 +1882,22 @@ describe("AgentNotificationService", () => {
       expect(call?.[1]).toBe("Auth refactor finished its task");
       expect(call?.[2]).toMatchObject({ panelTitle: "Auth refactor" });
     });
+
+    it("leads with the persona emoji the user gave the pane (#16213)", () => {
+      const call = completeOn(
+        {
+          id: "term-1",
+          kind: "terminal",
+          title: "Auth refactor",
+          titleMode: "user",
+          displayEmoji: "🦊",
+          location: "dock",
+        },
+        { agentId: "codex" }
+      );
+      expect(call?.[1]).toBe("🦊 Auth refactor finished its task");
+      expect(call?.[2]).toMatchObject({ panelTitle: "🦊 Auth refactor" });
+    });
   });
 
   describe("quiet hours suppression", () => {

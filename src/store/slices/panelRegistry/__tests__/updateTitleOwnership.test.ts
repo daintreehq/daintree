@@ -293,3 +293,48 @@ describe("updateTitle pty-host sync", () => {
     expect(await client()).not.toHaveBeenCalled();
   });
 });
+
+describe("setDisplayEmoji (#16213)", () => {
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    const { terminalClient } = await import("@/clients");
+    vi.mocked(terminalClient.spawn).mockImplementation(
+      async ({ id }: { id?: string }) => id ?? "spawn-id"
+    );
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "t1",
+      cwd: "/",
+      bypassLimits: true,
+    });
+    vi.mocked(terminalClient.updateTitle).mockClear();
+  });
+
+  it("gives a panel an emoji apart from its title, and takes it away again", async () => {
+    usePanelStore.getState().updateTitle("t1", "Dwight", "user");
+    usePanelStore.getState().setDisplayEmoji("t1", " 🌱 ");
+    expect(getPtyPanel("t1")).toMatchObject({
+      title: "Dwight",
+      titleMode: "user",
+      displayEmoji: "🌱",
+    });
+
+    usePanelStore.getState().setDisplayEmoji("t1", undefined);
+    expect(getPtyPanel("t1")?.displayEmoji).toBeUndefined();
+    expect(getPtyPanel("t1")?.titleMode).toBe("user");
+    // The persona is display only: nothing about it reaches the pty host.
+    const { terminalClient } = await import("@/clients");
+    expect(vi.mocked(terminalClient.updateTitle)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a reset title's emoji, and refuses text that is not one emoji", () => {
+    usePanelStore.getState().setDisplayEmoji("t1", "🦊");
+    usePanelStore.getState().updateTitle("t1", "", "user");
+    expect(getPtyPanel("t1")?.displayEmoji).toBe("🦊");
+
+    usePanelStore.getState().setDisplayEmoji("t1", "fox");
+    expect(getPtyPanel("t1")?.displayEmoji).toBeUndefined();
+  });
+});

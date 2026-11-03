@@ -820,6 +820,13 @@ describe("PanelPersistence", () => {
       );
     });
 
+    it("saves a panel's persona emoji and leaves it out when there is none (#16213)", () => {
+      expect(panelToSnapshot(createMockTerminal({ id: "e1", displayEmoji: "🦊" })).displayEmoji).toBe(
+        "🦊"
+      );
+      expect("displayEmoji" in panelToSnapshot(createMockTerminal({ id: "e2" }))).toBe(false);
+    });
+
     it("persists pluginId for unregistered extension kind so placeholder can survive restart", () => {
       // Regression test for #5580. When a plugin is disabled, its panel kind is
       // no longer registered — `panelToSnapshot` must still include `pluginId`
