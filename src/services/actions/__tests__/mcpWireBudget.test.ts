@@ -587,8 +587,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 57_694): `agent.launch` takes `accountId`, so a caller can launch on one of
   // the agent's accounts, chosen apart from its preset, or explicitly on the
   // CLI's default login.
-  // 57_850 → 59_000 for #16189, measured at 58_960 B (+1_132 over develop's
-  // 57_828): `inputLine` on `terminal.getStatus` and `terminal.getOutput`
+  // 57_850 → 59_000 for #16189, measured at 58_949 B (+1_132 over develop's
+  // 57_817): `inputLine` on `terminal.getStatus` and `terminal.getOutput`
   // results, so a caller can tell the CLI's own suggested prompt from text
   // someone typed, with the `truncated` flag its bounded text needs. Both
   // result schemas are closed, so the field must be advertised on each; its
@@ -991,9 +991,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // host, project, worktree, both run generations, reason and host-clock time,
   // and how each host is heard. Assistant-only, so the external ceiling does
   // not move.
-  // 177_900 → 179_000 for #16189: the same `inputLine` result field as the
-  // external ceiling's raise, carried in-app for the external⊆in-app subset
-  // invariant.
+  // 177_900 → 179_000 for #16189, measured at 178_950 B (+1_132 over
+  // develop's 177_818): the same `inputLine` result field as the external
+  // ceiling's raise, carried in-app for the external⊆in-app subset invariant.
   const MAX_COHORT_PAYLOAD_BYTES = 179_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
