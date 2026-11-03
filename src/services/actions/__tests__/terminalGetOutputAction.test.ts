@@ -179,6 +179,30 @@ describe("terminal.getOutput action", () => {
     expect(result.content).not.toContain("\x1b");
   });
 
+  it("reports the input box by the panel's agent and marks its suggestion (#16189)", async () => {
+    const screen = "⏺ Done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────\r\n  ? for shortcuts";
+    mockGetSerializedState.mockResolvedValue(snapshotOf(screen));
+
+    const actions = await createRegistry();
+    const { usePanelStore } = await import("@/store/panelStore");
+    const panel = { id: "t-claude", kind: "terminal", detectedAgentId: "claude" };
+    usePanelStore.setState({ panelsById: { "t-claude": panel } } as never);
+    const action = actions.get("terminal.getOutput")!();
+
+    const result = (await action.run({ terminalId: "t-claude" }, {})) as TerminalOutputResult & {
+      inputLine?: unknown;
+    };
+    expect(result.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
+    expect(result.content).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
+
+    // An id the view holds no panel for reads no agent, so its box is unknown.
+    const other = (await action.run({ terminalId: "t-other" }, {})) as TerminalOutputResult & {
+      inputLine?: unknown;
+    };
+    expect(other.inputLine).toEqual({ state: "unknown", text: "" });
+    expect(other.content).toContain("\n❯ open the PR\n");
+  });
+
   it("returns null content for non-existent terminal", async () => {
     mockGetSerializedState.mockResolvedValue(snapshotOf(null));
 

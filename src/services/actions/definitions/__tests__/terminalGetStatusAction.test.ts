@@ -627,6 +627,48 @@ describe("terminal.getStatus", () => {
     expect(raw.terminals[0]?.recentOutput).toBe(ansi);
   });
 
+  it("reports the input box and marks a Claude Code suggestion in the plain tail (#16189)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["claude", "shell"],
+      panelsById: {
+        claude: {
+          id: "claude",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          detectedAgentId: "claude",
+        },
+        shell: { id: "shell", kind: "terminal", location: "grid" },
+      },
+    });
+    // A focused pane: Claude Code paints its cursor over the first cell.
+    const screen =
+      "⏺ Done.\r\n\r\n────────\r\n❯ \x1b[7mm\x1b[27;2merge #2079 when green\r\n────────\r\n\x1b[0m  ? for shortcuts";
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ claude: screen, shell: screen }));
+
+    const result = await callGetStatus(setupActions(), { includeOutput: true });
+    // Read through the published schema, which strips any key it does not declare.
+    const terminals = TerminalStatusResultSchema.parse(result).terminals;
+    const claude = terminals.find((t) => t.terminalId === "claude");
+    expect(claude?.inputLine).toEqual({ state: "suggestion", text: "merge #2079 when green" });
+    expect(claude?.recentOutput).toContain(
+      "\n❯ [suggested by Claude Code: merge #2079 when green]\n"
+    );
+    // A terminal running no agent declares no rule, so its box is unknown and
+    // its tail is left as drawn.
+    const shell = terminals.find((t) => t.terminalId === "shell");
+    expect(shell?.inputLine).toEqual({ state: "unknown", text: "" });
+    expect(shell?.recentOutput).toContain("\n❯ merge #2079 when green\n");
+
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ claude: screen, shell: screen }));
+    const raw = await callGetStatus(setupActions(), {
+      terminalIds: ["claude"],
+      includeOutput: { stripAnsi: false },
+    });
+    expect(raw.terminals[0]?.inputLine?.state).toBe("suggestion");
+    expect(raw.terminals[0]?.recentOutput).toContain("❯ \x1b[7mm\x1b[27;2merge #2079 when green");
+  });
+
   it("preserves status fields when getSerializedStates rejects", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1"],

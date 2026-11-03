@@ -14,6 +14,7 @@ import {
 
 type Record = {
   id: string;
+  detectedAgentId?: string;
   spawnedAt?: number;
   projectId?: string;
   kind?: string;
@@ -215,7 +216,8 @@ describe("screen text from a real headless terminal", () => {
     rows: number,
     output: string,
     lines = 20,
-    options: { dropGhostInput?: boolean } = {}
+    options: { dropGhostInput?: boolean } = {},
+    detectedAgentId?: string
   ) {
     const { Terminal } = await import("@xterm/headless");
     const serializeModule = await import("@xterm/addon-serialize");
@@ -228,7 +230,7 @@ describe("screen text from a real headless terminal", () => {
       serializeAddon: addon,
       preservedSnapshot: undefined,
     } as unknown as TerminalInfo;
-    const client = makeClient({ id: "t-1", projectId: "p-a" });
+    const client = makeClient({ id: "t-1", projectId: "p-a", detectedAgentId });
     client.getSerializedStateAsync.mockImplementation(async (_id, options) =>
       serializeTerminalTail("t-1", info, options?.tailRows ?? 0)
     );
@@ -267,6 +269,29 @@ describe("screen text from a real headless terminal", () => {
     // What the user typed is drawn at full intensity and stays.
     const typed = await screenRead(6, "⏺ Done.\r\n❯ add a test", 20, { dropGhostInput: true });
     expect(typed.status === "ok" && typed.text).toBe("⏺ Done.\n❯ add a test");
+  });
+
+  it("drops a focused Claude Code suggestion whole, the cursor cell it paints included (#16189)", async () => {
+    // Claude Code inverts the first cell for its own cursor and dims the rest.
+    const output =
+      "⏺ Done.\r\n\x1b[38;2;136;136;136m──────\x1b[39m\r\n❯ \x1b[7mm\x1b[27m\x1b[2merge #2079 when green\x1b[22m\r\n──────\r\n  ? for shortcuts";
+    const result = await screenRead(6, output, 20, { dropGhostInput: true }, "claude");
+    expect(result.status === "ok" && result.text).toBe("⏺ Done.\n──────\n❯\n──────\n  ? for shortcuts");
+    // Typed text under the painted cursor is the person's and stays.
+    const typed = await screenRead(
+      6,
+      "⏺ Done.\r\n──────\r\n❯ add a test\x1b[7m \x1b[27m\r\n──────",
+      20,
+      { dropGhostInput: true },
+      "claude"
+    );
+    expect(typed.status === "ok" && typed.text).toBe("⏺ Done.\n──────\n❯ add a test\n──────");
+  });
+
+  it("keeps the generic dim drop for an agent with no declared rule", async () => {
+    const output = "⏺ Done.\r\n› \x1b[2mExplain this codebase\x1b[22m";
+    const result = await screenRead(4, output, 20, { dropGhostInput: true }, "codex");
+    expect(result.status === "ok" && result.text).toBe("⏺ Done.\n›");
   });
 
   it("leaves a dim echo of an earlier message alone: only the input box is filtered", async () => {

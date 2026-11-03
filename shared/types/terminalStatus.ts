@@ -63,7 +63,11 @@ export interface TerminalInputLine {
 
 /** Model-facing description of `inputLine`, shared by the status and output schemas. */
 export const INPUT_LINE_DESCRIPTION =
-  "What the agent's input box held, read off screen styling: empty, typed text, or the CLI's own suggested next prompt (not typed by anyone). unknown when unread. Not proof of authorship.";
+  "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.";
+
+/** Model-facing description of `inputLine.text`. */
+export const INPUT_LINE_TEXT_DESCRIPTION =
+  "Text after the prompt glyph; empty for `empty` and `unknown`.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {

@@ -126,18 +126,26 @@ function stateAfter(text: string, state: SgrState): SgrState {
 interface ScreenRows {
   prefix: string;
   rows: string[];
-  /** Each row as plain text, for matching a box's rows. */
-  plain: string[];
+  /** Row `i` as plain text, for matching a box's rows; read from the bottom, so built on demand. */
+  plain(i: number): string;
 }
 
 function readRows(serialized: string): ScreenRows {
   const switchAt = serialized.lastIndexOf(ALT_SCREEN_ENTER);
   const split = switchAt === -1 ? 0 : switchAt + ALT_SCREEN_ENTER.length;
   const rows = serialized.slice(split).split("\n");
+  const plain = new Map<number, string>();
   return {
     prefix: serialized.slice(0, split),
     rows,
-    plain: rows.map((row) => stripAnsiCodes(expandCursorForward(row))),
+    plain: (i) => {
+      let text = plain.get(i);
+      if (text === undefined) {
+        text = stripAnsiCodes(expandCursorForward(rows[i]!));
+        plain.set(i, text);
+      }
+      return text;
+    },
   };
 }
 
@@ -158,7 +166,6 @@ function cellsOf(screen: ScreenRows, from: number, to: number): Cell[][] {
 }
 
 interface CompiledRule {
-  rule: AgentInputSuggestionConfig;
   promptRow: RegExp;
   border: RegExp;
   placeholders: RegExp[];
@@ -170,7 +177,6 @@ function compile(rule: AgentInputSuggestionConfig): CompiledRule {
   let entry = compiled.get(rule);
   if (entry === undefined) {
     entry = {
-      rule,
       promptRow: new RegExp(rule.promptRowPattern, "u"),
       border: new RegExp(rule.borderPattern, "u"),
       placeholders: (rule.placeholderPatterns ?? []).map((pattern) => new RegExp(pattern, "u")),
@@ -192,12 +198,12 @@ interface BoxRow {
  * anywhere else are echoes of messages already sent.
  */
 function findBox(screen: ScreenRows, rule: CompiledRule): BoxRow[] | null {
-  for (let i = screen.plain.length - 1; i > 0; i--) {
-    const match = rule.promptRow.exec(screen.plain[i]!);
-    if (match === null || !rule.border.test(screen.plain[i - 1]!)) continue;
+  for (let i = screen.rows.length - 1; i > 0; i--) {
+    const match = rule.promptRow.exec(screen.plain(i));
+    if (match === null || !rule.border.test(screen.plain(i - 1))) continue;
     let last = i;
-    for (let r = i + 1; r < screen.plain.length && r <= i + MAX_BOX_ROWS; r++) {
-      if (rule.border.test(screen.plain[r]!)) {
+    for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
+      if (rule.border.test(screen.plain(r))) {
         last = r - 1;
         break;
       }
@@ -221,11 +227,7 @@ function findBox(screen: ScreenRows, rule: CompiledRule): BoxRow[] | null {
  * leads into.
  */
 function suggestionCells(box: readonly BoxRow[]): Set<Cell> {
-  const dim = new Set<Cell>();
-  const visible = box.flatMap((row) => row.cells.filter((cell) => !isBlank(cell)));
-  visible.forEach((cell) => {
-    if (cell.dim) dim.add(cell);
-  });
+  const dim = new Set(box.flatMap((row) => row.cells.filter((cell) => cell.dim)));
   const first = box.flatMap((row) => row.cells).find((cell) => !isBlank(cell) || cell.inverse);
   if (first !== undefined && first.inverse && !first.dim) {
     const row = box.find((r) => r.cells.includes(first))!;
@@ -339,8 +341,8 @@ export function dropInputSuggestion(
     return rebuild(reading.screen, rows);
   }
   const screen = reading.screen ?? readRows(serialized);
-  for (let i = screen.plain.length - 1; i >= 0; i--) {
-    if (!GENERIC_PROMPT_ROW.test(screen.plain[i]!)) continue;
+  for (let i = screen.rows.length - 1; i >= 0; i--) {
+    if (!GENERIC_PROMPT_ROW.test(screen.plain(i))) continue;
     const rows = [...screen.rows];
     rows[i] = removeCells(
       rows[i]!,

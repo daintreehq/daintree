@@ -7,6 +7,7 @@ import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { captureTerminalTail } from "../../../shared/utils/terminalInputLine.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { readClientMetadata } from "../../../shared/utils/mcpClientMetadata.js";
 import {
@@ -311,23 +312,29 @@ export async function runTerminalGetOutput(
   const pty = deps.getPtyReader();
   if (!pty || pty.getTerminalProjectId(terminalId) !== project.id) return success(missing);
   // Raw output keeps the whole-buffer read, as the view's does: the
-  // serializer's erase escapes depend on the range it starts from.
-  const serialized = stripAnsi
-    ? await readTailSnapshot(
-        (options) => pty.getSerializedStateAsync(terminalId, options),
-        maxLines
-      )
-    : await pty.getSerializedStateAsync(terminalId);
+  // serializer's erase escapes depend on the range it starts from. The record
+  // names the agent whose input box the screen is read for (#16189); one that
+  // can't be read leaves the box `unknown`, never the output unread.
+  const [serialized, record] = await Promise.all([
+    stripAnsi
+      ? readTailSnapshot(
+          (options) => pty.getSerializedStateAsync(terminalId, options),
+          maxLines
+        )
+      : pty.getSerializedStateAsync(terminalId),
+    pty.getTerminalAsync(terminalId).catch(() => null),
+  ]);
   if (serialized === null) return success(missing);
 
-  const { content, lineCount, truncated } = tailCapturedOutput(
+  const { content, lineCount, truncated, inputLine } = captureTerminalTail(
     serialized.data,
     maxLines,
-    stripAnsi
+    stripAnsi,
+    record?.detectedAgentId ?? record?.launchAgentId
   );
   return success(
     fitTerminalOutputResult(
-      { terminalId, content, lineCount, truncated },
+      { terminalId, content, lineCount, truncated, inputLine },
       MCP_RESPONSE_TEXT_MAX_BYTES
     )
   );

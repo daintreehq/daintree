@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import {
+  TerminalInputLineSchema,
   TerminalSummarySchema,
   TerminalStatusResultSchema,
   TerminalSendCommandResultSchema,
@@ -169,6 +170,7 @@ export function registerTerminalQueryActions(
         .describe(
           "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept."
         ),
+      inputLine: TerminalInputLineSchema.optional(),
       error: z.string().optional(),
     }),
     mcpOutputSchema: true,
@@ -305,7 +307,7 @@ export function registerTerminalQueryActions(
           ])
           .optional()
           .describe(
-            "`true` or options: adds `recentOutput` (last N lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed."
+            "`true` or options: adds `recentOutput` (last N lines) and `inputLine`, plus `lastOutputChangeAt` and `lastTypedInputAt` when observed."
           ),
       })
       .optional(),
