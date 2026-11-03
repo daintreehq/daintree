@@ -129,8 +129,8 @@ interface AgentsRecord extends BaseRecord {
    * hears their attention instead. Each host's read sets it as it lands.
    */
   olderHosts: Set<HostId>;
-  /** Arms that read its hosts; only the latest one's reads classify them. */
-  reads: number;
+  /** Each host's reads by its arms; only the latest one of a host's classifies it. */
+  readPasses: Map<HostId, number>;
   /**
    * Hosts whose read is still running, with the attention they sent meanwhile:
    * heard once the read says the host is too old, dropped otherwise.
@@ -443,7 +443,7 @@ export class HostWatches {
         reasons: agents.waitingReasons,
         projectId: agents.projectId,
         olderHosts: new Set(),
-        reads: 0,
+        readPasses: new Map(),
         unclassified: new Map(),
         pending: new Map(),
         overflow: new Map(),
@@ -506,22 +506,23 @@ export class HostWatches {
               .map((host) => ({ hostId: host.hostId, name: host.name })),
           ];
     const options = record.projectId === null ? {} : { projectId: record.projectId };
-    record.reads += 1;
-    const pass = record.reads;
-    for (const target of targets) {
+    const passes = targets.map((target) => {
+      const pass = (record.readPasses.get(target.hostId) ?? 0) + 1;
+      record.readPasses.set(target.hostId, pass);
       if (target.hostId !== LOCAL_HOST_ID && !record.unclassified.has(target.hostId)) {
         record.unclassified.set(target.hostId, []);
       }
-    }
+      return pass;
+    });
     const reads = await Promise.all(
-      targets.map((target): Promise<AgentWatchRead> =>
+      targets.map((target, index): Promise<AgentWatchRead> =>
         (read === undefined
           ? Promise.resolve<AgentWatchRead>({ status: "unread" })
           : Promise.resolve()
               .then(() => read(target.hostId, options))
               .catch((): AgentWatchRead => ({ status: "unread" }))
         ).then((answer) => {
-          this.classify(record, pass, target.hostId, answer);
+          this.classify(record, passes[index] ?? 0, target.hostId, answer);
           return answer;
         })
       )
@@ -570,7 +571,7 @@ export class HostWatches {
     hostId: HostId,
     answer: AgentWatchRead
   ): void {
-    if (hostId === LOCAL_HOST_ID || record.reads !== pass) return;
+    if (hostId === LOCAL_HOST_ID || record.readPasses.get(hostId) !== pass) return;
     const older =
       answer.status === "unsupported" || (answer.status === "read" && !answer.waitingEvents);
     if (older) record.olderHosts.add(hostId);
@@ -789,6 +790,8 @@ export class HostWatches {
     // The person's notice, which names no reason, run or time, never replaces the host's own.
     if (heard.source === "attention" && record.pending.has(key)) return;
     if (record.pending.has(key) || record.pending.size < PENDING_AGENTS_MAX) {
+      // One counted while the settle had no room is kept in full once it has.
+      record.overflow.delete(key);
       record.pending.set(key, {
         hostId,
         projectId: heard.projectId,

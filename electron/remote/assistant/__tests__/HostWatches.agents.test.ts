@@ -464,11 +464,14 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
     finishSlow({ status: "read", directory: directory([]), waitingEvents: true });
     await pending;
 
-    // Updated since: a new arm reads it sending its own, and its attention no longer counts.
-    reads.set("old", { status: "read", directory: directory([]), waitingEvents: true });
-    reads.set("slow", { status: "read", directory: directory([]), waitingEvents: true });
+    // Armed again on the same watch: each read of a host says what it is now.
     queued = [];
+    reads.set("old", { status: "unsupported" });
+    reads.set("slow", { status: "read", directory: directory([]), waitingEvents: true });
+    const second = await arm({ waitingReasons: ["any"] });
+    reads.set("old", { status: "read", directory: directory([]), waitingEvents: true });
     const again = await arm({ waitingReasons: ["any"] });
+    expect(again.watches[0]!.watchId).toBe(second.watches[0]!.watchId);
     expect(again.agents?.hosts).toContainEqual({ hostId: "old", name: "old-box", hears: "events" });
     listener?.("old", legacy("t-attention"));
     advance(NOTIFY_TARGET_SETTLE_MS);
@@ -486,6 +489,51 @@ describe("HostWatches on agents starting to wait (#16188)", () => {
         agentIncarnation: 4,
       }),
     ]);
+  });
+
+  it("classifies a host by its own latest read, whatever another arm of the watch read", async () => {
+    hosts = [host("old", "old-box")];
+    control = new Set(["old"]);
+    let finishOld!: (read: AgentWatchRead) => void;
+    reads.set(
+      "old",
+      new Promise((resolve) => {
+        finishOld = resolve;
+      })
+    );
+    const first = arm({ waitingReasons: ["any"] });
+    // Switched off, a second arm of the same watch reads only this machine.
+    control.delete("old");
+    await arm({ waitingReasons: ["any"] });
+    control.add("old");
+    finishOld({ status: "unsupported" });
+    await first;
+    listener?.(
+      "old",
+      heard("t-old", {
+        source: "attention",
+        waitingReason: null,
+        incarnation: null,
+        agentIncarnation: null,
+        worktreeId: null,
+        seenAt: null,
+      })
+    );
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued[0]!.hostWatch!.agents?.seen.map((agent) => agent.terminalId)).toEqual(["t-old"]);
+  });
+
+  it("counts an agent once when it moves from those counted to those kept", async () => {
+    await arm();
+    for (let index = 0; index < 256; index += 1) listener?.("studio", heard(`t-${index}`));
+    listener?.("studio", heard("t-x"));
+    // A slot opens, and the one only counted is seen again.
+    listener?.("studio", heard("t-0", { waitingReason: "prompt", refined: true }));
+    listener?.("studio", heard("t-x", { waitingReason: "question", refined: true }));
+    advance(NOTIFY_TARGET_SETTLE_MS);
+    expect(queued[0]!.hostWatch!.agents).toMatchObject({ omitted: 0 });
+    expect(queued[0]!.hostWatch!.agents!.seen).toHaveLength(256);
+    expect(formatHostWatchLine(queued[0]!.hostWatch!)).toContain("saw 256 agents start waiting");
   });
 
   it("is lost with its one host's control, and on every host stops hearing the one switched off", async () => {
