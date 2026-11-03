@@ -154,7 +154,7 @@ function frame(message: Record<string, unknown>): string {
   return `${JSON.stringify({ v: HOST_CONTRACT_VERSION, ...message })}\n`;
 }
 
-interface Endpoint {
+export interface RelayDeployEndpoint {
   /** Where the server listens. */
   listenPath: string;
   /** What the CLI is told: the same endpoint, spelled for a command line. */
@@ -171,7 +171,10 @@ interface Endpoint {
  * the pane might run rewrites. Elsewhere a Unix socket in a new directory
  * only this user can open.
  */
-async function makeEndpoint(platform: NodeJS.Platform, tmpRoot: string): Promise<Endpoint> {
+export async function relayDeployEndpoint(
+  platform: NodeJS.Platform,
+  tmpRoot: string
+): Promise<RelayDeployEndpoint> {
   if (platform === "win32") {
     const name = `daintree-decisions-deploy-${randomBytes(16).toString("hex")}`;
     return { listenPath: `\\\\.\\pipe\\${name}`, channelPath: `//./pipe/${name}`, directory: null };
@@ -213,7 +216,7 @@ export async function openRelayDeployHost(
   options: RelayDeployHostOptions = {}
 ): Promise<RelayDeployHost> {
   const platform = options.platform ?? process.platform;
-  const endpoint = await makeEndpoint(platform, options.tmpRoot ?? os.tmpdir());
+  const endpoint = await relayDeployEndpoint(platform, options.tmpRoot ?? os.tmpdir());
   let disposed = false;
   let settled = false;
   let accepted: Socket | null = null;
