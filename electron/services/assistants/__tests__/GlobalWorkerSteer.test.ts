@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl.js";
-import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
+import {
+  stampPromptInput,
+  stampTypedInput,
+} from "../../../../shared/utils/terminalInputProvenance.js";
 import { AssistantTargetError } from "../AssistantTerminalControl.js";
+import {
+  HoldRefusedError,
+  type HoldSteerRequest,
+  type HoldSteerResult,
+} from "../WorkerSteerQueue.js";
 import {
   GlobalWorkerSteer,
   liveGlobalWorkerSteer,
@@ -38,6 +46,9 @@ describe("GlobalWorkerSteer (#14551)", () => {
   /** Runs while a screen read is on its way back. */
   let duringRead: () => void;
   let steer: GlobalWorkerSteer;
+  /** What the steer handed its queue, and how the queue answers; null is no queue. */
+  let held: HoldSteerRequest[];
+  let holdAnswer: ((request: HoldSteerRequest) => HoldSteerResult) | null;
 
   const atPrompt = (extra: Partial<WorkerSteerRecord> = {}): WorkerSteerRecord => ({
     projectId: PROJECT,
@@ -86,6 +97,8 @@ describe("GlobalWorkerSteer (#14551)", () => {
     escapes = 0;
     duringGap = () => {};
     duringRead = () => {};
+    held = [];
+    holdAnswer = null;
     const deps: GlobalWorkerSteerDeps = {
       getTerminalProjectId: () => fake.projectId,
       getLiveGeneration: () => fake.generation,
@@ -109,6 +122,15 @@ describe("GlobalWorkerSteer (#14551)", () => {
       sleep: async () => {
         duringGap();
       },
+      queue: () =>
+        holdAnswer === null
+          ? null
+          : {
+              hold: (request) => {
+                held.push(request);
+                return holdAnswer!(request);
+              },
+            },
     };
     steer = new GlobalWorkerSteer(deps);
   });
@@ -170,6 +192,199 @@ describe("GlobalWorkerSteer (#14551)", () => {
         agentId: "claude",
         agentStateAtDispatch: "working",
       });
+    });
+  });
+
+  describe("a send held for a worker mid-turn (#16187)", () => {
+    const working = (extra: Partial<WorkerSteerRecord> = {}): WorkerSteerRecord =>
+      atPrompt({
+        agentState: "working",
+        waitingReason: undefined,
+        agentIncarnation: 2,
+        agentSessionId: "sess-1",
+        worktreeId: "wt-1",
+        ...extra,
+      });
+    const heldTarget = (extra: Partial<WorkerSteerTarget> = {}) =>
+      target({ authorizeHeld: () => null, ...extra });
+    const queueSend = (
+      command = "Rebase onto develop",
+      extra: { handback?: boolean; target?: WorkerSteerTarget } = {}
+    ) =>
+      steer.prompt(extra.target ?? heldTarget(), {
+        command,
+        handback: extra.handback ?? false,
+        machineName: "studio-01",
+        whenBusy: { queue: { ttlSeconds: 900 } },
+      });
+
+    beforeEach(() => {
+      fake.record = working();
+      holdAnswer = () => ({ queuedSendToken: "q-1", expiresAt: 901_000 });
+    });
+
+    it("holds the stamped brief for the run it read, sending nothing", async () => {
+      const receipt = await queueSend();
+
+      expect(submits).toEqual([]);
+      expect(receipt).toMatchObject({
+        sent: false,
+        queued: true,
+        terminalId: WORKER,
+        command: "Rebase onto develop",
+        queuedSendToken: "q-1",
+        expiresAt: 901_000,
+      });
+      expect(receipt).not.toHaveProperty("submissionToken");
+      expect(held).toHaveLength(1);
+      const request = held[0]!;
+      expect(request).toMatchObject({
+        principal: OWNER,
+        projectId: PROJECT,
+        terminalId: WORKER,
+        generation: 4,
+        run: { agentIncarnation: 2, agentSessionId: "sess-1", worktreeId: "wt-1" },
+        promptAsWritten: "Rebase onto develop",
+        ttlSeconds: 900,
+      });
+      expect(request.text).toContain("From the Daintree Assistant on studio-01");
+      expect(request.text.endsWith("Rebase onto develop")).toBe(true);
+      expect(request.handbackCode).toBeUndefined();
+    });
+
+    it("mints the handback now and puts its instruction on the held text", async () => {
+      await queueSend("Rebase onto develop", { handback: true });
+
+      const request = held[0]!;
+      expect(request.handbackCode).toBeDefined();
+      expect(request.text).toContain(`DAINTREE-DONE-${request.handbackCode}`);
+      expect(request.promptAsWritten).toBe("Rebase onto develop");
+    });
+
+    it("carries the run's prompt-capable input as the baseline someone else's must move past", async () => {
+      fake.record = working();
+      stampPromptInput(fake.record, 1_500);
+
+      await queueSend();
+
+      expect(held[0]!.run.lastForeignPromptInputAt).toBe(1_500);
+    });
+
+    it("names the held prompt it replaced", async () => {
+      holdAnswer = () => ({ queuedSendToken: "q-2", expiresAt: 901_000, supersededToken: "q-1" });
+
+      const receipt = await queueSend();
+
+      expect(receipt).toMatchObject({ queuedSendToken: "q-2", supersededToken: "q-1" });
+      expect(receipt.message).toContain("q-1");
+    });
+
+    it("hands the deferred authority and writer check to the queue, never the session's", async () => {
+      const authorizeHeld = vi.fn(() => null);
+      await queueSend("go", { target: heldTarget({ authorizeHeld }) });
+
+      expect(held[0]!.authorize).toBe(authorizeHeld);
+      // Read when asked: the call that held it has finished writing by now.
+      expect(held[0]!.isWriting()).toBe(false);
+
+      // While another steer writes keys to the worker, the held prompt waits.
+      let midKeys: boolean | undefined;
+      duringGap = () => {
+        midKeys ??= held[0]!.isWriting();
+      };
+      fake.record = atPrompt({ waitingReason: "approval" });
+      await steer.keys(target(), { keys: ["2", "Enter"] });
+      expect(midKeys).toBe(true);
+      expect(held[0]!.isWriting()).toBe(false);
+    });
+
+    it("still sends at once when the agent is already at its prompt", async () => {
+      fake.record = atPrompt();
+
+      const receipt = await queueSend();
+
+      expect(held).toEqual([]);
+      expect(submits).toHaveLength(1);
+      expect(receipt).toMatchObject({ sent: true });
+    });
+
+    it("keeps refusing what an immediate send refuses: a draft typed mid-turn", async () => {
+      personTypes();
+
+      const error = await refusal(queueSend());
+
+      expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+      expect(held).toEqual([]);
+    });
+
+    it("refuses over its own keys left at the prompt", async () => {
+      fake.record = working();
+      stampTypedInput(fake.record, 1_500, OWNER);
+
+      const error = await refusal(queueSend());
+
+      expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+      expect(error.message).toContain("keys you sent");
+      expect(held).toEqual([]);
+    });
+
+    it("refuses to hold a slash command", async () => {
+      fake.record = working({ detectedAgentId: "codex" });
+
+      const error = await refusal(queueSend("/compact"));
+
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(error.message).toContain("isn't held");
+      expect(held).toEqual([]);
+    });
+
+    it("refuses as busy with nothing to hold it in", async () => {
+      holdAnswer = null;
+      const noQueue = await refusal(queueSend());
+      expect(noQueue.code).toBe(WORKER_STEER_REFUSALS.busy);
+
+      holdAnswer = () => ({ queuedSendToken: "q-1", expiresAt: 1 });
+      const noAuthority = await refusal(queueSend("go", { target: target() }));
+      expect(noAuthority.code).toBe(WORKER_STEER_REFUSALS.busy);
+      expect(held).toEqual([]);
+    });
+
+    it("refuses as busy when the queue can't take it", async () => {
+      holdAnswer = () => {
+        throw new HoldRefusedError("that worker's notice line can't take it right now");
+      };
+
+      const error = await refusal(queueSend());
+
+      expect(error.code).toBe(WORKER_STEER_REFUSALS.busy);
+      expect(error.message).toContain("can't take it");
+      expect(error.message).toContain("Nothing was sent.");
+    });
+
+    it("refuses a restarted run and a session gone, holding nothing", async () => {
+      const stale = await refusal(queueSend("go", { target: heldTarget({ generation: 3 }) }));
+      expect(stale.code).toBe(WORKER_STEER_REFUSALS.restarted);
+
+      const gone = await refusal(
+        queueSend("go", {
+          target: heldTarget({
+            authorize: () => {
+              throw new AssistantTargetError("SESSION_GONE", "gone");
+            },
+          }),
+        })
+      );
+      expect(gone.code).toBe("SESSION_GONE");
+      expect(held).toEqual([]);
+    });
+
+    it("never holds without being asked: a working agent still refuses as busy", async () => {
+      const error = await refusal(
+        steer.prompt(heldTarget(), { command: "go", handback: false, machineName: "m" })
+      );
+
+      expect(error.code).toBe(WORKER_STEER_REFUSALS.busy);
+      expect(held).toEqual([]);
     });
   });
 

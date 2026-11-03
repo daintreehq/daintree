@@ -41,6 +41,8 @@ interface Internals {
     lastTypedInputAt?: number;
     lastOwnedInput?: { owner: string; at: number };
     lastForeignInputAt?: number;
+    lastOwnedPromptInput?: { owner: string; at: number };
+    lastForeignPromptInputAt?: number;
     detectedAgentId?: string;
     agentIncarnation?: number;
     agentSessionId?: string;
@@ -162,6 +164,59 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
       lastForeignInputAt: start + 10,
       lastOwnedInput: { owner: "principal-a", at: start },
     });
+  });
+
+  it("files keys at an approval dialog as typing but not as a prompt (#16187)", () => {
+    const terminal = createTerminal();
+    const t = info(terminal);
+    t.detectedAgentId = "claude";
+    t.agentState = "waiting";
+    t.waitingReason = "approval";
+    const start = Date.now();
+
+    terminal.write("\x1b[B");
+    terminal.tryWrite("\r");
+    expect(t.lastTypedInputAt).toBe(start);
+    expect(t.lastForeignPromptInputAt).toBeUndefined();
+
+    // The same keys reach the composer mid-turn, or at its prompt.
+    t.agentState = "working";
+    t.waitingReason = undefined;
+    vi.setSystemTime(start + 10);
+    terminal.write("x");
+    expect(t.lastForeignPromptInputAt).toBe(start + 10);
+
+    t.agentState = "waiting";
+    t.waitingReason = "prompt";
+    vi.setSystemTime(start + 20);
+    terminal.write("y", undefined, "principal-a");
+    expect(t.lastOwnedPromptInput).toEqual({ owner: "principal-a", at: start + 20 });
+    expect(t.lastForeignPromptInputAt).toBe(start + 10);
+
+    // A later approval key never hides the earlier prompt.
+    t.waitingReason = "approval";
+    vi.setSystemTime(start + 30);
+    terminal.write("\r");
+    expect(t.lastForeignPromptInputAt).toBe(start + 10);
+    expect(t.lastTypedInputAt).toBe(start + 30);
+  });
+
+  it("files an unguarded submission as someone's prompt, and Daintree's own guarded lines as nobody's (#16187)", async () => {
+    const terminal = createTerminal();
+    const t = info(terminal);
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    terminal.submit("notice", "tok-1", undefined, "settled-prompt");
+    terminal.submit("brief", "tok-2", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(t.lastForeignPromptInputAt).toBeUndefined();
+
+    const at = Date.now();
+    terminal.submit("a person's prompt");
+    expect(t.lastForeignPromptInputAt).toBe(at);
+    // It never reads as a draft: the lane's own writes leave the composer empty.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(t.lastTypedInputAt).toBeUndefined();
   });
 
   it("still holds a strict submission after an assistant's own keys (#16094)", async () => {
