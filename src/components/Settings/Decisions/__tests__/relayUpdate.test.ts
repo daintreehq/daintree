@@ -251,19 +251,40 @@ describe("relay update terminal", () => {
   it("keeps following through a spawn error the host later takes back", async () => {
     const id = await openRunning();
 
-    // A confirmation that timed out: the spawn itself is still being settled.
-    setPanel(id, { runtimeStatus: "error", spawnStatus: "spawning" });
+    // The host slow to confirm: reported as an error, cleared once it does.
+    setPanel(id, {
+      runtimeStatus: "error",
+      spawnStatus: "ready",
+      spawnError: { code: "SPAWN_TIMEOUT", message: "No answer yet" },
+    });
     expect(getRelayUpdateRun()?.state).toBe("running");
-    setPanel(id, { runtimeStatus: undefined, spawnStatus: "ready" });
+    setPanel(id, { runtimeStatus: undefined, spawnStatus: "ready", spawnError: undefined });
 
     setPanel(id, { runtimeStatus: "exited", exitCode: 1 });
     expect(getRelayUpdateRun()).toMatchObject({ end: { reason: "exited", exitCode: 1 } });
   });
 
-  it("ends the run when its pane's spawn failed for good", async () => {
+  it.each([
+    [
+      "refused before it reached the host",
+      {
+        runtimeStatus: "error",
+        spawnStatus: "failed",
+        spawnError: { code: "ENOENT", message: "x" },
+      },
+    ],
+    [
+      "reported failed by the host",
+      {
+        runtimeStatus: "error",
+        spawnStatus: "ready",
+        spawnError: { code: "EAGAIN", message: "x" },
+      },
+    ],
+  ])("ends the run when its pane's spawn was %s", async (_label, panel) => {
     const id = await openRunning();
 
-    setPanel(id, { runtimeStatus: "error", spawnStatus: "failed" });
+    setPanel(id, panel);
 
     expect(getRelayUpdateRun()).toMatchObject({ state: "ended", end: { reason: "not-started" } });
   });

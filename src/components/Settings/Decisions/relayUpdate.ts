@@ -117,11 +117,11 @@ export function useRelayUpdateRun(): RelayUpdateRun | null {
 
 /**
  * What the pane shows of its command's end, or null while it may still be
- * running. A failed spawn is an end, but not a spawn error alone: one
- * reported while the host was slow to confirm is cleared when the host turns
- * out to have started it. Nor is a restart being asked for, which can still
- * be refused; only one that went ahead (its restart key moved on), replacing
- * the process, is.
+ * running. A failed spawn is an end, whether refused before it reached the
+ * host or reported failed by it, but not the host being slow to confirm one
+ * (`SPAWN_TIMEOUT`), which is cleared when it turns out to have started. Nor
+ * is a restart being asked for, which can still be refused; only one that
+ * went ahead (its restart key moved on), replacing the process, is.
  */
 function endOf(panel: PanelInstance | undefined, restarts: number): RelayUpdateEnd | null {
   if (!panel || !isPtyPanel(panel) || (panel.restartKey ?? 0) !== restarts) {
@@ -130,7 +130,12 @@ function endOf(panel: PanelInstance | undefined, restarts: number): RelayUpdateE
   if (panel.runtimeStatus === "exited") {
     return { reason: "exited", exitCode: panel.exitCode ?? null };
   }
-  if (panel.spawnStatus === "failed") return { reason: "not-started" };
+  if (
+    panel.spawnStatus === "failed" ||
+    (panel.spawnError !== undefined && panel.spawnError.code !== "SPAWN_TIMEOUT")
+  ) {
+    return { reason: "not-started" };
+  }
   return null;
 }
 
