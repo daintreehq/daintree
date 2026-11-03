@@ -24,10 +24,7 @@ import {
   isDecisionsRemoveTerminalId,
   isScreenNeverSaved,
 } from "@shared/config/terminalScreenPersistence";
-import {
-  isRelayRemovalTerminalId,
-  parseRelayRemovalCommand,
-} from "@shared/config/relayRemoval";
+import { isRelayRemovalTerminalId, parseRelayRemovalCommand } from "@shared/config/relayRemoval";
 
 const ORIGIN = "https://relay.example.workers.dev";
 const PLACEMENT = { cwd: "/home/me", worktreeId: "wt-1" };
