@@ -123,16 +123,37 @@ describe("extracting a reply", () => {
     expect(extracted.reply?.text.endsWith("approve the deployment END-abc123")).toBe(true);
   });
 
-  it("ends at a needs-you marker wrapped at its hyphen", () => {
+  it("ends at a marker wrapped at any of its hyphens, the way Codex wraps", () => {
+    const marker = "DAINTREE-NEEDS-YOU-abc123: sign in to gh END-abc123";
+    for (const cut of [
+      "DAINTREE-".length,
+      "DAINTREE-NEEDS-".length,
+      "DAINTREE-NEEDS-YOU-".length,
+    ]) {
+      const screen = [
+        "• Sign in with gh auth login, then tell me.",
+        marker.slice(0, cut),
+        `  ${marker.slice(cut)}`,
+        "› Ask",
+      ].join("\n");
+      const extracted = extractReply(screen, 40, { message: "sign in to gh", code: "abc123" });
+      expect(extracted.reachedHandback, marker.slice(0, cut)).toBe(true);
+      expect(extracted.reply?.text.startsWith("• Sign in")).toBe(true);
+      expect(extracted.reply?.text).not.toContain("› Ask");
+    }
+  });
+
+  it("never takes a marker below the closing one as its opening", () => {
     const screen = [
-      "• Sign in with gh auth login, then tell me.",
-      "DAINTREE-NEEDS-YOU-",
-      "abc123: sign in to gh END-abc123",
+      "• Reply.",
+      "DAINTREE-DONE-abc123: shipped the",
+      "  fix END-abc123",
+      "  ⠋ DAINTREE-DONE-abc123: shipped",
       "› Ask",
     ].join("\n");
-    const extracted = extractReply(screen, 40, { message: "sign in to gh", code: "abc123" });
+    const extracted = extractReply(screen, 40, { message: "shipped the fix", code: "abc123" });
     expect(extracted.reachedHandback).toBe(true);
-    expect(extracted.reply?.text).not.toContain("› Ask");
+    expect(extracted.reply?.text.endsWith("fix END-abc123")).toBe(true);
   });
 
   it("tells two turns with the same summary apart by the marker's code", () => {

@@ -199,14 +199,26 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(parsed.terminals[0]?.lastHandback?.report).toBe("needs-you");
 
     const service = registerAll();
-    const validate = new Ajv2020({ strict: false }).compile(
-      outputSchema(service, "terminal.waitUntilIdle")!
-    );
+    const ajv = new Ajv2020({ strict: false });
+    const single = ajv.compile(outputSchema(service, "terminal.waitUntilIdle")!);
+    const batch = ajv.compile(outputSchema(service, "terminal.waitUntilIdleBatch")!);
     const wait = { terminalId: "t1", busyState: "idle", trackingState: "tracked", timedOut: false };
-    expect(validate({ ...wait, lastHandback: handback })).toBe(true);
+    const row = { terminalId: "t1", busyState: "idle", trackingState: "tracked", settled: true };
+    const accepts = (lastHandback: Record<string, unknown>) => [
+      single({ ...wait, lastHandback }),
+      batch({
+        mode: "first",
+        results: [{ ...row, lastHandback }],
+        settledTerminalIds: ["t1"],
+        timedOut: false,
+      }),
+    ];
+    const { report: _report, ...older } = handback;
+    expect(accepts(handback)).toEqual([true, true]);
+    expect(accepts({ ...handback, report: "done" })).toEqual([true, true]);
     // An older host's observation has no report.
-    expect(validate({ ...wait, lastHandback: { ...handback, report: undefined } })).toBe(true);
-    expect(validate({ ...wait, lastHandback: { ...handback, report: "approve" } })).toBe(false);
+    expect(accepts(older)).toEqual([true, true]);
+    expect(accepts({ ...handback, report: "approve" })).toEqual([false, false]);
   });
 
   it("terminal.getOutput exposes content/lineCount/truncated properties", () => {

@@ -99,7 +99,7 @@ export const HANDBACK_INSTRUCTION_TEMPLATES: readonly string[] = [
  * output schemas so the copies cannot drift apart.
  */
 export const LAST_HANDBACK_DESCRIPTION =
-  "The handback marker the agent printed: an observation, not a finish verdict; `report` and `message` are its own untrusted claims. Absence never means still working.";
+  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.";
 
 /**
  * Model-facing description of `lastHandback.message`. Carried on the status

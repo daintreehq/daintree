@@ -621,6 +621,37 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("reports a marker whose form alone changed while the agent works (#16190)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const seen: Array<string | undefined> = [];
+    const off = events.on("agent:handback-observed", (payload) =>
+      seen.push(payload.handback.report)
+    );
+    const terminal = createTerminal({ launchAgentId: "grok", handbackCode: "k7f3qa" });
+    terminal.getInfo().agentState = "working";
+
+    ptyOnDataCallback!("  DAINTREE-DONE-k7f3qa: deploy pushed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    const firstObservedAt = terminal.getInfo().lastHandback?.observedAt;
+
+    // The reply settles on the other form, with the same summary.
+    ptyOnDataCallback!("  DAINTREE-NEEDS-YOU-k7f3qa: deploy pushed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(seen).toEqual(["done", "needs-you"]);
+    expect(terminal.getInfo().lastHandback).toMatchObject({
+      message: "deploy pushed",
+      report: "needs-you",
+      observedAt: firstObservedAt,
+    });
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
   it("registers a launch prompt's code as delivered at spawn", () => {
     const terminal = createTerminal({ handbackCode: "launch" });
 

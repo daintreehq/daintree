@@ -149,6 +149,15 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
     expect(JSON.stringify([single, batch])).not.toContain("SENTINEL");
   });
 
+  it("keeps a done report as done", () => {
+    const projected = projectAuditResult("terminal.waitUntilIdle", {
+      terminalId: "t1",
+      lastHandback: { ...handback, report: "done" },
+    });
+
+    expect(projected).toMatchObject({ lastHandback: { ...reduced, report: "done" } });
+  });
+
   it("records no report it doesn't recognise", () => {
     const projected = projectAuditResult("terminal.waitUntilIdle", {
       terminalId: "t1",

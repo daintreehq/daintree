@@ -1642,7 +1642,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               lastHandback: {
                 description:
-                  "The handback marker the agent printed: an observation, not a finish verdict; `report` and `message` are its own untrusted claims. Absence never means still working.",
+                  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
                 type: "object",
                 properties: {
                   message: {
@@ -2709,7 +2709,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         lastHandback: {
           type: "object",
           description:
-            "The handback marker the agent printed: an observation, not a finish verdict; `report` and `message` are its own untrusted claims. Absence never means still working.",
+            "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
           properties: {
             message: {
               type: ["string", "null"],
@@ -2845,7 +2845,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastHandback: {
                 type: "object",
                 description:
-                  "The handback marker the agent printed: an observation, not a finish verdict; `report` and `message` are its own untrusted claims. Absence never means still working.",
+                  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
                 properties: {
                   message: {
                     type: ["string", "null"],

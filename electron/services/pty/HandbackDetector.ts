@@ -111,6 +111,11 @@ function isEchoedInstruction(text: string): boolean {
 const HYPHEN_ROW_BREAK_RE =
   /(?<=[A-Za-z0-9])-[ \t\u2500-\u259f|]*\r?\n[ \t\u2500-\u259f\u23bf\u23fa|>›❯•●◦·]*/gu;
 
+/** Rendered rows with every row broken at a hyphen joined back, as the detector reads them. */
+export function rejoinHyphenRowBreaks(text: string): string {
+  return text.replace(HYPHEN_ROW_BREAK_RE, "-");
+}
+
 function capMessage(message: string): HandbackMatch {
   if (message.length === 0) return { message: null, truncated: false };
   if (message.length <= HANDBACK_MESSAGE_MAX_CHARS) return { message, truncated: false };
@@ -173,7 +178,7 @@ function scanHandback(
   rendered: boolean
 ): { match: HandbackMatch | null; report: HandbackReport; statusLine: boolean } {
   if (!input) return { match: null, report: "done", statusLine: false };
-  const text = rendered ? input.replace(HYPHEN_ROW_BREAK_RE, "-") : input;
+  const text = rendered ? rejoinHyphenRowBreaks(input) : input;
   const end = handbackEndMarker(code);
   const openings = openingsOf(text, code);
 
