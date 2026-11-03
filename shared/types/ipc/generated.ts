@@ -618,6 +618,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsModel.js").CancelDecisionsModelEvaluationPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
   };
+  "decisions:cancel-relay-deploy": {
+    args: [deployId: string];
+    result: void;
+  };
   "decisions:cancel-setup-check": {
     args: [payload: import("../decisions.js").CancelDecisionsSetupCheckPayload];
     result: import("../decisions.js").DecisionsSetupCheckRun | null;
@@ -625,6 +629,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:check-relay": {
     args: [url: string];
     result: import("../decisions.js").DecisionsRelayCheck;
+  };
+  "decisions:claim-deployed-relay": {
+    args: [payload: import("../decisions.js").ClaimDeployedDecisionsRelayPayload];
+    result: import("../decisions.js").DecisionsConnectResult;
   };
   "decisions:claim-relay": {
     args: [payload: import("../decisions.js").ClaimDecisionsRelayPayload];
@@ -709,6 +717,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:mark-answer-handled": {
     args: [payload: import("../decisionsAttention.js").MarkDecisionsAnswerHandledPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:prepare-relay-deploy": {
+    args: [];
+    result: import("../decisions.js").PreparedDecisionsRelayDeploy;
   };
   "decisions:reassign-answer": {
     args: [payload: import("../decisionsAttention.js").ReassignDecisionsAnswerPayload];

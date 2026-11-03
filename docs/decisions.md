@@ -25,18 +25,24 @@ With it on, the page shows Connection, Devices, Questions, Policy, Voice and Dat
 
 If you already have a relay, enter its address in **Relay URL** (for example `https://decisions.example.workers.dev`) and press **Check**. Daintree reads the relay's `/health` and `/api/v1/info` and reports what it found: `<host> is ready to claim`, `<host> is claimed`, `<host> has no claim secret set`, `<host> speaks a protocol Daintree doesn't`, `<host> isn't a Decisions relay`, `Couldn't reach <host>` or `<host> answered with an error`. The check accepts only `https://` addresses, apart from plain `http://` to `localhost` or `127.0.0.1` for a relay you run on this computer with `wrangler dev`. It compares the relay's protocol and version with Daintree's, reports them incompatible when their protocol ranges don't overlap, and says which side to update when it can tell. Once the relay is connected, **Update relay** updates it (see [Updating the relay](#updating-the-relay)).
 
-If you don't have one, **Don't have a relay yet?** offers two ways to deploy one:
+If you don't have one, **Don't have a relay yet?** offers the **Guided deploy**. It creates a Worker (the relay, its Durable Object and the phone app) and a private R2 bucket in your own Cloudflare account; Cloudflare's free plan is enough for one person, though R2 needs a payment method on file. It opens a terminal titled **Deploy Decisions relay** in the active worktree and runs the Decisions CLI's `deploy` from your home folder, pinned to the version Daintree speaks (0.3.0), and needs Node.js 22 or later. Wrangler signs you in to Cloudflare in your browser, then the CLI asks, one step at a time:
 
-- **Deploy to Cloudflare** opens Cloudflare's deploy page in your browser. It asks for one secret, `CLAIM_SECRET`: enter a long random string (such as the output of `openssl rand -hex 32`) and keep it, since you claim the relay with it. When Cloudflare has deployed the Worker, enter its URL in **Relay URL** and press **Check**.
-- **Guided deploy** opens a terminal titled **Deploy Decisions relay** in the active worktree and runs the Decisions CLI's `deploy` from your home folder, pinned to the version Daintree speaks, with a fresh `daintree-decisions-<8 hex>` Worker and bucket name. Wrangler signs you in to Cloudflare in your browser, and the terminal shows the Worker URL and claim secret once. Copy both: Daintree never saves that terminal's screen, so after a restart the pane comes back empty. Press **Connect relay…** on the pane's banner to go back to Settings with the relay URL field focused. Guided deploy needs a local project window; a Remote Hosts window's terminals run on the Host.
+- the Cloudflare account, and the Worker and R2 bucket names (a fresh `daintree-decisions-<8 hex>` by default);
+- whether to turn on dictation transcription, with xAI (Grok) or OpenAI, and that provider's API key;
+- whether to turn on transcript cleanup, with Anthropic or OpenAI, which model, and its key;
+- a summary to confirm or cancel. Nothing is created in Cloudflare until you confirm it.
 
-Daintree never sees a Cloudflare token, and Decisions doesn't read the URL or secret from the deploy terminal: you copy them yourself. The Decisions repository's [self-hosting guide](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/self-host.md) covers the same routes from the CLI, a manual deploy, custom domains and Cloudflare Access. Choose a custom domain before you pair phones: moving the relay to another address means pairing them again.
+Your voice settings fill in the answers: Grok transcription becomes xAI, your cleanup provider and model become the relay's, and a key Daintree already holds shows as present rather than in the clear. You can change any answer, and with no voice settings configured every step starts empty. Deepgram has no relay equivalent, so it's never suggested. The keys reach the CLI over a private local channel, never on its command line, in its environment or on screen, and only the keys for the providers you choose are set on the Worker.
+
+When the deploy ends, the CLI hands Daintree the Worker URL and the claim secret over the same channel, and the terminal never shows the secret. **Connect relay…** on the pane's banner opens Settings with the relay URL filled in, and **Don't have a relay yet?** shows how the deploy went, with **Use this relay** to check the relay it created. Daintree holds the claim secret in memory until you claim the relay, start another deploy, turn Decisions off or quit, so claim it in the same session. A deploy that was cancelled or failed after creating the Worker still offers its relay to check, since the claim secret may already be set on it. Daintree never saves the deploy terminal's screen, so after a restart the pane comes back empty, and a crash never runs the deploy again.
+
+The guided deploy runs from a local project or scratch window: a Remote Hosts window's terminals run on the Host, which can't reach the channel, so Settings there says to start it from a local project window. Daintree never sees a Cloudflare token. The Decisions repository's [self-hosting guide](https://github.com/daintreehq/decisions/blob/v0.3.0/docs/self-host.md) covers deploying from the CLI yourself, a manual deploy, custom domains and Cloudflare Access; a relay deployed that way is claimed with its `CLAIM_SECRET`, below. Choose a custom domain before you pair phones: moving the relay to another address means pairing them again.
 
 ### 3. Claim the relay, or restore your identity
 
 What Connection offers next depends on what the check found.
 
-- **A new relay** (`ready to claim`): enter the `CLAIM_SECRET` under **Claim secret** and press **Claim relay**. Daintree sends it once and keeps no copy. A relay can be claimed only once, and this computer becomes its owner: it holds the relay's keys and approves every phone. If the relay doesn't confirm the claim (`<host> didn't confirm the claim`), the keys stay on this computer; claim again with the same secret to finish.
+- **A new relay** (`ready to claim`): for the relay a guided deploy just created, press **Claim relay**, which uses the claim secret Daintree holds from it. For any other, enter its `CLAIM_SECRET` under **Claim secret** and press **Claim relay**. Daintree sends it once and keeps no copy. A relay can be claimed only once, and this computer becomes its owner: it holds the relay's keys and approves every phone. If the relay doesn't confirm the claim (`<host> didn't confirm the claim`), the keys stay on this computer; claim again with the same secret to finish.
 - **A relay that already has an owner** (`is claimed`), such as one you set up on another computer: under **Restore from a recovery kit**, choose the kit file (**Choose kit…**), enter its passphrase and press **Restore identity**. A kit saved by the `decisions recovery export` CLI works too. Daintree checks the kit opens, holds that relay's owner identity, and that the relay still lists it as its owner before anything is saved.
 
 Daintree seals the keys with your system keychain. On Linux without a working keyring, Daintree asks **Use the weaker key storage?** before going on: a fixed key keeps the keys only from someone who can't read this computer's files.
@@ -48,7 +54,7 @@ Until a recovery kit is verified and the setup check has passed, Connection show
 - **Save a recovery kit**: enter a passphrase of at least 12 characters and press **Save kit…**. The kit is a file holding this computer's Decisions keys, locked with that passphrase. Daintree keeps neither the file nor the passphrase.
 - **Verify a saved kit**: choose the file you saved, enter its passphrase and press **Verify kit**. Daintree checks it opens, holds this computer's identity and has every key this computer holds now. Saving alone doesn't count as verified.
 
-Keep the kit somewhere other than this computer, such as a password manager. It's how you restore the relay's owner on a new computer. **If you lose every device that holds your keys and have no kit, nobody can read the relay's encrypted questions and answers again, you included.** If you rotate keys or revoke a device later, the old kit lacks the new key; save and verify a new one. The Decisions repository's [key recovery guide](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/key-recovery.md) covers losing a phone or everything.
+Keep the kit somewhere other than this computer, such as a password manager. It's how you restore the relay's owner on a new computer. **If you lose every device that holds your keys and have no kit, nobody can read the relay's encrypted questions and answers again, you included.** If you rotate keys or revoke a device later, the old kit lacks the new key; save and verify a new one. The Decisions repository's [key recovery guide](https://github.com/daintreehq/decisions/blob/v0.3.0/docs/key-recovery.md) covers losing a phone or everything.
 
 ### 5. Pair a phone
 
@@ -214,7 +220,7 @@ Even then it answers only a question that allows a proxy answer: a question with
 
 ## Privacy
 
-The Decisions repository's [security claims](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/security-claims.md) say exactly what its encryption protects and what it doesn't, including a compromised Cloudflare account and plaintext on your own devices. This section covers what Daintree adds to that.
+The Decisions repository's [security claims](https://github.com/daintreehq/decisions/blob/v0.3.0/docs/security-claims.md) say exactly what its encryption protects and what it doesn't, including a compromised Cloudflare account and plaintext on your own devices. This section covers what Daintree adds to that.
 
 ### What leaves this computer
 
@@ -230,7 +236,7 @@ A question's text, options and screenshots come from the agent; Daintree adds on
 
 ### Voice dictation
 
-Dictating an answer is a setting in the phone app, off until you turn it on there, and it **isn't end-to-end encrypted**. When you dictate, your voice goes through your relay to a speech provider (xAI or OpenAI), and the transcript, with the question, its options and a few project terms, goes to a correction provider (Anthropic or OpenAI), depending on the keys set on your Worker. Daintree on this computer sends nothing for it, and the answer you then send is encrypted like any other. The Decisions repository's [voice privacy page](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/voice-privacy.md) says who sees what.
+Dictating an answer is a setting in the phone app, off until you turn it on there, and it **isn't end-to-end encrypted**. When you dictate, your voice goes through your relay to a speech provider (xAI or OpenAI), and the transcript, with the question, its options and a few project terms, goes to a correction provider (Anthropic or OpenAI), depending on the keys set on your Worker. Daintree on this computer sends nothing for it, and the answer you then send is encrypted like any other. The Decisions repository's [voice privacy page](https://github.com/daintreehq/decisions/blob/v0.3.0/docs/voice-privacy.md) says who sees what.
 
 ### Revoking a device
 

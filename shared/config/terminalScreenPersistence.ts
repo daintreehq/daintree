@@ -2,8 +2,9 @@ import { isHostThrowawayTerminalId } from "./hostThrowaway.js";
 
 /**
  * Every guided Decisions relay deploy's terminal id starts with this (#16023).
- * The deploy prints the relay's claim secret, which Daintree never writes to
- * disk, so the pane's screen must never reach a session snapshot.
+ * The person types API keys at its prompts, and the CLI before 0.3.0 printed
+ * the relay's claim secret (#16199 has it hand the secret to main instead),
+ * so the pane's screen must never reach a session snapshot.
  */
 export const DECISIONS_DEPLOY_TERMINAL_PREFIX = "daintree-decisions-deploy-";
 

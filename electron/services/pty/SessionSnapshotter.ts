@@ -152,7 +152,7 @@ export class SessionSnapshotter {
   private async captureAsync(trigger: CaptureTrigger): Promise<void> {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
     // A throwaway run (#14445) keeps nothing for recovery, its screen included,
-    // and a relay deploy's screen holds a claim secret (#16023). The writers
+    // and a relay deploy's screen is where its keys are typed (#16023). The writers
     // refuse both too; this check spares the serialize.
     if (isScreenNeverSaved(this.host.id)) return;
     if (isSessionPersistSuppressed()) return;

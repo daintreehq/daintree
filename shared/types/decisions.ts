@@ -184,6 +184,51 @@ export interface DecisionsStatus {
    * (#16024). Absent until one has, or while its key file is known to be gone.
    */
   setupCheck?: { checkedAt: number; failedStep: DecisionsSetupCheckStep | null };
+  /**
+   * The guided relay deploy started from Settings this session (#16199), as
+   * the CLI reported it over its host channel. Never the claim secret: only
+   * whether main holds one.
+   */
+  relayDeploy?: DecisionsRelayDeploy;
+}
+
+/**
+ * Where a guided deploy is: `waiting` for its CLI to connect, `running` once
+ * it has the prefilled answers, then the CLI's own outcome. `interrupted` is
+ * a channel that ended with no outcome: the CLI never started, its handshake
+ * failed, or it stopped before it said how the deploy went.
+ */
+export type DecisionsRelayDeployState =
+  "waiting" | "running" | "completed" | "cancelled" | "failed" | "interrupted";
+
+/** What the guided deploy's CLI reported about the relay's claim. */
+export type DecisionsRelayDeployClaimState = "claimed" | "unclaimed" | "unknown";
+
+export interface DecisionsRelayDeploy {
+  id: string;
+  state: DecisionsRelayDeployState;
+  /** The Worker URL, once the CLI reported one, whatever the outcome. */
+  url?: string;
+  claimState?: DecisionsRelayDeployClaimState;
+  /** Main holds the relay's claim secret, in memory, for this session. */
+  holdsClaimSecret?: true;
+  /** For `failed` or `interrupted`: what went wrong, with no secret in it. */
+  error?: string;
+}
+
+/**
+ * A guided deploy main is listening for (#16199): the pane runs the CLI with
+ * `--host-channel <hostChannel>`. The path is not a secret.
+ */
+export interface PreparedDecisionsRelayDeploy {
+  id: string;
+  hostChannel: string;
+}
+
+/** Claiming the guided deploy's relay with the claim secret main holds for it. */
+export interface ClaimDeployedDecisionsRelayPayload {
+  deployId: string;
+  acceptWeakStorage?: boolean;
 }
 
 /** How strictly a question needs a person: only a person, or a proxy answer may do. */

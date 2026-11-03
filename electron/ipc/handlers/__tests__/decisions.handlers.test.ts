@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ClaimDecisionsRelayPayload,
+  ClaimDeployedDecisionsRelayPayload,
   DecisionsConnectResult,
   DecisionsExportResult,
   DecisionsKitExportResult,
@@ -14,6 +15,7 @@ import type {
   ExportDecisionsDataPayload,
   ExportDecisionsRecoveryKitPayload,
   PaneDecisionState,
+  PreparedDecisionsRelayDeploy,
   RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
   VerifyDecisionsRecoveryKitPayload,
@@ -48,6 +50,19 @@ const decisionsEntry = vi.hoisted(() => ({
   })),
   claimRelay: vi.fn(
     async (_payload: ClaimDecisionsRelayPayload): Promise<DecisionsConnectResult> => ({
+      result: "saved",
+      status: { state: "not-connected", relayOrigin: "https://relay.example.com" },
+    })
+  ),
+  prepareRelayDeploy: vi.fn(
+    async (_readVoiceSettings: () => unknown): Promise<PreparedDecisionsRelayDeploy> => ({
+      id: "deploy-1",
+      hostChannel: "/tmp/daintree-deploy-AbC123/host.sock",
+    })
+  ),
+  cancelRelayDeploy: vi.fn((_deployId: string) => {}),
+  claimDeployedRelay: vi.fn(
+    async (_payload: ClaimDeployedDecisionsRelayPayload): Promise<DecisionsConnectResult> => ({
       result: "saved",
       status: { state: "not-connected", relayOrigin: "https://relay.example.com" },
     })
@@ -143,6 +158,14 @@ const dialogMock = vi.hoisted(() => ({
   ),
 }));
 
+// Views bound to a Remote Host, by webContents id.
+const remoteViews = vi.hoisted(() => new Set<number>());
+const getVoiceSettings = vi.hoisted(() => vi.fn(() => ({ enabled: false })));
+vi.mock("../../../window/webviewSrcGate.js", () => ({
+  isRemoteView: (webContentsId: number) => remoteViews.has(webContentsId),
+}));
+vi.mock("../voiceInput.js", () => ({ getVoiceSettings }));
+
 // The export ops take their asking window from the context, which finds none here.
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: dialogMock, BrowserWindow: {} }));
 vi.mock("../../../store.js", () => ({
@@ -159,6 +182,9 @@ vi.mock("../../../services/decisions/index.js", () => {
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
+    prepareRelayDeploy: decisionsEntry.prepareRelayDeploy,
+    cancelRelayDeploy: decisionsEntry.cancelRelayDeploy,
+    claimDeployedRelay: decisionsEntry.claimDeployedRelay,
     restoreIdentity: decisionsEntry.restoreIdentity,
     disconnectRelay: decisionsEntry.disconnectRelay,
     exportData: decisionsEntry.exportData,
@@ -225,6 +251,15 @@ const checkRelay = decisionsNamespace.ops.checkRelay.handler as unknown as (
 
 const claimRelay = decisionsNamespace.ops.claimRelay.handler as unknown as (
   payload: ClaimDecisionsRelayPayload
+) => Promise<DecisionsConnectResult>;
+const prepareRelayDeploy = decisionsNamespace.ops.prepareRelayDeploy.handler as unknown as (ctx: {
+  webContentsId: number;
+}) => Promise<PreparedDecisionsRelayDeploy>;
+const cancelRelayDeploy = decisionsNamespace.ops.cancelRelayDeploy.handler as unknown as (
+  deployId: string
+) => Promise<void>;
+const claimDeployedRelay = decisionsNamespace.ops.claimDeployedRelay.handler as unknown as (
+  payload: ClaimDeployedDecisionsRelayPayload
 ) => Promise<DecisionsConnectResult>;
 const restoreIdentity = decisionsNamespace.ops.restoreIdentity.handler as unknown as (
   payload: RestoreDecisionsIdentityPayload
@@ -309,6 +344,9 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
+  CHANNELS.DECISIONS_PREPARE_RELAY_DEPLOY,
+  CHANNELS.DECISIONS_CANCEL_RELAY_DEPLOY,
+  CHANNELS.DECISIONS_CLAIM_DEPLOYED_RELAY,
   CHANNELS.DECISIONS_RESTORE_IDENTITY,
   CHANNELS.DECISIONS_DISCONNECT_RELAY,
   CHANNELS.DECISIONS_EXPORT_DATA,
@@ -342,6 +380,11 @@ describe("decisions IPC", () => {
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
+    decisionsEntry.prepareRelayDeploy.mockClear();
+    decisionsEntry.cancelRelayDeploy.mockClear();
+    decisionsEntry.claimDeployedRelay.mockClear();
+    getVoiceSettings.mockClear();
+    remoteViews.clear();
     decisionsEntry.restoreIdentity.mockClear();
     decisionsEntry.disconnectRelay.mockClear();
     decisionsEntry.exportData.mockClear();
@@ -494,6 +537,36 @@ describe("decisions IPC", () => {
 
     expect(decisionsEntry.evaluated).toBe(0);
     expect(decisionsEntry.libraries).toBe(0);
+  });
+
+  it("refuses a guided deploy and its claim while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
+      saved.value = value;
+
+      await expect(prepareRelayDeploy({ webContentsId: 1 })).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+      await expect(claimDeployedRelay({ deployId: "deploy-1" })).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+      await expect(cancelRelayDeploy("deploy-1")).resolves.toBeUndefined();
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+  });
+
+  it("refuses a guided deploy from a window whose terminals run on a Remote Host", async () => {
+    saved.value = { enabled: true };
+    remoteViews.add(7);
+
+    await expect(prepareRelayDeploy({ webContentsId: 7 })).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      message: expect.stringMatching(/local project window/),
+    });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(getVoiceSettings).not.toHaveBeenCalled();
   });
 
   it("refuses to read the policy or change the allowlist while off, loading none of Decisions", async () => {
@@ -807,6 +880,46 @@ describe("decisions IPC", () => {
 
     expect(schema.safeParse("https://relay.example.com").success).toBe(true);
     for (const value of [undefined, 42, { url: "https://relay.example.com" }, "x".repeat(2049)]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("opens a guided deploy's channel with the voice settings reader, reading nothing yet", async () => {
+    saved.value = { enabled: true };
+
+    await expect(prepareRelayDeploy({ webContentsId: 1 })).resolves.toEqual({
+      id: "deploy-1",
+      hostChannel: "/tmp/daintree-deploy-AbC123/host.sock",
+    });
+
+    expect(decisionsEntry.prepareRelayDeploy).toHaveBeenCalledExactlyOnceWith(getVoiceSettings);
+    expect(getVoiceSettings).not.toHaveBeenCalled();
+  });
+
+  it("cancels a deploy and claims its relay through Decisions itself", async () => {
+    saved.value = { enabled: true };
+    const payload = { deployId: "deploy-1", acceptWeakStorage: true };
+
+    await cancelRelayDeploy("deploy-1");
+    await expect(claimDeployedRelay(payload)).resolves.toMatchObject({ result: "saved" });
+
+    expect(decisionsEntry.cancelRelayDeploy).toHaveBeenCalledExactlyOnceWith("deploy-1");
+    expect(decisionsEntry.claimDeployedRelay).toHaveBeenCalledExactlyOnceWith(payload);
+  });
+
+  it("takes only a deploy id, never a secret, to claim a deployed relay", () => {
+    const schema = decisionsNamespace.ops.claimDeployedRelay.schema as SafeParse;
+
+    expect(schema.safeParse({ deployId: "deploy-1" }).success).toBe(true);
+    expect(schema.safeParse({ deployId: "deploy-1", acceptWeakStorage: true }).success).toBe(true);
+    for (const value of [
+      {},
+      { deployId: "deploy-1", acceptWeakStorage: "yes" },
+      { deployId: "" },
+      { deployId: "x".repeat(129) },
+      { deployId: "deploy-1", claimSecret: "claim-secret-0123456789abcdef" },
+      { deployId: "deploy-1", url: "https://relay.example.com" },
+    ]) {
       expect(schema.safeParse(value).success).toBe(false);
     }
   });

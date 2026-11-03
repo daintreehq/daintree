@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { DecisionsStatus } from "@shared/types/decisions";
+import type { DecisionsRelayDeploy, DecisionsStatus } from "@shared/types/decisions";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const dispatch = vi.hoisted(() => vi.fn());
 const openRelayDeployTerminal = vi.hoisted(() => vi.fn(() => Promise.resolve("pane-1")));
 const view = vi.hoisted(() => ({
   remote: false,
@@ -15,7 +14,6 @@ const view = vi.hoisted(() => ({
   activeWorktreeId: "wt-1" as string | null,
 }));
 
-vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 vi.mock("@/hooks/app/useHomeDir", () => ({ useHomeDir: () => ({ homeDir: view.homeDir }) }));
 vi.mock("@/hooks/useHostPlatform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useHostPlatform")>()),
@@ -42,10 +40,15 @@ vi.mock("../relayDeploy", async (importOriginal) => ({
 }));
 
 import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
-import { DEPLOY_TO_CLOUDFLARE_URL } from "../relayDeploy";
 import { requestRelayUrl, takePendingRelayUrlRequest } from "../relayUrlRequest";
 
+const checkRelay = vi.fn<(url: string) => Promise<never>>();
 const NOT_CONNECTED: DecisionsStatus = { state: "not-connected" };
+const DEPLOYED_URL = "https://daintree-decisions-0a1b2c3d.me.workers.dev";
+
+function withDeploy(relayDeploy: DecisionsRelayDeploy): DecisionsStatus {
+  return { state: "not-connected", relayDeploy };
+}
 
 function renderSection(
   status: DecisionsStatus = NOT_CONNECTED,
@@ -69,7 +72,6 @@ function guidedRow(): HTMLElement {
 
 describe("Decisions relay deploy offer", () => {
   beforeEach(() => {
-    dispatch.mockReset();
     openRelayDeployTerminal.mockClear();
     Object.assign(view, {
       remote: false,
@@ -82,7 +84,7 @@ describe("Decisions relay deploy offer", () => {
       // A saved relay is checked on mount; that check never answers here.
       value: {
         decisions: {
-          checkRelay: vi.fn(() => new Promise(() => {})),
+          checkRelay: checkRelay.mockReset().mockImplementation(() => new Promise(() => {})),
           getSetupCheck: () => new Promise(() => {}),
         },
         events: { on: () => () => {} },
@@ -96,14 +98,21 @@ describe("Decisions relay deploy offer", () => {
     takePendingRelayUrlRequest();
   });
 
-  it("offers both routes, with the cost and what they create, only while no relay is set up", () => {
+  it("offers the guided deploy alone, saying what it asks and creates, only while no relay is set up", () => {
     const { unmount } = renderSection();
 
     const offer = screen.getByRole("group", { name: "Don't have a relay yet?" });
     expect(offer.textContent).toMatch(/Cloudflare's free plan is enough for one person/);
-    expect(offer.textContent).toMatch(/a Worker, its Durable Object and a private R2 bucket/);
-    expect(button("Deploy to Cloudflare").disabled).toBe(false);
+    expect(offer.textContent).toMatch(
+      /a Worker \(the relay, its Durable Object and the phone app\)/
+    );
+    expect(offer.textContent).toMatch(/private R2 bucket/);
+    expect(guidedRow().textContent).toMatch(/dictation transcription \(xAI or OpenAI\)/);
+    expect(guidedRow().textContent).toMatch(/transcript cleanup \(Anthropic or OpenAI\)/);
+    expect(guidedRow().textContent).toMatch(/Nothing is created until you confirm the summary/);
+    expect(offer.querySelectorAll("button")).toHaveLength(1);
     expect(button("Guided deploy").disabled).toBe(false);
+    expect(screen.queryByText(/Cloudflare's page|CLAIM_SECRET/)).toBeNull();
     unmount();
 
     renderSection({ state: "connected", relayOrigin: "https://relay.example.workers.dev" });
@@ -114,43 +123,85 @@ describe("Decisions relay deploy offer", () => {
   it("starts nothing while the switch is changing", () => {
     renderSection(NOT_CONNECTED, undefined, true);
 
-    expect(button("Deploy to Cloudflare").disabled).toBe(true);
     expect(button("Guided deploy").disabled).toBe(true);
   });
 
-  it("opens Cloudflare's page, says what's next, and hands focus to the URL field", async () => {
-    dispatch.mockResolvedValue({ ok: true, result: undefined });
-    renderSection();
+  it("starts no second deploy while one is asking its questions", async () => {
+    renderSection(withDeploy({ id: "deploy-1", state: "running" }));
 
-    expect(screen.getByText(/It asks for one secret, CLAIM_SECRET/)).toBeTruthy();
-    await act(async () => {
-      fireEvent.click(button("Deploy to Cloudflare"));
-    });
-
-    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
-      "system.openExternal",
-      { url: DEPLOY_TO_CLOUDFLARE_URL },
-      { source: "user" }
-    );
-    expect(document.getElementById("decisions-deploy-next")).not.toBeNull();
-    expect(document.activeElement).toBe(
-      screen.getByPlaceholderText("https://decisions.example.workers.dev")
+    expect(button("Guided deploy").disabled).toBe(true);
+    expect(guidedRow().textContent).toMatch(/A guided deploy is running/);
+    expect(document.getElementById("decisions-deploy-outcome")!.textContent).toMatch(
+      /Answer its questions in its terminal/
     );
   });
 
-  it("says when Cloudflare's page couldn't open, and claims nothing came next", async () => {
-    dispatch.mockResolvedValue({
-      ok: false,
-      error: { code: "EXECUTION_ERROR", message: "No browser" },
+  it("lets a deploy whose CLI never connected be replaced by another", async () => {
+    renderSection(withDeploy({ id: "deploy-1", state: "waiting" }));
+
+    expect(screen.queryByRole("button", { name: "Use this relay" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(button("Guided deploy"));
     });
-    renderSection();
+    expect(openRelayDeployTerminal).toHaveBeenCalledOnce();
+  });
+
+  it("checks the relay a finished deploy reported, from its own row", async () => {
+    renderSection(
+      withDeploy({
+        id: "deploy-1",
+        state: "completed",
+        url: DEPLOYED_URL,
+        claimState: "unclaimed",
+        holdsClaimSecret: true,
+      })
+    );
+    const outcome = document.getElementById("decisions-deploy-outcome")!;
+    expect(outcome.textContent).toContain(DEPLOYED_URL);
+    expect(outcome.textContent).toMatch(/holds its claim secret/);
 
     await act(async () => {
-      fireEvent.click(button("Deploy to Cloudflare"));
+      fireEvent.click(button("Use this relay"));
     });
 
-    expect(screen.getByText("Couldn't open Cloudflare's deploy page. No browser")).toBeTruthy();
-    expect(document.getElementById("decisions-deploy-next")).toBeNull();
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(DEPLOYED_URL);
+    expect(
+      (screen.getByPlaceholderText("https://decisions.example.workers.dev") as HTMLInputElement)
+        .value
+    ).toBe(DEPLOYED_URL);
+  });
+
+  it("offers a failed deploy's relay for checking when it got as far as a Worker", () => {
+    renderSection(
+      withDeploy({
+        id: "deploy-1",
+        state: "failed",
+        url: DEPLOYED_URL,
+        claimState: "unknown",
+        holdsClaimSecret: true,
+        error: "wrangler deploy exited with code 1",
+      })
+    );
+
+    const outcome = document.getElementById("decisions-deploy-outcome")!;
+    expect(outcome.textContent).toMatch(/wrangler deploy exited with code 1\. It had created/);
+    expect(button("Use this relay").disabled).toBe(false);
+  });
+
+  it("says a deploy that stopped without a result, and offers no relay it never named", () => {
+    renderSection(
+      withDeploy({
+        id: "deploy-1",
+        state: "interrupted",
+        error: "The deploy stopped before the CLI said how it went",
+      })
+    );
+
+    expect(document.getElementById("decisions-deploy-outcome")!.textContent).toMatch(
+      /check that relay before deploying again/
+    );
+    expect(screen.queryByRole("button", { name: "Use this relay" })).toBeNull();
+    expect(button("Guided deploy").disabled).toBe(false);
   });
 
   it("closes Settings first, then opens the deploy pane from home in the active worktree", async () => {
@@ -236,16 +287,18 @@ describe("Decisions relay deploy offer", () => {
   });
 
   it.each([
-    ["a Remote Hosts window", { remote: true }, /run on its Remote Host/],
-    ["no project or scratch", { project: false }, /Open a project to watch the deploy/],
-  ])("keeps the guided deploy for a local window, in %s", (_label, overrides, reason) => {
+    [
+      "a Remote Hosts window",
+      { remote: true },
+      /Run the guided deploy from Settings → Decisions in a local project window/,
+    ],
+    ["no project or scratch", { project: false }, /Open a project or a scratch here first/],
+  ])("says where to run the guided deploy, in %s", (_label, overrides, reason) => {
     Object.assign(view, overrides);
     renderSection();
 
     expect(button("Guided deploy").disabled).toBe(true);
     expect(guidedRow().textContent).toMatch(reason);
-    // Cloudflare's page doesn't need a terminal.
-    expect(button("Deploy to Cloudflare").disabled).toBe(false);
   });
 
   it("waits for the home folder and the project's worktree before it can start", () => {
@@ -266,6 +319,76 @@ describe("Decisions relay deploy offer", () => {
       screen.getByPlaceholderText("https://decisions.example.workers.dev")
     );
     expect(takePendingRelayUrlRequest()).toBe(false);
+  });
+
+  it("fills the empty URL field with the deployed relay when the deploy's pane asks", () => {
+    requestRelayUrl();
+    renderSection(
+      withDeploy({
+        id: "deploy-1",
+        state: "completed",
+        url: DEPLOYED_URL,
+        claimState: "unclaimed",
+        holdsClaimSecret: true,
+      })
+    );
+
+    const field = screen.getByPlaceholderText(
+      "https://decisions.example.workers.dev"
+    ) as HTMLInputElement;
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe(DEPLOYED_URL);
+    // Filled, not checked: the person checks it.
+    expect(checkRelay).not.toHaveBeenCalled();
+  });
+
+  it("keeps what the person typed when the deploy's pane asks for the URL field", () => {
+    renderSection(
+      withDeploy({
+        id: "deploy-1",
+        state: "completed",
+        url: DEPLOYED_URL,
+        claimState: "unclaimed",
+        holdsClaimSecret: true,
+      })
+    );
+    const field = screen.getByPlaceholderText(
+      "https://decisions.example.workers.dev"
+    ) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "https://mine.example.workers.dev" } });
+
+    act(() => requestRelayUrl());
+
+    expect(field.value).toBe("https://mine.example.workers.dev");
+  });
+
+  it("replaces a URL it filled in for a deploy another deploy has since replaced", () => {
+    const first: DecisionsRelayDeploy = {
+      id: "deploy-1",
+      state: "completed",
+      url: DEPLOYED_URL,
+      claimState: "unclaimed",
+      holdsClaimSecret: true,
+    };
+    const { rerender } = renderSection(withDeploy(first));
+    act(() => requestRelayUrl());
+    const field = screen.getByPlaceholderText(
+      "https://decisions.example.workers.dev"
+    ) as HTMLInputElement;
+    expect(field.value).toBe(DEPLOYED_URL);
+
+    const nextUrl = "https://daintree-decisions-9f8e7d6c.me.workers.dev";
+    rerender(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={withDeploy({ ...first, id: "deploy-2", url: nextUrl })}
+          locked={false}
+        />
+      </TooltipProvider>
+    );
+    act(() => requestRelayUrl());
+
+    expect(field.value).toBe(nextUrl);
   });
 
   it("lands on the URL field asked for while Connection is showing", () => {

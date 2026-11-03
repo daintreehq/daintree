@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type {
   ClaimDecisionsRelayPayload,
+  ClaimDeployedDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsRelayDeploy,
   DecisionsRelayCheck,
   DecisionsRelayCompatibility,
   DecisionsStatus,
@@ -47,6 +49,17 @@ const claimRelay =
 const restoreIdentity =
   vi.fn<(payload: RestoreDecisionsIdentityPayload) => Promise<DecisionsConnectResult>>();
 const disconnectRelay = vi.fn<() => Promise<DecisionsStatus>>();
+const claimDeployedRelay =
+  vi.fn<(payload: ClaimDeployedDecisionsRelayPayload) => Promise<DecisionsConnectResult>>();
+
+/** A guided deploy that created the relay at ORIGIN, whose claim secret main holds. */
+const DEPLOYED: DecisionsRelayDeploy = {
+  id: "deploy-1",
+  state: "completed",
+  url: ORIGIN,
+  claimState: "unclaimed",
+  holdsClaimSecret: true,
+};
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -69,12 +82,13 @@ function renderSection(status: DecisionsStatus, onChanged = vi.fn()) {
 
 type ClaimState = "unclaimed" | "claimed" | "claim-not-configured";
 
-function relayCheck(result: ClaimState): DecisionsRelayCheck {
-  return { result, origin: ORIGIN, compatibility: SAME };
+function relayCheck(result: ClaimState, origin = ORIGIN): DecisionsRelayCheck {
+  return { result, origin, compatibility: SAME };
 }
 
-async function checkAddress(result: ClaimState, typed = ORIGIN) {
-  checkRelay.mockResolvedValue(relayCheck(result));
+/** Types an address and checks it; main answers for `origin`, the address it normalized. */
+async function checkAddress(result: ClaimState, typed = ORIGIN, origin = ORIGIN) {
+  checkRelay.mockResolvedValue(relayCheck(result, origin));
   const field = screen.getByPlaceholderText(ORIGIN) as HTMLInputElement;
   fireEvent.change(field, { target: { value: typed } });
   await act(async () => {
@@ -109,6 +123,7 @@ describe("DecisionsConnectionSection claim and restore", () => {
     claimRelay.mockReset();
     restoreIdentity.mockReset();
     disconnectRelay.mockReset();
+    claimDeployedRelay.mockReset();
     Object.defineProperty(window, "electron", {
       value: {
         decisions: {
@@ -116,6 +131,7 @@ describe("DecisionsConnectionSection claim and restore", () => {
           claimRelay,
           restoreIdentity,
           disconnectRelay,
+          claimDeployedRelay,
           // The setup check's read once a relay is set up, left unanswered here.
           getSetupCheck: () => new Promise(() => {}),
         },
@@ -436,6 +452,90 @@ describe("DecisionsConnectionSection claim and restore", () => {
     expect(claimRelay.mock.calls.map(([payload]) => payload.acceptWeakStorage)).toEqual([
       undefined,
       true,
+    ]);
+  });
+
+  it("claims the guided deploy's relay with the secret main holds, never asking for one", async () => {
+    claimDeployedRelay.mockResolvedValue({
+      result: "saved",
+      status: { state: "not-connected", relayOrigin: ORIGIN },
+    });
+    checkRelay.mockResolvedValue(relayCheck("unclaimed"));
+    const { onChanged } = renderSection({ state: "not-connected", relayDeploy: DEPLOYED });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use this relay" }));
+    });
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    expect((screen.getByPlaceholderText(ORIGIN) as HTMLInputElement).value).toBe(ORIGIN);
+    expect(secretField()).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Claim relay" }));
+    });
+
+    expect(claimDeployedRelay).toHaveBeenCalledExactlyOnceWith({ deployId: "deploy-1" });
+    expect(claimRelay).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenLastCalledWith({ state: "not-connected", relayOrigin: ORIGIN });
+  });
+
+  it("asks for a secret for any relay other than the one the deploy created", async () => {
+    renderSection({ state: "not-connected", relayDeploy: DEPLOYED });
+
+    await checkAddress(
+      "unclaimed",
+      "https://other.example.workers.dev",
+      "https://other.example.workers.dev"
+    );
+
+    expect(secretField()).not.toBeNull();
+    expect(claimDeployedRelay).not.toHaveBeenCalled();
+  });
+
+  it("knows the deployed relay typed as a bare host, by the origin main checked", async () => {
+    renderSection({ state: "not-connected", relayDeploy: DEPLOYED });
+
+    await checkAddress("unclaimed", new URL(ORIGIN).host);
+
+    expect(secretField()).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Claim relay" }).closest("#decisions-claim-secret")
+    ).not.toBeNull();
+  });
+
+  it("asks for a secret when main no longer holds the deploy's", async () => {
+    const { holdsClaimSecret: _held, ...withoutSecret } = DEPLOYED;
+    renderSection({ state: "not-connected", relayDeploy: withoutSecret });
+
+    await checkAddress("unclaimed");
+
+    expect(secretField()).not.toBeNull();
+  });
+
+  it("claims the deploy's relay again on weaker storage once the person accepts it", async () => {
+    claimDeployedRelay.mockResolvedValueOnce({
+      result: "key-storage",
+      kind: "weak-storage-unconfirmed",
+      reason: "No keyring is available",
+    });
+    claimDeployedRelay.mockResolvedValueOnce({
+      result: "saved",
+      status: { state: "not-connected", relayOrigin: ORIGIN },
+    });
+    renderSection({ state: "not-connected", relayDeploy: DEPLOYED });
+    await checkAddress("unclaimed");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Claim relay" }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Use weaker storage" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Claim relay" }));
+    });
+
+    expect(claimDeployedRelay.mock.calls.map(([payload]) => payload)).toEqual([
+      { deployId: "deploy-1" },
+      { deployId: "deploy-1", acceptWeakStorage: true },
     ]);
   });
 

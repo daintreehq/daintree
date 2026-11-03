@@ -4,8 +4,9 @@ import { Input } from "@/components/ui/input";
 import { SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { DecisionsRelayCheck } from "@shared/types/decisions";
+import type { DecisionsRelayCheck, DecisionsRelayDeploy } from "@shared/types/decisions";
 import type { UseRelayIdentityResult } from "./useRelayIdentity";
+import { isDeployedRelay } from "./relayDeployCopy";
 
 /** The relay's own minimum for CLAIM_SECRET. */
 const MIN_SECRET_LENGTH = 16;
@@ -25,6 +26,8 @@ interface DecisionsRelaySetupProps {
   keysStored: boolean;
   disabled: boolean;
   identity: UseRelayIdentityResult;
+  /** The guided deploy this session started, whose claim secret main may hold (#16199). */
+  deploy?: DecisionsRelayDeploy;
 }
 
 /**
@@ -32,7 +35,9 @@ interface DecisionsRelaySetupProps {
  * secret when it reads as unclaimed, a recovery kit and passphrase when it
  * reads as claimed. Each secret is handed to main as the attempt starts and
  * cleared here at once, success or not. Mounted per checked address, so
- * nothing typed for one relay carries over to another.
+ * nothing typed for one relay carries over to another. The relay a guided
+ * deploy just created is claimed with the secret main holds from it, which
+ * never comes here.
  */
 export function DecisionsRelaySetup({
   check,
@@ -40,6 +45,7 @@ export function DecisionsRelaySetup({
   keysStored,
   disabled,
   identity,
+  deploy,
 }: DecisionsRelaySetupProps) {
   const [secret, setSecret] = useState("");
   const [kit, setKit] = useState<ChosenKit | null>(null);
@@ -65,6 +71,10 @@ export function DecisionsRelaySetup({
     identity.result?.result === "key-storage" &&
     identity.result.kind === "weak-storage-unconfirmed";
   const weakStorage = acceptWeak ? { acceptWeakStorage: true } : {};
+  const deployed =
+    deploy !== undefined && "origin" in check && isDeployedRelay(deploy, check.origin)
+      ? deploy
+      : null;
 
   /** Every secret on the page goes as an attempt starts, whichever form sent it. */
   const clearSecrets = () => {
@@ -79,6 +89,12 @@ export function DecisionsRelaySetup({
     const payload = { url: checkedUrl, claimSecret: secret, ...weakStorage };
     clearSecrets();
     identity.claim(payload);
+  };
+
+  const submitDeployedClaim = () => {
+    if (busy || !deployed) return;
+    clearSecrets();
+    identity.claimDeployed({ deployId: deployed.id, ...weakStorage });
   };
 
   const submitRestore = () => {
@@ -114,7 +130,31 @@ export function DecisionsRelaySetup({
 
   return (
     <>
-      {showClaim && (
+      {showClaim && deployed && (
+        <SettingsRow
+          id="decisions-claim-secret"
+          label={claimed ? "Finish a claim from this computer" : "Claim with the deploy's secret"}
+          description={
+            claimed
+              ? "This computer holds Decisions keys no relay is recorded for. If they're from a claim of this relay that wasn't confirmed, finish it with the claim secret the guided deploy set."
+              : "The guided deploy handed Daintree the claim secret it set on this relay. Claiming sends it to the relay, and Daintree drops it once the relay is yours."
+          }
+          disabled={busy}
+          control={({ descriptionId, disabled: rowDisabled }) => (
+            <Button
+              variant="outline"
+              size="sm"
+              loading={identity.pending === "claim"}
+              disabled={rowDisabled}
+              aria-describedby={descriptionId}
+              onClick={submitDeployedClaim}
+            >
+              Claim relay
+            </Button>
+          )}
+        />
+      )}
+      {showClaim && !deployed && (
         <SettingsRow
           id="decisions-claim-secret"
           label={claimed ? "Finish a claim from this computer" : "Claim secret"}
@@ -255,7 +295,11 @@ export function DecisionsRelaySetup({
         <SettingsRow
           id="decisions-weak-storage"
           label="Weaker key storage accepted"
-          description="Enter the secret again. The keys will be sealed with a fixed key rather than a keyring."
+          description={
+            deployed
+              ? "Claim the relay again. The keys will be sealed with a fixed key rather than a keyring."
+              : "Enter the secret again. The keys will be sealed with a fixed key rather than a keyring."
+          }
         />
       )}
     </>
