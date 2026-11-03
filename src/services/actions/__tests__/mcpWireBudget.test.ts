@@ -1023,10 +1023,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // record. The record is the larger part, listed on the status read and the
   // cancel because both results are closed. The external share is the raise
   // above.
-  // 188_300 → 188_700 for #16210, measured at 188_651 B (+439 over develop's
-  // 188_212): the same submission `output` field as the external ceiling's
+  // 188_300 → 188_800 for #16210, measured at 188_716 B (+439 over develop's
+  // 188_277): the same submission `output` field as the external ceiling's
   // raise, carried in-app for the external⊆in-app subset invariant.
-  const MAX_COHORT_PAYLOAD_BYTES = 188_700;
+  const MAX_COHORT_PAYLOAD_BYTES = 188_800;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
