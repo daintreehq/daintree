@@ -42,6 +42,29 @@ export interface AgentExternalLink {
 }
 
 /**
+ * How an agent CLI draws the next prompt it suggests in its empty input box
+ * (#16189), so a screen read can tell it from text someone typed. Declared per
+ * agent from a captured screen: grey is a legitimate colour for typed text in
+ * some themes, so no generic rule applies.
+ */
+export interface AgentInputSuggestionConfig {
+  /** The CLI as a plain-text read's mark names it: `[suggested by Claude Code: …]`. */
+  label: string;
+  /** `dim`: the suggestion is SGR 2, its first cell inverse when the CLI paints its own cursor. */
+  style: "dim";
+  /** The box's first row as plain text: its prompt glyph and the gap after it. */
+  promptRowPattern: string;
+  /**
+   * The row directly above that one, the box's top edge; the box runs down to
+   * the next row like it. Echoes of sent messages open with the same glyph but
+   * have no edge above them.
+   */
+  borderPattern: string;
+  /** Fixed placeholders an empty box shows, matched against its styled text: they read as `empty`. */
+  placeholderPatterns?: string[];
+}
+
+/**
  * Configuration for pattern-based working state detection.
  * Patterns are matched against terminal output to detect when an agent is actively working.
  */
@@ -928,6 +951,8 @@ export interface AgentConfig {
    * If not specified, built-in patterns for the agent ID are used.
    */
   detection?: AgentDetectionConfig;
+  /** How the CLI draws its suggested next prompt; absent, its input box reads as `unknown`. */
+  inputSuggestion?: AgentInputSuggestionConfig;
   /**
    * Version detection configuration.
    */

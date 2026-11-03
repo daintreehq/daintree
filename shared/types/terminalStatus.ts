@@ -46,6 +46,25 @@ export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
 export const LAST_TYPED_INPUT_AT_DESCRIPTION =
   "Epoch ms of last PTY input (keys, paste, broadcast, withdrawn sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.";
 
+/**
+ * What a terminal's input box held when its screen was read (#16189): nothing,
+ * text drawn as typed, or the CLI's own suggested next prompt, which it styles
+ * apart. Read off the screen's styling, so an observation and never a verdict
+ * on who wrote it; `unknown` for an agent with no declared rule, a screen whose
+ * box wasn't found, or a terminal running no agent.
+ */
+export type TerminalInputLineState = "empty" | "typed" | "suggestion" | "unknown";
+
+export interface TerminalInputLine {
+  state: TerminalInputLineState;
+  /** The box's text after the prompt glyph; the suggested text for `suggestion`, `""` for `empty` and `unknown`. */
+  text: string;
+}
+
+/** Model-facing description of `inputLine`, shared by the status and output schemas. */
+export const INPUT_LINE_DESCRIPTION =
+  "What the agent's input box held, read off screen styling: empty, typed text, or the CLI's own suggested next prompt (not typed by anyone). unknown when unread. Not proof of authorship.";
+
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
   terminalId: string;
@@ -105,6 +124,12 @@ export interface TerminalStatusEntry {
    */
   lastHandback?: TerminalHandback;
   recentOutput?: string | null;
+  /**
+   * The input box as `recentOutput`'s screen showed it (#16189). Read off the
+   * whole screen, so present even when the tail is cut above the box; absent
+   * whenever `recentOutput` is not a string.
+   */
+  inputLine?: TerminalInputLine;
   /**
    * `true` when older output was left out of `recentOutput`, by the requested
    * line count or by the shared response budget (#12450). Never sent as

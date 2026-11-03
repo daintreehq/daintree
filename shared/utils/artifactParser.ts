@@ -255,7 +255,7 @@ const MAX_CURSOR_FORWARD_EXPANSION = 1000;
 // the CUF with no replacement and collapse the gap (`I take 5` -> `Itake5`).
 // Read-path only: the persistence/restore serialize must stay byte-faithful and
 // never passes through here.
-function expandCursorForward(text: string): string {
+export function expandCursorForward(text: string): string {
   if (!text.includes("\x1b[")) return text;
   return text.replace(CURSOR_FORWARD_REGEX, (_match, digits: string) => {
     // CUF advances one column for an omitted parameter, and ANSI treats an
