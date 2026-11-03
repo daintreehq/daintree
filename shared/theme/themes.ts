@@ -294,10 +294,12 @@ function createBaseDaintreeTokens(
     // Dark lands on the `overlay-elevated` value on purpose: brand marks on a
     // highlighted row are already measured against that lift
     // (`brandMarkMatrix.test.ts`), and it sits in the band shipping palettes use
-    // for a fill-only active row. Light keeps the raised plane, which is already
-    // an opaque upward lift rather than an ink wash.
-    "overlay-highlight":
-      tokens["overlay-highlight"] ?? (dark ? withAlpha(overlayTone, 0.06) : overlayRaised),
+    // for a fill-only active row. Light is a neutral black wash, not the raised
+    // plane: an opaque plane tuned for white popovers landed on, or lighter
+    // than, the tinted sidebars (#16184), while a wash darkens every light
+    // surface by about the same step (1.17-1.19:1). Pure black rather than
+    // `overlayBase`, whose hue would tint a fill that must stay neutral.
+    "overlay-highlight": tokens["overlay-highlight"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.075),
     "filter-selected-bg-soft":
       tokens["filter-selected-bg-soft"] ?? withAlpha(dark ? tint : overlayBase, dark ? 0.08 : 0.08),
     "filter-selected-bg-strong":
@@ -682,27 +684,6 @@ function followBorderStrongForInput(
   }
 }
 
-/**
- * On light, `overlay-highlight` is the `overlay-raised` plane unless the theme
- * names it — including when the theme retuned `overlay-raised` itself, which
- * most light themes do with an opaque hex. Same reason as `border-input` above:
- * the engine derives the highlight before token overrides are merged, so
- * without this a light theme's highlighted row would fall back to the engine's
- * `color-mix()` plane instead of the lift the theme chose. Dark's highlight is
- * its own alpha step and never follows.
- */
-function followRaisedForHighlight(
-  tokens: Record<string, unknown>,
-  overrides: Record<string, unknown> | undefined,
-  type: "dark" | "light"
-): void {
-  if (type !== "light") return;
-  if (typeof overrides?.["overlay-highlight"] === "string") return;
-  if (typeof tokens["overlay-raised"] === "string") {
-    tokens["overlay-highlight"] = tokens["overlay-raised"];
-  }
-}
-
 // Headroom over the gate for the compositor rounding a channel the other way
 // from `blendOverBackground`.
 const DIFF_TEXT_DERIVATION_TARGET = DIFF_TEXT_MIN_CONTRAST + 0.05;
@@ -761,10 +742,9 @@ export function deriveStatusTextInks(
 
 /**
  * The churn inks follow the status inks unless the theme names them, and are
- * lifted from the final tokens for the same reason as the two follows above: a
+ * lifted from the final tokens for the same reason as the follow above: a
  * theme that retunes a status ink, a surface or a row fill after the engine ran
- * would otherwise keep inks measured against another theme's backdrops. Runs
- * after `followRaisedForHighlight`, since the highlight is one of them.
+ * would otherwise keep inks measured against another theme's backdrops.
  */
 function followStatusForDiffText(
   tokens: Record<string, unknown>,
@@ -948,7 +928,6 @@ function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
     ? normalizeAppThemeTokens(source.tokens, compiledTokens)
     : compiledTokens;
   if (source.tokens) followBorderStrongForInput(tokens, source.tokens);
-  if (source.tokens) followRaisedForHighlight(tokens, source.tokens, source.type);
   if (source.tokens) followStatusForDiffText(tokens, source.tokens, source.type);
   if (source.tokens) followStatusForText(tokens, source.tokens, source.type);
   if (source.tokens) followActivityForText(tokens, source.tokens, source.type);
@@ -1395,7 +1374,6 @@ export function normalizeAppColorScheme(
   const normalizedTokens = normalizeAppThemeTokens(rawTokens ?? {}, baseScheme.tokens);
   Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));
   followBorderStrongForInput(normalizedTokens, tokenOverrides);
-  followRaisedForHighlight(normalizedTokens, tokenOverrides, resolvedType);
   followStatusForDiffText(normalizedTokens, tokenOverrides, resolvedType);
   followStatusForText(normalizedTokens, tokenOverrides, resolvedType);
   followActivityForText(normalizedTokens, tokenOverrides, resolvedType);

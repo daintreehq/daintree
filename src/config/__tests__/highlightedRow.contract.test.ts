@@ -8,6 +8,7 @@ import {
   blendOverBackground,
   contrastRatio,
   parseRgba,
+  relativeLuminance,
   resolvePaletteRowBackdrops,
 } from "@shared/theme/contrast";
 import { readIndexCss } from "@/__tests__/support/hostCss";
@@ -224,6 +225,73 @@ describe("highlighted-row language", () => {
           ).toBeGreaterThanOrEqual(3);
         }
       }
+    }
+  });
+
+  it("darkens the sidebar and the panels by one perceptible, matching step on every light theme", () => {
+    // The hosts section's current host and every list-detail selection drawn on
+    // the sidebar (#16184). The fill is whatever `sidebar.css` paints there, on
+    // the solid sidebar (reduced transparency, increased contrast, performance
+    // mode) and on the chrome it normally is: the sidebar at 95% over the
+    // canvas. An opaque plane tuned for white popovers landed on, or lighter
+    // than, the tinted sidebars, so the row could not be picked out. The panels
+    // hold the same step, so one fill has to adapt to the surface under it.
+    const over = (value: string, backdrop: string) => {
+      const rgba = parseRgba(value);
+      return rgba ? blendOverBackground(rgba.hex, backdrop, rgba.opacity) : value;
+    };
+    const steps: Record<string, number[]> = { solid: [], chrome: [], panel: [], elevated: [] };
+    for (const scheme of BUILT_IN_APP_SCHEMES.filter((s) => s.type === "light")) {
+      const t = scheme.tokens;
+      const ext = (scheme.extensions ?? {}) as Record<string, string | undefined>;
+      const fillToken = ext["sidebar-row-highlight-bg"] ?? t["overlay-highlight"];
+      const backdrops = {
+        solid: t["surface-sidebar"],
+        chrome: blendOverBackground(t["surface-sidebar"], t["surface-canvas"], 0.95),
+        panel: t["surface-panel"],
+        elevated: t["surface-panel-elevated"],
+      };
+      for (const [model, surface] of Object.entries(backdrops)) {
+        const sidebar = model === "solid" || model === "chrome";
+        const fill = over(sidebar ? fillToken : t["overlay-highlight"], surface);
+        const where = `${scheme.id}: the highlighted row on the ${model} ${sidebar ? "sidebar" : "surface"}`;
+        expect(relativeLuminance(fill), `${where} is darker`).toBeLessThan(
+          relativeLuminance(surface)
+        );
+        const step = contrastRatio(fill, surface);
+        expect(step, `${where} steps ${step.toFixed(3)}:1`).toBeGreaterThanOrEqual(1.15);
+        expect(step, `${where} steps ${step.toFixed(3)}:1`).toBeLessThanOrEqual(1.24);
+        steps[model]!.push(step);
+        const hover = over(t["overlay-subtle"], surface);
+        expect(contrastRatio(hover, surface), `${where} out-weighs hover`).toBeLessThan(step);
+        for (const ink of ["text-primary", "text-secondary"] as const) {
+          const ratio = contrastRatio(t[ink], fill);
+          expect(ratio, `${where}: ${ink} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+        }
+        // The state glyphs beside a row's counts (the hosts section's bands).
+        for (const glyph of ["activity-working", "activity-waiting"] as const) {
+          const ratio = contrastRatio(t[glyph], fill);
+          expect(ratio, `${where}: ${glyph} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+        }
+        const outline = over(t["selection-outline"], fill);
+        for (const [label, against] of [
+          ["the fill", fill],
+          ["the surface", surface],
+        ] as const) {
+          const ratio = contrastRatio(outline, against);
+          expect(
+            ratio,
+            `${where}: selection-outline against ${label} is ${ratio.toFixed(2)}:1`
+          ).toBeGreaterThanOrEqual(3);
+        }
+      }
+    }
+    for (const [model, values] of Object.entries(steps)) {
+      const spread = Math.max(...values) - Math.min(...values);
+      expect(
+        spread,
+        `the ${model} step varies ${spread.toFixed(3)} across light themes`
+      ).toBeLessThanOrEqual(0.03);
     }
   });
 

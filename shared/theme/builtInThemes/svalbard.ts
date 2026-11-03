@@ -109,7 +109,7 @@ export const theme: BuiltInThemeSource = {
     "overlay-hover": "rgba(39,48,55,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(39,48,55,0.055)",
-    // Opaque elevate-to-select for menu/palette rows on white popovers.
+    // Opaque elevate-to-select plane (armed toolbar controls, settings scope).
     "overlay-raised": "#E8EFF4",
     // GitHub-brand defaults fail AA on the near-white panel.
     "pr-merged": "#6C5CA8",

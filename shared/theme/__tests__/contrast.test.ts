@@ -511,6 +511,9 @@ describe("getThemeContrastWarnings", () => {
       tokens: {
         ...light.tokens,
         "surface-panel": "#C8C8C8" as AppColorSchemeTokens["surface-panel"],
+        // Opaque, so the fill stays put while the panel around it darkens: the
+        // built-in wash would darken with the panel and fail on the fill first.
+        "overlay-highlight": "#EEE6D8" as AppColorSchemeTokens["overlay-highlight"],
       },
     };
     expect(outlineMessages(scheme)).toEqual([
