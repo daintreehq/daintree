@@ -1,5 +1,6 @@
 import { NOTIFY_REPLY_MAX_CHARS } from "../../../shared/types/terminalNotify.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { handbackNeedsYouMarker, handbackStartMarker } from "../../../shared/utils/handback.js";
 import { detectHandback } from "../pty/HandbackDetector.js";
 
 /** The target's last screen lines, captured when its notice fired. */
@@ -97,14 +98,18 @@ function closingMarkerAt(
 /** Rows searched above a closing marker for its opening one: a capped summary wraps to fewer. */
 const MAX_MARKER_ROWS = 40;
 
-const HANDBACK_START_SPLIT_HEAD = /DAINTREE-DONE-[\s─-▟|]*$/u;
+const HANDBACK_START_SPLIT_HEAD = /DAINTREE-(?:DONE|NEEDS-YOU)-[\s─-▟|]*$/u;
 
-/** The row the opening marker for `code` nearest above row `from` starts on; -1 when none. */
+/**
+ * The row the opening marker for `code` nearest above row `from` starts on,
+ * either form (#16190); -1 when none.
+ */
 function openingRowFor(rows: readonly string[], code: string, from: number): number {
-  const start = `DAINTREE-DONE-${code}`;
+  const starts = [handbackStartMarker(code), handbackNeedsYouMarker(code)];
   const splitTail = new RegExp(`^[\\s\\u2500-\\u259f\\u23bf\\u23fa|>›❯•●◦·]*${code}\\b`, "u");
   for (let r = from; r >= 0 && r >= from - MAX_MARKER_ROWS; r--) {
-    if (rows[r].includes(start)) return r;
+    const row = rows[r];
+    if (starts.some((start) => row.includes(start))) return r;
     if (
       r + 1 < rows.length &&
       HANDBACK_START_SPLIT_HEAD.test(rows[r]) &&

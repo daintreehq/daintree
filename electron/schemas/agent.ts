@@ -3,6 +3,7 @@
 // .check(z.*)) instead of chained methods, which mini does not ship.
 import { z } from "zod/mini";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
+import { HANDBACK_REPORTS } from "../../shared/types/handback.js";
 
 /** Schema for a built-in agent identity (claude, gemini, codex, opencode, …). */
 export const BuiltInAgentIdSchema = z.enum(BUILT_IN_AGENT_IDS);
@@ -104,6 +105,7 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
   lastHandback: z.optional(
     z.object({
       message: z.nullable(z.string()),
+      report: z.optional(z.enum(HANDBACK_REPORTS)),
       observedAt: positiveInt,
       submissionToken: z.optional(z.string()),
       truncated: z.boolean(),

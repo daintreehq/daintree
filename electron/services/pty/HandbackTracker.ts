@@ -1,4 +1,4 @@
-import type { HandbackInstruction } from "../../../shared/types/handback.js";
+import type { HandbackInstruction, HandbackReport } from "../../../shared/types/handback.js";
 
 /**
  * Handback requests one terminal is holding (#12488): the codes minted for
@@ -14,9 +14,9 @@ export interface HandbackRequest {
   code: string;
   /**
    * Present for a scheduled run's launch prompt (#15982) and for a prompt to a
-   * terminal armed with a When done choice (#16171), whose instruction offers
-   * a `needs-you` marker beside `done`. Every other request is looked for in
-   * its `done` form alone, as the agent was asked.
+   * terminal armed with a When done choice (#16171): the marker that retires
+   * its code is reported to Main's run consumers. Every request is looked for
+   * in both forms (#16190).
    */
   instruction?: Extract<HandbackInstruction, "run">;
   /** Token of the submission that asked, when it carried one (#12337). */
@@ -33,7 +33,7 @@ export interface HandbackRequest {
    * working. The code stays open then: a marker seen mid-turn can sit in a
    * draft or a status line that the reply goes on to replace.
    */
-  reported?: { message: string | null; truncated: boolean };
+  reported?: { message: string | null; truncated: boolean; report: HandbackReport };
 }
 
 /**
@@ -110,18 +110,24 @@ export class HandbackTracker {
    * capture that only now reaches the length cap is new: its summary is no
    * longer whole.
    */
-  noteReported(code: string, message: string | null, truncated = false): boolean {
+  noteReported(
+    code: string,
+    message: string | null,
+    truncated = false,
+    report: HandbackReport = "done"
+  ): boolean {
     const request = this.requests.find((candidate) => candidate.code === code);
     if (request === undefined) return true;
     const reported = request.reported;
     if (
       reported !== undefined &&
       reported.message === message &&
-      reported.truncated === truncated
+      reported.truncated === truncated &&
+      reported.report === report
     ) {
       return false;
     }
-    request.reported = { message, truncated };
+    request.reported = { message, truncated, report };
     return true;
   }
 
