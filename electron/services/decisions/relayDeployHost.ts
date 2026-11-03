@@ -251,7 +251,10 @@ export async function openRelayDeployHost(
   const serve = (socket: Socket) => {
     let buffer = Buffer.alloc(0);
     let phase: "hello" | "running" | "done" = "hello";
-    helloTimer = setTimeout(() => interrupt("handshake"), options.helloTimeoutMs ?? HELLO_TIMEOUT_MS);
+    helloTimer = setTimeout(
+      () => interrupt("handshake"),
+      options.helloTimeoutMs ?? HELLO_TIMEOUT_MS
+    );
 
     const handle = (message: unknown) => {
       if (phase === "hello") {

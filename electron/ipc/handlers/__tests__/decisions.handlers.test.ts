@@ -252,9 +252,9 @@ const checkRelay = decisionsNamespace.ops.checkRelay.handler as unknown as (
 const claimRelay = decisionsNamespace.ops.claimRelay.handler as unknown as (
   payload: ClaimDecisionsRelayPayload
 ) => Promise<DecisionsConnectResult>;
-const prepareRelayDeploy = decisionsNamespace.ops.prepareRelayDeploy.handler as unknown as (
-  ctx: { webContentsId: number }
-) => Promise<PreparedDecisionsRelayDeploy>;
+const prepareRelayDeploy = decisionsNamespace.ops.prepareRelayDeploy.handler as unknown as (ctx: {
+  webContentsId: number;
+}) => Promise<PreparedDecisionsRelayDeploy>;
 const cancelRelayDeploy = decisionsNamespace.ops.cancelRelayDeploy.handler as unknown as (
   deployId: string
 ) => Promise<void>;

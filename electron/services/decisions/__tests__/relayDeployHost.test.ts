@@ -342,9 +342,12 @@ describe("parseResult", () => {
   });
 
   it("takes a result with neither a URL nor a secret", () => {
-    expect(parseResult({ ...RESULT, status: "cancelled", url: null, claim_secret: null })).toEqual(
-      { status: "cancelled", url: null, claimSecret: null, claimState: "unclaimed" }
-    );
+    expect(parseResult({ ...RESULT, status: "cancelled", url: null, claim_secret: null })).toEqual({
+      status: "cancelled",
+      url: null,
+      claimSecret: null,
+      claimState: "unclaimed",
+    });
   });
 
   it.each([

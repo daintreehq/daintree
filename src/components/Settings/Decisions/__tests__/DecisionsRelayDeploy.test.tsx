@@ -103,7 +103,9 @@ describe("Decisions relay deploy offer", () => {
 
     const offer = screen.getByRole("group", { name: "Don't have a relay yet?" });
     expect(offer.textContent).toMatch(/Cloudflare's free plan is enough for one person/);
-    expect(offer.textContent).toMatch(/a Worker \(the relay, its Durable Object and the phone app\)/);
+    expect(offer.textContent).toMatch(
+      /a Worker \(the relay, its Durable Object and the phone app\)/
+    );
     expect(offer.textContent).toMatch(/private R2 bucket/);
     expect(guidedRow().textContent).toMatch(/dictation transcription \(xAI or OpenAI\)/);
     expect(guidedRow().textContent).toMatch(/transcript cleanup \(Anthropic or OpenAI\)/);

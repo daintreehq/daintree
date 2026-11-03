@@ -199,12 +199,7 @@ export interface DecisionsStatus {
  * failed, or it stopped before it said how the deploy went.
  */
 export type DecisionsRelayDeployState =
-  | "waiting"
-  | "running"
-  | "completed"
-  | "cancelled"
-  | "failed"
-  | "interrupted";
+  "waiting" | "running" | "completed" | "cancelled" | "failed" | "interrupted";
 
 /** What the guided deploy's CLI reported about the relay's claim. */
 export type DecisionsRelayDeployClaimState = "claimed" | "unclaimed" | "unknown";
