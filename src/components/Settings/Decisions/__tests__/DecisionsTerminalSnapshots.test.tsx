@@ -57,6 +57,9 @@ function snapshotsSwitch(): HTMLButtonElement {
 
 const on = () => snapshotsSwitch().getAttribute("aria-checked");
 
+/** Longer than a dialog's exit animation, so one that closed has left the DOM by then. */
+const EXIT_ALLOWANCE_MS = 300;
+
 /** A dialog plays its exit before it leaves the DOM. */
 async function gone() {
   await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -174,10 +177,18 @@ describe("Decisions terminal snapshots switch", () => {
       );
     });
     expect(setTerminalSnapshots).toHaveBeenCalledExactlyOnceWith({ enabled: true, consent: true });
-    // Still open while main saves, and Cancel can't take back what's being saved.
-    const dialog = screen.getByRole("dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    // Still open while main saves, past any exit animation, and Cancel can't
+    // take back what's being saved.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, EXIT_ALLOWANCE_MS));
+    });
     expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, EXIT_ALLOWANCE_MS));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(snapshotsSwitch().disabled).toBe(true);
 
     await act(async () =>
       saving.resolve({ state: "connected", terminalSnapshots: true, revision: 1 })
