@@ -497,9 +497,17 @@ describe("trusted workflow gates", () => {
     });
   });
 
+  it("hands Settings a copy of the agents switched on for ask_human", () => {
+    const askHumanAgents = ["claude"];
+    const read = decisionsPolicyOf({ ...SAVED, askHumanAgents }, 0);
+    read.askHumanAgents.push("codex");
+    expect(askHumanAgents).toEqual(["claude"]);
+    expect(decisionsPolicyOf({ ...SAVED, askHumanAgents }, 0).askHumanAgents).toEqual(["claude"]);
+  });
+
   it("hands Settings copies: changing what it read changes no registered gate", () => {
     const policy = createTrustedPolicy(SAVED);
-    const read = decisionsPolicyOf(SAVED, 0);
+    const read = decisionsPolicyOf({ ...SAVED, askHumanAgents: [] }, 0);
     const gate = read.gates.find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
     gate.requirement = "proxy-first";
     gate.choices[0]!.id = "ship-anyway";
@@ -527,7 +535,10 @@ describe("trusted workflow gates", () => {
     "asks a question with a saved default of %s as Settings reports it, signed and stored alike",
     async (_label, saved) => {
       const h = await harness({ defaultQuestionExpiryMs: saved });
-      const reported = decisionsPolicyOf({ ...SAVED, defaultQuestionExpiryMs: saved }, 0);
+      const reported = decisionsPolicyOf(
+        { ...SAVED, defaultQuestionExpiryMs: saved, askHumanAgents: [] },
+        0
+      );
       expect(reported.defaultQuestionExpiryMs).toBe(saved);
 
       expectLasting(await askedExpiry(h, { question: "Tabs?" }), saved);

@@ -17,6 +17,7 @@ import type {
   PaneDecisionState,
   PreparedDecisionsRelayDeploy,
   RestoreDecisionsIdentityPayload,
+  SetDecisionsAgentAskHumanPayload,
   SetDecisionsEnabledPayload,
   VerifyDecisionsRecoveryKitPayload,
 } from "../../../../shared/types/decisions.js";
@@ -95,6 +96,7 @@ const decisionsEntry = vi.hoisted(() => ({
     proxyAllowlisted: false,
     defaultQuestionExpiryMs: 1,
     maxQuestionExpiryMs: 2,
+    askHumanAgents: [],
     revision: 0,
   })),
   setDecisionsProxyAllowlisted: vi.fn(async (allowed: boolean): Promise<DecisionsPolicy> => ({
@@ -102,6 +104,7 @@ const decisionsEntry = vi.hoisted(() => ({
     proxyAllowlisted: allowed,
     defaultQuestionExpiryMs: 1,
     maxQuestionExpiryMs: 2,
+    askHumanAgents: [],
     revision: 1,
   })),
   setDecisionsDefaultQuestionExpiry: vi.fn(async (ms: number | null): Promise<DecisionsPolicy> => ({
@@ -109,8 +112,19 @@ const decisionsEntry = vi.hoisted(() => ({
     proxyAllowlisted: false,
     defaultQuestionExpiryMs: ms,
     maxQuestionExpiryMs: null,
+    askHumanAgents: [],
     revision: 1,
   })),
+  setDecisionsAgentAskHuman: vi.fn(
+    async (payload: SetDecisionsAgentAskHumanPayload): Promise<DecisionsPolicy> => ({
+      gates: [],
+      proxyAllowlisted: false,
+      defaultQuestionExpiryMs: 1,
+      maxQuestionExpiryMs: 2,
+      askHumanAgents: payload.enabled ? [payload.agentId] : [],
+      revision: 1,
+    })
+  ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
     async (
@@ -193,6 +207,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionsPolicy: decisionsEntry.getDecisionsPolicy,
     setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
     setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
+    setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
@@ -273,6 +288,9 @@ const setProxyAllowlisted = decisionsNamespace.ops.setProxyAllowlisted.handler a
 ) => Promise<DecisionsPolicy>;
 const setDefaultQuestionExpiry = decisionsNamespace.ops.setDefaultQuestionExpiry
   .handler as unknown as (ms: number | null) => Promise<DecisionsPolicy>;
+const setAgentAskHuman = decisionsNamespace.ops.setAgentAskHuman.handler as unknown as (
+  payload: SetDecisionsAgentAskHumanPayload
+) => Promise<DecisionsPolicy>;
 
 const listHosts = decisionsNamespace.ops.listHosts
   .handler as unknown as () => Promise<DecisionsHostsResult>;
@@ -576,6 +594,9 @@ describe("decisions IPC", () => {
       await expect(getPolicy()).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setProxyAllowlisted(true)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setDefaultQuestionExpiry(null)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setAgentAskHuman({ agentId: "claude", enabled: true })).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1047,6 +1068,42 @@ describe("decisions IPC", () => {
       [3_600_000],
     ]);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("switches one agent's ask_human through Decisions itself once on", async () => {
+    saved.value = { enabled: true };
+
+    await expect(setAgentAskHuman({ agentId: "claude", enabled: true })).resolves.toMatchObject({
+      askHumanAgents: ["claude"],
+    });
+    expect(decisionsEntry.setDecisionsAgentAskHuman).toHaveBeenCalledExactlyOnceWith({
+      agentId: "claude",
+      enabled: true,
+    });
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes one agent id and a boolean to switch it, never a list", () => {
+    const schema = decisionsNamespace.ops.setAgentAskHuman.schema as SafeParse;
+    for (const value of [
+      { agentId: "claude", enabled: true },
+      { agentId: "acme.agent-2", enabled: false },
+    ]) {
+      expect(schema.safeParse(value).success).toBe(true);
+    }
+    for (const value of [
+      undefined,
+      "claude",
+      ["claude"],
+      { agentId: "claude" },
+      { agentId: "claude", enabled: "true" },
+      { agentId: "", enabled: true },
+      { agentId: "a b", enabled: true },
+      { agentId: "x".repeat(129), enabled: true },
+      { agentId: "claude", enabled: true, askHumanAgents: ["codex"] },
+    ]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("takes only whole milliseconds or null for the default expiry", () => {

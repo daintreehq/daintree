@@ -471,6 +471,7 @@ import {
   setDecisionsModelThreshold,
   setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
+  setDecisionsAgentAskHuman,
   startDecisionsModelEvaluation,
   startRelayRemoval,
   startDecisionsIfEnabled,
@@ -1090,8 +1091,117 @@ describe("Decisions entry", () => {
       saved.value = { enabled: false };
       await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+      ).rejects.toMatchObject(CANCELLED);
       expect(store.set).not.toHaveBeenCalled();
       expect(peekDecisionsService()).toBeNull();
+    });
+
+    describe("agents switched on for ask_human (#16223)", () => {
+      it("reads none switched on until the person switches one on", () => {
+        saved.value = { enabled: true };
+        expect(getDecisionsPolicy().askHumanAgents).toEqual([]);
+      });
+
+      it("switches one agent at a time over the setting as saved, keeping every other field", async () => {
+        saved.value = { enabled: true, ...RELAY, consentedAt: 5, askHumanAgents: ["codex"] };
+        await startDecisionsIfEnabled();
+        const before = getDecisionsPolicy().revision;
+
+        const on = await setDecisionsAgentAskHuman({ agentId: "claude", enabled: true });
+        expect(on.askHumanAgents).toEqual(["codex", "claude"]);
+        expect(on.revision).toBeGreaterThan(before);
+        expect(saved.value).toEqual({
+          ...defaultDecisionsSettings(),
+          enabled: true,
+          ...RELAY,
+          consentedAt: 5,
+          askHumanAgents: ["codex", "claude"],
+        });
+        expect(getDecisionsPolicy()).toEqual(on);
+
+        const off = await setDecisionsAgentAskHuman({ agentId: "codex", enabled: false });
+        expect(off.askHumanAgents).toEqual(["claude"]);
+        expect(off.revision).toBeGreaterThan(on.revision);
+        // Launches read it; the running relay connection is left alone.
+        expect(connections).toHaveLength(1);
+        expect(connections[0]!.stopped).toBe(0);
+      });
+
+      it("keeps both changes when two windows switch different agents at once", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+
+        const [claude, codex] = await Promise.all([
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true }),
+          setDecisionsAgentAskHuman({ agentId: "codex", enabled: true }),
+        ]);
+        expect(claude.askHumanAgents).toEqual(["claude"]);
+        expect(codex.askHumanAgents).toEqual(["claude", "codex"]);
+        expect(saved.value).toMatchObject({ askHumanAgents: ["claude", "codex"] });
+      });
+
+      it("saves nothing for a switch already where it was asked to be", async () => {
+        saved.value = { enabled: true, askHumanAgents: ["claude"] };
+        await startDecisionsIfEnabled();
+        const before = getDecisionsPolicy();
+        vi.mocked(store.set).mockClear();
+
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+        ).resolves.toEqual(before);
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "codex", enabled: false })
+        ).resolves.toEqual(before);
+        expect(store.set).not.toHaveBeenCalled();
+      });
+
+      it("tells every window to read the policy again when an agent is switched", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+        const status = (await getDecisionsStatus()).revision ?? 0;
+
+        await setDecisionsAgentAskHuman({ agentId: "claude", enabled: true });
+
+        await vi.waitFor(() =>
+          expect(pushedStatuses().at(-1)?.revision as number).toBeGreaterThan(status)
+        );
+      });
+
+      it("refuses an id no agent could have, or one more agent past the cap, saving nothing", async () => {
+        const full = Array.from({ length: 256 }, (_, i) => `agent-${i}`);
+        saved.value = { enabled: true, askHumanAgents: full };
+        await startDecisionsIfEnabled();
+        vi.mocked(store.set).mockClear();
+
+        for (const agentId of ["", "a b", "../claude", "x".repeat(129)]) {
+          await expect(
+            setDecisionsAgentAskHuman({ agentId, enabled: true }),
+            agentId
+          ).rejects.toMatchObject({ code: "VALIDATION" });
+        }
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        expect(store.set).not.toHaveBeenCalled();
+        // Switching one off still works at the cap.
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "agent-0", enabled: false })
+        ).resolves.toMatchObject({ askHumanAgents: full.slice(1) });
+      });
+
+      it("refuses after quit, though the switch still reads on", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+        await stopDecisions();
+        vi.mocked(store.set).mockClear();
+
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+        ).rejects.toMatchObject(CANCELLED);
+        expect(store.set).not.toHaveBeenCalled();
+      });
     });
   });
 
