@@ -291,7 +291,7 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     expect(await screen.findByText(/'studio' is revoked/)).toBeTruthy();
   });
 
-  it("shows neither Remote Hosts nor the key before a relay is set up", () => {
+  it("says to connect a relay first, under Devices and Remote Hosts, and shows no key until then", () => {
     render(
       <TooltipProvider>
         <DecisionsDevicesAndHosts status={{ state: "not-connected" }} />
@@ -299,7 +299,12 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     );
 
     expect(screen.getByText("Connect a relay above, then pair a phone here")).toBeTruthy();
-    expect(document.getElementById("decisions-hosts")).toBeNull();
+    expect(
+      within(document.getElementById("decisions-hosts")!).getByText(
+        "Connect a relay above, then enroll Remote Hosts here"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
     expect(document.getElementById("decisions-encryption")).toBeNull();
     expect(listDevices).not.toHaveBeenCalled();
     expect(listHosts).not.toHaveBeenCalled();

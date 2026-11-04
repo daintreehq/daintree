@@ -23,6 +23,8 @@ import type { UseDecisionsDevicesResult } from "./useDecisionsDevices";
 import type { DecisionsRevokeTarget } from "./useDecisionsKeyActions";
 
 export const HOSTS_SECTION_ID = "decisions-hosts";
+const HOSTS_DESCRIPTION =
+  "Each Remote Host you've connected to, and whether its agents can ask you through your relay";
 
 /** A Host as main lists it, with the relay's device for it when the relay lists one. */
 interface HostRow {
@@ -143,7 +145,15 @@ export function DecisionsHostsSection({
     if (before !== null && before !== enrolledKey) onEnrolledChange?.();
   }, [enrolledKey, onEnrolledChange]);
 
-  if (!enabled) return null;
+  if (!enabled) {
+    return (
+      <SettingsSection title="Remote Hosts" description={HOSTS_DESCRIPTION} id={HOSTS_SECTION_ID}>
+        <SettingsGroup>
+          <SettingsEmptyRow>Connect a relay above, then enroll Remote Hosts here</SettingsEmptyRow>
+        </SettingsGroup>
+      </SettingsSection>
+    );
+  }
 
   const { rows, relayOnly } = joinHostsToDevices(
     hosts,
@@ -194,7 +204,7 @@ export function DecisionsHostsSection({
   return (
     <SettingsSection
       title="Remote Hosts"
-      description="Each Remote Host you've connected to, and whether its agents can ask you through your relay"
+      description={HOSTS_DESCRIPTION}
       id={HOSTS_SECTION_ID}
       action={headerActions}
     >
@@ -249,7 +259,6 @@ export function DecisionsHostsSection({
                 variant="outline"
                 size="sm"
                 disabled={locked}
-                aria-label={`Enroll ${host.name} with weaker storage`}
                 onClick={() => setWeakHost({ hostId: host.hostId, name: host.name })}
               >
                 Enroll with weaker storage…
@@ -260,7 +269,6 @@ export function DecisionsHostsSection({
                 variant="outline"
                 size="sm"
                 disabled={locked || busy}
-                aria-label={`Enroll ${host.name}`}
                 onClick={() => enroll(host.hostId)}
               >
                 Enroll

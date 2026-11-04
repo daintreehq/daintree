@@ -20,7 +20,7 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         What an agent asks, with its context, screenshots and the project and computer it asked
         from, and your answers go to the relay in your own Cloudflare account. Only this computer,
         your paired phones and enrolled Remote Hosts can read them. Each Remote Host you connect to
-        is enrolled automatically, unless you turn that off under Devices, and can read every
+        is enrolled automatically, unless you turn that off under Remote Hosts, and can read every
         question and answer.
       </li>
       <li>

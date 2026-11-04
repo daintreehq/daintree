@@ -8,9 +8,7 @@ const ROTATE_BUTTON_ATTR = "data-decisions-rotate-keys";
 
 /** Where focus goes after a revocation: the revoked row may be gone, the key row stays. */
 export function currentRotateButton(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(
-    `#${ENCRYPTION_SECTION_ID} [${ROTATE_BUTTON_ATTR}]`
-  );
+  return document.querySelector<HTMLElement>(`#${ENCRYPTION_SECTION_ID} [${ROTATE_BUTTON_ATTR}]`);
 }
 
 /**

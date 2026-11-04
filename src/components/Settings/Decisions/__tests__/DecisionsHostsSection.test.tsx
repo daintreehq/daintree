@@ -102,9 +102,7 @@ function autoSwitch(): HTMLButtonElement {
 }
 
 function enrollButtons(): HTMLButtonElement[] {
-  return (screen.queryAllByRole("button") as HTMLButtonElement[]).filter(
-    (button) => button.textContent === "Enroll"
-  );
+  return screen.queryAllByRole("button", { name: "Enroll" }) as HTMLButtonElement[];
 }
 
 describe("Remote Hosts", () => {
@@ -123,7 +121,7 @@ describe("Remote Hosts", () => {
 
     expect(screen.getByText(/It has no keychain, as Linux and WSL machines/)).toBeTruthy();
     expect(enrollButtons()).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Enroll Ubuntu (WSL) with weaker storage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enroll with weaker storage…" }));
     expect(enrollHost).not.toHaveBeenCalled();
     expect(screen.getByText("Use the weaker key storage on Ubuntu (WSL)?")).toBeTruthy();
     await act(async () => {
@@ -136,6 +134,7 @@ describe("Remote Hosts", () => {
     await renderGroup({ enabled: false });
     expect(listHosts).not.toHaveBeenCalled();
     expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByText("Connect a relay above, then enroll Remote Hosts here")).toBeTruthy();
   });
 
   it("offers Enroll only for a Host it would do something for", async () => {
@@ -235,7 +234,12 @@ describe("Remote Hosts", () => {
     );
     view.rerender(
       <TooltipProvider>
-        <DecisionsHostsSection enabled revision={2} devicesRead={devicesRead()} onRevoke={() => {}} />
+        <DecisionsHostsSection
+          enabled
+          revision={2}
+          devicesRead={devicesRead()}
+          onRevoke={() => {}}
+        />
       </TooltipProvider>
     );
     await act(async () => {});
@@ -255,7 +259,12 @@ describe("Remote Hosts", () => {
     listHosts.mockResolvedValueOnce({ result: "not-set-up" });
     view.rerender(
       <TooltipProvider>
-        <DecisionsHostsSection enabled revision={2} devicesRead={devicesRead()} onRevoke={() => {}} />
+        <DecisionsHostsSection
+          enabled
+          revision={2}
+          devicesRead={devicesRead()}
+          onRevoke={() => {}}
+        />
       </TooltipProvider>
     );
     await act(async () => {});
@@ -275,7 +284,12 @@ describe("Remote Hosts", () => {
     );
     view.rerender(
       <TooltipProvider>
-        <DecisionsHostsSection enabled revision={2} devicesRead={devicesRead()} onRevoke={() => {}} />
+        <DecisionsHostsSection
+          enabled
+          revision={2}
+          devicesRead={devicesRead()}
+          onRevoke={() => {}}
+        />
       </TooltipProvider>
     );
     await act(async () => {});
@@ -318,7 +332,12 @@ describe("Remote Hosts", () => {
     );
     view.rerender(
       <TooltipProvider>
-        <DecisionsHostsSection enabled revision={2} devicesRead={devicesRead()} onRevoke={() => {}} />
+        <DecisionsHostsSection
+          enabled
+          revision={2}
+          devicesRead={devicesRead()}
+          onRevoke={() => {}}
+        />
       </TooltipProvider>
     );
     await act(async () => {});
@@ -510,9 +529,7 @@ describe("each Remote Host once (#16222)", () => {
   it("keeps a Host enrolled here revocable while the relay's devices haven't been read", async () => {
     const onRevoke = vi.fn();
     listHosts.mockResolvedValue(
-      listed([
-        host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false }),
-      ])
+      listed([host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false })])
     );
     await renderGroup({ devices: null, onRevoke });
 
