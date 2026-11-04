@@ -152,6 +152,13 @@ export interface DecisionsHost {
   enrollment: DecisionsHostEnrollment;
   /** Enroll would do something now: connected, and not enrolled or busy. */
   canEnroll: boolean;
+  /**
+   * The device this computer recorded the Host accepting, while that device
+   * isn't seen revoked; absent when there is none. It stays while a check or
+   * a failed attempt replaces `enrollment`, so Settings can join the Host to
+   * the relay's device for it (#16222).
+   */
+  recordedDeviceId?: string;
   /** What the Host last reported of its own Decisions; absent until it has. */
   runtime?: DecisionsHostRuntimeObservation;
 }

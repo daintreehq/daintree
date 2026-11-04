@@ -512,6 +512,9 @@ export class HostEnroller {
       connected,
       enrollment,
       canEnroll: connected && !busy && ENROLLABLE.has(enrollment.state),
+      ...(record?.deviceId && record.revokedAt === null
+        ? { recordedDeviceId: record.deviceId }
+        : {}),
       ...(runtime ? { runtime } : {}),
     };
   }

@@ -8,7 +8,7 @@ import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { useDecisionsModel } from "./useDecisionsModel";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
 import { DecisionsConnectionSection, kitUnverified } from "./DecisionsConnectionSection";
-import { DecisionsDevicesSection } from "./DecisionsDevicesSection";
+import { DecisionsDevicesAndHosts } from "./DecisionsDevicesAndHosts";
 import { DecisionsAgentsSection } from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
@@ -129,7 +129,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onFinishSetup={askForKit}
             onPairPhone={askForPairing}
           />
-          <DecisionsDevicesSection
+          <DecisionsDevicesAndHosts
             status={status}
             locked={pending !== null}
             pairFocusRequest={pairFocusRequest}

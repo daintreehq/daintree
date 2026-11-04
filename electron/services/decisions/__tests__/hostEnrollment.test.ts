@@ -396,6 +396,34 @@ describe("HostEnroller", () => {
     expect(await stateOf("slow")).toMatchObject({ state: "enrolled" });
   });
 
+  it("keeps an enrolled Host's recorded device in its row while a later check runs, and drops it once revoked", async () => {
+    enroller.start();
+    const first = port.connect("studio");
+    await settle();
+    const hostOf = async () => {
+      const listed = await enroller.list();
+      return listed.result === "listed" ? listed.hosts.find((h) => h.hostId === "studio") : null;
+    };
+    expect(await hostOf()).toMatchObject({ recordedDeviceId: "dev_host_000000001" });
+    first.close();
+
+    const again = new FakeLink();
+    const status = deferred<HostCallOutcome<HostIdentityReport>>();
+    again.onStatus = () => status.promise;
+    port.connect("studio", again);
+    await settle();
+    expect(await hostOf()).toMatchObject({
+      enrollment: { state: "checking" },
+      recordedDeviceId: "dev_host_000000001",
+    });
+    status.resolve({ ok: true, value: { kind: "none" } });
+    await settle();
+
+    revokeOnRelay((await owner!.records!.get("studio"))!.deviceId!);
+    await enroller.observeDevices(owner!.relayDevices);
+    expect(await hostOf()).not.toHaveProperty("recordedDeviceId");
+  });
+
   it("offers a Host with no keychain the fixed-key storage only through Enroll, never automatically", async () => {
     enroller.start();
     const link = new FakeLink();
