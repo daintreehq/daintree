@@ -65,6 +65,7 @@ import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerServi
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
+import { releaseReloadNotice } from "../../../window/rendererReloadNotice.js";
 import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { readHydrateTerminalConfig } from "../../../services/AppHydrationService.js";
@@ -1273,6 +1274,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       signalFirstInteractive(ctx.webContentsId);
       // A backup suspension raised while no window could show it waits for this one.
       noteDatabaseNoticeRendererReady(ctx.webContentsId);
+      // So does the notice explaining why this view just reloaded.
+      if (ctx.event) releaseReloadNotice(ctx.event.sender);
       // Close the cold-start timeline for a view this window's manager
       // cold-started (input-ready log + trace mark); no-op for warm views.
       // Same per-window resolution as APP_VIEW_PAINTED below.

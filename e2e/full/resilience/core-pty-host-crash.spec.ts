@@ -35,7 +35,6 @@ let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 let windowId = 0;
 let seq = 0;
-let crashedViewWcId = 0;
 
 interface Pane {
   id: string;
@@ -314,7 +313,6 @@ async function killHostAndAwaitReplacement(oldHostPid: number): Promise<number> 
 test.describe.serial("Resilience: real pty-host death and renderer crash", () => {
   test.beforeAll(async () => {
     panes.length = 0;
-    crashedViewWcId = 0;
     const { dir, cleanup } = createFixtureRepo({ name: FIXTURE_NAME });
     fixtureCleanup = cleanup;
     ctx = await launchApp({
@@ -592,7 +590,17 @@ test.describe.serial("Resilience: real pty-host death and renderer crash", () =>
     // reloads it, so the reloaded view is read and typed into through its
     // webContents: DOM reads via executeJavaScript, input via sendInputEvent.
     const wcId = view.wcId;
-    crashedViewWcId = wcId;
+
+    await test.step("the reloaded view tells the user it was reloaded", async () => {
+      await expect
+        .poll(() => viewEval<string>(wcId, "document.body.innerText"), {
+          timeout: T_LONG,
+          message: "the reload notice should be on screen",
+        })
+        .toMatch(
+          /(A project view|The renderer process) (crashed and was automatically reloaded|was stopped from outside Daintree and was reloaded|was restarted)/
+        );
+    });
 
     await test.step("every pane comes back attached to the shell that survived", async () => {
       await expect
@@ -618,30 +626,5 @@ test.describe.serial("Resilience: real pty-host death and renderer crash", () =>
       expect(await ptyHostPidsFromMetrics()).toEqual([hostPid]);
       expect(await viewEval<string>(wcId, "location.href")).not.toMatch(/recovery/i);
     });
-  });
-  test("the reloaded project view tells the user it was reloaded", async () => {
-    // Main raises the notice (ProjectViewHandlers → notifyError) while the
-    // crashed view is the only project renderer, so the broadcast reaches no
-    // live renderer and nothing buffers it for the reload (the renderer only
-    // pulls persisted errors on load). Reproduced in 3 local runs: main logs
-    // "A project view was stopped from outside Daintree and was reloaded." and
-    // the reloaded view never shows it. Delivery alone will not turn this green:
-    // humanizeAppError renders an untyped Error as the generic "Something went
-    // wrong", so the reload copy also needs its own classification. When fixed,
-    // fold this back into the crash test directly after the reload.
-    test.info().annotations.push({
-      type: "quarantine",
-      description:
-        "2026-09-30 renderer-crash reload notice is broadcast while the only project renderer is dead and never reaches the reloaded view; its copy would also humanize to a generic error",
-    });
-    test.skip(true, "reload notice never reaches the reloaded view; see quarantine annotation");
-    await expect
-      .poll(() => viewEval<string>(crashedViewWcId, "document.body.innerText"), {
-        timeout: T_LONG,
-        message: "the reload notice should be on screen",
-      })
-      .toMatch(
-        /(A project view|The renderer process) (crashed and was automatically reloaded|was stopped from outside Daintree and was reloaded|was restarted)/
-      );
   });
 });

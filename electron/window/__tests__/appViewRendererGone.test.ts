@@ -11,6 +11,10 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 }));
 
 vi.mock("../../ipc/errorHandlers.js", () => ({ notifyError: vi.fn() }));
+vi.mock("../rendererReloadNotice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../rendererReloadNotice.js")>()),
+  holdReloadNotice: vi.fn(),
+}));
 
 const availableMemory = { mb: null as number | null };
 vi.mock("../../utils/systemMemory.js", () => ({
@@ -21,6 +25,7 @@ vi.mock("../../utils/logger.js", () => ({ logError: vi.fn(), logWarn: vi.fn() })
 
 import { app } from "electron";
 import { notifyError } from "../../ipc/errorHandlers.js";
+import { holdReloadNotice } from "../rendererReloadNotice.js";
 import { logError, logWarn } from "../../utils/logger.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { isWindowRecreating } from "../../lifecycle/windowRecreationState.js";
@@ -123,7 +128,12 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(appWebContents.reload).not.toHaveBeenCalled();
     vi.runAllTimers();
     expect(appWebContents.reload).toHaveBeenCalledTimes(1);
-    expect(notifyError).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledWith(
+      appWebContents,
+      "The renderer process crashed and was automatically reloaded.",
+      "warning"
+    );
     expect(recordRendererGone).toHaveBeenCalledTimes(1);
     expect(recordRendererGone).toHaveBeenCalledWith(
       expect.objectContaining({ process: "app-view", projectId: "proj-a", webContentsId: 2 })
@@ -139,6 +149,10 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(onViewCrashed).toHaveBeenCalledTimes(1);
     vi.runAllTimers();
     expect(appWebContents.reload).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledWith(
+      appWebContents,
+      "The renderer was reloaded due to memory pressure."
+    );
     expect(recordRendererGone).not.toHaveBeenCalled();
   });
 
@@ -218,6 +232,7 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(appWebContents.reload).not.toHaveBeenCalled();
     expect(appWebContents.loadURL).not.toHaveBeenCalled();
     expect(notifyError).not.toHaveBeenCalled();
+    expect(holdReloadNotice).not.toHaveBeenCalled();
     expect(recordRendererGone).toHaveBeenCalledTimes(1);
   });
 
@@ -231,6 +246,7 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(pvm.evictCrashedCachedView).toHaveBeenCalledWith(appWebContents, "memory-eviction");
     expect(appWebContents.reload).not.toHaveBeenCalled();
     expect(notifyError).not.toHaveBeenCalled();
+    expect(holdReloadNotice).not.toHaveBeenCalled();
   });
 
   it("still sends a cached startup view's probable OOM to window recreation", async () => {
@@ -424,14 +440,17 @@ describe("app-view render-process-gone (#12954)", () => {
       message: "The renderer process was restarted.",
     },
   ])("attributes the reload toast for $name", ({ reason, intent, message }) => {
-    const { crash } = createHarness();
+    const { appWebContents, crash } = createHarness();
     if (intent) noteTerminationIntent({ webContentsId: 2 }, "user force-restarted view");
 
     crash(reason, 9);
 
-    expect(notifyError).toHaveBeenCalledTimes(1);
-    const [error, options] = vi.mocked(notifyError).mock.calls[0];
-    expect((error as Error).message).toBe(message);
-    expect(options).toEqual({ source: "renderer-crash" });
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(holdReloadNotice).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledWith(
+      appWebContents,
+      message,
+      intent ? "info" : "warning"
+    );
   });
 });

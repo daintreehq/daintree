@@ -33,7 +33,7 @@ import { isWebviewSrcAllowed } from "./webviewSrcGate.js";
 import { gateHtmlPreviewWebviewAttach } from "../setup/htmlPreviewSession.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
-import { rendererReloadNotice } from "./rendererReloadNotice.js";
+import { holdReloadNotice, rendererReloadNotice } from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 import {
   forgetRendererDocumentState,
@@ -253,9 +253,7 @@ export function setupViewHandlers(
     // memory pressure are not a sign of a looping crash bug.
     if (details.reason === "memory-eviction") {
       if (projectId && projectId === host.activeProjectId) {
-        notifyError(new Error("A project view was reloaded due to memory pressure."), {
-          source: "renderer-crash",
-        });
+        holdReloadNotice(wc, "A project view was reloaded due to memory pressure.");
         setImmediate(() => {
           if (!wc.isDestroyed()) wc.reload();
         });
@@ -371,17 +369,11 @@ export function setupViewHandlers(
     } else {
       console.log("[ProjectViewManager] Renderer crash, auto-reloading view");
       if (projectId && projectId === host.activeProjectId) {
-        notifyError(
-          new Error(
-            rendererReloadNotice(
-              "A project view",
-              details.reason,
-              getTerminationIntent({ webContentsId: wc.id })
-            )
-          ),
-          {
-            source: "renderer-crash",
-          }
+        const intent = getTerminationIntent({ webContentsId: wc.id });
+        holdReloadNotice(
+          wc,
+          rendererReloadNotice("A project view", details.reason, intent),
+          intent ? "info" : "warning"
         );
       }
       setImmediate(() => {

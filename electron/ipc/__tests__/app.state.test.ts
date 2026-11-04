@@ -167,6 +167,10 @@ vi.mock("../../services/databaseBackupNotice.js", () => ({
   noteDatabaseNoticeRendererReady: vi.fn(),
 }));
 
+vi.mock("../../window/rendererReloadNotice.js", () => ({
+  releaseReloadNotice: vi.fn(),
+}));
+
 vi.mock("../../utils/performance.js", () => ({
   markPerformance: vi.fn(),
   isPerformanceCaptureEnabled: vi.fn(() => false),
@@ -204,6 +208,7 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
 
 import { registerAppStateHandlers } from "../handlers/app/state.js";
 import { noteDatabaseNoticeRendererReady } from "../../services/databaseBackupNotice.js";
+import { releaseReloadNotice } from "../../window/rendererReloadNotice.js";
 import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import {
@@ -2501,5 +2506,19 @@ describe("app:first-interactive handler", () => {
     cleanup();
 
     expect(noteDatabaseNoticeRendererReady).toHaveBeenCalledExactlyOnceWith(7);
+  });
+
+  it("releases the reload notice held for the sender", async () => {
+    vi.mocked(releaseReloadNotice).mockClear();
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get(CHANNELS.APP_FIRST_INTERACTIVE);
+    if (!handler) throw new Error("app:first-interactive handler not registered");
+
+    const event = makeInvokeEvent(7);
+    await handler(event);
+    cleanup();
+
+    expect(releaseReloadNotice).toHaveBeenCalledExactlyOnceWith(event.sender);
   });
 });

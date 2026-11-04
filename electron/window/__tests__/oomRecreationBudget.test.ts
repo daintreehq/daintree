@@ -70,6 +70,7 @@ function fakeWebContents(id: number) {
     on: vi.fn((event: string, handler: GoneHandler) => {
       if (event === "render-process-gone") gone.push(handler);
     }),
+    once: vi.fn(),
     removeListener: vi.fn(),
     setWindowOpenHandler: vi.fn(),
     isDestroyed: () => false,

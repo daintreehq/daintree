@@ -18,7 +18,7 @@ import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { logError, logWarn } from "../utils/logger.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { PrepareWindowRecreation } from "./windowRecreation.js";
-import { rendererReloadNotice } from "./rendererReloadNotice.js";
+import { holdReloadNotice, rendererReloadNotice } from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
@@ -95,9 +95,7 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
       // for every other cached view: reloading a renderer the OS just reclaimed
       // would respawn it under the same pressure.
       if (pvm?.evictCrashedCachedView(appWebContents, "memory-eviction")) return;
-      notifyError(new Error("The renderer was reloaded due to memory pressure."), {
-        source: "renderer-crash",
-      });
+      holdReloadNotice(appWebContents, "The renderer was reloaded due to memory pressure.");
       setImmediate(() => {
         if (win.isDestroyed()) return;
         appWebContents.reload();
@@ -184,17 +182,11 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
       // any other cached view (#12954). Nothing on screen, so no toast.
     } else {
       console.log("[MAIN] Renderer crash, auto-reloading");
-      notifyError(
-        new Error(
-          rendererReloadNotice(
-            "The renderer process",
-            details.reason,
-            getTerminationIntent({ webContentsId: appWebContents.id })
-          )
-        ),
-        {
-          source: "renderer-crash",
-        }
+      const intent = getTerminationIntent({ webContentsId: appWebContents.id });
+      holdReloadNotice(
+        appWebContents,
+        rendererReloadNotice("The renderer process", details.reason, intent),
+        intent ? "info" : "warning"
       );
       setImmediate(() => {
         if (win.isDestroyed()) return;
