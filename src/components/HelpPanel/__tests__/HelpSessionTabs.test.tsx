@@ -1275,14 +1275,36 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
     Object.defineProperty(list, "scrollWidth", { configurable: true, value: 360 });
     relayout();
     const trigger = screen.getByTestId("assistant-sessions-overflow");
+    // The trigger's 24px, its 4px margin and the strip's 2px gap: 30px it gives back.
     Object.defineProperty(trigger, "offsetWidth", { configurable: true, value: 24 });
+    const computed = window.getComputedStyle.bind(window);
+    const styles = vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
+      const style = computed(el, pseudo);
+      return new Proxy(style, {
+        get: (target, prop) =>
+          el === trigger && prop === "marginLeft"
+            ? "4px"
+            : el === trigger.parentElement && prop === "columnGap"
+              ? "2px"
+              : Reflect.get(target, prop),
+      });
+    });
 
-    // Back to three, which overflow the 250px the trigger leaves but fit its 274px.
-    rerender(strip({ tabs: SIX.slice(0, 3) }));
-    Object.defineProperty(list, "scrollWidth", { configurable: true, value: 270 });
-    relayout();
+    try {
+      // Back to three at their 280px of floors: past the 250px the trigger leaves, and
+      // inside the 280px it gives back only with its margin and the gap counted.
+      rerender(strip({ tabs: SIX.slice(0, 3) }));
+      Object.defineProperty(list, "scrollWidth", { configurable: true, value: 280 });
+      relayout();
+      expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
 
-    expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+      // The strip takes that room back, and the lanes still fit: the menu stays gone.
+      Object.defineProperty(list, "clientWidth", { configurable: true, value: 280 });
+      relayout();
+      expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+    } finally {
+      styles.mockRestore();
+    }
   });
 
   it("brings the selected lane back into view when the menu picks it", async () => {
