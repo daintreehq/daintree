@@ -48,6 +48,18 @@
  */
 export const MAX_ASSISTANT_SLOTS = 6;
 
+/**
+ * The lanes a remote Shell reads when its HELLO doesn't say: a build from
+ * before #16218 validates every lane against a ceiling of three, and refuses a
+ * whole answer that names a higher one.
+ */
+export const LEGACY_REMOTE_ASSISTANT_SLOTS = 3;
+
+/** The lanes a remote Shell that advertised `advertised` can read. */
+export function remoteReadableAssistantSlots(advertised: number | undefined): number {
+  return advertised ?? LEGACY_REMOTE_ASSISTANT_SLOTS;
+}
+
 /** The lane an install had before slots existed. Never re-numbered. */
 export const DEFAULT_ASSISTANT_SLOT = 0;
 

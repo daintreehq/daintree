@@ -202,6 +202,15 @@ describe("help.launchAgent", () => {
     action = extractHelpLaunchAgent();
   });
 
+  it("takes any lane a project can hold as its slot, and refuses one past the ceiling", () => {
+    const schema = action.argsSchema!;
+    for (const slot of ASSISTANT_SLOTS) {
+      expect(schema.safeParse({ slot }).success).toBe(true);
+    }
+    expect(schema.safeParse({ slot: ASSISTANT_SLOTS.length }).success).toBe(false);
+    expect(schema.safeParse({ slot: -1 }).success).toBe(false);
+  });
+
   it("asks for the assistant panel and binds nothing until it has mounted", async () => {
     // HelpPanel mounts lazily; its lane runtimes hold the session listeners,
     // which don't replay — so the session must not be provisioned before them.

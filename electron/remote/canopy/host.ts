@@ -14,10 +14,16 @@ import {
   type CanopyAssistantsAnswer,
 } from "./linkMethods.js";
 import type { CanopyViewerParams, CanopyViewers } from "./viewer.js";
-import { unreadAgentDirectory, type AgentDirectory } from "../../../shared/types/agentDirectory.js";
+import {
+  agentDirectoryForLanes,
+  unreadAgentDirectory,
+  type AgentDirectory,
+} from "../../../shared/types/agentDirectory.js";
+import { remoteReadableAssistantSlots } from "../../../shared/config/assistantSlots.js";
 import { ASSISTANT_VIEWER_VERSION } from "../../../shared/types/ipc/canopyHost.js";
 import {
   ASSISTANT_WORK_VERSION,
+  assistantWorkForLanes,
   unreadAssistantWork,
   type AssistantWorkHostReading,
 } from "../../../shared/types/assistantWork.js";
@@ -97,6 +103,8 @@ export function installCanopyHostWith(
     // Per link, not per host session: a resumed link starts its viewers afresh.
     const prefix = `${++nextSession}:`;
     const ref = clientRefOf(client);
+    // What this Shell's build can name: a higher lane fails its whole answer.
+    const lanes = remoteReadableAssistantSlots(client.assistantSlots);
     /**
      * A push the Shell never got leaves its panel wrong: a snapshot no later
      * one may replace, or a terminal missing bytes. The viewer is dropped,
@@ -190,7 +198,10 @@ export function installCanopyHostWith(
               assistantsOnly: true,
             }).catch(() => unreadAgentDirectory("unreachable"))
           : unreadAgentDirectory("unsupported");
-        return { version: ASSISTANT_VIEWER_VERSION, directory: assistantsOf(directory) };
+        return {
+          version: ASSISTANT_VIEWER_VERSION,
+          directory: agentDirectoryForLanes(assistantsOf(directory), lanes),
+        };
       }
     );
     session.registerCallHandler(
@@ -205,7 +216,10 @@ export function installCanopyHostWith(
           });
         }
         const reading = await read().catch(() => unreadAssistantWork("unreachable"));
-        return { version: ASSISTANT_WORK_VERSION, reading };
+        return {
+          version: ASSISTANT_WORK_VERSION,
+          reading: assistantWorkForLanes(reading, lanes),
+        };
       }
     );
     session.registerCallHandler(

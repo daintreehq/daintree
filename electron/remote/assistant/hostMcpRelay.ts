@@ -4,10 +4,12 @@ import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionContext, MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
+  agentDirectoryForLanes,
   fitAgentDirectory,
   unreadAgentDirectory,
   type AgentDirectory,
 } from "../../../shared/types/agentDirectory.js";
+import { remoteReadableAssistantSlots } from "../../../shared/config/assistantSlots.js";
 import {
   AgentsPayloadSchema,
   AssistantLinkMethod,
@@ -263,7 +265,10 @@ export function installHostMcpRelay(
         }
         return {
           status: "done",
-          directory: fitAgentDirectory(directory, AGENT_DIRECTORY_BYTES_MAX),
+          directory: fitAgentDirectory(
+            agentDirectoryForLanes(directory, remoteReadableAssistantSlots(client.assistantSlots)),
+            AGENT_DIRECTORY_BYTES_MAX
+          ),
           // Its metrics host sends every attached Shell its agents' waits (#16188).
           waitingEvents: true,
         };

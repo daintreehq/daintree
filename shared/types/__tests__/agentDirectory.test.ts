@@ -4,6 +4,7 @@ import {
   AgentDirectoryLiveEntrySchema,
   AgentDirectoryResumableEntrySchema,
   AgentDirectorySubjectSchema,
+  agentDirectoryForLanes,
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_LABEL_MAX,
   cutAgentLabel,
@@ -155,5 +156,45 @@ describe("assistant lanes (#16218)", () => {
       expect(AgentDirectorySubjectSchema.safeParse(subject(lane)).success).toBe(false);
       expect(AgentDirectoryResumableEntrySchema.safeParse(resumable(lane)).success).toBe(false);
     }
+  });
+});
+
+describe("agentDirectoryForLanes (#16218)", () => {
+  const assistant = (lane: number): AgentDirectoryLiveEntry => ({
+    ...entry(lane),
+    role: "assistant",
+    subject: { ...entry(lane).subject, lane },
+    attached: true,
+  });
+  const directory = (entries: AgentDirectory["entries"]): AgentDirectory => ({
+    coverage: "ok",
+    observedAt: 1,
+    complete: true,
+    omitted: 1,
+    entries,
+  });
+
+  it("leaves out entries in lanes past the count, live or resumable, and counts them", () => {
+    const resumable = {
+      state: "resumable" as const,
+      role: "assistant" as const,
+      hostId: "local",
+      scope: { kind: "project" as const, projectId: "p" },
+      lane: 4,
+      agentId: null,
+      capturedAt: 1,
+    };
+    const fitted = agentDirectoryForLanes(
+      directory([entry(9), assistant(2), assistant(3), resumable]),
+      3
+    );
+    // A worker names no lane and always stays.
+    expect(fitted.entries).toEqual([entry(9), assistant(2)]);
+    expect(fitted.omitted).toBe(3);
+  });
+
+  it("returns a directory with nothing past the count unchanged", () => {
+    const within = directory([entry(0), assistant(0), assistant(2)]);
+    expect(agentDirectoryForLanes(within, 3)).toBe(within);
   });
 });

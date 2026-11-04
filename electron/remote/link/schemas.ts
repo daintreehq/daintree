@@ -44,6 +44,9 @@ const ClientInfoSchema = z.object({
   clientName: z.string().max(256),
   platform: z.enum(["darwin", "linux", "win32"]),
   deviceId: id.optional(),
+  // One this side cannot read is dropped rather than refusing the HELLO: the
+  // host then sends the lanes every Shell reads.
+  assistantSlots: z.number().int().min(1).max(1024).optional().catch(undefined),
 });
 
 export const HelloSchema = z.object({

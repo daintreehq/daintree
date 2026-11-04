@@ -21,6 +21,7 @@ import {
 } from "../../services/ProjectHistoryService.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
+import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
 import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -822,6 +823,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       deviceId: readOrCreateDeviceId(clientDir),
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
+      assistantSlots: MAX_ASSISTANT_SLOTS,
     },
     views: createViewSink(hostForView),
     reverseRequests: answerReverseRequest,

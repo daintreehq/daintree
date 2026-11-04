@@ -1,4 +1,4 @@
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { LayoutGroup } from "framer-motion";
 import { ChevronDown, Plus, RotateCw, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, InteractingCircle } from "@/components/icons";
@@ -31,7 +31,6 @@ import {
   revealTabInStrip,
 } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
-import { useTabOverflow } from "@/hooks/useTabOverflow";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import type { AgentState } from "@/types";
@@ -270,8 +269,6 @@ function SessionTabChip({
       id={tabId}
       // How the strip finds one lane without holding a ref to every chip.
       data-slot={tab.slot}
-      // What `useTabOverflow` watches to tell which lanes the strip has clipped.
-      data-tab-id={tab.slot}
       data-document-tab=""
       aria-selected={isActive}
       aria-controls={panelId}
@@ -306,8 +303,11 @@ function SessionTabChip({
         // Content-width, like every other tab strip in the app and every browser's. Tabs
         // shrink when the strip is tight, down to the portal strip's floor, and past
         // that the strip scrolls; `TabLabel` keeps the identifying numeral out of the
-        // part that gives way. Three lanes still fit at the 320px minimum.
-        "min-w-[88px] shrink px-2 py-1.5"
+        // part that gives way. The selected tab's floor keeps room for the close it
+        // alone draws once crowded, beside an agent mark and a working spinner. Three
+        // lanes still fit at the 320px minimum.
+        isActive ? "min-w-[104px]" : "min-w-[88px]",
+        "shrink px-2 py-1.5"
       )}
     >
       {isActive && <DocumentTabIndicator inFocusedRegion={isRegionFocused} />}
@@ -433,8 +433,8 @@ interface HelpSessionTabsProps {
 }
 
 /**
- * Every lane, offered while the strip has scrolled any of them out of view: with the
- * scrollbar hidden, a pointer without a horizontal wheel has no other way to one. The
+ * Every lane, offered while the strip can't show them all at once: with the scrollbar
+ * hidden, a pointer without a horizontal wheel has no other way to one. The
  * same radio list of every tab the portal strip keeps, rather than the hidden ones
  * alone, so a lane half under the edge is never missing from both places.
  */
@@ -578,17 +578,34 @@ export function HelpSessionTabs({
   );
 
   const slots = useMemo(() => tabs.map((t) => t.slot), [tabs]);
-  // Membership alone: `tabs` is rebuilt on every state transition, and a lane at work
-  // must not drag a strip the user scrolled back to the selected lane.
+  // Membership alone: `tabs` is rebuilt on every state transition.
   const slotsKey = slots.join(",");
+  const hasActiveTab = slots.includes(activeSlot);
 
-  // The selected lane in view whenever it changes or a lane opens or closes: a lane
-  // opened past the edge, or picked from the menu, would otherwise be selected offscreen.
+  // Measured off the strip rather than per tab: a lane half under the edge is clipped
+  // too, and an intersection observer still reports it as intersecting. Tabs are
+  // observed as well as the strip, because a title that grows a tab past the edge
+  // leaves the strip's own box the same size.
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  useEffect(() => {
+    if (!listEl || !slotsKey) return;
+    const measure = () => setIsOverflowing(listEl.scrollWidth > listEl.clientWidth + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(listEl);
+    for (const child of Array.from(listEl.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [listEl, slotsKey]);
+
+  // The selected lane in view when it changes, when it first has a tab (a restore can
+  // select a lane before its tab arrives), and when the menu's trigger mounts or goes,
+  // which narrows or widens the strip under it. Not when another lane opens or closes,
+  // nor when one changes state: the keyboard's close handoff scrolls to the lane it
+  // focuses, and a strip the user scrolled stays where they put it.
   useLayoutEffect(() => {
-    if (slotsKey) revealSlot(activeSlot);
-  }, [activeSlot, slotsKey, revealSlot]);
-
-  const hiddenTabIds = useTabOverflow(listEl, slots.map(String));
+    if (hasActiveTab) revealSlot(activeSlot);
+  }, [activeSlot, hasActiveTab, isOverflowing, revealSlot]);
 
   /**
    * Closing a lane with a working agent raises a confirm dialog first, and `tabs` is
@@ -759,7 +776,7 @@ export function HelpSessionTabs({
           </TooltipContent>
         </Tooltip>
       )}
-      {hiddenTabIds.size > 0 && (
+      {isOverflowing && (
         <AllSessionsMenu
           tabs={tabs}
           activeSlot={activeSlot}

@@ -94,6 +94,28 @@ export interface AssistantWorkReading extends Omit<AssistantWorkHostReading, "wo
   workers: AssistantWorkWorker[];
 }
 
+/**
+ * The reading a Shell that reads lanes below `laneCount` can parse: a worker
+ * whose creator or controller is an assistant in a higher lane is counted in
+ * `omitted` rather than sent, since one such lane fails that Shell's whole answer.
+ */
+export function assistantWorkForLanes(
+  reading: AssistantWorkHostReading,
+  laneCount: number
+): AssistantWorkHostReading {
+  const readable = (ref: AssistantWorkHostRef | null) =>
+    ref?.kind !== "assistant" || ref.subject.lane === undefined || ref.subject.lane < laneCount;
+  const workers = reading.workers.filter(
+    (worker) => readable(worker.createdBy) && readable(worker.controlledBy)
+  );
+  if (workers.length === reading.workers.length) return reading;
+  return {
+    ...reading,
+    omitted: reading.omitted + reading.workers.length - workers.length,
+    workers,
+  };
+}
+
 /** Nothing read: it names no worker, and is never a full reading. */
 export function unreadAssistantWork(
   coverage: "unreachable" | "unsupported"
