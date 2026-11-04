@@ -23,7 +23,6 @@ vi.mock("electron", () => ({
   powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
-import { FOLLOW_UPS_NOT_SERVED } from "../mcpSurface.js";
 import { QuestionBridge } from "../questionBridge.js";
 import type { QuestionSource } from "../relayConnection.js";
 
@@ -73,6 +72,13 @@ function liveBridge() {
     })),
     getDecision: vi.fn(async () => ({ questionId: "q_live" })),
     cancelQuestion: vi.fn(async () => {}),
+    postMessage: vi.fn(async () => ({
+      questionId: "q_live",
+      messageId: "m_live",
+      alias: 1,
+      status: "queued" as const,
+      expectsReply: true,
+    })),
     listPending: vi.fn(async () => []),
   };
 }
@@ -150,24 +156,130 @@ describe("QuestionBridge", () => {
     expect(live.getDecision).toHaveBeenCalledWith(result.questionId, paneIdentityOf(ORIGIN));
   });
 
-  // The 0.4.0 bridge's follow-ups would skip `admit` and land in the outbox a live attempt publishes (#16232).
-  it("refuses an agent's follow-up, with or without a live attempt, and commits nothing", async () => {
+  it("posts a follow-up through the live attempt's bridge, for the pane that called", async () => {
+    const b = bridge();
+    live = liveBridge();
+    const pane = paneIdentityOf(ORIGIN);
+    const followUp = { question_id: "q_live", text: "And then?", expects_reply: true };
+
+    await expect(b.postMessage(followUp, pane)).resolves.toMatchObject({ messageId: "m_live" });
+
+    expect(live.postMessage).toHaveBeenCalledWith(followUp, pane);
+    expect(fetches).toBe(0);
+  });
+
+  it("commits a follow-up between attempts, sealed and signed, for the next attempt to publish after its question", async () => {
     const b = bridge();
     const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Later?" } });
     const followUp = { question_id: asked.questionId, text: "And then?", expects_reply: true };
 
-    // The MCP route answers exactly this refusal as an unknown tool, so both states must give it.
-    const refusal = { code: "not_supported", message: FOLLOW_UPS_NOT_SERVED };
-    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject(refusal);
-    const posting = { ...liveBridge(), postMessage: vi.fn() };
-    live = posting;
-    const whileLive = b.postMessage(followUp, paneIdentityOf(ORIGIN));
-    await expect(whileLive).rejects.toBeInstanceOf(BridgeError);
-    await expect(whileLive).rejects.toMatchObject(refusal);
+    const posted = await b.postMessage(followUp, paneIdentityOf(ORIGIN));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(posting.postMessage).not.toHaveBeenCalled();
+    expect(posted).toMatchObject({
+      questionId: asked.questionId,
+      alias: asked.alias,
+      status: "queued",
+      expectsReply: true,
+    });
+    expect(b.state).toBe("stopped");
+    expect(fetches).toBe(0);
+    const outbox = await store.outboxFor(asked.questionId);
+    expect(outbox.map((item) => item.kind)).toEqual(["create", "message"]);
+    const { signed } = outbox[1]!.payload as {
+      signed: { record: Record<string, unknown>; envelope: unknown };
+    };
+    expect(signed.record).toMatchObject({
+      question_id: asked.questionId,
+      message_id: posted.messageId,
+      side: "agent",
+      expects_reply: true,
+      signer_device_id: identity!.config.deviceId,
+    });
+    expect(JSON.stringify(outbox[1]!.payload)).not.toContain("And then?");
+    // A message never touches the question it follows up.
+    expect(await store.getQuestion(asked.questionId)).toMatchObject({
+      local_status: "queued",
+      messages_json: "[]",
+    });
+  });
+
+  it("refuses a follow-up on another pane's question or an unknown one alike, and from a pane no longer current", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Mine?" } });
+    const followUp = { question_id: asked.questionId, text: "Mine too?", expects_reply: false };
+    const other = { ...paneIdentityOf(ORIGIN), pane_id: "pane-2" };
+    const relaunched = { ...paneIdentityOf(ORIGIN), ownership_principal: "principal-2" };
+
+    for (const pane of [other, relaunched]) {
+      await expect(b.postMessage(followUp, pane)).rejects.toMatchObject({
+        code: "not_found",
+        message: "unknown question",
+      });
+    }
+    await expect(
+      b.postMessage({ ...followUp, question_id: "q_unknown" }, paneIdentityOf(ORIGIN))
+    ).rejects.toMatchObject({ code: "not_found", message: "unknown question" });
+    current = false;
+    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject({
+      code: "forbidden",
+    });
+    current = true;
+    live = liveBridge();
+    current = false;
+    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject({
+      code: "forbidden",
+    });
+    expect(live.postMessage).not.toHaveBeenCalled();
     expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual(["create"]);
-    expect((await store.getQuestion(asked.questionId))?.messages_json).toBe("[]");
+  });
+
+  it("runs posts one at a time, checking each pane when its turn comes", async () => {
+    const b = bridge();
+    live = liveBridge();
+    let release!: () => void;
+    live.postMessage.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          release = () => reject(new BridgeError("invalid_state", "q-1 was cancelled"));
+        })
+    );
+    const pane = paneIdentityOf(ORIGIN);
+    const first = b.postMessage({ question_id: "q_live", text: "One", expects_reply: false }, pane);
+    const second = b.postMessage({ question_id: "q_live", text: "Two", expects_reply: true }, pane);
+    await vi.waitFor(() => expect(live!.postMessage).toHaveBeenCalledTimes(1));
+    release();
+    await expect(first).rejects.toMatchObject({ code: "invalid_state" });
+    await expect(second).resolves.toMatchObject({ messageId: "m_live" });
+    expect(live.postMessage).toHaveBeenCalledTimes(2);
+
+    live.postMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              questionId: "q_live",
+              messageId: "m_third",
+              alias: 1,
+              status: "queued",
+              expectsReply: false,
+            });
+        })
+    );
+    const third = b.postMessage(
+      { question_id: "q_live", text: "Three", expects_reply: false },
+      pane
+    );
+    const fourth = b.postMessage(
+      { question_id: "q_live", text: "Four", expects_reply: false },
+      pane
+    );
+    await vi.waitFor(() => expect(live!.postMessage).toHaveBeenCalledTimes(3));
+    current = false;
+    release();
+    await expect(third).resolves.toMatchObject({ messageId: "m_third" });
+    await expect(fourth).rejects.toMatchObject({ code: "forbidden" });
+    expect(live.postMessage).toHaveBeenCalledTimes(3);
   });
 
   it("asks under the lifetime's own policy, as the attempts do", async () => {
@@ -255,6 +367,18 @@ describe("QuestionBridge", () => {
     });
     await expect(
       b.getDecision(known.questionId, { ...paneIdentityOf(ORIGIN), agent_session_id: "session-2" })
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      b.postMessage(
+        { question_id: asked.questionId, text: "Still me", expects_reply: false },
+        learned
+      )
+    ).resolves.toMatchObject({ questionId: asked.questionId });
+    await expect(
+      b.postMessage(
+        { question_id: known.questionId, text: "Not me", expects_reply: false },
+        { ...paneIdentityOf(ORIGIN), agent_session_id: "session-2" }
+      )
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(b.cancelQuestion(asked.questionId, learned)).resolves.toBeUndefined();
     expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");

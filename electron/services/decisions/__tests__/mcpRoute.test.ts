@@ -4,6 +4,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import {
   MemoryKeyStore,
   MemoryLocalStore,
+  SERVER_INSTRUCTIONS,
+  TOOLS,
+  askedInstruction,
+  followupInstruction,
   loadIdentity,
   type DecisionsBridge,
   type Identity,
@@ -321,7 +325,7 @@ describe("/mcp/decisions (#16011)", () => {
     await fs.rm(testHomeDir, { recursive: true, force: true });
   });
 
-  it("serves the three tools to a pane bearer with the MCP server off, each described in under 400 bytes", async () => {
+  it("serves the four tools to a pane bearer with the MCP server off, each described in under 400 bytes", async () => {
     await boot(false);
     add(pane("pane-a"));
     const port = await openRoute();
@@ -342,14 +346,15 @@ describe("/mcp/decisions (#16011)", () => {
       "ask_human",
       "cancel_question",
       "get_decision",
+      "send_followup",
     ]);
     for (const tool of tools) {
       expect(Buffer.byteLength(tool.description, "utf8"), tool.name).toBeLessThan(400);
     }
   });
 
-  // The 0.4.0 library adds thread follow-ups; agents get none of it until Daintree delivers them (#16231, #16232).
-  it("keeps agents on the surface from before follow-ups: words, tools and results", async () => {
+  // `get_decision`'s thread is held until Daintree takes the relay's thread events (#16231).
+  it("tells agents about follow-ups in the library's own words, with no thread on get_decision", async () => {
     await boot(false);
     add(pane("pane-a"));
     const port = await openRoute();
@@ -361,41 +366,59 @@ describe("/mcp/decisions (#16011)", () => {
     });
     const instructions = (JSON.parse(init.body) as { result: { instructions: string } }).result
       .instructions;
-    expect(instructions).toContain("Use ask_human for decisions that belong to the human.");
-    expect(instructions).not.toMatch(/follow-?up|send_followup/i);
+    expect(instructions).toBe(SERVER_INSTRUCTIONS);
+    expect(instructions).toContain("send_followup");
 
     const list = await rpc(port, "pane-token-pane-a", "tools/list");
-    expect(list.body).not.toMatch(/follow-?up|send_followup|"thread"/i);
+    const tools = (JSON.parse(list.body) as { result: { tools: Array<Record<string, unknown>> } })
+      .result.tools;
+    const byName = (name: string, from: readonly Record<string, unknown>[]) =>
+      from.find((tool) => tool.name === name);
+    const library = TOOLS as readonly Record<string, unknown>[];
+    for (const name of ["ask_human", "cancel_question", "send_followup"]) {
+      expect(byName(name, tools), name).toEqual(byName(name, library));
+    }
+    const getDecision = byName("get_decision", tools)!;
+    expect(JSON.stringify(getDecision)).not.toMatch(/"thread"|follow-?up/i);
+    expect(getDecision.inputSchema).toEqual(byName("get_decision", library)!.inputSchema);
 
     const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Which name?" });
     const alias = (await store.listQuestions())[0].alias;
-    expect(asked.content[0].text).toBe(
-      `Asked as q-${alias}. Carry on with anything that does not depend on the answer; once you cannot go further without it, end your turn. The answer arrives as a new message in this terminal, with your question quoted.`
-    );
+    expect(asked.content[0].text).toBe(askedInstruction(alias));
     expect(asked.structuredContent.instruction).toBe(asked.content[0].text);
     const questionId = asked.structuredContent.question_id as string;
 
+    await call(port, "pane-token-pane-a", "send_followup", {
+      question_id: questionId,
+      text: "One more thing",
+      expects_reply: false,
+    });
     const read = await call(port, "pane-token-pane-a", "get_decision", { question_id: questionId });
     expect(read.structuredContent).toMatchObject({ question_id: questionId, status: "queued" });
     expect(read.structuredContent).not.toHaveProperty("thread");
-    expect(read.content[0].text).not.toMatch(/follow-?up/i);
   });
 
-  it("answers send_followup as an unknown tool, alone or in a batch, and commits nothing", async () => {
+  it("commits a follow-up on the pane's own question at once, alone or in a batch, before any network I/O", async () => {
     await boot(false);
     add(pane("pane-a"));
     const port = await openRoute();
     const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Which name?" });
     const questionId = asked.structuredContent.question_id as string;
-    const followUp = { question_id: questionId, text: "One more thing", expects_reply: true };
+    const alias = (await store.getQuestion(questionId))!.alias;
 
-    const alone = await rpc(port, "pane-token-pane-a", "tools/call", {
-      name: "send_followup",
-      arguments: followUp,
+    const posted = await call(port, "pane-token-pane-a", "send_followup", {
+      question_id: questionId,
+      text: "Should the old name stay as an alias?",
+      expects_reply: true,
     });
-    expect(alone.status).toBe(200);
-    expect(JSON.parse(alone.body)).toMatchObject({
-      error: { code: -32602, message: "Unknown tool" },
+    expect(posted.isError).toBeUndefined();
+    expect(posted.content[0].text).toBe(followupInstruction(alias, true));
+    expect(posted.structuredContent).toEqual({
+      question_id: questionId,
+      message_id: expect.any(String),
+      status: "queued",
+      expects_reply: true,
+      instruction: posted.content[0].text,
     });
 
     const batch = await request(port, DECISIONS_MCP_PATH, {
@@ -406,7 +429,10 @@ describe("/mcp/decisions (#16011)", () => {
           jsonrpc: "2.0",
           id: "f",
           method: "tools/call",
-          params: { name: "send_followup", arguments: followUp },
+          params: {
+            name: "send_followup",
+            arguments: { question_id: questionId, text: "No reply needed.", expects_reply: false },
+          },
         },
         {
           jsonrpc: "2.0",
@@ -416,16 +442,25 @@ describe("/mcp/decisions (#16011)", () => {
         },
       ]),
     });
-    const [refused, read] = JSON.parse(batch.body) as Array<Record<string, unknown>>;
-    expect(refused).toEqual({
-      jsonrpc: "2.0",
+    const [note, read] = JSON.parse(batch.body) as Array<Record<string, unknown>>;
+    expect(note).toMatchObject({
       id: "f",
-      error: { code: -32602, message: "Unknown tool" },
+      result: { structuredContent: { status: "queued", expects_reply: false } },
     });
-    expect(read).toMatchObject({ id: "g", result: { structuredContent: { status: "queued" } } });
+    // A follow-up never answers or moves the question.
+    expect(read).toMatchObject({
+      id: "g",
+      result: { structuredContent: { status: "queued", provenance: null, choice: null } },
+    });
 
-    expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual(["create"]);
-    expect((await store.getQuestion(questionId))?.messages_json).toBe("[]");
+    expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual([
+      "create",
+      "message",
+      "message",
+    ]);
+    const row = (await store.getQuestion(questionId))!;
+    expect(row).toMatchObject({ local_status: "queued", messages_json: "[]" });
+    expect(fetches).toBe(0);
   });
 
   it("commits the question with its full origin from the bearer and the pane, before any network I/O", async () => {
@@ -690,6 +725,22 @@ describe("/mcp/decisions (#16011)", () => {
       question_id: questionId,
     });
     expect(refused.structuredContent).toEqual({ error: "not_found" });
+    // A follow-up is the asking pane's alone, whatever its arguments name.
+    const followUp = await call(port, "pane-token-pane-b", "send_followup", {
+      question_id: questionId,
+      text: "Pick A.",
+      expects_reply: false,
+      pane_id: "pane-a",
+      origin: { pane_id: "pane-a", ownership_principal: "principal-pane-a" },
+    });
+    const unknownFollowUp = await call(port, "pane-token-pane-b", "send_followup", {
+      question_id: "q_doesnotexist",
+      text: "Pick A.",
+      expects_reply: false,
+    });
+    expect(followUp.isError).toBe(true);
+    expect(followUp.structuredContent).toEqual({ error: "not_found" });
+    expect(followUp.content).toEqual(unknownFollowUp.content);
     expect((await store.getQuestion(questionId))?.local_status).toBe("queued");
     expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual(["create"]);
 
@@ -732,7 +783,14 @@ describe("/mcp/decisions (#16011)", () => {
     expect(read.structuredContent).toEqual({ error: "not_found" });
     const cancel = await call(port, token, "cancel_question", { question_id: questionId });
     expect(cancel.structuredContent).toEqual({ error: "not_found" });
+    const followUp = await call(port, token, "send_followup", {
+      question_id: questionId,
+      text: "Still mine?",
+      expects_reply: false,
+    });
+    expect(followUp.structuredContent).toEqual({ error: "not_found" });
     expect((await store.getQuestion(questionId))?.local_status).toBe("queued");
+    expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual(["create"]);
   });
 
   it("still shows a question to its run once the run's agent session is learned", async () => {

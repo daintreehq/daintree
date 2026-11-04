@@ -8,16 +8,22 @@ import {
   type QuestionOrigin,
   type RegisterResult,
 } from "@daintreehq/decisions-client";
-import { FOLLOW_UPS_NOT_SERVED } from "./mcpSurface.js";
 import type { QuestionSource } from "./relayConnection.js";
 import { holdingTerminalSink } from "./relayTransport.js";
+
+/** The question a follow-up names, if it names one; the library refuses the rest. */
+function questionIdOf(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const id = (input as { question_id?: unknown }).question_id;
+  return typeof id === "string" ? id : null;
+}
 
 export interface QuestionBridgeOptions {
   source: QuestionSource;
   /**
    * Whether `pane` is still exactly the run its request was let in as. Asked
    * again at each call: the handler authenticates before it reads the body,
-   * and a pane revoked or relaunched since then must not ask, read or cancel.
+   * and a pane revoked or relaunched since then must not ask, read, cancel or post.
    */
   isCurrent(pane: PaneIdentity): boolean;
 }
@@ -38,6 +44,7 @@ export interface QuestionBridgeOptions {
 export class QuestionBridge extends DecisionsBridge {
   private readonly question: QuestionBridgeOptions;
   private asks: Promise<unknown> = Promise.resolve();
+  private posts: Promise<unknown> = Promise.resolve();
 
   constructor(options: QuestionBridgeOptions) {
     const identity = options.source.identity();
@@ -88,12 +95,23 @@ export class QuestionBridge extends DecisionsBridge {
   }
 
   /**
-   * An agent's follow-up (0.4.0) is refused before anything is read or
-   * committed: this bridge would commit it to the lifetime's outbox past
-   * `admit`, and a live attempt would publish it (#16232).
+   * An agent's follow-up (#16232) goes the way an ask does: to the live
+   * attempt, or committed here between attempts, sealed and signed, for the
+   * next one to publish after its question. Posts run one at a time: each
+   * bridge reserves a question's message count and order under its own lock,
+   * and a post committed here could otherwise race one on an attempt that has
+   * just gone live.
    */
-  override postMessage(_input: unknown, _pane: PaneIdentity): Promise<PostMessageResult> {
-    return Promise.reject(new BridgeError("not_supported", FOLLOW_UPS_NOT_SERVED));
+  override postMessage(input: unknown, pane: PaneIdentity): Promise<PostMessageResult> {
+    const post = async (): Promise<PostMessageResult> => {
+      const live = this.admit(pane);
+      const questionId = questionIdOf(input);
+      const asker = questionId === null ? pane : await this.askerOf(questionId, pane);
+      return live ? live.postMessage(input, asker) : super.postMessage(input, asker);
+    };
+    const run = this.posts.then(post);
+    this.posts = run.catch(() => {});
+    return run;
   }
 
   override async listPending(pane?: PaneIdentity): Promise<DecisionView[]> {

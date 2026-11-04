@@ -17,6 +17,7 @@ import {
 import {
   buildSignedAction,
   buildSignedMessage,
+  decryptEnvelope,
   encryptEnvelope,
   exportPublicKey,
   generateDeviceKeys,
@@ -171,6 +172,13 @@ class FakeRelay {
   readonly questions = new Map<string, { target_host_id: string; signer_device_id: string }>();
   /** The device each signed request came from, and where it went. */
   readonly requests: Array<{ path: string; deviceId: string | null; body: unknown }> = [];
+  /** Thread messages as their sender signed them, in the order the relay took them. */
+  readonly messages: Array<{
+    questionId: string;
+    deviceId: string | null;
+    record: Record<string, unknown>;
+    envelope: Record<string, unknown>;
+  }> = [];
   /** While true, the socket isn't reachable: tickets fail and nothing connects. */
   down = false;
   hostDeviceId = "";
@@ -210,6 +218,28 @@ class FakeRelay {
       body,
     });
     if (this.down) throw new TypeError("fetch failed");
+    // A 0.4.0 relay advertises threads; nothing is sent to a desktop that doesn't declare them.
+    if (method === "GET" && pathname === "/api/v1/info") {
+      return json(200, { features: ["thread-messages-v1"] });
+    }
+    const thread = /^\/api\/v1\/questions\/([^/]+)\/messages$/.exec(pathname);
+    if (method === "POST" && thread !== null) {
+      const { message } = body as {
+        message: { record: Record<string, unknown>; envelope: Record<string, unknown> };
+      };
+      this.messages.push({
+        questionId: thread[1]!,
+        deviceId: this.requests.at(-1)!.deviceId,
+        record: message.record,
+        envelope: message.envelope,
+      });
+      return json(201, {
+        question_id: thread[1],
+        message_id: message.record.message_id,
+        message_seq: this.messages.filter((m) => m.questionId === thread[1]).length,
+        event_seq: this.highWater(),
+      });
+    }
     if (method === "POST" && pathname === "/api/v1/socket-ticket") {
       return json(200, {
         ticket: `ticket-${this.requests.length}`,
@@ -460,23 +490,18 @@ async function loopbackListener() {
 
 let nextRpc = 1;
 
-/** An agent's `ask_human`, through the Host's `/mcp/decisions` with its pane's bearer. */
-async function askHuman(port: number, token: string, question: string): Promise<string> {
+/** An agent's tool call, through the Host's `/mcp/decisions` with its pane's bearer. */
+async function callTool(
+  port: number,
+  token: string,
+  name: string,
+  args: Record<string, unknown>
+): Promise<{ isError?: boolean; structuredContent: Record<string, unknown> }> {
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: nextRpc++,
     method: "tools/call",
-    params: {
-      name: "ask_human",
-      arguments: {
-        question,
-        kind: "choice",
-        options: [
-          { id: "a", label: "Option A" },
-          { id: "b", label: "Option B" },
-        ],
-      },
-    },
+    params: { name, arguments: args },
   });
   const answer = await new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = http.request(
@@ -504,10 +529,24 @@ async function askHuman(port: number, token: string, question: string): Promise<
     req.end(body);
   });
   expect(answer.status).toBe(200);
-  const result = (
-    JSON.parse(answer.body) as { result: { structuredContent: { question_id: string } } }
+  return (
+    JSON.parse(answer.body) as {
+      result: { isError?: boolean; structuredContent: Record<string, unknown> };
+    }
   ).result;
-  return result.structuredContent.question_id;
+}
+
+/** An agent's `ask_human`, through the Host's `/mcp/decisions` with its pane's bearer. */
+async function askHuman(port: number, token: string, question: string): Promise<string> {
+  const result = await callTool(port, token, "ask_human", {
+    question,
+    kind: "choice",
+    options: [
+      { id: "a", label: "Option A" },
+      { id: "b", label: "Option B" },
+    ],
+  });
+  return result.structuredContent.question_id as string;
 }
 
 function typedChoices(text: string): string[] {
@@ -792,5 +831,100 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const tickets = relay.requests.filter((request) => request.path === "/api/v1/socket-ticket");
     expect(tickets.length).toBeGreaterThan(0);
     for (const ticket of tickets) expect(ticket.body).not.toHaveProperty("features");
+  }, 60_000);
+  it("publishes a Host pane's follow-ups on its own questions, signed by the Host, live and after being away", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    const store = new DaintreeLocalStore(sqlite);
+    const followUp = (token: string, questionId: string, text: string, expectsReply: boolean) =>
+      callTool(listener.port, token, "send_followup", {
+        question_id: questionId,
+        text,
+        expects_reply: expectsReply,
+      });
+    /** What the phone reads of a message the relay took: its record, and its words opened with the owner's keys. */
+    const posted = async (index: number) => {
+      const message = relay.messages[index]!;
+      const content = (await decryptEnvelope(message.envelope as never, owner.identity.epochs, {
+        questionId: message.questionId,
+        recordType: MESSAGE_RECORD_TYPE,
+        purpose: "message-content",
+      })) as { side: string; text: string };
+      return { ...message, content };
+    };
+
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const before = (await store.getQuestion(asked))!;
+
+    // Connected: queued at once, then published by the Host's own device.
+    const live = await followUp("token-pane-1", asked, "Is B the faster one?", true);
+    expect(live.structuredContent).toMatchObject({ question_id: asked, status: "queued" });
+    await vi.waitFor(() => expect(relay.messages).toHaveLength(1), { timeout: 15_000 });
+    const first = await posted(0);
+    expect(first).toMatchObject({
+      questionId: asked,
+      deviceId: host.config.deviceId,
+      record: {
+        message_id: live.structuredContent.message_id,
+        side: "agent",
+        expects_reply: true,
+        signer_device_id: host.config.deviceId,
+      },
+      content: { side: "agent", text: "Is B the faster one?" },
+    });
+
+    // The other pane's follow-up on that question is refused as an unknown one, and nothing is sent.
+    const refused = await followUp("token-pane-2", asked, "Pick A for them.", false);
+    expect(refused).toMatchObject({ isError: true, structuredContent: { error: "not_found" } });
+
+    // Away: a follow-up, and a question with a follow-up of its own, are kept and answered at once.
+    relay.down = true;
+    relay.liveSocket()!.drop();
+    await vi.waitFor(() => expect(service.getStatus().state).toBe("reconnecting"), {
+      timeout: 15_000,
+    });
+    const away = await followUp("token-pane-1", asked, "No reply needed: B is faster.", false);
+    expect(away.structuredContent).toMatchObject({ status: "queued", expects_reply: false });
+    const later = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    const laterFollowUp = await followUp("token-pane-2", later, "Either works for me.", false);
+    expect(laterFollowUp.structuredContent).toMatchObject({ status: "queued" });
+    expect(relay.messages).toHaveLength(1);
+
+    // Back: each is published once, a new question before its own follow-up.
+    relay.down = false;
+    await vi.waitFor(() => expect(relay.messages).toHaveLength(3), { timeout: 20_000 });
+    const sent = await Promise.all([1, 2].map((index) => posted(index)));
+    expect(sent.map((message) => [message.questionId, message.content.text])).toEqual(
+      expect.arrayContaining([
+        [asked, "No reply needed: B is faster."],
+        [later, "Either works for me."],
+      ])
+    );
+    const created = relay.requests.findIndex(
+      (request) =>
+        request.path === "/api/v1/questions" && JSON.stringify(request.body).includes(later)
+    );
+    const laterPosted = relay.requests.findIndex(
+      (request) => request.path === `/api/v1/questions/${later}/messages`
+    );
+    expect(created).toBeGreaterThanOrEqual(0);
+    expect(laterPosted).toBeGreaterThan(created);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(relay.messages).toHaveLength(3);
+
+    // A follow-up is never typed anywhere, and never moves its question.
+    expect(terminals.submitted).toEqual([]);
+    expect((await store.getQuestion(asked))!).toMatchObject({
+      local_status: before.local_status,
+      delivery_status: before.delivery_status,
+      question_revision: before.question_revision,
+      answers_json: before.answers_json,
+    });
+    const signers = new Set(
+      relay.requests
+        .filter((request) => request.path !== "/api/v1/info")
+        .map((request) => request.deviceId)
+    );
+    expect(signers).toEqual(new Set([host.config.deviceId]));
   }, 60_000);
 });
