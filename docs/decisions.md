@@ -124,7 +124,7 @@ Agents are told, when they connect and in what `ask_human` returns, that your an
 
 A follow-up never answers the question, changes your answer or satisfies a gate, and it's never typed into any terminal. A terminal can't post on another terminal's questions, or on one that was withdrawn or expired, and a question takes at most 200 follow-ups. A relay older than 0.4.0 doesn't take them: a follow-up already queued for one is dropped once Daintree reads that, and after that it can refuse new ones outright until the relay is updated.
 
-Replying from your phone needs a later Daintree: until then, your phone says **Follow-ups need a newer Daintree on the computer that asked**, so an agent waiting on a reply gets it only if you type it into its terminal.
+A follow-up or reply you send from your phone is typed into the terminal that asked, like an answer (see [What gets typed](#what-gets-typed)).
 
 ## Answers
 
@@ -133,6 +133,8 @@ Replying from your phone needs a later Daintree: until then, your phone says **F
 Daintree types your answer only into the run that asked, as Daintree observed it: the same terminal, the same launch, and the agent session it recorded. If the terminal was closed or relaunched, Daintree restarted, or a different agent session is seen there, the answer isn't typed in directly. For Claude and Codex, Daintree can then resume the recorded session, or find a terminal already running it in the same worktree (the original one after a restart included), and deliver there; otherwise the answer needs attention. Session changes made inside the agent, such as Claude's `/clear` or `/resume`, aren't always observed.
 
 Daintree waits until it sees the agent at its prompt, never while it's seen working, waiting on an approval, or showing a question or an error, and drops the trailing Enter if you type into the terminal meanwhile. When several answers are waiting for one terminal, they go in the order their questions were asked, possibly in one paste under one preface; an answered question doesn't wait for an earlier one that's still unanswered.
+
+A follow-up you send from your phone on a question goes the same way, into the same run and under the same rules, after the answer it follows and in the order you sent it. It's typed as its own `FOLLOW-UP` block that tells the agent it's a message from your phone, not text typed in that terminal, and that it isn't a new answer, a correction or an approval: it never changes the answer.
 
 What gets typed is a delimited, labelled block, preceded by Daintree's own line telling the agent it's data:
 
@@ -157,7 +159,7 @@ comment: Proceed with the compact sidebar.
 - `choice` and `choice_label` appear when you picked an option, and `comment` when you wrote something; later lines of a comment are indented.
 - `injection_id` and the `[decision-injection …]` line are how Daintree recognises its own typing if it stops partway through.
 - A correction you send from the phone arrives as a new revision with `note: This corrects an earlier answer. Reassess any work that depended on the earlier one.`, and the reason you gave as `reason:`, after the choice and before any comment.
-- Follow-ups aren't typed: an agent's goes to your phone, and replying from the phone needs a later Daintree (see [Follow-ups](#follow-ups)).
+- An agent's follow-up goes to your phone and is never typed. Yours from the phone is typed as its own `FOLLOW-UP` block, after the answer it follows: `source: human`, `sent_from: phone`, a note that it was sent from your phone about a decision already made and is not a new answer, a correction or an approval (or, sent before any answer, that it authorises no gated step), the question as a one-line excerpt, and your words as `text:`, sanitised and cut like a comment.
 - A question that expires unanswered is typed as `source: system`, `status: expired`, `authorised: no`, with a note that the agent isn't authorised to continue the gated step.
 - Answer text is treated as data: control and escape sequences are stripped, and anything that looks like the block's delimiters or marker is neutralised. A comment is cut at 4,000 characters and a correction's reason at 1,000, or sooner to fit the block's size limit (the comment first), ending in `…[truncated]`. That limits what an answer can do to the terminal; it can't stop an agent from being swayed by what you wrote.
 
@@ -180,12 +182,12 @@ The tooltip gives the whole breakdown, and the chip's popover lists each questio
 
 ### Answers that need attention
 
-Some answers can't be typed in on their own: the terminal that asked was closed, relaunched or restarted, a different agent session is running there now, a resume failed, or typing was interrupted. Open the list from the chip's popover (**Review answers**) or from **Settings → Decisions → Questions → Answers needing attention → Review**. The dialog lists each answer with its question, where it was asked, the reason and, when this computer can read it, the answer. Which actions it offers depends on the answer:
+Some answers, and follow-ups sent after them, can't be typed in on their own: the terminal that asked was closed, relaunched or restarted, a different agent session is running there now, a resume failed, or typing was interrupted. Open the list from the chip's popover (**Review answers**) or from **Settings → Decisions → Questions → Answers needing attention → Review**. The dialog lists each answer with its question, where it was asked, the reason and, when this computer can read it, the answer, with each follow-up that needs you below it. The actions act on the answer and its follow-ups together, and which ones it offers depends on them:
 
 - **Copy answer**, when there's an answer to copy, copies the same block Daintree would have typed, without its `injection_id` and marker lines, for you to paste where you choose. Copying doesn't mark it handled.
 - **Try resume** reopens the agent's session in its worktree and types the answer once it reaches its prompt. It's offered for a question asked on this computer by Claude or Codex, when the run that asked is gone or a resume failed in a way a second try could change, a session was recorded and the worktree's folder is still there. It can take up to a minute and a half.
 - **Choose destination**, for a question asked on this computer, lists the agents running here, then confirms **Send `q-4`'s answer to …?**, naming both terminals. Daintree waits until it sees that agent at its prompt, types the answer in once, and records the move in the Decisions audit trail.
-- **Mark handled** is always offered. It takes the answer off the list, the chip and Canopy without typing it. A later correction from your phone needs you again.
+- **Mark handled** is always offered. It takes the answer off the list, the chip and Canopy without typing it, and its follow-ups are never typed either. A later correction or follow-up from your phone needs you again.
 
 When Daintree stopped while typing an answer in and can't find its marker in the terminal, the answer **may or may not have been delivered**. Daintree never types it again on its own: look at the terminal, then **Copy answer** or **Mark handled**.
 
