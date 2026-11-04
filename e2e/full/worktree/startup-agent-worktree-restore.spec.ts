@@ -235,7 +235,7 @@ function readRestoreFile(file: string): string {
 }
 
 test.describe.serial("Startup: agent terminals across multiple worktrees", () => {
-  // Handed from the restart journey to the quarantined scrollback check below.
+  // Handed from the restart journey to the scrollback check below.
   let restoredPlain: { window: Page; terminalId: string; marker: string } | null = null;
   test.beforeAll(async () => {
     userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-startup-restore-"));

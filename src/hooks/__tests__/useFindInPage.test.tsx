@@ -549,7 +549,7 @@ function createSessionWebview(matchesFor: (text: string) => number) {
         session = { text, active: matches > 0 ? 1 : 0 };
       } else if (session) {
         const step = opts.forward === false ? -1 : 1;
-        session.active = ((session.active - 1 + step + matches) % matches) + 1;
+        session.active = matches > 0 ? ((session.active - 1 + step + matches) % matches) + 1 : 0;
       } else {
         return requestId;
       }
