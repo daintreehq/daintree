@@ -255,6 +255,7 @@ export const CHANNEL_LOCALITY = {
   "decisions:rotate-keys": "shell",
   "decisions:set-auto-enroll-hosts": "shell",
   "decisions:set-default-question-expiry": "shell",
+  "decisions:set-agent-ask-human": "shell",
   "decisions:set-enabled": "shell",
   "decisions:set-model": "shell",
   "decisions:set-model-threshold": "shell",

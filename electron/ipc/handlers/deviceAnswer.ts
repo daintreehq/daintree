@@ -48,6 +48,7 @@ import type {
   PaneDecisionState,
   PreparedDecisionsRelayDeploy,
   RestoreDecisionsIdentityPayload,
+  SetDecisionsAgentAskHumanPayload,
   SetDecisionsEnabledPayload,
   StartDecisionsRelayRemovalPayload,
   VerifyDecisionsRecoveryKitPayload,
@@ -56,6 +57,8 @@ import {
   isRelayRemovalTerminalId,
   isRemovableRelayOrigin,
 } from "../../../shared/config/relayRemoval.js";
+import { MAX_ASK_HUMAN_AGENT_ID_LENGTH } from "../../../shared/config/decisionsAskHumanAgents.js";
+import { SAFE_AGENT_ID_PATTERN } from "../../../shared/types/userAgentRegistry.js";
 import type {
   DecisionsHostEnrollResult,
   DecisionsHostsResult,
@@ -236,6 +239,14 @@ const verifyRecoveryKitSchema = z
 // A host id as the host list keeps it.
 const enrollHostSchema = z
   .object({ hostId: z.string().min(1).max(256), allowWeakStorage: z.boolean().optional() })
+  .strict();
+
+// An agent id in the shape the registries accept; main refuses anything else too.
+const agentAskHumanSchema = z
+  .object({
+    agentId: z.string().min(1).max(MAX_ASK_HUMAN_AGENT_ID_LENGTH).regex(SAFE_AGENT_ID_PATTERN),
+    enabled: z.boolean(),
+  })
   .strict();
 
 // A run id main minted (a UUID); a cancel names the run it means to end.
@@ -554,6 +565,18 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setDecisionsDefaultQuestionExpiry(ms);
+      }
+    ),
+    // Which agents' launches get ask_human (#16223), one agent at a time, so
+    // two windows switching different agents never undo each other.
+    setAgentAskHuman: opValidated(
+      CHANNELS.DECISIONS_SET_AGENT_ASK_HUMAN,
+      agentAskHumanSchema,
+      async (payload: SetDecisionsAgentAskHumanPayload): Promise<DecisionsPolicy> => {
+        refuseWhileOff("change which agents can ask you");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsAgentAskHuman(payload);
       }
     ),
     // Saving and verifying a recovery kit (#16007). The save dialog belongs to

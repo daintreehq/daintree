@@ -41,6 +41,7 @@ import {
   type DecisionsRevokeDeviceResult,
   type DecisionsRotateKeysResult,
   type DecisionsSettings,
+  type SetDecisionsAgentAskHumanPayload,
   type CancelDecisionsSetupCheckPayload,
   type DecisionsSetupCheckRun,
   type DecisionsSetupCheckStartResult,
@@ -78,6 +79,10 @@ import type {
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
+import {
+  MAX_ASK_HUMAN_AGENTS,
+  isAskHumanAgentId,
+} from "../../../shared/config/decisionsAskHumanAgents.js";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
   normalizeRelayOrigin,
@@ -1222,6 +1227,46 @@ export function setDecisionsDefaultQuestionExpiry(ms: number | null): Promise<De
     );
   }
   return savePolicy({ defaultQuestionExpiryMs: ms });
+}
+
+/**
+ * Switches one agent's `ask_human` on or off (#16223), over the setting as it
+ * stands when its turn comes, so a change to another agent queued meanwhile
+ * is kept. Only launches from now on read it: an agent already running keeps
+ * what it launched with, and the running lifetime has nothing to update.
+ */
+export function setDecisionsAgentAskHuman(
+  payload: SetDecisionsAgentAskHumanPayload
+): Promise<DecisionsPolicy> {
+  const { agentId, enabled } = payload;
+  if (!isAskHumanAgentId(agentId)) {
+    return Promise.reject(
+      new AppError({ code: "VALIDATION", message: "That isn't an agent Daintree knows" })
+    );
+  }
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (shutDown || !current.enabled) throw setupRefused();
+    if (current.askHumanAgents.includes(agentId) === enabled) {
+      return decisionsPolicyOf(current, policyRevision);
+    }
+    if (enabled && current.askHumanAgents.length >= MAX_ASK_HUMAN_AGENTS) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Too many agents are switched on. Switch one off first.",
+      });
+    }
+    const saved = writeDecisionsSettings(store, {
+      ...current,
+      askHumanAgents: enabled
+        ? [...current.askHumanAgents, agentId]
+        : current.askHumanAgents.filter((id) => id !== agentId),
+    });
+    policyRevision += 1;
+    // Like the rest of the policy, Settings in other windows reads it again on a status change.
+    publishStatus();
+    return decisionsPolicyOf(saved, policyRevision);
+  });
 }
 
 /**
