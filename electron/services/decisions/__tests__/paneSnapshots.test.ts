@@ -769,14 +769,15 @@ describe("PaneSnapshots", () => {
       env.snapshots.observe(asked);
       await vi.advanceTimersByTimeAsync(250);
       expect(env.shared()).toEqual(["q2"]);
-      settle();
-      await vi.advanceTimersByTimeAsync(0);
 
-      // Reopened and shared again, then turned off: its clear goes.
+      // Reopened and shared again before the old clear settles; then turned off: its clear goes.
       const reopened = [row("q1"), asked[1]!];
       env.setRows(reopened);
       env.snapshots.observe(reopened);
       await vi.advanceTimersByTimeAsync(250);
+      expect(env.shared()).toEqual(["q1", "q2"]);
+      settle();
+      await vi.advanceTimersByTimeAsync(0);
       env.setAllowed(false);
       env.snapshots.sharingChanged();
       await vi.advanceTimersByTimeAsync(0);
