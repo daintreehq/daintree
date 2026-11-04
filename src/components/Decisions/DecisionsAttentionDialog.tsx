@@ -30,6 +30,7 @@ import type {
   DecisionsAnswerOutcome,
   DecisionsAttentionItem,
   DecisionsAttentionList,
+  DecisionsFollowUpPreview,
 } from "@shared/types/decisionsAttention";
 import {
   EMPTY_DESCRIPTION,
@@ -38,6 +39,8 @@ import {
   STILL_WORKING,
   agentLabel,
   aliasLabel,
+  canCopy,
+  copyLabel,
   destinationDetail,
   fromLines,
   leavesList,
@@ -49,6 +52,7 @@ import {
   reasonText,
   remainingText,
   statusText,
+  subjectOf,
   toLines,
   type PaneLines,
 } from "./decisionsAttentionModel";
@@ -120,6 +124,8 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
   }, [answer?.text, expanded]);
 
   if (answer === null) {
+    // Only follow-ups need a person: the answer was typed in.
+    if (item.answerUnavailable === null) return null;
     return (
       <p className="text-xs text-text-secondary [text-wrap:pretty]">
         {missingAnswerText(item.answerUnavailable)}
@@ -164,6 +170,72 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
           onClick={() => setExpanded((open) => !open)}
         >
           {expanded ? "Show less" : "Show full answer"}
+        </Button>
+      )}
+    </figure>
+  );
+}
+
+/**
+ * A follow-up the person sent from their phone (#16231), as it would be
+ * typed in. It never changes the answer, so it shows apart from it.
+ */
+function FollowUpPreview({
+  followUp,
+  alias,
+}: {
+  followUp: DecisionsFollowUpPreview;
+  alias: string;
+}) {
+  const textRef = useRef<HTMLQuoteElement>(null);
+  const textId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (el === null || expanded) return;
+    setClamped(el.scrollHeight > el.clientHeight + 1);
+  }, [followUp.text, expanded]);
+
+  return (
+    <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
+      <figcaption className="text-2xs text-text-secondary">
+        Your follow-up from your phone
+        {followUp.status === "delivery-uncertain" && ", may or may not have been delivered"}
+        {" · "}
+        <TimeAgo timestamp={followUp.sentAt} />
+      </figcaption>
+      {followUp.text !== null ? (
+        <blockquote
+          ref={textRef}
+          id={textId}
+          className={
+            expanded
+              ? "whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+              : "line-clamp-4 whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+          }
+        >
+          {followUp.text}
+        </blockquote>
+      ) : (
+        <p className="text-xs text-text-secondary [text-wrap:pretty]">
+          {followUp.unreadable
+            ? "This follow-up couldn't be opened on this computer."
+            : "This follow-up has no words to type in."}
+        </p>
+      )}
+      {(clamped || expanded) && (
+        <Button
+          variant="link"
+          size="xs"
+          className="self-start px-0"
+          aria-expanded={expanded}
+          aria-controls={textId}
+          aria-label={expanded ? `Show less for ${alias}` : `Show full follow-up for ${alias}`}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? "Show less" : "Show full follow-up"}
         </Button>
       )}
     </figure>
@@ -247,6 +319,9 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
         </span>
       </p>
       <AnswerPreview item={item} />
+      {item.followUps.map((followUp) => (
+        <FollowUpPreview key={followUp.messageId} followUp={followUp} alias={alias} />
+      ))}
       <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
         {item.canResume && (
           <Button
@@ -331,10 +406,10 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-        {item.answer !== null && (
+        {canCopy(item) && (
           <CopyButton
-            label="Copy answer"
-            aria-label={`Copy answer to ${alias}`}
+            label={copyLabel(item)}
+            aria-label={`${copyLabel(item)} to ${alias}`}
             variant={item.canResume || item.canReassign ? "ghost" : "outline"}
             size="xs"
             data-attention-action=""
@@ -504,12 +579,18 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     let next: Outcome;
     try {
       const result = await action();
-      next = { message: outcomeText(item.alias, result), severity: outcomeSeverity(result) };
+      next = {
+        message: outcomeText(item.alias, result, subjectOf(item)),
+        severity: outcomeSeverity(result),
+      };
       if (!leavesList(result)) focusAfter.current = null;
     } catch (error) {
       focusAfter.current = null;
       next = {
-        message: formatErrorMessage(error, `Couldn't change ${aliasLabel(item.alias)}'s answer`),
+        message: formatErrorMessage(
+          error,
+          `Couldn't change ${aliasLabel(item.alias)}'s ${subjectOf(item)}`
+        ),
         severity: "warning",
       };
     }
@@ -664,22 +745,23 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         title={
           move === null
             ? ""
-            : `Send ${aliasLabel(move.item.alias)}'s answer to ${paneName(
+            : `Send ${aliasLabel(move.item.alias)}'s ${subjectOf(move.item)} to ${paneName(
                 move.destination.title,
                 agentLabel(move.destination)
               )}?`
         }
         description={
           <span className="[text-wrap:pretty]">
-            Daintree waits until it sees that agent at its prompt, types the answer in once, and
-            records the move in the Decisions audit trail.
+            Daintree waits until it sees that agent at its prompt, types the{" "}
+            {move === null ? "answer" : subjectOf(move.item)} in once, and records the move in the
+            Decisions audit trail.
           </span>
         }
         // The menu that opened it is its row's; when a fast move has already
         // taken that row away, the close lands on the next row, else the one
         // before, else the list's own place.
         restoreFocusTo={restoreAfterMove}
-        confirmLabel="Send answer"
+        confirmLabel={move === null ? "Send answer" : `Send ${subjectOf(move.item)}`}
         onConfirm={confirmMove}
       >
         {move !== null && (

@@ -1,4 +1,5 @@
 import { parseAnswers, type QuestionRow } from "@daintreehq/decisions-client";
+import { heldFollowUps } from "./attentionList.js";
 import type {
   DecisionDeliveryStatus,
   PaneDecisionAttention,
@@ -47,7 +48,8 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  * - **Needs attention:** delivery stopped at `needs-attention` or
  *   `delivery-uncertain`. That status is the observation, with or without an
  *   answer still marked for delivery: the inbox flags an answer it refused
- *   without keeping it.
+ *   without keeping it. A follow-up held for a person (#16231) counts too,
+ *   with its own status and code once the answer is past needing one.
  * - **Waiting:** otherwise, an answer entry still marked for delivery and not
  *   yet delivered, the same test the delivery engine uses.
  *
@@ -74,7 +76,8 @@ export function projectPaneDecisionStates(
 
     const deliveryStatus: DecisionDeliveryStatus = row.delivery_status;
     const open = row.local_status === "queued" || row.local_status === "open";
-    const attention = isAttention(deliveryStatus);
+    const held = heldFollowUps(row);
+    const attention = isAttention(deliveryStatus) || held.length > 0;
     const pending = attention
       ? []
       : parseAnswers(row.answers_json).filter((entry) => entry.deliver && !entry.delivered);
@@ -96,12 +99,17 @@ export function projectPaneDecisionStates(
         expiresAt: row.expires_at ?? null,
       });
     }
-    if (isAttention(deliveryStatus)) {
+    if (attention) {
+      const uncertain =
+        deliveryStatus === "delivery-uncertain" ||
+        held.some((message) => message.delivery?.status === "delivery-uncertain");
       pane.content.needsAttention.push({
         questionId,
         alias,
-        deliveryStatus,
-        reason: reasonOf(row.error_code),
+        deliveryStatus: uncertain ? "delivery-uncertain" : "needs-attention",
+        reason: reasonOf(
+          isAttention(deliveryStatus) ? row.error_code : (held[0]!.delivery?.error_code ?? null)
+        ),
       });
     } else if (pending.length > 0) {
       pane.content.waitingAnswers.push({

@@ -36,13 +36,36 @@ export interface DecisionsAnswerPreview {
   answeredAt: string;
 }
 
+/** A follow-up the person sent from their phone (#16231) that Daintree won't type in on its own, opened. */
+export interface DecisionsFollowUpPreview {
+  messageId: string;
+  /** `delivery-uncertain`: it may or may not have been typed in already. */
+  status: "needs-attention" | "delivery-uncertain";
+  /** The library's code for why; `unspecified` when none was recorded. */
+  reason: string;
+  /** What the person wrote, as it would be typed; null when it had no words, or couldn't be opened. */
+  text: string | null;
+  /** It couldn't be opened on this computer. */
+  unreadable: boolean;
+  /** When the person sent it, ISO 8601. */
+  sentAt: string;
+}
+
+/**
+ * One question whose answer, or a follow-up after it, needs a person. The
+ * answer fields describe the answer only while it is one of those.
+ */
 export interface DecisionsAttentionItem {
   questionId: string;
   /** The `N` of the `q-N` the agent was told. */
   alias: number;
-  /** `delivery-uncertain`: the answer may or may not have been typed in already. */
+  /** `delivery-uncertain`: the answer, or a follow-up, may or may not have been typed in already. */
   status: "needs-attention" | "delivery-uncertain";
-  /** The library's code for why (`pane_gone`, `resume_timeout`, …); `unspecified` when none was recorded. */
+  /**
+   * The library's code for why (`pane_gone`, `resume_timeout`, …), the
+   * answer's while it needs a person, else the first follow-up's;
+   * `unspecified` when none was recorded.
+   */
   reason: string;
   /** The question as asked, its first line; null when it couldn't be opened here. */
   question: string | null;
@@ -54,16 +77,21 @@ export interface DecisionsAttentionItem {
   /**
    * Why `answer` is null: nothing is waiting to be typed in for it (`none`),
    * or something is but it couldn't be opened on this computer (`unreadable`).
-   * Null when there is an answer.
+   * Null when there is an answer, or the answer doesn't need a person.
    */
   answerUnavailable: "none" | "unreadable" | null;
+  /** The follow-ups that need a person, in the order they were sent. */
+  followUps: DecisionsFollowUpPreview[];
   /**
    * Resuming the agent's session could deliver it: an agent Daintree can
    * resume, asked on this computer, with a session and a worktree that is
    * still there.
    */
   canResume: boolean;
-  /** Another pane can be chosen for it. Never for an answer that may already have been typed in. */
+  /**
+   * Another pane can be chosen for it, answer and follow-ups alike. Never for
+   * one that may already have been typed in.
+   */
   canReassign: boolean;
 }
 

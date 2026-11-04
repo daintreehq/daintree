@@ -67,11 +67,53 @@ export function aliasLabel(alias: number): string {
   return `q-${alias}`;
 }
 
-const UNCERTAIN_STATUS = "This answer may or may not have been delivered";
-const ATTENTION_STATUS = "Answer needs attention";
+/** What of a question needs a person: its answer, the follow-ups after it (#16231), or both. */
+export type AttentionSubject =
+  "answer" | "follow-up" | "follow-ups" | "answer and follow-up" | "answer and follow-ups";
 
-export function statusText(item: Pick<DecisionsAttentionItem, "status">): string {
-  return item.status === "delivery-uncertain" ? UNCERTAIN_STATUS : ATTENTION_STATUS;
+type SubjectFields = Pick<DecisionsAttentionItem, "answer" | "answerUnavailable" | "followUps">;
+
+export function subjectOf(item: SubjectFields): AttentionSubject {
+  const answer = item.answer !== null || item.answerUnavailable !== null;
+  const count = item.followUps.length;
+  if (count === 0) return "answer";
+  const followUps = count === 1 ? "follow-up" : "follow-ups";
+  return answer ? `answer and ${followUps}` : followUps;
+}
+
+function isPlural(subject: AttentionSubject): boolean {
+  return subject !== "answer" && subject !== "follow-up";
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+const UNCERTAIN_STATUS: Record<AttentionSubject, string> = {
+  answer: "This answer may or may not have been delivered",
+  "follow-up": "This follow-up may or may not have been delivered",
+  "follow-ups": "These follow-ups may or may not have been delivered",
+  "answer and follow-up": "This answer or its follow-up may or may not have been delivered",
+  "answer and follow-ups": "This answer or its follow-ups may or may not have been delivered",
+};
+
+export function statusText(item: Pick<DecisionsAttentionItem, "status"> & SubjectFields): string {
+  const subject = subjectOf(item);
+  if (item.status === "delivery-uncertain") return UNCERTAIN_STATUS[subject];
+  return `${capitalized(subject)} ${isPlural(subject) ? "need" : "needs"} attention`;
+}
+
+/** What the copy button copies, in its label's words. */
+export function copyLabel(item: SubjectFields): string {
+  return `Copy ${subjectOf(item)}`;
+}
+
+/** Whether everything that needs a person is here to copy: the answer, if it does, and each follow-up. */
+export function canCopy(item: SubjectFields): boolean {
+  const answerHeld = item.answer !== null || item.answerUnavailable !== null;
+  if (answerHeld && item.answer === null) return false;
+  if (item.followUps.some((followUp) => followUp.unreadable)) return false;
+  return answerHeld || item.followUps.length > 0;
 }
 
 /** The agent's name, falling back to its id. */
@@ -81,9 +123,9 @@ export function agentLabel(origin: { agentId: string; agentName: string | null }
 
 /** The dialog's opening line, which also tells a screen reader what the list is. */
 export const LIST_DESCRIPTION =
-  "Daintree won't type these answers in on its own. Choose what happens to each one.";
+  "Daintree won't type these answers and follow-ups in on its own. Choose what happens to each one.";
 export const EMPTY_DESCRIPTION =
-  "Nothing needs attention right now. Answers Daintree won't type in on its own show up here.";
+  "Nothing needs attention right now. Answers and follow-ups Daintree won't type in on its own show up here.";
 
 /** Why an item shows no answer: there is none waiting, or this computer can't open it. */
 export function missingAnswerText(unavailable: "none" | "unreadable" | null): string {
@@ -163,41 +205,48 @@ export function paneName(title: string | null, agent: string): string {
 }
 
 /**
- * What an action did, as one sentence naming the question: what the list
- * shows and announces. A result that leaves the item listed says why.
+ * What an action did, as one sentence naming the question and what of it
+ * was acted on: what the list shows and announces. A result that leaves the
+ * item listed says why.
  */
-export function outcomeText(alias: number, outcome: DecisionsAnswerOutcome): string {
+export function outcomeText(
+  alias: number,
+  outcome: DecisionsAnswerOutcome,
+  subject: AttentionSubject = "answer"
+): string {
   const q = aliasLabel(alias);
+  const what = `${capitalized(subject)} to ${q}`;
+  const plural = isPlural(subject);
+  const needs = plural ? "need" : "needs";
   switch (outcome.result) {
     case "delivered":
-      return outcome.title !== null
-        ? `Answer to ${q} typed into “${outcome.title}”`
-        : `Answer to ${q} typed in`;
+      return outcome.title !== null ? `${what} typed into “${outcome.title}”` : `${what} typed in`;
     case "waiting": {
       const where = outcome.title !== null ? `“${outcome.title}”` : "its terminal";
+      const goes = plural ? "go" : "goes";
       return outcome.waitsFor === "host"
-        ? `Answer to ${q} goes to ${where}, typed in once its host is back`
-        : `Answer to ${q} goes to ${where}, typed in once it's idle`;
+        ? `${what} ${goes} to ${where}, typed in once its host is back`
+        : `${what} ${goes} to ${where}, typed in once it's idle`;
     }
     case "needs-attention":
       // The item shows the new reason; the line says only what became of it.
       return outcome.status === "delivery-uncertain"
-        ? `Answer to ${q} may or may not have been delivered, and still needs attention`
-        : `Answer to ${q} wasn't typed in and still needs attention`;
+        ? `${what} may or may not have been delivered, and still ${needs} attention`
+        : `${what} ${plural ? "weren't" : "wasn't"} typed in and still ${needs} attention`;
     case "handled":
-      return `Answer to ${q} marked handled`;
+      return `${what} marked handled`;
     case "resolved":
-      return `Answer to ${q} no longer needs attention`;
+      return `${what} no longer ${needs} attention`;
     case "refused":
       switch (outcome.reason) {
         case "not-running":
           return "Decisions isn't running, so nothing changed";
         case "uncertain":
-          return `Answer to ${q} may already have been typed in, so it isn't typed again`;
+          return `${what} may already have been typed in, so ${plural ? "they aren't" : "it isn't"} typed again`;
         case "no-answer":
           return `No answer is kept for ${q}`;
         case "destination-gone":
-          return `That terminal is no longer running an agent, so ${q}'s answer wasn't sent`;
+          return `That terminal is no longer running an agent, so ${q}'s ${subject} ${plural ? "weren't" : "wasn't"} sent`;
       }
   }
 }
