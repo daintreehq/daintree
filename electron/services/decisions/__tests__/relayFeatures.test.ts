@@ -84,7 +84,7 @@ describe("DaintreeRelayClient (#16229)", () => {
     expect(page!.url.searchParams.get("features")).toBe("pane-snapshots-v1,thread-messages-v1");
     expect(page!.url.searchParams.get("after")).toBe("5");
     expect(page!.url.searchParams.get("limit")).toBe("10");
-    expect(ticket!.body).toHaveProperty("features", ["thread-messages-v1", "pane-snapshots-v1"]);
+    expect(ticket!.body).toHaveProperty("features", ["pane-snapshots-v1", "thread-messages-v1"]);
   });
 
   it("declares nothing when the bridge asks only for what Daintree doesn't handle", async () => {
