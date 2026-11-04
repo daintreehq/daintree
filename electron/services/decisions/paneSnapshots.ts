@@ -318,8 +318,13 @@ export class PaneSnapshots {
   private sharing = false;
   /** The questions the relay may hold a snapshot of from this store, as it records them; null until read. */
   private shared: Map<string, number> | null = null;
-  /** Each question's snapshots queued in this run, so a clear stands only for the shares before it. */
+  /**
+   * Each question's latest snapshot queued in this run, numbered from one
+   * counter, so a clear stands only for the shares before it, even across a
+   * forgotten entry shared again.
+   */
   private readonly generations = new Map<string, number>();
+  private lastGeneration = 0;
   /**
    * The generation each question's clear settled at, through a bridge still
    * attached: on the current bridge, so it isn't sent again there, and in this
@@ -365,6 +370,8 @@ export class PaneSnapshots {
       this.asking.set(id, { row, sent: null, title: null });
       this.request(row.origin.pane_id, true);
     }
+    const panes = this.panes();
+    for (const paneId of this.states.keys()) if (!panes.has(paneId)) this.states.delete(paneId);
     this.follow();
   }
 
@@ -620,7 +627,7 @@ export class PaneSnapshots {
       this.publish(bridge, epoch, id, asking, input, force);
     }
     // The pane's agent as the run still in it shows it; none once every asker's run is gone.
-    if (state !== null) this.states.set(paneId, state);
+    if (state !== null && this.panes().has(paneId)) this.states.set(paneId, state);
     else if (readings.some((reading) => reading.kind === "exited")) this.states.delete(paneId);
     this.follow();
   }
@@ -655,7 +662,7 @@ export class PaneSnapshots {
       const result = await bridge.publishSnapshot(id, input, paneIdentityOf(asking.row.origin));
       if (result === "queued") {
         asking.sent = key;
-        this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+        this.generations.set(id, ++this.lastGeneration);
         this.follow();
       }
     });
@@ -791,9 +798,9 @@ export class PaneSnapshots {
     };
   }
 
-  /** Forgets an entry; its generation stays, so a clear settling late can't stand for a later share. */
   private forget(id: string): void {
     this.shared?.delete(id);
+    this.generations.delete(id);
     this.settledOnBridge.delete(id);
     this.settledInRun.delete(id);
   }
