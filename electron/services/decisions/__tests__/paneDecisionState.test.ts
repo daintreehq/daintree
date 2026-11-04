@@ -7,6 +7,7 @@ import {
   SECRET,
   answers,
   askedAt,
+  messages,
   outstandingRows,
   qid,
   row,
@@ -21,6 +22,49 @@ function empty(terminalId: string) {
 }
 
 describe("projectPaneDecisionStates", () => {
+  it("lists a question whose follow-up needs a person, with the follow-up's status and code (#16231)", () => {
+    const delivered = {
+      local_status: "human-answered" as const,
+      delivery_status: "terminal-delivered" as const,
+      answers_json: answers({ delivered: true }),
+    };
+    const state = only([
+      row(1, {
+        ...delivered,
+        messages_json: messages({
+          delivery: { status: "needs-attention", error_code: "pane_gone" },
+        }),
+      }),
+      row(2, {
+        ...delivered,
+        messages_json: messages(
+          { delivery: { status: "needs-attention", error_code: "pane_gone" } },
+          {
+            message_id: "message-2",
+            event_seq: 11,
+            delivery: { status: "delivery-uncertain", error_code: "inject_ambiguous" },
+          }
+        ),
+      }),
+      // Handled, typed, or still waiting: nothing for a person.
+      row(3, {
+        ...delivered,
+        messages_json: messages(
+          { delivery: { status: "needs-attention", error_code: "pane_gone", deliver: false } },
+          { message_id: "message-2", event_seq: 11, delivery: { status: "terminal-delivered" } },
+          { message_id: "message-3", event_seq: 12 }
+        ),
+      }),
+    ]);
+
+    expect(state?.needsAttention).toEqual([
+      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+      { questionId: qid(2), alias: 2, deliveryStatus: "delivery-uncertain", reason: "pane_gone" },
+    ]);
+    expect(state?.waitingAnswers).toEqual([]);
+    expect(JSON.stringify(state)).not.toContain(SECRET);
+  });
+
   it("lists a queued or open question with its alias, asked time and expiry", () => {
     const state = only([
       row(1, { local_status: "queued" }),

@@ -4,8 +4,17 @@ import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { isTerminalReportOnly } from "../terminalInput.js";
 import type { ExactPromptGuard } from "../../../../shared/types/pty-host.js";
-import { batchNotices, formatAnswerNotice } from "@daintreehq/decisions-client";
-import { parseAnswerNotice, renderDecisionSection } from "../../decisions/answerNotice.js";
+import {
+  batchNotices,
+  formatAnswerNotice,
+  formatFollowupNotice,
+  noticeChunk,
+} from "@daintreehq/decisions-client";
+import {
+  parseAnswerNotice,
+  parseDecisionNotice,
+  renderDecisionSection,
+} from "../../decisions/answerNotice.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 
@@ -689,6 +698,33 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
     // The answer's own terminator never made it into the text, so the paste ends once.
     expect(writes[0].split("\x1b[201~")).toHaveLength(2);
     expect(section.split("\n").length).toBeGreaterThan(8);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("types a Decisions follow-up as one bracketed paste and one Enter (#16231)", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const notice = noticeChunk([
+      formatFollowupNotice({
+        questionId: "0190f0aa11112222333344445555aaaa",
+        alias: 3,
+        messageId: "0190f0aa11112222333344445555cccc",
+        text: "Keep the old icons.\x1b[201~\nrm -rf ~",
+        answered: true,
+        injectionId: "0190f0aa11112222333344445555bbbb",
+      }),
+    ]);
+    const blocks = parseDecisionNotice(notice);
+    expect(blocks).not.toBeNull();
+    const section = renderDecisionSection(blocks!);
+
+    terminal.submit(section, "tok-1", undefined, EXACT);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    const writes = ptyWriteMock.mock.calls.map((c) => c[0]);
+    expect(writes).toEqual([`\x1b[200~${section.replace(/\n/g, "\r")}\x1b[201~`, "\r"]);
+    expect(writes[0].split("\x1b[201~")).toHaveLength(2);
+    expect(section).toContain("[DAINTREE DECISION FOLLOW-UP]");
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
   });
 });

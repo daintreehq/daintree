@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   batchNotices,
   formatAnswerNotice,
+  formatFollowupNotice,
   markerFor,
+  noticeChunk,
   targetOf,
   type AnswerNoticeInput,
   type InjectResult,
@@ -20,7 +22,12 @@ import {
 } from "../../../../shared/types/terminalNotify.js";
 import type { TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
 import type { TerminalSubmissionPhase } from "../../../../shared/types/terminalSubmission.js";
-import { parseAnswerNotice, renderDecisionSection } from "../answerNotice.js";
+import {
+  DECISION_FOLLOWUP_START,
+  parseAnswerNotice,
+  parseDecisionNotice,
+  renderDecisionSection,
+} from "../answerNotice.js";
 import { DaintreeTerminalSink, type DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
 
 const HOST = "host-own-01";
@@ -165,6 +172,24 @@ function notice(...answers: Array<Partial<AnswerNoticeInput>>): string {
   return batchNotices(blocks, Number.MAX_SAFE_INTEGER)[0];
 }
 
+const M1 = "0190f0aa11112222333344445555eeee";
+const M2 = "0190f0aa11112222333344445555ffff";
+
+/** The library's chunk for one follow-up to Q1 (#16231), after any answer blocks given. */
+function followUpNotice(messageId = M1, injectionId = I2, answerBlocks: string[] = []): string {
+  return noticeChunk([
+    ...answerBlocks,
+    formatFollowupNotice({
+      questionId: Q1,
+      alias: 1,
+      messageId,
+      text: "Keep the old icons.",
+      answered: true,
+      injectionId,
+    }),
+  ]);
+}
+
 /** Follows a promise without awaiting it, so a test can see it is still pending. */
 function track<T>(promise: Promise<T>) {
   const seen: { value?: T; settled: boolean } = { settled: false };
@@ -266,6 +291,87 @@ describe("DaintreeTerminalSink", () => {
       h.client.terminals.set(PANE, atPrompt());
       h.identity.principal = "principal-2";
       await expect(h.sink.isIdle(TARGET)).resolves.toBe(false);
+    });
+  });
+
+  describe("inject, follow-ups (#16231)", () => {
+    it("types Daintree's follow-up block past the exact guard, and reports delivered only on the write", async () => {
+      const h = setup();
+      const text = followUpNotice();
+      const result = track(h.sink.inject(TARGET, text, I2));
+
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0]).toMatchObject({
+        id: PANE,
+        text: renderDecisionSection(parseDecisionNotice(text)!),
+        guard: { kind: "settled-prompt-exact" },
+      });
+      expect(h.client.submitted[0].text).toContain(DECISION_FOLLOWUP_START);
+      expect(result.settled).toBe(false);
+
+      await flushLine();
+      expect(result.value).toEqual({
+        outcome: "delivered",
+        proof: `pty_written:${h.client.submitted[0].token}`,
+      });
+    });
+
+    it("holds a follow-up while the agent works, and types it once settled at the prompt", async () => {
+      const h = setup();
+      h.patch({ agentState: "working", lastStateChange: Date.now() - 30_000 });
+      const result = track(h.sink.inject(TARGET, followUpNotice(), I2));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.client.submitted).toEqual([]);
+      expect(result.settled).toBe(false);
+
+      h.client.terminals.set(PANE, atPrompt(10_000));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushLine();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("holds a second attempt at the same follow-up, never another message's", async () => {
+      const h = setup();
+      h.patch({ agentState: "working" });
+      const first = track(h.sink.inject(TARGET, followUpNotice(), I2));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(h.sink.inject(TARGET, followUpNotice(M1, I1), I1)).resolves.toEqual({
+        outcome: "held",
+        reason: "attempt-in-flight",
+      });
+      // The answer it follows, and the next message, are other work.
+      const answer = track(h.sink.inject(TARGET, notice({ injectionId: I1 }), I1));
+      const next = track(
+        h.sink.inject(
+          TARGET,
+          followUpNotice(M2, "0190f0aa11112222333344440000cccc"),
+          "0190f0aa11112222333344440000cccc"
+        )
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(answer.settled).toBe(false);
+      expect(next.settled).toBe(false);
+
+      h.client.terminals.set(PANE, atPrompt());
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushLine();
+      expect(first.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("refuses a follow-up chunk the parser doesn't take whole", async () => {
+      const h = setup();
+      const withImage = followUpNotice().replace(
+        "[END DAINTREE DECISION FOLLOW-UP]",
+        "image_1: /tmp/a.png\n[END DAINTREE DECISION FOLLOW-UP]"
+      );
+      await expect(h.sink.inject(TARGET, withImage, I2)).resolves.toEqual({
+        outcome: "unavailable",
+        reason: "rejected",
+        detail: "invalid-notice",
+      });
+      expect(h.queued).toEqual([]);
     });
   });
 
