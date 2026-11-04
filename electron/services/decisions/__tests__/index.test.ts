@@ -1108,6 +1108,9 @@ describe("Decisions entry", () => {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5, askHumanAgents: ["codex"] };
         await startDecisionsIfEnabled();
         const before = getDecisionsPolicy().revision;
+        // Launches read the choice from the store; updating the running
+        // lifetime would resume a connection a disconnect had suspended.
+        const updateSettings = vi.spyOn(peekDecisionsService()!, "updateSettings");
 
         const on = await setDecisionsAgentAskHuman({ agentId: "claude", enabled: true });
         expect(on.askHumanAgents).toEqual(["codex", "claude"]);
@@ -1124,9 +1127,35 @@ describe("Decisions entry", () => {
         const off = await setDecisionsAgentAskHuman({ agentId: "codex", enabled: false });
         expect(off.askHumanAgents).toEqual(["claude"]);
         expect(off.revision).toBeGreaterThan(on.revision);
-        // Launches read it; the running relay connection is left alone.
+        expect(updateSettings).not.toHaveBeenCalled();
         expect(connections).toHaveLength(1);
         expect(connections[0]!.stopped).toBe(0);
+      });
+
+      it("waits its turn behind a switch-on under way, then saves over what that saved", async () => {
+        saved.value = { enabled: true, consentedAt: 5 };
+        await startDecisionsIfEnabled();
+        const service = peekDecisionsService()!;
+        let closed!: () => void;
+        loads.closing = new Promise<void>((resolve) => (closed = resolve));
+        const stopping = service.stop();
+        const enabling = setDecisionsEnabled(true);
+        await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+        let switched = false;
+        const switching = setDecisionsAgentAskHuman({ agentId: "claude", enabled: true }).then(
+          (policy) => {
+            switched = true;
+            return policy;
+          }
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(switched).toBe(false);
+        expect(saved.value).toMatchObject({ askHumanAgents: [] });
+
+        closed();
+        await Promise.all([stopping, enabling, switching]);
+        expect(saved.value).toMatchObject({ enabled: true, askHumanAgents: ["claude"] });
       });
 
       it("keeps both changes when two windows switch different agents at once", async () => {
@@ -1169,18 +1198,30 @@ describe("Decisions entry", () => {
         );
       });
 
-      it("refuses an id no agent could have, or one more agent past the cap, saving nothing", async () => {
+      it("refuses an id no agent could have, saving nothing", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+        const before = getDecisionsPolicy();
+        vi.mocked(store.set).mockClear();
+
+        for (const agentId of ["", "a b", "../claude", "x".repeat(129)]) {
+          for (const enabled of [true, false]) {
+            await expect(
+              setDecisionsAgentAskHuman({ agentId, enabled }),
+              agentId
+            ).rejects.toMatchObject({ code: "VALIDATION" });
+          }
+        }
+        expect(store.set).not.toHaveBeenCalled();
+        expect(getDecisionsPolicy()).toEqual(before);
+      });
+
+      it("refuses one more agent past the cap, saving nothing, and still switches one off", async () => {
         const full = Array.from({ length: 256 }, (_, i) => `agent-${i}`);
         saved.value = { enabled: true, askHumanAgents: full };
         await startDecisionsIfEnabled();
         vi.mocked(store.set).mockClear();
 
-        for (const agentId of ["", "a b", "../claude", "x".repeat(129)]) {
-          await expect(
-            setDecisionsAgentAskHuman({ agentId, enabled: true }),
-            agentId
-          ).rejects.toMatchObject({ code: "VALIDATION" });
-        }
         await expect(
           setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
         ).rejects.toMatchObject({ code: "VALIDATION" });

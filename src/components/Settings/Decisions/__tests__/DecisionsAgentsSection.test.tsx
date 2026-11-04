@@ -95,8 +95,8 @@ async function statusPushed() {
 }
 
 /** The section as the Decisions tab renders it, fed by the tab's one policy read. */
-function Section({ status }: { status: DecisionsStatus }) {
-  const read = useDecisionsPolicy(true);
+function Section({ status, active = true }: { status: DecisionsStatus; active?: boolean }) {
+  const read = useDecisionsPolicy(active);
   return (
     <TooltipProvider>
       <DecisionsAgentsSection status={status} policy={read} />
@@ -446,6 +446,116 @@ describe("DecisionsAgentsSection (#16012)", () => {
       expect(setAgentAskHuman).toHaveBeenLastCalledWith({ agentId: "codex", enabled: true });
       expect(screen.queryByText(`Couldn't switch on ask_human for ${nameOf("codex")}`)).toBeNull();
       expect(isOn("codex")).toBe(true);
+    });
+
+    it("saves two agents at once, whatever order main answers in, and asks once per row", async () => {
+      setAvailability(INSTALLED);
+      await renderSection(CONNECTED);
+      const claude = deferred<DecisionsPolicy>();
+      const codex = deferred<DecisionsPolicy>();
+      setAgentAskHuman.mockReturnValueOnce(claude.promise).mockReturnValueOnce(codex.promise);
+
+      // Two clicks on one row before it re-renders ask main once.
+      act(() => {
+        fireEvent.click(agentSwitch("claude"));
+        fireEvent.click(agentSwitch("claude"));
+      });
+      fireEvent.click(agentSwitch("codex"));
+      expect(setAgentAskHuman.mock.calls).toEqual([
+        [{ agentId: "claude", enabled: true }],
+        [{ agentId: "codex", enabled: true }],
+      ]);
+      expect([isOn("claude"), isOn("codex")]).toEqual([true, true]);
+      expect([agentSwitch("claude").disabled, agentSwitch("codex").disabled]).toEqual([true, true]);
+
+      // Main saved them in turn; the later answer lands first, and the earlier can't roll it back.
+      await act(async () =>
+        codex.resolve(policy({ askHumanAgents: ["claude", "codex"], revision: 2 }))
+      );
+      expect([isOn("claude"), isOn("codex")]).toEqual([true, true]);
+      expect(agentSwitch("claude").disabled).toBe(true);
+      await act(async () => claude.resolve(policy({ askHumanAgents: ["claude"], revision: 1 })));
+      expect([isOn("claude"), isOn("codex")]).toEqual([true, true]);
+      expect([agentSwitch("claude").disabled, agentSwitch("codex").disabled]).toEqual([
+        false,
+        false,
+      ]);
+    });
+
+    it("keeps each agent's failed save until that agent is saved again", async () => {
+      setAvailability(INSTALLED);
+      await renderSection(CONNECTED);
+      setAgentAskHuman.mockRejectedValueOnce(new Error("claude refused"));
+      await act(async () => {
+        fireEvent.click(agentSwitch("claude"));
+      });
+      setAgentAskHuman.mockResolvedValueOnce(policy({ askHumanAgents: ["codex"], revision: 1 }));
+      await act(async () => {
+        fireEvent.click(agentSwitch("codex"));
+      });
+
+      expect(screen.getByText(`Couldn't switch on ask_human for ${nameOf("claude")}`)).toBeTruthy();
+      setAgentAskHuman.mockResolvedValueOnce(
+        policy({ askHumanAgents: ["codex", "claude"], revision: 2 })
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(setAgentAskHuman).toHaveBeenLastCalledWith({ agentId: "claude", enabled: true });
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect([isOn("claude"), isOn("codex")]).toEqual([true, true]);
+    });
+
+    it("shows what main holds after a failed save, as read again", async () => {
+      setAvailability(INSTALLED);
+      await renderSection(CONNECTED);
+      const reread = deferred<DecisionsPolicy>();
+      getPolicy.mockReturnValueOnce(reread.promise);
+      setAgentAskHuman.mockRejectedValueOnce(new Error("store refused"));
+
+      await act(async () => {
+        fireEvent.click(agentSwitch("claude"));
+      });
+      expect(agentSwitch("claude").disabled).toBe(false);
+      // Another window switched Codex on meanwhile; the read after the failure shows it.
+      await act(async () => reread.resolve(policy({ askHumanAgents: ["codex"], revision: 1 })));
+      expect([isOn("claude"), isOn("codex")]).toEqual([false, true]);
+    });
+
+    it("lets a row go when Decisions turns off mid-save, and turning on starts from main's answer", async () => {
+      setAvailability(INSTALLED);
+      const view = await renderSection(CONNECTED);
+      const save = deferred<DecisionsPolicy>();
+      setAgentAskHuman.mockReturnValueOnce(save.promise);
+      fireEvent.click(agentSwitch("claude"));
+      expect(agentSwitch("claude").disabled).toBe(true);
+
+      view.rerender(<Section status={CONNECTED} active={false} />);
+      view.rerender(<Section status={CONNECTED} />);
+      await act(async () => {});
+      expect(agentSwitch("claude").disabled).toBe(false);
+      expect(isOn("claude")).toBe(false);
+
+      // The old save landing later neither shows its answer nor frees a newer save's row.
+      const again = deferred<DecisionsPolicy>();
+      setAgentAskHuman.mockReturnValueOnce(again.promise);
+      fireEvent.click(agentSwitch("claude"));
+      await act(async () => save.resolve(policy({ askHumanAgents: ["claude"], revision: 9 })));
+      expect(agentSwitch("claude").disabled).toBe(true);
+      await act(async () => again.resolve(policy({ askHumanAgents: ["claude"], revision: 1 })));
+      expect(agentSwitch("claude").disabled).toBe(false);
+      expect(isOn("claude")).toBe(true);
+    });
+
+    it("gives an agent whose id names an object method a working switch", async () => {
+      setAvailability({ ...INSTALLED, toString: "ready" });
+      await renderSection(CONNECTED);
+      act(() =>
+        registerPluginAgents("acme.agents", [{ ...ACME, id: "toString", name: "To String" }])
+      );
+
+      expect(agentSwitch("toString").disabled).toBe(false);
+      expect(isOn("toString")).toBe(false);
     });
 
     it("follows another window's change, and never rolls back to an older read", async () => {

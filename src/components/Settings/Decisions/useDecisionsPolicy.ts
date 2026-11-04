@@ -29,8 +29,9 @@ export interface UseDecisionsPolicyResult {
   pendingExpiry: { ms: number | null } | null;
   expirySaveFailure: DecisionsExpirySaveFailure | null;
   /** Each agent's `ask_human` switch being saved, by agent id, so its row shows what was asked while main acts. */
-  pendingAgents: Readonly<Record<string, boolean>>;
-  agentSaveFailure: DecisionsAgentSaveFailure | null;
+  pendingAgents: ReadonlyMap<string, boolean>;
+  /** Each agent's last failed save, by agent id, until that agent is saved again. */
+  agentSaveFailures: ReadonlyMap<string, DecisionsAgentSaveFailure>;
   reload(): Promise<void>;
   setProxyAllowlisted(allowed: boolean): Promise<void>;
   setDefaultQuestionExpiry(ms: number | null): Promise<void>;
@@ -38,6 +39,17 @@ export interface UseDecisionsPolicyResult {
 }
 
 const READ_FAILED = "Decisions' policy couldn't be read.";
+
+const NO_AGENTS: ReadonlyMap<string, boolean> = new Map();
+const NO_FAILURES: ReadonlyMap<string, DecisionsAgentSaveFailure> = new Map();
+
+/** `map` without `key`, as a new map; the same one when it had no such key. */
+function without<V>(map: ReadonlyMap<string, V>, key: string): ReadonlyMap<string, V> {
+  if (!map.has(key)) return map;
+  const next = new Map(map);
+  next.delete(key);
+  return next;
+}
 
 /**
  * The policy as main applies it, read while `active` (Decisions on): on
@@ -61,8 +73,10 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   const [expirySaveFailure, setExpirySaveFailure] = useState<DecisionsExpirySaveFailure | null>(
     null
   );
-  const [pendingAgents, setPendingAgents] = useState<Readonly<Record<string, boolean>>>({});
-  const [agentSaveFailure, setAgentSaveFailure] = useState<DecisionsAgentSaveFailure | null>(null);
+  // Maps, not objects: an agent id is any registry id, `toString` included.
+  const [pendingAgents, setPendingAgents] = useState<ReadonlyMap<string, boolean>>(NO_AGENTS);
+  const [agentSaveFailures, setAgentSaveFailures] =
+    useState<ReadonlyMap<string, DecisionsAgentSaveFailure>>(NO_FAILURES);
   const savingRef = useRef(false);
   const savingExpiryRef = useRef(false);
   const savingAgentsRef = useRef(new Set<string>());
@@ -116,7 +130,11 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
       setLoadError(null);
       setSaveFailure(null);
       setExpirySaveFailure(null);
-      setAgentSaveFailure(null);
+      // A save still in flight lands nowhere now, so its row is free again
+      // and turning on starts from main's answer alone.
+      savingAgentsRef.current = new Set();
+      setPendingAgents(NO_AGENTS);
+      setAgentSaveFailures(NO_FAILURES);
     };
   }, [active]);
 
@@ -174,10 +192,11 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   };
 
   const setAgentAskHuman = (agentId: string, enabled: boolean): Promise<void> => {
-    if (savingAgentsRef.current.has(agentId)) return Promise.resolve();
-    savingAgentsRef.current.add(agentId);
-    setPendingAgents((current) => ({ ...current, [agentId]: enabled }));
-    setAgentSaveFailure(null);
+    const saving = savingAgentsRef.current;
+    if (saving.has(agentId)) return Promise.resolve();
+    saving.add(agentId);
+    setPendingAgents((current) => new Map(current).set(agentId, enabled));
+    setAgentSaveFailures((current) => without(current, agentId));
     const generation = generationRef.current;
     return window.electron.decisions
       .setAgentAskHuman({ agentId, enabled })
@@ -185,21 +204,21 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
         (next) => accept(next, generation),
         (error: unknown) => {
           if (generation !== generationRef.current) return;
-          setAgentSaveFailure({
+          const failure = {
             agentId,
             enabled,
             message: formatErrorMessage(error, "Try again in a moment."),
-          });
+          };
+          setAgentSaveFailures((current) => new Map(current).set(agentId, failure));
           void read();
         }
       )
       .then(() => {
-        savingAgentsRef.current.delete(agentId);
-        setPendingAgents((current) => {
-          const next = { ...current };
-          delete next[agentId];
-          return next;
-        });
+        // A turn off meanwhile already let the row go, and a save asked for
+        // since then is the one holding it now.
+        if (generation !== generationRef.current) return;
+        saving.delete(agentId);
+        setPendingAgents((current) => without(current, agentId));
       });
   };
 
@@ -211,7 +230,7 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
     pendingExpiry,
     expirySaveFailure: active ? expirySaveFailure : null,
     pendingAgents,
-    agentSaveFailure: active ? agentSaveFailure : null,
+    agentSaveFailures: active ? agentSaveFailures : NO_FAILURES,
     reload,
     setProxyAllowlisted,
     setDefaultQuestionExpiry,

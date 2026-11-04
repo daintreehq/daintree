@@ -166,7 +166,7 @@ export function DecisionsAgentsSection({
     loadError: policyLoadError,
     reload,
     pendingAgents,
-    agentSaveFailure,
+    agentSaveFailures,
     setAgentAskHuman,
   } = read;
   const switchedOn = new Set(policy?.askHumanAgents ?? []);
@@ -221,27 +221,26 @@ export function DecisionsAgentsSection({
                     key={id}
                     id={id}
                     saved={saved}
-                    shown={pendingAgents[id] ?? saved}
-                    disabled={policy === null || pendingAgents[id] !== undefined}
+                    shown={pendingAgents.get(id) ?? saved}
+                    disabled={policy === null || pendingAgents.has(id)}
                     onChange={(enabled) => void setAgentAskHuman(id, enabled)}
                   />
                 );
               })}
             </SettingsGroup>
           )}
-          {agentSaveFailure && (
+          {[...agentSaveFailures.values()].map((failure) => (
             <SettingsLoadErrorBanner
+              key={failure.agentId}
               title={
-                agentSaveFailure.enabled
-                  ? `Couldn't switch on ask_human for ${agentName(agentSaveFailure.agentId)}`
-                  : `Couldn't switch off ask_human for ${agentName(agentSaveFailure.agentId)}`
+                failure.enabled
+                  ? `Couldn't switch on ask_human for ${agentName(failure.agentId)}`
+                  : `Couldn't switch off ask_human for ${agentName(failure.agentId)}`
               }
-              message={agentSaveFailure.message}
-              onRetry={() =>
-                void setAgentAskHuman(agentSaveFailure.agentId, agentSaveFailure.enabled)
-              }
+              message={failure.message}
+              onRetry={() => void setAgentAskHuman(failure.agentId, failure.enabled)}
             />
-          )}
+          ))}
           {unsupported.length > 0 && (
             <SettingsGroup label="Not supported yet">
               {unsupported.map((id) => (
