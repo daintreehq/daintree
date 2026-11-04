@@ -36,7 +36,6 @@ import {
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
 import { decisionsHostServes, loadDecisionsModule } from "../../../window/serviceRefs.js";
-import { askHumanAgentIds } from "../../../../shared/config/decisionsAskHumanAgents.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
@@ -189,7 +188,9 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
  * switch, only an agent the owner switched on in Settings does, whatever an
  * old Host record says. An enrolled Host serves its panes as its enrollment
  * says: the owner's choice of agents never reaches it, and it has no Settings
- * of its own to choose in.
+ * of its own to choose in. Read from the saved value as it stands, like the
+ * switch itself: every write of it goes through main's sanitiser, and nothing
+ * of Decisions joins the startup graph to read it.
  */
 function decisionsServesAgent(
   settings: unknown,
@@ -201,7 +202,11 @@ function decisionsServesAgent(
     askHumanAgents?: unknown;
   };
   if (owner.enabled !== true) return decisionsHostServes(hostRecord);
-  return agentId !== undefined && askHumanAgentIds(owner.askHumanAgents).includes(agentId);
+  return (
+    agentId !== undefined &&
+    Array.isArray(owner.askHumanAgents) &&
+    owner.askHumanAgents.includes(agentId)
+  );
 }
 
 /**

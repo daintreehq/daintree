@@ -1098,8 +1098,7 @@ describe("decisions IPC", () => {
       { agentId: "claude" },
       { agentId: "claude", enabled: "true" },
       { agentId: "", enabled: true },
-      { agentId: "a b", enabled: true },
-      { agentId: "x".repeat(129), enabled: true },
+      { agentId: "x".repeat(257), enabled: true },
       { agentId: "claude", enabled: true, askHumanAgents: ["codex"] },
     ]) {
       expect(schema.safeParse(value).success).toBe(false);

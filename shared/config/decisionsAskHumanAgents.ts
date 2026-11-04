@@ -18,8 +18,8 @@ export function isAskHumanAgentId(value: unknown): value is string {
  * The agent ids switched on for `ask_human` (#16223), as saved: in the order
  * they were switched on, each once. Anything that isn't an agent id is
  * dropped, so a damaged value switches nothing on; an id whose agent is gone
- * stays, so the agent is still on if it comes back. Main's sanitiser and the
- * launch gate both read the saved value through this.
+ * stays, so the agent is still on if it comes back. Main's sanitiser reads
+ * the saved value through this, so the launch gate can read it as it stands.
  */
 export function askHumanAgentIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];

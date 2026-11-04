@@ -57,8 +57,6 @@ import {
   isRelayRemovalTerminalId,
   isRemovableRelayOrigin,
 } from "../../../shared/config/relayRemoval.js";
-import { MAX_ASK_HUMAN_AGENT_ID_LENGTH } from "../../../shared/config/decisionsAskHumanAgents.js";
-import { SAFE_AGENT_ID_PATTERN } from "../../../shared/types/userAgentRegistry.js";
 import type {
   DecisionsHostEnrollResult,
   DecisionsHostsResult,
@@ -241,12 +239,9 @@ const enrollHostSchema = z
   .object({ hostId: z.string().min(1).max(256), allowWeakStorage: z.boolean().optional() })
   .strict();
 
-// An agent id in the shape the registries accept; main refuses anything else too.
+// Only the shape here; main refuses any id no agent could have.
 const agentAskHumanSchema = z
-  .object({
-    agentId: z.string().min(1).max(MAX_ASK_HUMAN_AGENT_ID_LENGTH).regex(SAFE_AGENT_ID_PATTERN),
-    enabled: z.boolean(),
-  })
+  .object({ agentId: z.string().min(1).max(256), enabled: z.boolean() })
   .strict();
 
 // A run id main minted (a UUID); a cancel names the run it means to end.
