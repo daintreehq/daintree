@@ -50,6 +50,7 @@ import type {
   RestoreDecisionsIdentityPayload,
   SetDecisionsAgentAskHumanPayload,
   SetDecisionsEnabledPayload,
+  SetDecisionsTerminalSnapshotsPayload,
   StartDecisionsRelayRemovalPayload,
   VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
@@ -237,6 +238,11 @@ const verifyRecoveryKitSchema = z
 // A host id as the host list keeps it.
 const enrollHostSchema = z
   .object({ hostId: z.string().min(1).max(256), allowWeakStorage: z.boolean().optional() })
+  .strict();
+
+// Turning on needs `consent`, checked by main; the time it records is main's own.
+const setTerminalSnapshotsSchema = z
+  .object({ enabled: z.boolean(), consent: z.boolean().optional() })
   .strict();
 
 // Only the shape here; main refuses any id no agent could have.
@@ -572,6 +578,18 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setDecisionsAgentAskHuman(payload);
+      }
+    ),
+    // What the phone may show of a pane that asked (#16228). Only while on,
+    // like every preference behind the switch.
+    setTerminalSnapshots: opValidated(
+      CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
+      setTerminalSnapshotsSchema,
+      async (payload: SetDecisionsTerminalSnapshotsPayload): Promise<DecisionsStatus> => {
+        refuseWhileOff("change what your phone shows");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsTerminalSnapshots(payload);
       }
     ),
     // Saving and verifying a recovery kit (#16007). The save dialog belongs to

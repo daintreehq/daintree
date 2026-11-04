@@ -420,6 +420,9 @@ export interface GeneratedElectronAPI {
     setProxyAllowlisted(
       ...args: IpcInvokeMap["decisions:set-proxy-allowlisted"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-proxy-allowlisted"]["result"]>;
+    setTerminalSnapshots(
+      ...args: IpcInvokeMap["decisions:set-terminal-snapshots"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-terminal-snapshots"]["result"]>;
     startModelEvaluation(
       ...args: IpcInvokeMap["decisions:start-model-evaluation"]["args"]
     ): Promise<IpcInvokeMap["decisions:start-model-evaluation"]["result"]>;

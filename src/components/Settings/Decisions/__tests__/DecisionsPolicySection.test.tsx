@@ -74,7 +74,12 @@ function Sections({ active = true }: { active?: boolean }) {
   const read = useDecisionsPolicy(active);
   return (
     <TooltipProvider>
-      <DecisionsQuestionsSection policy={read} />
+      <DecisionsQuestionsSection
+        policy={read}
+        status={{ state: "connected" }}
+        locked={false}
+        onChanged={() => {}}
+      />
       <DecisionsPolicySection policy={read} />
     </TooltipProvider>
   );

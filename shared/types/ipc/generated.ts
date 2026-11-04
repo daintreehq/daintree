@@ -772,6 +772,10 @@ export interface GeneratedIpcInvokeMap {
     args: [allowed: boolean];
     result: import("../decisions.js").DecisionsPolicy;
   };
+  "decisions:set-terminal-snapshots": {
+    args: [payload: import("../decisions.js").SetDecisionsTerminalSnapshotsPayload];
+    result: import("../decisions.js").DecisionsStatus;
+  };
   "decisions:start-model-evaluation": {
     args: [];
     result: import("../decisionsModel.js").DecisionsModelState;

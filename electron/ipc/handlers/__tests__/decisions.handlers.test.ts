@@ -19,6 +19,7 @@ import type {
   RestoreDecisionsIdentityPayload,
   SetDecisionsAgentAskHumanPayload,
   SetDecisionsEnabledPayload,
+  SetDecisionsTerminalSnapshotsPayload,
   VerifyDecisionsRecoveryKitPayload,
 } from "../../../../shared/types/decisions.js";
 import type { IpcContext } from "../../types.js";
@@ -125,6 +126,12 @@ const decisionsEntry = vi.hoisted(() => ({
       revision: 1,
     })
   ),
+  setDecisionsTerminalSnapshots: vi.fn(
+    async (payload: SetDecisionsTerminalSnapshotsPayload): Promise<DecisionsStatus> =>
+      payload.enabled
+        ? { state: "connected", terminalSnapshots: true, revision: 1 }
+        : { state: "connected", revision: 1 }
+  ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
     async (
@@ -208,6 +215,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
     setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
     setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
+    setDecisionsTerminalSnapshots: decisionsEntry.setDecisionsTerminalSnapshots,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
@@ -291,6 +299,9 @@ const setDefaultQuestionExpiry = decisionsNamespace.ops.setDefaultQuestionExpiry
 const setAgentAskHuman = decisionsNamespace.ops.setAgentAskHuman.handler as unknown as (
   payload: SetDecisionsAgentAskHumanPayload
 ) => Promise<DecisionsPolicy>;
+const setTerminalSnapshots = decisionsNamespace.ops.setTerminalSnapshots.handler as unknown as (
+  payload: SetDecisionsTerminalSnapshotsPayload
+) => Promise<DecisionsStatus>;
 
 const listHosts = decisionsNamespace.ops.listHosts
   .handler as unknown as () => Promise<DecisionsHostsResult>;
@@ -373,6 +384,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_POLICY,
   CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
   CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
+  CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
   CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
   CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
   CHANNELS.DECISIONS_LIST_HOSTS,
@@ -414,6 +426,7 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionsPolicy.mockClear();
     decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
     decisionsEntry.setDecisionsDefaultQuestionExpiry.mockClear();
+    decisionsEntry.setDecisionsTerminalSnapshots.mockClear();
     decisionsEntry.revokeDevice.mockClear();
     decisionsEntry.rotateKeys.mockClear();
     decisionsEntry.startSetupCheck.mockClear();
@@ -595,6 +608,9 @@ describe("decisions IPC", () => {
       await expect(setProxyAllowlisted(true)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setDefaultQuestionExpiry(null)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setAgentAskHuman({ agentId: "claude", enabled: true })).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+      await expect(setTerminalSnapshots({ enabled: true, consent: true })).rejects.toMatchObject({
         code: "PERMISSION",
       });
     }
@@ -1081,6 +1097,44 @@ describe("decisions IPC", () => {
       enabled: true,
     });
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("changes terminal snapshots through Decisions itself once on", async () => {
+    saved.value = { enabled: true };
+
+    await expect(setTerminalSnapshots({ enabled: true, consent: true })).resolves.toMatchObject({
+      terminalSnapshots: true,
+    });
+    await expect(setTerminalSnapshots({ enabled: false })).resolves.not.toHaveProperty(
+      "terminalSnapshots"
+    );
+    expect(decisionsEntry.setDecisionsTerminalSnapshots.mock.calls).toEqual([
+      [{ enabled: true, consent: true }],
+      [{ enabled: false }],
+    ]);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes the switch and an agreement for terminal snapshots, never a time of its own", () => {
+    const schema = decisionsNamespace.ops.setTerminalSnapshots.schema as SafeParse;
+    for (const value of [
+      { enabled: true, consent: true },
+      { enabled: true },
+      { enabled: false },
+      { enabled: false, consent: false },
+    ]) {
+      expect(schema.safeParse(value).success).toBe(true);
+    }
+    for (const value of [
+      undefined,
+      true,
+      { consent: true },
+      { enabled: "true", consent: true },
+      { enabled: true, consent: "yes" },
+      { enabled: true, consent: true, terminalSnapshotsConsentedAt: 1 },
+    ]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("takes one agent id and a boolean to switch it, never a list", () => {

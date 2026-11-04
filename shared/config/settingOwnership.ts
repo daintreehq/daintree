@@ -229,6 +229,8 @@ export const SETTING_CATALOG = {
           modelAdapter: device,
           modelConsentedAt: device,
           askHumanAgents: device,
+          terminalSnapshots: device,
+          terminalSnapshotsConsentedAt: device,
         },
       },
       // An enrolled Host's own record of its enrollment, kept on the Host itself.

@@ -472,11 +472,13 @@ import {
   setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
   setDecisionsAgentAskHuman,
+  setDecisionsTerminalSnapshots,
   startDecisionsModelEvaluation,
   startRelayRemoval,
   startDecisionsIfEnabled,
   startSetupCheck,
   stopDecisions,
+  terminalSnapshotsAllowed,
   verifyRecoveryKit,
 } from "../index.js";
 
@@ -929,6 +931,157 @@ describe("Decisions entry", () => {
       // Learning stays off, and its agreement stays.
       expect(saved.value).toMatchObject({ modelLearning: false });
       expect(cleared.consentedAt).toBeGreaterThan(0);
+    });
+  });
+
+  describe("terminal snapshots (#16228)", () => {
+    afterEach(async () => {
+      await peekDecisionsService()?.stop();
+    });
+
+    it("turns snapshots on only with an agreement given each time, keeping every other field", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, modelConsentedAt: 6 };
+      await startDecisionsIfEnabled();
+
+      // Neither Decisions' consent nor the model's stands for it.
+      await expect(setDecisionsTerminalSnapshots({ enabled: true })).rejects.toMatchObject({
+        name: "AppError",
+        code: "PERMISSION",
+      });
+      expect(store.set).not.toHaveBeenCalled();
+      expect(terminalSnapshotsAllowed()).toBe(false);
+
+      const status = await setDecisionsTerminalSnapshots({ enabled: true, consent: true });
+      expect(status.terminalSnapshots).toBe(true);
+      const agreedAt = (saved.value as { terminalSnapshotsConsentedAt: number })
+        .terminalSnapshotsConsentedAt;
+      expect(agreedAt).toBeGreaterThan(0);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelConsentedAt: 6,
+        terminalSnapshots: true,
+        terminalSnapshotsConsentedAt: agreedAt,
+      });
+      expect(peekDecisionsService()!.getSettings()!.terminalSnapshots).toBe(true);
+      expect(terminalSnapshotsAllowed()).toBe(true);
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ terminalSnapshots: true })
+      );
+
+      const off = await setDecisionsTerminalSnapshots({ enabled: false });
+      expect(off.terminalSnapshots).toBeUndefined();
+      expect(saved.value).toMatchObject({
+        terminalSnapshots: false,
+        terminalSnapshotsConsentedAt: agreedAt,
+      });
+      expect(peekDecisionsService()!.getSettings()!.terminalSnapshots).toBe(false);
+      expect(terminalSnapshotsAllowed()).toBe(false);
+
+      // The earlier agreement doesn't turn them on again.
+      await expect(setDecisionsTerminalSnapshots({ enabled: true })).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+      expect(saved.value).toMatchObject({ terminalSnapshots: false });
+
+      // A new agreement records its own time.
+      const later = agreedAt + 60_000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(later);
+      await setDecisionsTerminalSnapshots({ enabled: true, consent: true }).finally(() =>
+        now.mockRestore()
+      );
+      expect(saved.value).toMatchObject({
+        terminalSnapshots: true,
+        terminalSnapshotsConsentedAt: later,
+      });
+    });
+
+    it("lets a turn off stand over a turn on queued before it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      // One window agrees and turns them on; another turns them off before that lands.
+      const turningOn = setDecisionsTerminalSnapshots({ enabled: true, consent: true });
+      const turningOff = setDecisionsTerminalSnapshots({ enabled: false });
+      closed();
+      const [, , on, off] = await Promise.all([stopping, enabling, turningOn, turningOff]);
+
+      const wroteOn = vi
+        .mocked(store.set)
+        .mock.calls.some(
+          (call) =>
+            ((call as unknown[])[1] as { terminalSnapshots?: boolean } | undefined)
+              ?.terminalSnapshots === true
+        );
+      expect(wroteOn).toBe(false);
+      expect(on.terminalSnapshots).toBeUndefined();
+      expect(off.terminalSnapshots).toBeUndefined();
+      expect(saved.value).toMatchObject({ terminalSnapshots: false });
+      expect(terminalSnapshotsAllowed()).toBe(false);
+      expect(service.getSettings()!.terminalSnapshots).toBe(false);
+    });
+
+    it("saves off at once, ahead of a change still in the queue, and the service follows in turn", async () => {
+      saved.value = {
+        enabled: true,
+        consentedAt: 5,
+        terminalSnapshots: true,
+        terminalSnapshotsConsentedAt: 7,
+      };
+      await startDecisionsIfEnabled();
+      expect(terminalSnapshotsAllowed()).toBe(true);
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      let answered = false;
+      const turningOff = setDecisionsTerminalSnapshots({ enabled: false }).then((status) => {
+        answered = true;
+        return status;
+      });
+      expect(saved.value).toMatchObject({ terminalSnapshots: false });
+      expect(terminalSnapshotsAllowed()).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(answered).toBe(false);
+
+      closed();
+      const [, , status] = await Promise.all([stopping, enabling, turningOff]);
+      expect(status.terminalSnapshots).toBeUndefined();
+      expect(saved.value).toMatchObject({
+        enabled: true,
+        terminalSnapshots: false,
+        terminalSnapshotsConsentedAt: 7,
+      });
+      expect(service.getSettings()!.terminalSnapshots).toBe(false);
+    });
+
+    it("refuses to turn on while Decisions is off, and allows nothing while it's off or quit", async () => {
+      saved.value = { enabled: false, terminalSnapshots: true, terminalSnapshotsConsentedAt: 7 };
+      const constructed = loads.constructed;
+      await expect(
+        setDecisionsTerminalSnapshots({ enabled: true, consent: true })
+      ).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(loads.constructed).toBe(constructed);
+      expect(terminalSnapshotsAllowed()).toBe(false);
+
+      saved.value = { enabled: true, terminalSnapshots: true, terminalSnapshotsConsentedAt: 7 };
+      expect(terminalSnapshotsAllowed()).toBe(true);
+      await stopDecisions();
+      expect(terminalSnapshotsAllowed()).toBe(false);
     });
   });
 

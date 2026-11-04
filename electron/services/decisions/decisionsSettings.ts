@@ -47,6 +47,8 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     modelAdapter: null,
     modelConsentedAt: null,
     askHumanAgents: [],
+    terminalSnapshots: false,
+    terminalSnapshotsConsentedAt: null,
   };
 }
 
@@ -202,6 +204,7 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
   // the relay's ids; without them there is nothing it could still refer to.
   const identified = relayOrigin !== null && installationId !== null && deviceId !== null;
   const modelConsentedAt = consentTime(value.modelConsentedAt);
+  const terminalSnapshotsConsentedAt = consentTime(value.terminalSnapshotsConsentedAt);
   return {
     enabled: value.enabled === true && !damaged,
     relayOrigin,
@@ -224,6 +227,10 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     modelAdapter: modelAdapter(value.modelAdapter),
     modelConsentedAt,
     askHumanAgents: askHumanAgentIds(value.askHumanAgents),
+    // Snapshots send what is on a screen, so they are on only once the person
+    // agreed to that; Decisions' own consent doesn't cover them.
+    terminalSnapshots: value.terminalSnapshots === true && terminalSnapshotsConsentedAt !== null,
+    terminalSnapshotsConsentedAt,
   };
 }
 

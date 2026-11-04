@@ -97,6 +97,31 @@ export interface DecisionsSettings {
    * gets it only once the person switches it on; empty until then.
    */
   askHumanAgents: string[];
+  /**
+   * Whether the phone may show a pane that asked a question (#16228): its
+   * title, the agent state Daintree observed and its last terminal lines,
+   * redacted on a best-effort basis, only while that question is open. Off
+   * unless the person turns it on, and on only with
+   * `terminalSnapshotsConsentedAt`, so a setting saved before the field
+   * existed reads as off. Whatever captures or publishes a snapshot reads it
+   * from the setting each time, never once.
+   */
+  terminalSnapshots: boolean;
+  /**
+   * When the person last agreed to what terminal snapshots send (epoch ms).
+   * Each turn on asks again and records the new time; turning off keeps it.
+   * Null until they first agree.
+   */
+  terminalSnapshotsConsentedAt: number | null;
+}
+
+/**
+ * Turns terminal snapshots on or off (#16228). Turning on needs `consent`:
+ * the person agreed to what they send just now.
+ */
+export interface SetDecisionsTerminalSnapshotsPayload {
+  enabled: boolean;
+  consent?: boolean;
 }
 
 /** Switches one agent's `ask_human` on or off for its launches from now on (#16223). */
@@ -173,6 +198,8 @@ export interface DecisionsStatus {
   relayOrigin?: string;
   /** When the person agreed to what Decisions sends; absent until they have. */
   consentedAt?: number;
+  /** Terminal snapshots are on (#16228); absent while off. */
+  terminalSnapshots?: true;
   /**
    * This computer's Decisions key file exists. Read only while on, from the
    * file's presence alone, so it never asks the keychain. With no relay set

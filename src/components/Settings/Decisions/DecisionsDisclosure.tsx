@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils";
  * streams through the relay to a speech provider, and correction sends the
  * transcript with the question and its options to a model provider. The
  * decision model's item is #16027's: its CLI sends from this computer, under
- * learning's own consent.
+ * learning's own consent. Terminal snapshots are #16228's, under their own
+ * consent, which shows `TerminalSnapshotsDisclosure` too.
  */
 export function DecisionsDisclosure({ className }: { className?: string }) {
   return (
@@ -50,6 +51,30 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         CLI you then choose for it sends a question and your past answers like it to that CLI&apos;s
         provider (Anthropic, OpenAI or Google, unless the CLI is set up to use another).
       </li>
+      <li>
+        <span className="font-medium text-text-primary">
+          Terminal snapshots, only if you turn them on.
+        </span>{" "}
+        <TerminalSnapshotsDisclosure /> They&apos;re off unless you turn them on under Questions,
+        which asks first.
+      </li>
     </ul>
+  );
+}
+
+/**
+ * What terminal snapshots send, and when (#16228), in one place: their own
+ * consent dialog and the list above say it in these words, so what the
+ * person agreed to and what the page says later can't drift apart.
+ */
+export function TerminalSnapshotsDisclosure() {
+  return (
+    <>
+      While a question is open, the title of the pane that asked it, the agent state Daintree
+      observed there and its last terminal lines go to your relay, end-to-end encrypted like the
+      question, so your phone can show them. They&apos;re redacted on a best-effort basis, so a
+      secret the redaction misses can still be sent. Only the latest snapshot is kept, never a
+      history.
+    </>
   );
 }
