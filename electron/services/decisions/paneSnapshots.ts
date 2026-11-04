@@ -9,7 +9,7 @@ import {
   type SnapshotRefreshRequest,
 } from "@daintreehq/decisions-client";
 import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
-import type { AgentId } from "../../../shared/types/agent.js";
+import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { composeTitledPanel } from "../../../shared/utils/terminalTitleDisplay.js";
 import type { PtyClient } from "../PtyClient.js";
 import { readPluginTerminalScreen } from "../plugin/pluginTerminalScreenRead.js";
@@ -35,7 +35,14 @@ export const WORKING_TICK_MS = 15_000;
 export const SNAPSHOT_MIN_INTERVAL_MS = 2_500;
 /** Pane events that come together (a state change and a retitle) are read once. */
 const SETTLE_MS = 200;
-/** "1" while the relay may hold a snapshot this store's device shared, since its last clear. */
+/** A read the pty host didn't answer in time is tried again this often, this many times in a row. */
+const READ_RETRY_MS = 5_000;
+const READ_RETRIES = 3;
+/**
+ * The questions the relay may hold a snapshot of from this store's device,
+ * as a JSON list: each recorded before its first share and dropped once a
+ * clear of it has gone through, so a restart takes back what a crash left.
+ */
 export const SNAPSHOTS_SHARED_META_KEY = "daintree:snapshots-shared";
 
 /** The whole screen: no line or byte cut before redaction, which sees it all. */
@@ -56,27 +63,35 @@ export interface PaneSnapshotSources extends DecisionIdentitySources {
    */
   allowed(): boolean;
   getPtyClient(): PaneSnapshotPtyClient | null;
-  /** Calls `onPane` with the pane's id on each of main's events that can change its snapshot. */
-  watchPanes(onPane: (terminalId: string) => void): () => void;
+  /**
+   * Calls `onPane` with the pane's id on each of main's events that can
+   * change its snapshot, and its agent's new state when the event says.
+   */
+  watchPanes(onPane: (terminalId: string, state?: string) => void): () => void;
 }
 
 export interface PaneSnapshotsOptions extends PaneSnapshotSources {
-  store: Pick<LocalStore, "listQuestions" | "getMeta" | "setMeta">;
+  store: Pick<LocalStore, "listQuestions" | "getQuestion" | "getMeta" | "setMeta">;
   now?: () => number;
   tickMs?: number;
   settleMs?: number;
+  retryMs?: number;
 }
 
-/** The bridge calls a snapshot goes through: each attempt's bridge in turn. */
-export type SnapshotBridge = Pick<DecisionsBridge, "publishSnapshot" | "clearSnapshots">;
+/**
+ * The bridge calls a snapshot goes through: each attempt's bridge in turn.
+ * Clears go to its publisher with the row, which queues them at once, where
+ * `clearSnapshots` would first read the row and then wait on the relay.
+ */
+export type SnapshotBridge = Pick<DecisionsBridge, "publishSnapshot"> & {
+  snapshots: Pick<DecisionsBridge["snapshots"], "clear">;
+};
 
 /** A question Daintree asked from one of this machine's panes, still waiting for its answer. */
 interface Asking {
   row: QuestionRow;
   /** What was last queued for it on the current bridge; a read that finds the same sends nothing. */
   sent: string | null;
-  /** Something was shared for it in this lifetime, which closing it takes back. */
-  shared: boolean;
   /** Its pane's title as last read for the run that asked: an exited snapshot keeps it. */
   title: string | null;
 }
@@ -117,7 +132,19 @@ function sameRun(a: QuestionOrigin, b: QuestionOrigin): boolean {
 }
 
 function agentName(agentId: string | undefined): string | null {
-  return agentId ? (AGENT_REGISTRY[agentId as AgentId]?.name ?? null) : null;
+  if (!agentId || !Object.hasOwn(AGENT_REGISTRY, agentId)) return null;
+  return AGENT_REGISTRY[agentId as BuiltInAgentId].name;
+}
+
+/** What the store records as shared; anything unreadable is nothing. */
+function sharedIds(raw: string | null): Set<string> {
+  if (raw === null) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
 }
 
 /** Whether the pane holds the very run `origin` names, by the checks delivery types an answer under. */
@@ -234,24 +261,29 @@ function codeOf(error: unknown): string {
  * and nothing listens: a refresh is answered "not shared", and what was
  * shared is taken back, here and after a restart, once a bridge can.
  *
- * One step at a time goes to the bridge, so a clear queued after a publish
- * always lands after it: the library sends a question's newest record last.
+ * One step at a time hands the bridge a record, and none waits on the relay,
+ * so a clear handed over after a publish lands after it (the library sends a
+ * question's newest record last) and a clear the relay keeps refusing holds
+ * nothing up behind it.
  */
 export class PaneSnapshots {
   private readonly o: PaneSnapshotsOptions;
   private readonly now: () => number;
   private readonly asking = new Map<string, Asking>();
   private readonly reads = new Map<string, PaneRead>();
-  /** Each pane's agent state as last read, so the tick reads only working ones. */
+  /** Each pane's agent state as last read or reported, so the tick reads only working ones. */
   private readonly states = new Map<string, string>();
-  /** Questions closed while their snapshot may still be on the relay. */
+  /** Reads that failed in a row, by pane, and the retry each has waiting. */
+  private readonly failures = new Map<string, number>();
+  private readonly retries = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Questions closed here, waiting for a bridge to take back what they shared. */
   private readonly toClear = new Set<string>();
   private bridge: SnapshotBridge | null = null;
   /** Rises with each bridge and each turn of the switch: a read begun before one sends nothing. */
   private epoch = 0;
   private sharing = false;
-  /** Whether the store records a snapshot that may still be on the relay; null until read. */
-  private shared: boolean | null = null;
+  /** The questions the relay may hold a snapshot of from this store, as it records them; null until read. */
+  private shared: Set<string> | null = null;
   private offPanes: (() => void) | null = null;
   private tick: ReturnType<typeof setInterval> | null = null;
   private steps: Promise<void> = Promise.resolve();
@@ -272,10 +304,10 @@ export class PaneSnapshots {
       const row = open.get(id);
       if (row === undefined) {
         this.asking.delete(id);
-        if (asking.shared || this.shared !== false) this.clear(id);
+        this.clear(id);
       } else if (!sameRun(row.origin, asking.row.origin)) {
         // Resumed elsewhere: the run it is bound to now is the one to read.
-        this.asking.set(id, { row, sent: null, shared: asking.shared, title: null });
+        this.asking.set(id, { row, sent: null, title: null });
         this.request(row.origin.pane_id, true);
       } else {
         asking.row = row;
@@ -283,7 +315,7 @@ export class PaneSnapshots {
     }
     for (const [id, row] of open) {
       if (this.asking.has(id)) continue;
-      this.asking.set(id, { row, sent: null, shared: false, title: null });
+      this.asking.set(id, { row, sent: null, title: null });
       this.request(row.origin.pane_id, true);
     }
     this.follow();
@@ -314,15 +346,15 @@ export class PaneSnapshots {
     for (const asking of this.asking.values()) asking.sent = null;
     this.enqueue(async () => {
       const rows = await this.o.store.listQuestions();
-      if (this.shared === null) {
-        this.shared = (await this.o.store.getMeta(SNAPSHOTS_SHARED_META_KEY)) === "1";
-      }
+      const shared = await this.loadShared();
       if (this.bridge !== bridge) return;
       this.observe(rows);
       if (this.sharing) {
+        // Shared before, by an earlier bridge or run, for a question that no longer asks.
+        for (const id of shared) if (!this.asking.has(id)) this.toClear.add(id);
         this.requestAll();
         this.flushClears(bridge);
-      } else {
+      } else if (shared.size > 0) {
         this.clearAll();
       }
     });
@@ -348,8 +380,9 @@ export class PaneSnapshots {
     }
     // Not shared, or no longer asking: the phone shows so instead of waiting out its deadline.
     this.enqueue(async () => {
-      if (this.bridge !== bridge) return;
-      await bridge.clearSnapshots(request.questionId);
+      const row = await this.o.store.getQuestion(request.questionId);
+      if (row === null || this.bridge !== bridge) return;
+      this.handOver(bridge.snapshots.clear(row));
     });
   }
 
@@ -366,7 +399,7 @@ export class PaneSnapshots {
   private follow(): void {
     const live = !this.stopped && this.sharing && this.bridge !== null && this.asking.size > 0;
     if (live && this.offPanes === null) {
-      this.offPanes = this.o.watchPanes((paneId) => this.onPane(paneId));
+      this.offPanes = this.o.watchPanes((paneId, state) => this.onPane(paneId, state));
     } else if (!live && this.offPanes !== null) {
       this.offPanes();
       this.offPanes = null;
@@ -391,8 +424,12 @@ export class PaneSnapshots {
     return [...this.panes()].filter((paneId) => this.states.get(paneId) === "working");
   }
 
-  private onPane(paneId: string): void {
-    if (this.panes().has(paneId)) this.request(paneId, false);
+  private onPane(paneId: string, state: string | undefined): void {
+    if (!this.panes().has(paneId)) return;
+    // The state as reported, so the tick follows a working agent even when this read fails.
+    if (state !== undefined) this.states.set(paneId, state);
+    this.request(paneId, false);
+    this.follow();
   }
 
   private requestAll(): void {
@@ -427,6 +464,9 @@ export class PaneSnapshots {
       read.again = false;
     }
     for (const [paneId, read] of this.reads) if (!read.running) this.reads.delete(paneId);
+    for (const retry of this.retries.values()) clearTimeout(retry);
+    this.retries.clear();
+    this.failures.clear();
   }
 
   private async run(paneId: string, read: PaneRead): Promise<void> {
@@ -442,6 +482,19 @@ export class PaneSnapshots {
       read.running = false;
       if (this.reads.get(paneId) === read && read.timer === null) this.reads.delete(paneId);
     }
+  }
+
+  /** The pty host didn't answer in time: read again soon, a few times, rather than wait for the next event. */
+  private retryLater(paneId: string): void {
+    const failed = (this.failures.get(paneId) ?? 0) + 1;
+    this.failures.set(paneId, failed);
+    if (failed > READ_RETRIES || this.retries.has(paneId)) return;
+    const retry = setTimeout(() => {
+      this.retries.delete(paneId);
+      this.request(paneId, true);
+    }, this.o.retryMs ?? READ_RETRY_MS);
+    retry.unref?.();
+    this.retries.set(paneId, retry);
   }
 
   private async capture(paneId: string, force: boolean): Promise<void> {
@@ -463,9 +516,10 @@ export class PaneSnapshots {
         this.now
       );
     } catch {
-      // The pty host didn't answer in time: the next event or tick reads again.
+      if (this.bridge === bridge && this.epoch === epoch) this.retryLater(paneId);
       return;
     }
+    this.failures.delete(paneId);
     let state: string | null = null;
     for (const [index, [id, asking]] of askers.entries()) {
       const reading = readings[index]!;
@@ -509,17 +563,15 @@ export class PaneSnapshots {
       !this.o.allowed();
     this.enqueue(async () => {
       if (stale()) return;
-      if (this.shared !== true) {
+      const shared = await this.loadShared();
+      if (!shared.has(id)) {
         // Recorded before anything goes, so a restart knows to take it back.
-        await this.o.store.setMeta(SNAPSHOTS_SHARED_META_KEY, "1");
-        this.shared = true;
+        shared.add(id);
+        await this.saveShared();
         if (stale()) return;
       }
       const result = await bridge.publishSnapshot(id, input, paneIdentityOf(asking.row.origin));
-      if (result === "queued") {
-        asking.sent = key;
-        asking.shared = true;
-      }
+      if (result === "queued") asking.sent = key;
     });
   }
 
@@ -532,58 +584,87 @@ export class PaneSnapshots {
   private flushClears(bridge: SnapshotBridge): void {
     if (this.toClear.size === 0) return;
     this.enqueue(async () => {
-      // Nothing was shared from this store since its last clear: the relay holds none of these.
-      if (this.shared === false) {
-        this.toClear.clear();
-        return;
-      }
+      const shared = await this.loadShared();
       for (const id of [...this.toClear]) {
         if (this.bridge !== bridge) return;
-        if (this.asking.has(id)) {
-          this.toClear.delete(id);
-          continue;
-        }
-        try {
-          await bridge.clearSnapshots(id);
-        } catch (error) {
-          // A question deleted since has nothing left on the relay to clear.
-          if (codeOf(error) !== "not_found") throw error;
-        }
-        if (this.bridge === bridge) this.toClear.delete(id);
+        this.toClear.delete(id);
+        // Asking again (reopened), or nothing of it shared: nothing to take back.
+        if (this.asking.has(id) || !shared.has(id)) continue;
+        await this.takeBack(bridge, id);
       }
     });
   }
 
-  /** Snapshots turned off, or found still shared from before: every open question's goes. */
+  /** Snapshots turned off, or found shared by an earlier run: every question that shared one takes it back. */
   private clearAll(): void {
     this.enqueue(async () => {
       const bridge = this.bridge;
       if (bridge === null) return;
-      if (this.shared === null) {
-        this.shared = (await this.o.store.getMeta(SNAPSHOTS_SHARED_META_KEY)) === "1";
-      }
-      if (!this.shared) {
-        this.toClear.clear();
-        return;
-      }
-      await bridge.clearSnapshots();
-      // A new bridge, or the switch back on, keeps the record: the next clear isn't done.
-      if (this.bridge !== bridge || this.o.allowed()) return;
-      await this.o.store.setMeta(SNAPSHOTS_SHARED_META_KEY, "0");
-      this.shared = false;
+      const shared = await this.loadShared();
       this.toClear.clear();
-      for (const asking of this.asking.values()) {
-        asking.shared = false;
-        asking.sent = null;
+      for (const id of [...shared]) {
+        if (this.bridge !== bridge || this.o.allowed()) return;
+        await this.takeBack(bridge, id);
       }
     });
+  }
+
+  /**
+   * Hands the bridge `id`'s sharing-off record, at once, without waiting on
+   * the relay. Once the record settles through a bridge still attached, the
+   * question is dropped from what the store records as shared, unless it was
+   * shared again since; one left recorded is taken back by the next bridge.
+   */
+  private async takeBack(bridge: SnapshotBridge, id: string): Promise<void> {
+    const row = await this.o.store.getQuestion(id);
+    const shared = this.shared!;
+    if (this.bridge !== bridge) {
+      this.toClear.add(id);
+      return;
+    }
+    if (row === null) {
+      // Deleted here: the relay keeps nothing of a question gone from the store.
+      shared.delete(id);
+      await this.saveShared();
+      return;
+    }
+    // A row given, the library queues the record before its first await.
+    const settled = bridge.snapshots.clear(row);
+    this.handOver(settled, () =>
+      this.enqueue(async () => {
+        if (this.bridge !== bridge || !shared.has(id)) return;
+        if (this.asking.has(id) && this.o.allowed()) return;
+        shared.delete(id);
+        await this.saveShared();
+      })
+    );
+  }
+
+  /** Follows a record handed to the bridge without holding up the next step. */
+  private handOver(settled: Promise<void>, then?: () => void): void {
+    settled.then(then, (error: unknown) => {
+      if (!this.stopped)
+        console.warn(`[Decisions] A terminal snapshot wasn't cleared (${codeOf(error)})`);
+    });
+  }
+
+  private async loadShared(): Promise<Set<string>> {
+    if (this.shared === null) {
+      this.shared = sharedIds(await this.o.store.getMeta(SNAPSHOTS_SHARED_META_KEY));
+    }
+    return this.shared;
+  }
+
+  private saveShared(): Promise<void> {
+    return this.o.store.setMeta(SNAPSHOTS_SHARED_META_KEY, JSON.stringify([...this.shared!]));
   }
 
   private enqueue(step: () => Promise<void>): void {
     this.steps = this.steps.then(step).catch((error: unknown) => {
       // Never the content: only what kind of refusal it was.
-      if (!this.stopped)
+      if (!this.stopped) {
         console.warn(`[Decisions] A terminal snapshot wasn't sent (${codeOf(error)})`);
+      }
     });
   }
 }

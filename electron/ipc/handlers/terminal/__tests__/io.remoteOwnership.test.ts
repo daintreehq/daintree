@@ -220,6 +220,21 @@ describe("terminal input from a remote view", () => {
     expect(announced()).toEqual([
       ["terminal:observed-title-changed", { id: "term-a", timestamp: expect.any(Number) }],
     ]);
+    // Announced only after the record has it, so a reader that hears it reads the new title.
+    const emitted =
+      emitMock.mock.invocationCallOrder[
+        emitMock.mock.calls.findIndex(([name]) => name === "terminal:observed-title-changed")
+      ]!;
+    expect(ptyClient.updateObservedTitle.mock.invocationCallOrder[0]).toBeLessThan(emitted);
+
+    // A title that didn't reach the record is never announced.
+    ptyClient.updateObservedTitle.mockImplementationOnce(() => {
+      throw new Error("no host");
+    });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    localSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-a", title: "Another task" });
+    quiet.mockRestore();
+    expect(announced()).toHaveLength(1);
   });
 
   it("drops foreign ids from a fan-out and keeps the owned ones", async () => {

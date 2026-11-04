@@ -470,10 +470,10 @@ const deliveryDeps: DecisionsDeliveryDeps = {
 };
 
 /** Main's pane events that can change what a pane's terminal snapshot shows (#16230), by pane id. */
-function watchSnapshotPanes(onPane: (terminalId: string) => void): () => void {
+function watchSnapshotPanes(onPane: (terminalId: string, state?: string) => void): () => void {
   const offs = [
-    events.on("agent:state-changed", ({ terminalId }) => {
-      if (terminalId) onPane(terminalId);
+    events.on("agent:state-changed", ({ terminalId, state }) => {
+      if (terminalId) onPane(terminalId, state);
     }),
     events.on("terminal:title-changed", ({ id }) => onPane(id)),
     events.on("terminal:observed-title-changed", ({ id }) => onPane(id)),

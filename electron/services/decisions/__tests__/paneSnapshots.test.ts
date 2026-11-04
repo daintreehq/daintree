@@ -110,9 +110,16 @@ class FakePane {
 
 function fakeBridge() {
   return {
-    publishSnapshot: vi.fn(async () => "queued" as const),
-    clearSnapshots: vi.fn(async () => {}),
+    publishSnapshot: vi.fn(
+      async (_id: string, _input: unknown, _pane?: unknown): Promise<"queued"> => "queued"
+    ),
+    snapshots: { clear: vi.fn(async (_row?: QuestionRow): Promise<void> => {}) },
   } satisfies SnapshotBridge;
+}
+
+/** The questions whose snapshot was handed over to be cleared, in order. */
+function cleared(bridge: ReturnType<typeof fakeBridge>): string[] {
+  return bridge.snapshots.clear.mock.calls.map(([cleared]) => cleared!.question_id);
 }
 
 function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string | null } = {}) {
@@ -121,8 +128,9 @@ function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string
   let rows = options.rows ?? [row("q1")];
   const meta = new Map<string, string>();
   if (options.meta != null) meta.set(SNAPSHOTS_SHARED_META_KEY, options.meta);
-  let onPane: ((id: string) => void) | null = null;
-  const watchPanes = vi.fn((listener: (id: string) => void) => {
+  let writes: Promise<void> | null = null;
+  let onPane: ((id: string, state?: string) => void) | null = null;
+  const watchPanes = vi.fn((listener: (id: string, state?: string) => void) => {
     onPane = listener;
     return () => {
       onPane = null;
@@ -136,8 +144,10 @@ function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string
     watchPanes,
     store: {
       listQuestions: vi.fn(async () => rows),
+      getQuestion: vi.fn(async (id: string) => rows.find((r) => r.question_id === id) ?? null),
       getMeta: vi.fn(async (key: string) => meta.get(key) ?? null),
       setMeta: vi.fn(async (key: string, value: string) => {
+        await writes;
         meta.set(key, value);
       }),
     },
@@ -153,8 +163,21 @@ function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string
     setRows: (next: QuestionRow[]) => {
       rows = next;
     },
-    paneEvent: (id: string) => onPane?.(id),
+    paneEvent: (id: string, state?: string) => onPane?.(id, state),
     listening: () => onPane !== null,
+    /** What the store records as shared. */
+    shared: (): string[] => JSON.parse(meta.get(SNAPSHOTS_SHARED_META_KEY) ?? "[]") as string[],
+    /** Holds the store's writes until the returned release is called. */
+    holdWrites: (): (() => void) => {
+      let release!: () => void;
+      writes = new Promise((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        writes = null;
+        release();
+      };
+    },
   };
 }
 
@@ -297,16 +320,19 @@ describe("PaneSnapshots", () => {
     expect(published(bridge)[0]?.terminal).toEqual(["tui frame", "second row"]);
   });
 
-  it("drops the suggestion an agent draws in its empty input box", async () => {
+  it("drops the suggestion an agent draws in its empty input box, by the agent's own rule", async () => {
     const env = setup();
-    env.pane.screen = "⏺ Done.\n› \x1b[2mExplain this codebase\x1b[22m";
+    // Claude Code's box: not on the last row, where the generic drop looks, and its cursor cell inverted.
+    env.pane.screen =
+      "⏺ Done.\n\x1b[38;2;136;136;136m──────\x1b[39m\n❯ \x1b[7mm\x1b[27m\x1b[2merge #2079 when green\x1b[22m\n──────\n  ? for shortcuts";
     const bridge = fakeBridge();
     env.snapshots.attach(bridge);
     await vi.advanceTimersByTimeAsync(250);
 
     const text = published(bridge)[0]?.terminal.join("\n");
     expect(text).toContain("Done.");
-    expect(text).not.toContain("Explain this codebase");
+    expect(text).toContain("? for shortcuts");
+    expect(text).not.toContain("erge #2079");
   });
 
   describe("a pane that no longer holds the run that asked", () => {
@@ -395,18 +421,17 @@ describe("PaneSnapshots", () => {
     it("publishes on an agent state change, and on a waiting reason alone", async () => {
       const { pane, bridge, paneEvent } = await attached();
 
-      pane.record.agentState = "working";
-      paneEvent(PANE);
-      await vi.advanceTimersByTimeAsync(250);
-      pane.record.agentState = "waiting";
       pane.record.waitingReason = "approval";
       paneEvent(PANE);
+      await vi.advanceTimersByTimeAsync(250);
+      pane.record.agentState = "working";
+      paneEvent(PANE, "working");
       await vi.advanceTimersByTimeAsync(250);
 
       expect(published(bridge).map((p) => [p.agentState, p.waitingReason])).toEqual([
         ["waiting", "question"],
-        ["working", null],
         ["waiting", "approval"],
+        ["working", null],
       ]);
     });
 
@@ -456,7 +481,7 @@ describe("PaneSnapshots", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(bridge.publishSnapshot).toHaveBeenCalledTimes(2);
-      expect(bridge.clearSnapshots).not.toHaveBeenCalled();
+      expect(cleared(bridge)).toEqual([]);
     });
 
     it("reads a working agent's pane again on each tick, and a waiting one's never", async () => {
@@ -479,6 +504,41 @@ describe("PaneSnapshots", () => {
       await vi.advanceTimersByTimeAsync(WORKING_TICK_MS * 3);
       expect(bridge.publishSnapshot).toHaveBeenCalledTimes(settled);
     });
+
+    it("reads again after a read the pty host didn't answer", async () => {
+      const env = setup();
+      let failing = true;
+      env.pane.client.getTerminalAsync = (async () => {
+        if (failing) throw new Error("timed out");
+        return { ...env.pane.record };
+      }) as never;
+      const bridge = fakeBridge();
+      env.snapshots.attach(bridge);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(bridge.publishSnapshot).not.toHaveBeenCalled();
+
+      failing = false;
+      await vi.advanceTimersByTimeAsync(5_250);
+      expect(bridge.publishSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it("ticks for an agent its event says works, even while its pane can't be read", async () => {
+      const env = await attached();
+      let failing = true;
+      env.pane.client.getTerminalAsync = (async () => {
+        if (failing) throw new Error("timed out");
+        return { ...env.pane.record };
+      }) as never;
+      env.pane.record.agentState = "working";
+      env.paneEvent(PANE, "working");
+      // The read and every retry fail.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(env.bridge.publishSnapshot).toHaveBeenCalledTimes(1);
+
+      failing = false;
+      await vi.advanceTimersByTimeAsync(WORKING_TICK_MS + 250);
+      expect(published(env.bridge).at(-1)?.agentState).toBe("working");
+    });
   });
 
   describe("with snapshots off", () => {
@@ -491,7 +551,7 @@ describe("PaneSnapshots", () => {
       expect(bridge.publishSnapshot).not.toHaveBeenCalled();
       expect(watchPanes).not.toHaveBeenCalled();
       // Nothing was ever shared from this store, so there is nothing to take back.
-      expect(bridge.clearSnapshots).not.toHaveBeenCalled();
+      expect(cleared(bridge)).toEqual([]);
     });
 
     it("answers a phone's refresh as not shared, without reading the pane", async () => {
@@ -500,7 +560,7 @@ describe("PaneSnapshots", () => {
       snapshots.refreshRequested(bridge, { questionId: "q1" } as never);
       await vi.advanceTimersByTimeAsync(250);
 
-      expect(bridge.clearSnapshots).toHaveBeenCalledWith("q1");
+      expect(cleared(bridge)).toEqual(["q1"]);
       expect(pane.reads).toBe(0);
     });
 
@@ -519,73 +579,146 @@ describe("PaneSnapshots", () => {
     it("takes back every question's snapshot when the switch turns off, and stops listening", async () => {
       const env = await attached();
       expect(env.listening()).toBe(true);
+      expect(env.shared()).toEqual(["q1"]);
 
       env.setAllowed(false);
       env.snapshots.sharingChanged();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(env.bridge.clearSnapshots).toHaveBeenCalledWith();
+      expect(cleared(env.bridge)).toEqual(["q1"]);
       expect(env.listening()).toBe(false);
-      expect(env.meta.get(SNAPSHOTS_SHARED_META_KEY)).toBe("0");
+      expect(env.shared()).toEqual([]);
 
       env.pane.record.agentState = "working";
-      env.paneEvent(PANE);
+      env.paneEvent(PANE, "working");
       await vi.advanceTimersByTimeAsync(WORKING_TICK_MS * 2);
       expect(env.bridge.publishSnapshot).toHaveBeenCalledTimes(1);
     });
 
     it("takes back a question's snapshot once it is answered", async () => {
-      const { snapshots, bridge } = await attached();
+      const env = await attached();
+      const answered = [row("q1", { local_status: "human-answered" })];
+
+      env.setRows(answered);
+      env.snapshots.observe(answered);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(cleared(env.bridge)).toEqual(["q1"]);
+      expect(env.shared()).toEqual([]);
+    });
+
+    it("takes nothing back for a question it never shared", async () => {
+      const { snapshots, bridge } = await attached({ allowed: false });
 
       snapshots.observe([row("q1", { local_status: "human-answered" })]);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(bridge.clearSnapshots).toHaveBeenCalledWith("q1");
+      expect(cleared(bridge)).toEqual([]);
     });
 
     it("takes back a closed question's snapshot through the next bridge when none was up", async () => {
       const env = await attached();
       env.snapshots.detach(env.bridge);
 
-      env.snapshots.observe([row("q1", { local_status: "proxy-answered" })]);
       env.setRows([row("q1", { local_status: "proxy-answered" })]);
+      env.snapshots.observe([row("q1", { local_status: "proxy-answered" })]);
       const next = fakeBridge();
       env.snapshots.attach(next);
       await vi.advanceTimersByTimeAsync(250);
 
-      expect(env.bridge.clearSnapshots).not.toHaveBeenCalled();
-      expect(next.clearSnapshots).toHaveBeenCalledWith("q1");
+      expect(cleared(env.bridge)).toEqual([]);
+      expect(cleared(next)).toEqual(["q1"]);
       expect(next.publishSnapshot).not.toHaveBeenCalled();
     });
 
     it("takes back what a run before a restart shared, when it starts with snapshots off", async () => {
-      const { bridge, meta } = await attached({ allowed: false, meta: "1" });
+      const env = await attached({ allowed: false, meta: JSON.stringify(["q1"]) });
 
-      expect(bridge.clearSnapshots).toHaveBeenCalledWith();
-      expect(meta.get(SNAPSHOTS_SHARED_META_KEY)).toBe("0");
+      expect(cleared(env.bridge)).toEqual(["q1"]);
+      expect(env.shared()).toEqual([]);
+    });
+
+    it("takes back an answered question's snapshot an earlier run shared, when it starts sharing", async () => {
+      const env = await attached({
+        meta: JSON.stringify(["q-answered"]),
+        rows: [row("q1"), row("q-answered", { local_status: "human-answered" })],
+      });
+
+      expect(cleared(env.bridge)).toEqual(["q-answered"]);
+      expect(published(env.bridge).map((p) => p.questionId)).toEqual(["q1"]);
+      expect(env.shared()).toEqual(["q1"]);
     });
 
     it("records a share before it goes, so a restart knows to take it back", async () => {
-      const { meta } = await attached();
-      expect(meta.get(SNAPSHOTS_SHARED_META_KEY)).toBe("1");
+      const env = setup();
+      const bridge = fakeBridge();
+      const recorded: string[][] = [];
+      bridge.publishSnapshot.mockImplementation(async () => {
+        recorded.push(env.shared());
+        return "queued";
+      });
+      const release = env.holdWrites();
+      env.snapshots.attach(bridge);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(bridge.publishSnapshot).not.toHaveBeenCalled();
+
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(recorded).toEqual([["q1"]]);
     });
 
-    it("lets a clear queued after a publish land after it", async () => {
-      const env = await attached();
-      env.pane.record.agentState = "working";
-      env.paneEvent(PANE);
+    it("hands over a clear asked for while a publish is being queued only once it is", async () => {
+      const env = setup();
+      const bridge = fakeBridge();
+      let queued!: () => void;
+      bridge.publishSnapshot.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            queued = () => resolve("queued");
+          })
+      );
+      env.snapshots.attach(bridge);
       await vi.advanceTimersByTimeAsync(250);
+      expect(bridge.publishSnapshot).toHaveBeenCalledTimes(1);
+
       env.setAllowed(false);
       env.snapshots.sharingChanged();
       await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(bridge)).toEqual([]);
 
-      const order = [
-        ...env.bridge.publishSnapshot.mock.invocationCallOrder.map((n) => [n, "publish"] as const),
-        ...env.bridge.clearSnapshots.mock.invocationCallOrder.map((n) => [n, "clear"] as const),
-      ]
-        .sort((a, b) => a[0] - b[0])
-        .map(([, kind]) => kind);
-      expect(order).toEqual(["publish", "publish", "clear"]);
+      queued();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(bridge)).toEqual(["q1"]);
+    });
+
+    it("holds nothing up behind a clear the relay keeps refusing", async () => {
+      const env = await attached({
+        rows: [row("q1"), row("q2", { origin: origin({ pane_id: "pane-2" }) })],
+      });
+      expect(env.bridge.publishSnapshot).toHaveBeenCalledTimes(2);
+      // The library retries it for as long as the relay refuses: it never settles.
+      env.bridge.snapshots.clear.mockImplementation(() => new Promise(() => {}));
+
+      const answered = [
+        row("q1", { local_status: "human-answered" }),
+        row("q2", { origin: origin({ pane_id: "pane-2" }) }),
+      ];
+      env.setRows(answered);
+      env.snapshots.observe(answered);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(env.bridge)).toEqual(["q1"]);
+
+      // Turned off: the open question's snapshot is handed over at once all the same.
+      env.setAllowed(false);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(env.bridge)).toContain("q2");
+
+      // And on again: publishing carries on.
+      env.setAllowed(true);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(env.bridge.publishSnapshot).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -611,7 +744,7 @@ describe("PaneSnapshots", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(env.pane.reads).toBe(before);
-      expect(env.bridge.clearSnapshots).not.toHaveBeenCalled();
+      expect(cleared(env.bridge)).toEqual([]);
     });
 
     it("publishes every asking pane again through a new bridge", async () => {
@@ -631,6 +764,7 @@ describe("PaneSnapshots", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       env.snapshots.stop();
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(WORKING_TICK_MS * 2);
 
       expect(env.listening()).toBe(false);
