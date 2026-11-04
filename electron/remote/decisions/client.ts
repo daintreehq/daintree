@@ -22,6 +22,7 @@ import {
   HostRuntimePayloadSchema,
   HostStatusResultSchema,
   OwnerStatePayloadSchema,
+  OwnerStateV2PayloadSchema,
   type EnrollHostPayload,
 } from "./linkMethods.js";
 
@@ -182,6 +183,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly reports = new Map<string, HostReport>();
   /** Counts each Host's announcements, so an answer to an older one can't replace a newer one's. */
   private readonly announced = new Map<string, number>();
+  /** Sessions whose Host answered `OWNER_STATE_V2` UNSUPPORTED: they are told the older method only. */
+  private readonly beforeSnapshots = new WeakSet<DecisionsHostSession>();
   private readonly listeners = new Set<() => void>();
   /** Each wired session's handler and close listener, removed on stop. */
   private readonly unwires = new Set<() => void>();
@@ -281,13 +284,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     this.announced.set(hostId, turn);
     let raw: unknown;
     try {
-      raw = await session.call(
-        DecisionsLinkMethod.OWNER_STATE,
-        OwnerStatePayloadSchema.parse(state),
-        {
-          timeoutMs: OWNER_STATE_TIMEOUT_MS,
-        }
-      );
+      raw = await this.sendOwnerState(session, state);
     } catch {
       // A Host from before Hosts ran Decisions, or a link that went: nothing to keep.
       return;
@@ -295,6 +292,35 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     if (this.announced.get(hostId) !== turn) return;
     const parsed = HostRuntimePayloadSchema.safeParse(raw);
     if (parsed.success) this.observe(hostId, session, parsed.data.runtime);
+  }
+
+  /**
+   * `state` as the Host can take it (#16230): with terminal snapshots, or,
+   * to a Host from before them, without, which it reads as off.
+   */
+  private async sendOwnerState(
+    session: DecisionsHostSession,
+    state: OwnerStateAnnouncement
+  ): Promise<unknown> {
+    const options = { timeoutMs: OWNER_STATE_TIMEOUT_MS };
+    if (!this.beforeSnapshots.has(session)) {
+      try {
+        return await session.call(
+          DecisionsLinkMethod.OWNER_STATE_V2,
+          OwnerStateV2PayloadSchema.parse(state),
+          options
+        );
+      } catch (error) {
+        if (codeOf(error) !== "UNSUPPORTED") throw error;
+        this.beforeSnapshots.add(session);
+      }
+    }
+    const { terminalSnapshots: _snapshots, ...earlier } = state;
+    return session.call(
+      DecisionsLinkMethod.OWNER_STATE,
+      OwnerStatePayloadSchema.parse(earlier),
+      options
+    );
   }
 
   private observe(

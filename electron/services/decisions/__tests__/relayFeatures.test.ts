@@ -68,7 +68,7 @@ describe("DaintreeRelayClient (#16229)", () => {
   });
 
   // Daintree declares a feature only once it handles it; each joins with its own work, and changes this test.
-  it("declares follow-ups alone on event pages and socket tickets, whatever else the bridge asks (#16231)", async () => {
+  it("declares follow-ups and pane snapshots alone on event pages and socket tickets, whatever else the bridge asks", async () => {
     const { sent, stock, daintree } = await clients();
     expect(BRIDGE_FEATURES.length).toBeGreaterThan(0);
     expect(asked.length).toBeGreaterThan(1);
@@ -81,15 +81,17 @@ describe("DaintreeRelayClient (#16229)", () => {
     await daintree.events(5, 10, asked);
     await daintree.socketTicket(asked);
     const [page, ticket] = sent.slice(2);
-    expect(page!.url.searchParams.get("features")).toBe("thread-messages-v1");
+    expect(page!.url.searchParams.get("features")).toBe("pane-snapshots-v1,thread-messages-v1");
     expect(page!.url.searchParams.get("after")).toBe("5");
     expect(page!.url.searchParams.get("limit")).toBe("10");
-    expect(ticket!.body).toHaveProperty("features", ["thread-messages-v1"]);
+    expect(ticket!.body).toHaveProperty("features", ["pane-snapshots-v1", "thread-messages-v1"]);
   });
 
   it("declares nothing when the bridge asks only for what Daintree doesn't handle", async () => {
     const { sent, daintree } = await clients();
-    const unhandled = asked.filter((feature) => feature !== "thread-messages-v1");
+    const unhandled = asked.filter(
+      (feature) => feature !== "thread-messages-v1" && feature !== "pane-snapshots-v1"
+    );
     expect(unhandled.length).toBeGreaterThan(0);
 
     await daintree.events(5, 10, unhandled);
@@ -97,6 +99,14 @@ describe("DaintreeRelayClient (#16229)", () => {
 
     expect(sent[0]!.url.searchParams.has("features")).toBe(false);
     expect(sent[1]!.body).not.toHaveProperty("features");
+  });
+
+  it("declares no snapshots for a bridge that publishes none", async () => {
+    const { sent, daintree } = await clients();
+
+    await daintree.socketTicket(bridgeFeatures({ followUps: true }));
+
+    expect(sent[0]!.body).toHaveProperty("features", ["thread-messages-v1"]);
   });
 
   it("keeps the library's defaults when the caller declares nothing", async () => {

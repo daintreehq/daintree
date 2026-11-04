@@ -11,6 +11,7 @@ import {
   type LocalStore,
   type PolicyRegistry,
   type ProxyEngine,
+  type QuestionRow,
   type SocketState,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
@@ -19,6 +20,11 @@ import type { DecisionsConnectionProblem } from "../../../shared/types/decisions
 import { AnswerDelivery, type AnswerDeliveryDeps } from "./answerDelivery.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
 import { KeyRotations, pendingRotationOf } from "./keyRotation.js";
+import {
+  PaneSnapshots,
+  SNAPSHOT_MIN_INTERVAL_MS,
+  type PaneSnapshotSources,
+} from "./paneSnapshots.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { DaintreeRelayClient } from "./relayFeatures.js";
 import { relayRequests } from "./relayIdentity.js";
@@ -136,6 +142,13 @@ export interface RelayConnectionOptions {
    * stay stored and untyped.
    */
   delivery?: AnswerDeliveryDeps;
+  /**
+   * Terminal snapshots of the panes that asked (#16230), through every
+   * attempt's bridge for as long as the connection lasts. With them each
+   * bridge declares `pane-snapshots-v1`, whether or not they are on;
+   * without them it declares nothing of them.
+   */
+  snapshots?: PaneSnapshotSources;
   watchResume?: (onResume: () => void) => () => void;
   watchNetwork?: (onChange: (online: boolean) => void) => () => void;
   now?: () => number;
@@ -247,6 +260,7 @@ export class RelayConnection {
   private readonly keys: KeyStore;
   private readonly store: RelayConnectionStore;
   private delivery: AnswerDelivery | null = null;
+  private readonly snapshots: PaneSnapshots | null;
   private stopping: Promise<void> = Promise.resolve();
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
   private readonly lifetime = new AbortController();
@@ -259,6 +273,9 @@ export class RelayConnection {
     this.keys = retireable(options.keys, () => this.ended);
     this.store = retireable(options.store, () => this.ended);
     this.rotations = options.rotations ?? new KeyRotations(this.keys);
+    this.snapshots = options.snapshots
+      ? new PaneSnapshots({ ...options.snapshots, store: this.store, now: this.now })
+      : null;
   }
 
   /** What the connection last observed; null before `start`. */
@@ -269,6 +286,16 @@ export class RelayConnection {
 
   getStatus(): RelayConnectionStatus | null {
     return this.status;
+  }
+
+  /** The store's question rows after a write commits (#16230): what the snapshots follow. */
+  observeQuestions(rows: readonly QuestionRow[]): void {
+    this.snapshots?.observe(rows);
+  }
+
+  /** The terminal snapshots switch may have turned (#16230). Out of turn is fine: it starts nothing else. */
+  snapshotsChanged(): void {
+    this.snapshots?.sharingChanged();
   }
 
   /**
@@ -490,6 +517,7 @@ export class RelayConnection {
       const client = new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 });
       const settled = await this.settleKeys(attempt, client);
       if (attempt.retired) return;
+      const snapshots = this.snapshots;
       bridge = new DecisionsBridge({
         identity: settled,
         keyStore: this.bridgeKeys(attempt, retireable(this.keys, retired)),
@@ -509,6 +537,16 @@ export class RelayConnection {
         client,
         webSocket: (url) => this.openSocket(attempt, url),
         ...(this.o.pumpIntervalMs !== undefined ? { pumpIntervalMs: this.o.pumpIntervalMs } : {}),
+        ...(snapshots
+          ? {
+              snapshots: {
+                minIntervalMs: SNAPSHOT_MIN_INTERVAL_MS,
+                onRefresh: (request) => {
+                  if (bridge) snapshots.refreshRequested(bridge, request);
+                },
+              },
+            }
+          : {}),
       });
       // Answers are typed by the lifetime's delivery. An attempt's own engine
       // would stop with its socket, and reconcile the lifetime's injections as
@@ -528,7 +566,10 @@ export class RelayConnection {
         })
       );
       await started.start();
-      if (!attempt.retired) attempt.started = true;
+      if (!attempt.retired) {
+        attempt.started = true;
+        this.snapshots?.attach(started);
+      }
     } catch {
       if (this.o.store.isFaulted?.()) this.halt({ state: "not-connected", problem: "storage" });
       else this.fail(attempt);
@@ -745,6 +786,7 @@ export class RelayConnection {
     for (const off of attempt.offs.splice(0)) off();
     const bridge = attempt.bridge;
     if (bridge) {
+      this.snapshots?.detach(bridge);
       // Keys it reloaded after a rotation carry on into the next attempt.
       this.identity = bridge.ctx.identity;
       void bridge.stop().catch(() => {});
@@ -763,6 +805,7 @@ export class RelayConnection {
   private end(): void {
     this.ended = true;
     this.clearRetry();
+    this.snapshots?.stop();
     for (const off of this.watchers.splice(0)) off();
     // Reports to the relay stop now: a stalled one must not hold up the local
     // record of an answer being typed. A delivery's report is sent again next

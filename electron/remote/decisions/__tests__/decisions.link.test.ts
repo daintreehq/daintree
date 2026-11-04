@@ -479,6 +479,7 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     installationId: "inst_owner_0123456789",
     ownerDeviceId: "dev_owner_desktop_01",
     enabled: true,
+    terminalSnapshots: false,
   };
   const RUNNING = {
     state: "running",
@@ -563,7 +564,66 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
 
   it("is served by the Host, and its reports by the Shell", () => {
     expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.OWNER_STATE]).toBe("host");
+    expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.OWNER_STATE_V2]).toBe("host");
     expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.HOST_RUNTIME]).toBe("shell");
+  });
+
+  it("tells the Host whether the owner's terminal snapshots are on (#16230)", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    const sharing = { ...OWNER, terminalSnapshots: true };
+    let state: OwnerStateAnnouncement = sharing;
+    const { client: shell } = shellOver(client, () => state);
+
+    await vi.waitFor(() => expect(lifetime.applied).toEqual([sharing]));
+    state = OWNER;
+    shell.announceOwnerState();
+    await vi.waitFor(() => expect(lifetime.applied).toEqual([sharing, OWNER]));
+  });
+
+  it("tells a Host from before terminal snapshots the older method only, without them", async () => {
+    const { host, client } = await pair();
+    // A Host from before #16230: the strict older payload, and no v2 method.
+    const told: unknown[] = [];
+    host.registerCallHandler(
+      DecisionsLinkMethod.OWNER_STATE,
+      z
+        .object({ installationId: z.string(), ownerDeviceId: z.string(), enabled: z.boolean() })
+        .strict(),
+      (payload) => {
+        told.push(payload);
+        return { runtime: RUNNING };
+      }
+    );
+    const calls = vi.spyOn(client, "call");
+    const { client: shell } = shellOver(client, () => ({ ...OWNER, terminalSnapshots: true }));
+
+    await vi.waitFor(() =>
+      expect(shell.runtimeOf(HOST)).toEqual({ runtime: RUNNING, at: 5_000, live: true })
+    );
+    const { terminalSnapshots: _snapshots, ...earlier } = OWNER;
+    expect(told).toEqual([earlier]);
+
+    // Asked once: every later announcement goes straight to the older method.
+    shell.announceOwnerState();
+    await vi.waitFor(() => expect(told).toHaveLength(2));
+    expect(calls.mock.calls.map(([method]) => method)).toEqual([
+      DecisionsLinkMethod.OWNER_STATE_V2,
+      DecisionsLinkMethod.OWNER_STATE,
+      DecisionsLinkMethod.OWNER_STATE,
+    ]);
+  });
+
+  it("reads a Shell from before terminal snapshots as sharing none", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    const { terminalSnapshots: _snapshots, ...earlier } = OWNER;
+
+    await client.call(DecisionsLinkMethod.OWNER_STATE, earlier);
+
+    expect(lifetime.applied).toEqual([{ ...earlier, terminalSnapshots: false }]);
   });
 
   it("tells the Host the owner's switch as the link comes up, and keeps what it reports", async () => {

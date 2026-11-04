@@ -45,6 +45,8 @@ export function sanitizeHostRecord(raw: unknown): DecisionsHostRecord | null {
     revokedAt,
     // Removal follows a revocation; without one there was nothing to remove.
     credentialsRemovedAt: revokedAt === null ? null : consentTime(value.credentialsRemovedAt),
+    // A record saved before snapshots existed shares none.
+    ownerTerminalSnapshots: value.ownerTerminalSnapshots === true,
   };
 }
 

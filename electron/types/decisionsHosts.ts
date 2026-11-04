@@ -115,6 +115,12 @@ export interface OwnerStateAnnouncement {
   installationId: string;
   ownerDeviceId: string;
   enabled: boolean;
+  /**
+   * Whether the owner's terminal snapshots are on (#16230), so the Host
+   * shares its own asking panes'. A Shell from before them says nothing of
+   * them, which a Host reads as off.
+   */
+  terminalSnapshots: boolean;
 }
 
 /** A Host identity this machine holds, public parts only (#16022). */

@@ -448,6 +448,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       const normalized = normalizeObservedTitle(title);
       if (!normalized) return;
       ptyClient.updateObservedTitle(id, normalized);
+      events.emit("terminal:observed-title-changed", { id, timestamp: Date.now() });
     } catch (error) {
       console.error("[IPC] Error handling observed title update:", error);
     }

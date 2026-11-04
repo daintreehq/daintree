@@ -206,6 +206,37 @@ describe("terminal input from a remote view", () => {
     }
   });
 
+  it("announces an observed title once it reaches the record, and never one it refused (#16230)", async () => {
+    const announced = () =>
+      emitMock.mock.calls.filter(([name]) => name === "terminal:observed-title-changed");
+    remoteSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-b", title: "Fix auth" });
+    remoteSend(CHANNELS.TERMINAL_INPUT, "term-a", "marker");
+    await vi.waitFor(() => expect(ptyClient.write).toHaveBeenCalledWith("term-a", "marker"));
+    expect(announced()).toEqual([]);
+
+    localSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-a", title: "Fix auth" });
+
+    expect(ptyClient.updateObservedTitle).toHaveBeenCalledWith("term-a", "Fix auth");
+    expect(announced()).toEqual([
+      ["terminal:observed-title-changed", { id: "term-a", timestamp: expect.any(Number) }],
+    ]);
+    // Announced only after the record has it, so a reader that hears it reads the new title.
+    const emitted =
+      emitMock.mock.invocationCallOrder[
+        emitMock.mock.calls.findIndex(([name]) => name === "terminal:observed-title-changed")
+      ]!;
+    expect(ptyClient.updateObservedTitle.mock.invocationCallOrder[0]).toBeLessThan(emitted);
+
+    // A title that didn't reach the record is never announced.
+    ptyClient.updateObservedTitle.mockImplementationOnce(() => {
+      throw new Error("no host");
+    });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    localSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-a", title: "Another task" });
+    quiet.mockRestore();
+    expect(announced()).toHaveLength(1);
+  });
+
   it("drops foreign ids from a fan-out and keeps the owned ones", async () => {
     remoteSend(CHANNELS.TERMINAL_BROADCAST_WRITE, ["term-a", "term-b"], "y");
     remoteSend(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ["term-b", "term-a", "term-unknown"]);

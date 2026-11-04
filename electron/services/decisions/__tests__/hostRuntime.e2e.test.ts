@@ -656,6 +656,7 @@ async function startHost() {
     ownerOffAt: null,
     revokedAt: null,
     credentialsRemovedAt: null,
+    ownerTerminalSnapshots: false,
   };
   const service: DecisionsService = new DecisionsService({
     openStore: async () => new DaintreeLocalStore(sqlite),

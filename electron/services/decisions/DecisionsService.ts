@@ -36,6 +36,7 @@ import {
   type AnswerAttentionPublisher,
   type PaneDecisionStatePublisher,
 } from "./paneDecisionState.js";
+import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import {
   RelayConnection,
@@ -67,10 +68,23 @@ export interface DecisionsRelayConnection {
   getDelivery?(): AnswerDelivery | null;
   /** The decision model's proxy changed (#16026): an attempt asking the old one gives way. */
   modelChanged?(): void;
+  /** The store's question rows after a write commits: the terminal snapshots follow them (#16230). */
+  observeQuestions?(rows: readonly QuestionRow[]): void;
+  /** The terminal snapshots switch may have turned (#16230). */
+  snapshotsChanged?(): void;
 }
 
 /** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
 export type DecisionsDeliveryDeps = Omit<AnswerDeliveryDeps, "hostId">;
+
+/**
+ * What terminal snapshots need from main (#16230), apart from the host id:
+ * whether they may run for a lifetime of `role`, the owner's switch or what a
+ * Host's owner last said.
+ */
+export type DecisionsSnapshotDeps = Omit<PaneSnapshotSources, "hostId" | "allowed"> & {
+  allowed(role: DecisionsRole): boolean;
+};
 
 export type DecisionsConnectionFactory = (
   options: RelayConnectionOptions
@@ -144,6 +158,8 @@ export interface DecisionsServiceOptions {
   openQuestions?: (source: QuestionSource, previousClosed: Promise<void>) => DecisionsQuestions;
   /** Types received answers into the panes that asked (#16017); without it answers stay stored. */
   delivery?: DecisionsDeliveryDeps;
+  /** Publishes the asking panes' snapshots while they're on (#16230); without it none are. */
+  snapshots?: DecisionsSnapshotDeps;
   /** The setup check's diagnostic terminals (#16024), whose own image their questions attach. */
   diagnostics?: SetupDiagnostics;
   /** The decision model's history and CLIs (#16026): the library's unless a test says otherwise. */
@@ -184,6 +200,7 @@ export class DecisionsService {
   private readonly onRelayRevoked: (relay: RelayBinding, role: DecisionsRole) => void;
   private readonly onDevicesChanged: () => void;
   private readonly delivery: DecisionsDeliveryDeps | null;
+  private readonly snapshots: DecisionsSnapshotDeps | null;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
   /**
@@ -268,6 +285,7 @@ export class DecisionsService {
       });
     this.openQuestions = options.openQuestions ?? null;
     this.delivery = options.delivery ?? null;
+    this.snapshots = options.snapshots ?? null;
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
@@ -488,6 +506,17 @@ export class DecisionsService {
   observeQuestions(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
     if (this.disposed || this.state === "off") return;
     this.panes.replace(rows, handled);
+    this.connection?.observeQuestions?.(rows);
+  }
+
+  /**
+   * The terminal snapshots switch, or a Host's word from its owner, may have
+   * changed (#16230). Unlike `updateSettings` it may come out of turn: the
+   * connection only reads whether snapshots may run now, and resumes nothing.
+   */
+  snapshotsChanged(): void {
+    if (this.disposed) return;
+    this.connection?.snapshotsChanged?.();
   }
 
   /**
@@ -743,6 +772,7 @@ export class DecisionsService {
     let connection: DecisionsRelayConnection | null = null;
     const feed = this.feed;
     const delivery = this.delivery;
+    const snapshots = this.snapshots;
     const role = this.role;
     connection = this.connect({
       relay: wanted,
@@ -760,6 +790,15 @@ export class DecisionsService {
         : {}),
       ...(delivery
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
+        : {}),
+      ...(snapshots
+        ? {
+            snapshots: {
+              ...snapshots,
+              hostId: () => this.settings?.hostId ?? null,
+              allowed: () => snapshots.allowed(role),
+            },
+          }
         : {}),
       ...(this.attachments ? { attachments: this.attachments } : {}),
       onStatus: (status) => {

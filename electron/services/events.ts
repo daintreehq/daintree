@@ -340,6 +340,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A panel was renamed and the authoritative record now agrees",
   },
+  "terminal:observed-title-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A mounted terminal reported a new title from its agent",
+  },
   "terminal:worktree-changed": {
     category: "agent",
     requiresContext: false,
@@ -1028,6 +1034,17 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A mounted terminal sent main the agent's new title (#16230), once it was
+   * forwarded to the authoritative record. Apart from `terminal:title-changed`
+   * so the fleet doesn't re-read every terminal each time an agent retitles;
+   * Decisions' terminal snapshots retitle the pane on the phone.
+   */
+  "terminal:observed-title-changed": {
+    id: string;
+    timestamp: number;
+  };
+
+  /**
    * A cross-worktree move reached the authoritative terminal record. The fleet
    * projection subscribes because the row's worktree grouping changed; no agent
    * state moved, so no other feed reports it and the 5s poll would otherwise own
@@ -1335,6 +1352,8 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:park-changed",
   "terminal:park-released",
   "terminal:title-changed",
+  // `terminal:observed-title-changed` is absent: it fires each time an agent
+  // retitles, which would crowd the inspector's buffer for no reader.
   "terminal:worktree-changed",
   "terminal:snooze-changed",
   "terminal:hand-back-changed",

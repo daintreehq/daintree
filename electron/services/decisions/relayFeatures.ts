@@ -7,9 +7,13 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * phone offers follow-ups, images or a terminal refresh on a question only
  * when the desktop that asked it declared that feature, so each one joins
  * this list with the Daintree work that handles it: follow-ups with their
- * typing (#16231).
+ * typing (#16231), and pane snapshots with #16230, which a bridge asks for
+ * only when its connection publishes them.
  */
-export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = ["thread-messages-v1"];
+export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
+  "thread-messages-v1",
+  "pane-snapshots-v1",
+];
 
 function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {
   return features.filter((feature) => DAINTREE_PROTOCOL_FEATURES.includes(feature));

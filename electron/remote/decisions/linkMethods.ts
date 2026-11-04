@@ -28,6 +28,13 @@ export const DecisionsLinkMethod = {
    */
   OWNER_STATE: "decisions.ownerState",
   /**
+   * Shell → Host (#16230): `OWNER_STATE` and whether terminal snapshots are
+   * on. A Host from before it answers UNSUPPORTED, and is told `OWNER_STATE`
+   * instead, so it shares none: the older method's payload is strict, and a
+   * field it doesn't know would fail it.
+   */
+  OWNER_STATE_V2: "decisions.ownerState.v2",
+  /**
    * Host → Shell (#16022): what the Host reports of its own Decisions changed,
    * sent to the Shells whose owner enrolled it. A Shell from before it
    * answers UNSUPPORTED, which changes nothing.
@@ -43,6 +50,7 @@ export const DecisionsLinkMethod = {
 export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.ENROLL_HOST]: "host",
   [DecisionsLinkMethod.OWNER_STATE]: "host",
+  [DecisionsLinkMethod.OWNER_STATE_V2]: "host",
   [DecisionsLinkMethod.HOST_RUNTIME]: "shell",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
@@ -129,6 +137,15 @@ export const HostAcceptResultSchema = z.discriminatedUnion("step", [
 
 export const OwnerStatePayloadSchema = z
   .object({ installationId: RelayId, ownerDeviceId: RelayId, enabled: z.boolean() })
+  .strict() satisfies z.ZodType<Omit<OwnerStateAnnouncement, "terminalSnapshots">>;
+
+export const OwnerStateV2PayloadSchema = z
+  .object({
+    installationId: RelayId,
+    ownerDeviceId: RelayId,
+    enabled: z.boolean(),
+    terminalSnapshots: z.boolean(),
+  })
   .strict() satisfies z.ZodType<OwnerStateAnnouncement>;
 
 /** A time a Host reports, as epoch ms. */

@@ -107,6 +107,12 @@ export interface DecisionsHostRecord {
   revokedAt: number | null;
   /** When its keys and stored questions were removed after the revocation; null until they are. */
   credentialsRemovedAt: number | null;
+  /**
+   * The owner's Shell last said its terminal snapshots are on (#16230), so
+   * this Host shares its own asking panes'. False until a Shell that knows
+   * of them says so.
+   */
+  ownerTerminalSnapshots: boolean;
 }
 
 /**
