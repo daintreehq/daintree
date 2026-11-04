@@ -931,12 +931,14 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         ).toEqual([]),
       { timeout: 15_000 }
     );
-    expect(new Set(relay.messages.map((message) => message.record.message_id))).toEqual(
-      new Set([
+    expect(relay.messages.map((message) => String(message.record.message_id)).sort()).toEqual(
+      [
         live.structuredContent.message_id,
         away.structuredContent.message_id,
         laterFollowUp.structuredContent.message_id,
-      ])
+      ]
+        .map(String)
+        .sort()
     );
 
     // A follow-up is never typed anywhere, and never moves its question.
