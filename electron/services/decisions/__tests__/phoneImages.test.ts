@@ -536,6 +536,63 @@ describe("DecisionsPhoneImages sweeps (#16233)", () => {
     expect(fs.existsSync(photo)).toBe(false);
   });
 
+  const unprivileged = POSIX && process.getuid?.() !== 0;
+
+  it.runIf(unprivileged)(
+    "keeps a returning root's photos until it can be swept, through a root it can't read",
+    async () => {
+      const volume = path.join(dir, "volume");
+      const root = path.join(volume, "repo");
+      fs.mkdirSync(root, { recursive: true });
+      rows = [row(1, { origin: { worktree_root: root }, answers_json: answers({}) })];
+      const store = images();
+      const photo = await stored(store, { root });
+      const away = path.join(dir, "unmounted");
+      fs.renameSync(volume, away);
+      await store.sweep();
+
+      // Back, but unreadable for a while: still to have its time started once it's swept.
+      rows = [
+        row(1, { origin: { worktree_root: root }, answers_json: answers({ delivered: true }) }),
+      ];
+      fs.renameSync(away, volume);
+      fs.chmodSync(volume, 0o000);
+      clock += PHONE_IMAGE_RETENTION_MS + DAY;
+      try {
+        await store.sweep();
+      } finally {
+        fs.chmodSync(volume, 0o755);
+      }
+      await store.sweep();
+      expect(fs.existsSync(photo)).toBe(true);
+    }
+  );
+
+  it.runIf(unprivileged)(
+    "sweeps and records every other root while one of them can't be read",
+    async () => {
+      const other = path.join(dir, "other");
+      fs.mkdirSync(other);
+      rows = [
+        row(1, { origin: { worktree_root: repo }, answers_json: answers({ delivered: true }) }),
+        row(2, { origin: { worktree_root: other } }),
+      ];
+      const store = images();
+      const photo = await stored(store);
+      const locked = await stored(store, { root: other, questionId: qid(2) });
+      const lockedDir = path.dirname(path.dirname(locked));
+      fs.chmodSync(lockedDir, 0o000);
+      try {
+        clock += PHONE_IMAGE_RETENTION_MS + PHONE_IMAGE_SWEEP_INTERVAL_MS + DAY;
+        await store.sweep();
+        expect(fs.existsSync(photo)).toBe(false);
+        expect(JSON.parse(fs.readFileSync(rootsFile, "utf8")).roots).toEqual([other]);
+      } finally {
+        fs.chmodSync(lockedDir, 0o700);
+      }
+    }
+  );
+
   it("deletes only the files it writes, leaving anything else put in its folder", async () => {
     const store = images();
     const photo = await stored(store);

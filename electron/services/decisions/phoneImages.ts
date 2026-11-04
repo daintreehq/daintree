@@ -540,18 +540,27 @@ export class DecisionsPhoneImages implements PhoneImageStore {
     const roots: string[] = [];
     const missing: Record<string, number> = {};
     for (const root of record.roots) {
-      const returning = record.missing?.[root] !== undefined;
-      const swept = await this.sweepRoot(root, record.id, {
-        known,
-        deleted,
-        inUse,
-        now,
-        returning,
-      });
+      const missedSince = record.missing?.[root];
+      let swept: Awaited<ReturnType<DecisionsPhoneImages["sweepRoot"]>>;
+      try {
+        swept = await this.sweepRoot(root, record.id, {
+          known,
+          deleted,
+          inUse,
+          now,
+          returning: missedSince !== undefined,
+        });
+      } catch {
+        // One root's failure leaves it as it was, and never stops the rest being swept and recorded.
+        swept = "unreachable";
+      }
       if (swept === "missing") {
-        const since = record.missing?.[root] ?? now;
+        const since = missedSince ?? now;
         if (now - since >= MISSING_ROOT_MS) continue;
         missing[root] = since;
+      } else if (swept === "unreachable" && missedSince !== undefined) {
+        // Still to have its images' time started again, once it's swept.
+        missing[root] = missedSince;
       }
       if (swept !== "empty") roots.push(root);
     }
@@ -564,8 +573,8 @@ export class DecisionsPhoneImages implements PhoneImageStore {
   /**
    * `empty` once this emptied the root's images directory, `missing` when the
    * root or that directory isn't there and this didn't remove it (gone with
-   * its worktree, or a drive not mounted, its mount point left empty), `kept`
-   * otherwise. Back after being missing, its images' time starts again: what
+   * its worktree, or a drive not mounted, its mount point left empty),
+   * `unreachable` when the root can't be read now, `kept` otherwise. Back after being missing, its images' time starts again: what
    * a sweep couldn't touch while it was away may have waited all along.
    */
   private async sweepRoot(
@@ -578,12 +587,12 @@ export class DecisionsPhoneImages implements PhoneImageStore {
       now: number;
       returning: boolean;
     }
-  ): Promise<"empty" | "missing" | "kept"> {
+  ): Promise<"empty" | "missing" | "unreachable" | "kept"> {
     let rootStats: Stats;
     try {
       rootStats = await stat(root);
     } catch (error) {
-      return isMissing(error) ? "missing" : "kept";
+      return isMissing(error) ? "missing" : "unreachable";
     }
     if (!rootStats.isDirectory()) return "missing";
     const dir = await existingChain(root, [...DECISIONS_DIR, IMAGES_DIR, storeId]);
