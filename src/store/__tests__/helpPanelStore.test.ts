@@ -1718,7 +1718,9 @@ describe("selectHasRoomForSession (#13442)", () => {
     // Every slot open, so only the empty tab is room.
     store.setState({
       sessions: {
-        ...Object.fromEntries(ASSISTANT_SLOTS.map((slot) => [slot, lane({ terminalId: `t${slot}` })])),
+        ...Object.fromEntries(
+          ASSISTANT_SLOTS.map((slot) => [slot, lane({ terminalId: `t${slot}` })])
+        ),
         1: lane({ sessionId: "s1" }),
         2: lane(),
       },
@@ -1730,7 +1732,9 @@ describe("selectHasRoomForSession (#13442)", () => {
     const { useHelpPanelStore: store, selectHasRoomForSession } = await import("../helpPanelStore");
     store.setState({
       sessions: {
-        ...Object.fromEntries(ASSISTANT_SLOTS.map((slot) => [slot, lane({ terminalId: `t${slot}` })])),
+        ...Object.fromEntries(
+          ASSISTANT_SLOTS.map((slot) => [slot, lane({ terminalId: `t${slot}` })])
+        ),
         1: lane({ sessionId: "s1" }),
         2: lane(),
       },
