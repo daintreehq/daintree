@@ -10,7 +10,8 @@ import {
   within,
   type RenderOptions,
 } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -474,9 +475,9 @@ describe("HelpSessionTabs", () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
-  it("draws a close only on the selected lane once the strip is full", () => {
+  it("draws a close only on the selected lane once three lanes crowd the strip", () => {
     // A background lane's close is invisible until hover but still holds its width, and
-    // at the ceiling that room clipped every label. Delete still closes any lane.
+    // at three lanes that room clipped every label. Delete still closes any lane.
     const onClose = vi.fn();
     const { container } = renderStrip({
       tabs: [
@@ -497,7 +498,7 @@ describe("HelpSessionTabs", () => {
     expect(onClose).toHaveBeenCalledWith(2);
   });
 
-  it("keeps a hover close on every lane below the ceiling", () => {
+  it("keeps a hover close on every lane below three", () => {
     const { container } = renderStrip();
     expect(closers(container)).toHaveLength(TABS.length);
   });
@@ -1105,5 +1106,241 @@ describe("HelpSessionTabs — lanes on different agents", () => {
     fireEvent.contextMenu(lane(0));
     menu = await screen.findByRole("menu");
     expect(within(menu).queryByRole("menuitem", { name: /New session with/ })).toBeNull();
+  });
+});
+
+describe("HelpSessionTabs past three lanes (#16218)", () => {
+  const SIX: HelpSessionTab[] = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => ({
+    slot,
+    label: `Session ${slot + 1}`,
+    agentState: slot === 4 ? ("working" as const) : undefined,
+  }));
+
+  // jsdom has no ResizeObserver and lays nothing out: the strip's overflow is measured
+  // when a test says the layout changed.
+  const resizes: Array<() => void> = [];
+  class ManualResizeObserver {
+    private readonly callback: () => void;
+    constructor(callback: () => void) {
+      this.callback = callback;
+      resizes.push(this.notify);
+    }
+    private readonly notify = () => this.callback();
+    observe() {}
+    disconnect() {
+      resizes.splice(resizes.indexOf(this.notify), 1);
+    }
+  }
+  beforeAll(() => {
+    vi.stubGlobal("ResizeObserver", ManualResizeObserver);
+  });
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+  const relayout = () => act(() => resizes.forEach((notify) => notify()));
+
+  const strip = (props: Partial<Parameters<typeof HelpSessionTabs>[0]> = {}) => (
+    <HelpSessionTabs
+      tabs={SIX}
+      activeSlot={0}
+      onSelect={vi.fn()}
+      onClose={vi.fn()}
+      idBase="six"
+      panelId="six-body"
+      {...props}
+    />
+  );
+
+  /**
+   * Lay the strip out as a 200px window over a row of 90px tabs at `scrollLeft`, in the
+   * order they render. `scrollTo` is recorded, not applied.
+   */
+  function layOut(container: HTMLElement, scrollLeft = 0) {
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    const row = tabs(container);
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 200 });
+    Object.defineProperty(list, "scrollWidth", { configurable: true, value: row.length * 90 });
+    list.scrollLeft = scrollLeft;
+    list.getBoundingClientRect = () => ({ left: 0 }) as DOMRect;
+    const scrollTo = vi.fn();
+    list.scrollTo = scrollTo as unknown as typeof list.scrollTo;
+    row.forEach((tab, index) => {
+      Object.defineProperty(tab, "offsetWidth", { configurable: true, value: 90 });
+      tab.getBoundingClientRect = () => ({ left: index * 90 - list.scrollLeft }) as DOMRect;
+    });
+    return scrollTo;
+  }
+
+  it("holds a lane in every slot the project allows", () => {
+    const { container } = render(strip());
+    expect(tabs(container).map((t) => t.getAttribute("data-slot"))).toEqual(
+      SIX.map((t) => String(t.slot))
+    );
+    // Crowded, as at three: the selected lane alone draws a close.
+    expect(closers(container)).toHaveLength(1);
+  });
+
+  it("scrolls a lane selected past the edge into view", () => {
+    const { container, rerender } = render(strip());
+    const scrollTo = layOut(container);
+
+    rerender(strip({ activeSlot: 4 }));
+
+    // Its right edge at the strip's: 5 × 90 − 200.
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ left: 250 }));
+  });
+
+  it("leaves the strip where it is when a lane only changes state", () => {
+    const { container, rerender } = render(strip({ activeSlot: 5 }));
+    const scrollTo = layOut(container);
+
+    rerender(
+      strip({
+        activeSlot: 5,
+        tabs: SIX.map((t) => (t.slot === 1 ? { ...t, agentState: "working" as const } : t)),
+      })
+    );
+
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("scrolls the lane an arrow key reaches into view without selecting it", () => {
+    const onSelect = vi.fn();
+    const { container } = render(strip({ onSelect }));
+    const scrollTo = layOut(container);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    tabs(container)[0]!.focus();
+    // Wraps from the first lane to the last.
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+
+    expect(document.activeElement?.getAttribute("data-slot")).toBe("5");
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ left: 340 }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("lets the close handoff, not the selection, own the scroll after a background close", () => {
+    // Scrolled to the far end by the keyboard while the first lane stays selected. A
+    // selection reveal here would start a scroll back to the start that carries the
+    // lane the handoff focuses off screen.
+    const { container, rerender } = render(strip());
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    const scrollTo = layOut(container);
+    relayout();
+    tabs(container)[0]!.focus();
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ left: 340 }));
+    list.scrollLeft = 340;
+    scrollTo.mockClear();
+
+    fireEvent.keyDown(list, { key: "Delete" });
+    rerender(strip({ tabs: SIX.slice(0, 5) }));
+
+    // Its neighbour has focus and is already in view, so nothing scrolls.
+    expect(document.activeElement?.getAttribute("data-slot")).toBe("4");
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("offers every lane in a menu while the strip overflows, and none when it fits", async () => {
+    const onSelect = vi.fn();
+    const { container } = render(strip({ onSelect }));
+    expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+
+    layOut(container);
+    relayout();
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "All sessions" }), { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    const items = within(menu).getAllByRole("menuitemradio");
+    // Every lane, not only the clipped ones, with the selected one checked.
+    expect(items).toHaveLength(MAX_ASSISTANT_SLOTS);
+    expect(items[0]!.getAttribute("aria-checked")).toBe("true");
+    // A lane at work says so where its spinner can't be seen.
+    expect(items[4]!.textContent).toContain("working");
+
+    fireEvent.click(items[5]!);
+    expect(onSelect).toHaveBeenCalledWith(5);
+
+    // Wide enough again: the strip shows every lane and the menu goes.
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 540 });
+    relayout();
+    expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+  });
+
+  it("drops the menu once the lanes would fit without it", () => {
+    const { container, rerender } = render(strip({ tabs: SIX.slice(0, 4) }));
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 250 });
+    Object.defineProperty(list, "scrollWidth", { configurable: true, value: 360 });
+    relayout();
+    const trigger = screen.getByTestId("assistant-sessions-overflow");
+    // The trigger's 24px, its 4px margin and the strip's 2px gap: 30px it gives back.
+    Object.defineProperty(trigger, "offsetWidth", { configurable: true, value: 24 });
+    const computed = window.getComputedStyle.bind(window);
+    const styles = vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
+      const style = computed(el, pseudo);
+      return new Proxy(style, {
+        get: (target, prop) =>
+          el === trigger && prop === "marginLeft"
+            ? "4px"
+            : el === trigger.parentElement && prop === "columnGap"
+              ? "2px"
+              : Reflect.get(target, prop),
+      });
+    });
+
+    try {
+      // Back to three at their 280px of floors: past the 250px the trigger leaves, and
+      // inside the 280px it gives back only with its margin and the gap counted.
+      rerender(strip({ tabs: SIX.slice(0, 3) }));
+      Object.defineProperty(list, "scrollWidth", { configurable: true, value: 280 });
+      relayout();
+      expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+
+      // The strip takes that room back, and the lanes still fit: the menu stays gone.
+      Object.defineProperty(list, "clientWidth", { configurable: true, value: 280 });
+      relayout();
+      expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+    } finally {
+      styles.mockRestore();
+    }
+  });
+
+  it("brings the selected lane back into view when the menu picks it", async () => {
+    const onSelect = vi.fn();
+    const { container } = render(strip({ onSelect }));
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    const scrollTo = layOut(container);
+    relayout();
+    // The keyboard scrolled the selected first lane away without selecting another.
+    list.scrollLeft = 340;
+    scrollTo.mockClear();
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "All sessions" }), { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getAllByRole("menuitemradio")[0]!);
+
+    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ left: 0 }));
+  });
+
+  it("counts a lane only partly past the edge as overflow", () => {
+    const { container } = render(strip({ tabs: SIX.slice(0, 3) }));
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 250 });
+    Object.defineProperty(list, "scrollWidth", { configurable: true, value: 270 });
+    relayout();
+    expect(screen.getByTestId("assistant-sessions-overflow")).toBeTruthy();
+  });
+
+  it("brings the selected lane back into view when the menu's trigger narrows the strip", () => {
+    const { container } = render(strip({ activeSlot: 5 }));
+    const scrollTo = layOut(container);
+
+    relayout();
+
+    expect(screen.getByTestId("assistant-sessions-overflow")).toBeTruthy();
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ left: 340 }));
   });
 });

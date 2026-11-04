@@ -1,6 +1,6 @@
-import { useCallback, useId, useMemo, useRef } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { LayoutGroup } from "framer-motion";
-import { Plus, RotateCw, SquareTerminal, X } from "lucide-react";
+import { ChevronDown, Plus, RotateCw, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, InteractingCircle } from "@/components/icons";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
@@ -18,12 +18,21 @@ import {
   stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   DocumentTabClose,
   DocumentTabIndicator,
   documentTabClassName,
+  revealTabInStrip,
 } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import type { AgentState } from "@/types";
 import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
 
@@ -97,6 +106,13 @@ export function TabAgentMark({ agentId }: { agentId: string }) {
 function agentDisplayName(agentId: string): string {
   return getAgentConfig(agentId)?.name ?? agentId;
 }
+
+/**
+ * Lanes at which a background tab gives up its hover close. Fixed rather than the
+ * ceiling: three lanes at the panel's narrow widths is where that 24px started
+ * clipping every label, however many more lanes the strip may hold.
+ */
+const CROWDED_TAB_COUNT = 3;
 
 /**
  * The label, split so the part that identifies the lane cannot be truncated away.
@@ -197,7 +213,7 @@ interface SessionTabChipProps {
   onOpenSession?: () => void;
   /** Whether the strip spans several agents, so each lane names its own. */
   showAgent: boolean;
-  /** A full strip: background lanes give their hover close back to their label. */
+  /** A crowded strip: background lanes give their hover close back to their label. */
   isCrowded: boolean;
   newSessionAgentIds: readonly string[];
   canOpenSessionWithAgent: boolean;
@@ -285,9 +301,13 @@ function SessionTabChip({
       className={cn(
         documentTabClassName(isActive),
         // Content-width, like every other tab strip in the app and every browser's. Tabs
-        // may shrink when the strip is tight — three lanes at the 320px minimum — and
-        // `TabLabel` keeps the identifying numeral out of the part that gives way.
-        "min-w-0 shrink px-2 py-1.5"
+        // shrink when the strip is tight, down to the portal strip's floor, and past
+        // that the strip scrolls; `TabLabel` keeps the identifying numeral out of the
+        // part that gives way. The selected tab's floor keeps room for the close it
+        // alone draws once crowded, beside an agent mark and a working spinner. Three
+        // lanes still fit at the 320px minimum.
+        isActive ? "min-w-[104px]" : "min-w-[88px]",
+        "shrink px-2 py-1.5"
       )}
     >
       {isActive && <DocumentTabIndicator inFocusedRegion={isRegionFocused} />}
@@ -413,9 +433,76 @@ interface HelpSessionTabsProps {
 }
 
 /**
+ * Every lane, offered while the strip can't show them all at once: with the scrollbar
+ * hidden, a pointer without a horizontal wheel has no other way to one. The
+ * same radio list of every tab the portal strip keeps, rather than the hidden ones
+ * alone, so a lane half under the edge is never missing from both places.
+ */
+function AllSessionsMenu({
+  tabs,
+  activeSlot,
+  showAgent,
+  onSelect,
+}: {
+  tabs: readonly HelpSessionTab[];
+  activeSlot: number;
+  showAgent: boolean;
+  onSelect: (slot: number) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              // ml-1: the step the panel strips leave between "+" and their chevron, so
+              // the two read as two targets rather than one wide one.
+              className="ml-1 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
+              aria-label="All sessions"
+              data-testid="assistant-sessions-overflow"
+              data-sessions-overflow=""
+            >
+              <ChevronDown aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">All sessions</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent
+        align="end"
+        className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+      >
+        <DropdownMenuRadioGroup
+          value={String(activeSlot)}
+          onValueChange={(value) => onSelect(Number(value))}
+        >
+          {tabs.map((tab) => {
+            const marker = tabMarkerState(tab.agentState);
+            const agentName = showAgent && tab.agentId ? agentDisplayName(tab.agentId) : null;
+            return (
+              <DropdownMenuRadioItem key={tab.slot} value={String(tab.slot)}>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {agentName && tab.agentId && <TabAgentMark agentId={tab.agentId} />}
+                  <TabStateIndicator agentState={tab.agentState} />
+                  <span className="truncate">{tab.fullTitle ?? tab.label}</span>
+                  {agentName && <span className="sr-only">, {agentName}</span>}
+                  {marker && <span className="sr-only">, {marker}</span>}
+                </span>
+              </DropdownMenuRadioItem>
+            );
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
  * The session strip.
  *
- * Always rendered, at one lane as well as three. That is what every comparable side
+ * Always rendered, at one lane as well as several. That is what every comparable side
  * panel does — Cursor's chat, Windsurf's Cascade, Copilot Chat, Zed's agent panel all
  * keep the strip at a single session — and it is what gives the panel one honest home
  * for "which session am I in" and "give me another". Hiding it below two lanes meant
@@ -429,16 +516,17 @@ interface HelpSessionTabsProps {
  *
  * Tabs are content-width and sit at the leading edge with the new-session control
  * directly after the last one, which is how the panel, dock and portal strips in this
- * app lay out and how a browser does. The tablist scrolls horizontally if it ever has
- * to; at the current ceiling of three lanes it cannot, and a raised ceiling would find
- * the machinery already there rather than tabs clipped off the end.
+ * app lay out and how a browser does. Past three lanes at the narrow widths the
+ * tablist scrolls: the selected lane and the one the keyboard reaches are scrolled
+ * into view, and while any lane is clipped an "All sessions" menu after the "+" lists
+ * every one, which is the pointer's way to a lane the strip has scrolled away.
  *
  * The keyboard contract is the family's: the APG tabs pattern with MANUAL activation.
  * Arrow keys and Home/End move focus along the strip, Enter or Space selects, Delete
  * closes, and the single tab stop sits on the selected lane. Manual
  * rather than automatic because selecting a lane swaps a live terminal into the body
- * and refits it — arrowing across three lanes with automatic activation would tear
- * down and remount two sessions on the way past.
+ * and refits it — arrowing across lanes with automatic activation would tear down and
+ * remount every session on the way past.
  */
 export function HelpSessionTabs({
   tabs,
@@ -455,21 +543,80 @@ export function HelpSessionTabs({
   panelId,
   isRegionFocused = true,
 }: HelpSessionTabsProps) {
-  const listRef = useRef<HTMLDivElement | null>(null);
+  // State rather than a ref, so the overflow observer is rebuilt when the list mounts.
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
   const layoutGroupId = useId();
   // Lanes on one agent look exactly as they always did; only a mix is marked.
   const showAgent = new Set(tabs.flatMap((t) => (t.agentId ? [t.agentId] : []))).size > 1;
 
   /**
-   * Move focus to one lane by DOM query rather than by holding a ref per tab. One ref on
-   * the container does the same job, and a ref handed down to a subcomponent as a prop is
-   * a silent React Compiler bailout in this repo.
+   * Find one lane by DOM query rather than by holding a ref per tab. One element on
+   * the container does the same job, and a ref handed down to a subcomponent as a prop
+   * is a silent React Compiler bailout in this repo.
    */
-  const focusSlot = useCallback((slot: number) => {
-    listRef.current?.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`)?.focus();
-  }, []);
+  const tabElement = useCallback(
+    (slot: number) =>
+      listEl?.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`) ?? null,
+    [listEl]
+  );
+
+  /** Scroll the strip, and only the strip, so one lane is fully in view. */
+  const revealSlot = useCallback(
+    (slot: number) => {
+      const tab = tabElement(slot);
+      if (listEl && tab) {
+        revealTabInStrip(listEl, tab, prefersReducedMotion() ? "auto" : "smooth");
+      }
+    },
+    [listEl, tabElement]
+  );
+
+  // `preventScroll`: the focus handler reveals the lane inside the strip, where a
+  // focus's own scroll would move every scrollable ancestor too.
+  const focusSlot = useCallback(
+    (slot: number) => tabElement(slot)?.focus({ preventScroll: true }),
+    [tabElement]
+  );
 
   const slots = useMemo(() => tabs.map((t) => t.slot), [tabs]);
+  // Membership alone: `tabs` is rebuilt on every state transition.
+  const slotsKey = slots.join(",");
+  const hasActiveTab = slots.includes(activeSlot);
+
+  // Measured off the strip rather than per tab: a lane half under the edge is clipped
+  // too, and an intersection observer still reports it as intersecting. Tabs are
+  // observed as well as the strip, because a title that grows a tab past the edge
+  // leaves the strip's own box the same size.
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  useEffect(() => {
+    if (!listEl || !slotsKey) return;
+    // The trigger's own room counts as the strip's: it is there only while the strip
+    // overflows, so measured without it three lanes that fit once it goes would keep it.
+    const measure = () => {
+      const trigger = listEl.parentElement?.querySelector<HTMLElement>("[data-sessions-overflow]");
+      const reclaimed = trigger
+        ? trigger.offsetWidth +
+          (parseFloat(getComputedStyle(trigger).marginLeft) || 0) +
+          (parseFloat(getComputedStyle(trigger.parentElement ?? trigger).columnGap) || 0)
+        : 0;
+      setIsOverflowing(listEl.scrollWidth > listEl.clientWidth + reclaimed + 1);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(listEl);
+    for (const child of Array.from(listEl.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [listEl, slotsKey]);
+
+  // The selected lane in view when it changes, when it first has a tab (a restore can
+  // select a lane before its tab arrives), and when the menu's trigger mounts or goes,
+  // which narrows or widens the strip under it. Not when another lane opens or closes,
+  // nor when one changes state: the keyboard's close handoff scrolls to the lane it
+  // focuses, and a strip the user scrolled stays where they put it.
+  useLayoutEffect(() => {
+    if (hasActiveTab) revealSlot(activeSlot);
+  }, [activeSlot, hasActiveTab, isOverflowing, revealSlot]);
 
   /**
    * Closing a lane with a working agent raises a confirm dialog first, and `tabs` is
@@ -485,11 +632,29 @@ export function HelpSessionTabs({
 
   /**
    * A cancelled confirm dialog hands focus back to the tab it was opened from, so focus
-   * arriving on the closing lane is the signal that the close is not happening.
+   * arriving on the closing lane is the signal that the close is not happening. The
+   * focused lane is brought into view whichever way focus came: an arrow key under
+   * manual activation reaches a lane without selecting it.
    */
   const handleTabFocus = useCallback(
-    (slot: number) => disarmKeyboardClose(slot),
-    [disarmKeyboardClose]
+    (slot: number) => {
+      disarmKeyboardClose(slot);
+      revealSlot(slot);
+    },
+    [disarmKeyboardClose, revealSlot]
+  );
+
+  /**
+   * A lane picked from the menu is brought into view here as well as through the
+   * selection: picking the lane already selected changes no selection, and it is
+   * just as likely the one the strip has scrolled away.
+   */
+  const handleMenuPick = useCallback(
+    (slot: number) => {
+      onSelect(slot);
+      revealSlot(slot);
+    },
+    [onSelect, revealSlot]
   );
 
   /** A pointer close leaves focus where it was; an armed keyboard close must not fire on it. */
@@ -515,7 +680,7 @@ export function HelpSessionTabs({
       const focused = document.activeElement;
       const order = tabs.map((t) => t.slot);
       const current =
-        focused && listRef.current?.contains(focused)
+        focused && e.currentTarget.contains(focused)
           ? order.findIndex((id) => focused.getAttribute("data-slot") === String(id))
           : -1;
       if (current === -1) return;
@@ -565,14 +730,14 @@ export function HelpSessionTabs({
           new-session button inside it, axe's `aria-required-children` rejects the
           stray `button` in a `tablist`; as a sibling it is simply the next control. */}
       <div
-        ref={listRef}
+        ref={setListEl}
         role="tablist"
         aria-label="Assistant sessions"
         aria-orientation="horizontal"
         onKeyDown={handleKeyDown}
-        // `overflow-x-auto` is the safety net, not the plan: at the current ceiling of
-        // three lanes the tabs shrink before they overflow. The scrollbar is hidden
-        // because a scrollbar inside a 33px strip is louder than the tabs it scrolls.
+        // Tabs shrink to their floor before the strip scrolls. The scrollbar is hidden
+        // because a scrollbar inside a 33px strip is louder than the tabs it scrolls;
+        // the "All sessions" menu is the pointer's way past it.
         className="flex items-stretch min-w-0 overflow-x-auto [scrollbar-width:none]"
       >
         <LayoutGroup id={layoutGroupId}>
@@ -593,7 +758,7 @@ export function HelpSessionTabs({
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
               showAgent={showAgent}
-              isCrowded={tabs.length >= MAX_ASSISTANT_SLOTS}
+              isCrowded={tabs.length >= CROWDED_TAB_COUNT}
               newSessionAgentIds={newSessionAgentIds}
               canOpenSessionWithAgent={canOpenSessionWithAgent}
               onOpenSessionWithAgent={onOpenSessionWithAgent}
@@ -634,6 +799,14 @@ export function HelpSessionTabs({
               : `${MAX_ASSISTANT_SLOTS} sessions is the maximum for one project`}
           </TooltipContent>
         </Tooltip>
+      )}
+      {isOverflowing && (
+        <AllSessionsMenu
+          tabs={tabs}
+          activeSlot={activeSlot}
+          showAgent={showAgent}
+          onSelect={handleMenuPick}
+        />
       )}
     </div>
   );

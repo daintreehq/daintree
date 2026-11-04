@@ -4,6 +4,7 @@ import { render, act, fireEvent, screen, within, cleanup } from "@testing-librar
 import { primeRadix } from "@/components/ui/radix-loader";
 import { ToolbarAssistantButton } from "../ToolbarAssistantButton";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { usePanelStore } from "@/store";
 import { STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { McpRuntimeSnapshot } from "@shared/types";
@@ -738,7 +739,9 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
   it("parks the choices once every tab holds a session, and not while one is empty", async () => {
     agentChoices.current = ["claude", "codex"];
     const busyLane = (n: number) => ({ ...emptyLane(), terminalId: `t-${n}`, sessionId: `s-${n}` });
-    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: busyLane(1), 2: busyLane(2) } });
+    const everyLaneBusy = () =>
+      Object.fromEntries(ASSISTANT_SLOTS.map((slot) => [slot, busyLane(slot)]));
+    useHelpPanelStore.setState({ sessions: everyLaneBusy() });
     const { container, unmount } = render(<ToolbarAssistantButton />);
 
     fireEvent.contextMenu(container.querySelector("button")!);
@@ -751,7 +754,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
     unmount();
 
     // An empty tab at the ceiling is still somewhere to start one.
-    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: emptyLane(), 2: busyLane(2) } });
+    useHelpPanelStore.setState({ sessions: { ...everyLaneBusy(), 1: emptyLane() } });
     const again = render(<ToolbarAssistantButton />);
     fireEvent.contextMenu(again.container.querySelector("button")!);
     menu = await screen.findByRole("menu");

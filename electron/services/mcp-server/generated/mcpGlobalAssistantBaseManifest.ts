@@ -809,7 +809,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                                 lane: {
                                   type: "integer",
                                   minimum: 0,
-                                  maximum: 2,
+                                  maximum: 5,
                                 },
                               },
                               required: ["hostId", "scope", "terminalId", "incarnation"],
@@ -1002,7 +1002,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                             lane: {
                               type: "integer",
                               minimum: 0,
-                              maximum: 2,
+                              maximum: 5,
                             },
                             agentId: {
                               type: ["string", "null"],

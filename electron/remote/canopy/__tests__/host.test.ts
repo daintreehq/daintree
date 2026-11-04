@@ -172,7 +172,10 @@ describe("installCanopyHostWith", () => {
 });
 
 describe("installCanopyHostWith: assistant viewers (#14163)", () => {
-  function hostWith(readAgents?: () => Promise<unknown>) {
+  function hostWith(
+    readAgents?: () => Promise<unknown>,
+    more: { assistantSlots?: number; readAssistantWork?: () => Promise<unknown> } = {}
+  ) {
     const endpoints: ClientEndpoint[] = [];
     const viewers = new CanopyViewers({
       source: { observeCanopy: vi.fn(() => () => {}), observeFleet: () => null },
@@ -186,14 +189,18 @@ describe("installCanopyHostWith: assistant viewers (#14163)", () => {
     const link = fakeSession(() => "queued");
     const ctx: CanopySessionContext = {
       session: link.session,
-      client: { clientId: "shell-1", clientName: "mbp", platform: "darwin" },
+      client: {
+        clientId: "shell-1",
+        clientName: "mbp",
+        platform: "darwin",
+        ...(more.assistantSlots === undefined ? {} : { assistantSlots: more.assistantSlots }),
+      },
       sessionId: "s1",
     };
-    installCanopyHostWith(
-      { sessions: [ctx], onSession: () => () => {} },
-      viewers,
-      readAgents ? { readAgents: readAgents as never } : {}
-    );
+    installCanopyHostWith({ sessions: [ctx], onSession: () => () => {} }, viewers, {
+      ...(readAgents ? { readAgents: readAgents as never } : {}),
+      ...(more.readAssistantWork ? { readAssistantWork: more.readAssistantWork as never } : {}),
+    });
     return { link, endpoints, viewers };
   }
 
@@ -273,6 +280,70 @@ describe("installCanopyHostWith: assistant viewers (#14163)", () => {
     expect(readAgents).toHaveBeenCalledWith({ projectId: "p", assistantsOnly: true });
     expect(answer.version).toBe(1);
     expect(answer.directory.entries.map((entry) => entry.subject.terminalId)).toEqual(["a"]);
+  });
+
+  it("names no lane past what the Shell's build reads, counting what it leaves out (#16218)", async () => {
+    const lanes = [0, 3, 5];
+    const subject = (lane: number) => ({
+      hostId: "local",
+      scope: { kind: "project", projectId: "p" },
+      terminalId: `a${lane}`,
+      incarnation: 1,
+      lane,
+    });
+    const readAgents = async () => ({
+      coverage: "ok",
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      entries: lanes.map((lane) => ({
+        state: "live",
+        role: "assistant",
+        subject: subject(lane),
+        agentId: null,
+        agentState: null,
+        waitingReason: null,
+        since: null,
+        label: null,
+        attached: true,
+        handback: null,
+      })),
+    });
+    const readAssistantWork = async () => ({
+      coverage: "ok",
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      workers: lanes.map((lane) => ({
+        terminalId: `w${lane}`,
+        projectId: "p",
+        incarnation: 1,
+        spawnedAt: 1,
+        createdBy: { kind: "assistant", subject: subject(0) },
+        controlledBy: { kind: "assistant", subject: subject(lane) },
+        control: "handover",
+      })),
+    });
+    type Answer = {
+      directory: { omitted: number; entries: Array<{ subject: { terminalId: string } }> };
+    };
+    type Work = { reading: { omitted: number; workers: Array<{ terminalId: string }> } };
+
+    // A Shell from before it says nothing, and reads three lanes.
+    const legacy = hostWith(readAgents, { readAssistantWork });
+    const listed = (await legacy.link.shellCalls(CanopyLinkMethod.ASSISTANTS, {})) as Answer;
+    expect(listed.directory.entries.map((entry) => entry.subject.terminalId)).toEqual(["a0"]);
+    expect(listed.directory.omitted).toBe(2);
+    const work = (await legacy.link.shellCalls(CanopyLinkMethod.ASSISTANT_WORK, {})) as Work;
+    expect(work.reading.workers.map((worker) => worker.terminalId)).toEqual(["w0"]);
+    expect(work.reading.omitted).toBe(2);
+
+    const current = hostWith(readAgents, { readAssistantWork, assistantSlots: 6 });
+    const all = (await current.link.shellCalls(CanopyLinkMethod.ASSISTANTS, {})) as Answer;
+    expect(all.directory.entries).toHaveLength(lanes.length);
+    expect(all.directory.omitted).toBe(0);
+    const allWork = (await current.link.shellCalls(CanopyLinkMethod.ASSISTANT_WORK, {})) as Work;
+    expect(allWork.reading.workers).toHaveLength(lanes.length);
   });
 
   it("says a read it couldn't make, never an empty inventory", async () => {

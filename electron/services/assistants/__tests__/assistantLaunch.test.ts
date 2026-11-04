@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
 import {
   spawnAndConfirm,
@@ -252,12 +253,16 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
     await expect(start({ slot: undefined })).resolves.toMatchObject({ slot: 2 });
     expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2]);
 
+    // Every fresh slot is taken first, in order, before the kept one is touched.
+    const fresh = ASSISTANT_SLOTS.filter((slot) => slot !== 0 && slot !== 1);
     deps.provision.mockClear();
-    deps.provision.mockRejectedValueOnce(
-      Object.assign(new Error("taken"), { code: "LANE_OCCUPIED" })
-    );
+    for (const _slot of fresh) {
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("taken"), { code: "LANE_OCCUPIED" })
+      );
+    }
     await expect(start({ slot: undefined })).resolves.toMatchObject({ slot: 1 });
-    expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2, 1]);
+    expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([...fresh, 1]);
   });
 });
 

@@ -386,6 +386,40 @@ describe("HostServer authentication", () => {
   });
 
   it.each([
+    ["the lanes a Shell names", 6, 6],
+    ["nothing from an older Shell", undefined, undefined],
+    ["nothing for a count it can't read, rather than refusing the Shell", "lots", undefined],
+  ])("keeps %s as the lanes it may send (#16218)", async (_name, offered, kept) => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const raw = await rawConnect();
+    raw.socket.write(
+      encodeFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.HELLO,
+          body: {
+            handshake: TEST_HANDSHAKE,
+            token: server.token,
+            client: {
+              clientId: "c-lanes",
+              clientName: "n",
+              platform: "linux",
+              // Typed or not, the wire carries whatever a peer sends.
+              ...(offered === undefined ? {} : { assistantSlots: offered as number }),
+            },
+            resumeSessionId: null,
+          },
+        })
+      )
+    );
+    await waitFor(() => seen.length === 1);
+    expect(seen[0]!.client.assistantSlots).toBe(kept);
+    raw.socket.destroy();
+  });
+
+  it.each([
     ["a Shell that offers them", true],
     ["an older Shell that doesn't", false],
   ])(

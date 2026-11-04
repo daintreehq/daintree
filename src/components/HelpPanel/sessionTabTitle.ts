@@ -2,7 +2,7 @@
  * Longest name a session tab will carry, in characters.
  *
  * Tabs are content-width, so this is what keeps one chatty agent from taking the
- * whole strip: at three lanes and the panel's 320px minimum, every tab has to stay
+ * whole strip: beside its siblings at the panel's 320px minimum, every tab has to stay
  * readable. CSS still truncates below this — the cap only bounds how much the strip
  * can grow, so a title change resizes it within a known range rather than without one.
  */

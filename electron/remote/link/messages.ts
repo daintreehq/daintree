@@ -79,6 +79,11 @@ export interface LinkClientInfo {
    * (or two installs on one) can share. Absent from older Shells.
    */
   deviceId?: string;
+  /**
+   * How many assistant lanes this Shell's build can name (#16218), so a host
+   * sends it none higher. Absent from older Shells, which read three.
+   */
+  assistantSlots?: number;
 }
 
 export interface HelloMessage {

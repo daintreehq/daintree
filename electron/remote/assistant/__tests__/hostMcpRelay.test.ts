@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
+import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
+import {
+  AGENT_DIRECTORY_BYTES_MAX,
+  type AgentDirectory,
+} from "../../../../shared/types/agentDirectory.js";
 import { buildToolError } from "../../../services/mcp-server/shared.js";
 import { buildToolCallResult } from "../../../services/mcp-server/toolCallResult.js";
 import { decodeValue, encodeValue } from "../../link/encoding.js";
@@ -1419,6 +1423,43 @@ describe("a Shell listing this host's agents (#14455)", () => {
     expect(readAgents).toHaveBeenCalledWith({ projectId: "project-1" });
     // Listing opens no MCP session, and so takes no tier, grant or ownership.
     expect(openSession).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("sends a Shell no lane higher than its build names, counting the rest (#16218)", async () => {
+    const assistant = (lane: number) => ({
+      ...DIRECTORY.entries[0]!,
+      role: "assistant" as const,
+      subject: { ...DIRECTORY.entries[0]!.subject, terminalId: `lane-${lane}`, lane },
+      attached: true,
+    });
+    const kept = {
+      state: "resumable" as const,
+      role: "assistant" as const,
+      hostId: "local",
+      scope: { kind: "project" as const, projectId: "project-1" },
+      lane: 5,
+      agentId: "codex",
+      capturedAt: 1,
+    };
+    const wide = {
+      ...DIRECTORY,
+      omitted: 1,
+      entries: [DIRECTORY.entries[0]!, assistant(2), assistant(3), kept],
+    };
+    const { links, relay } = harness([["link-1", "sender-a"]], { readAgents: async () => wide });
+
+    // A Shell that doesn't say reads three lanes, and refuses an answer naming a fourth.
+    const legacy = (await links[0]!.ask(AssistantLinkMethod.AGENTS, {})) as {
+      directory: AgentDirectory;
+    };
+    expect(legacy.directory.entries).toEqual([DIRECTORY.entries[0], assistant(2)]);
+    expect(legacy.directory.omitted).toBe(3);
+
+    (links[0]!.ctx.client as { assistantSlots?: number }).assistantSlots = MAX_ASSISTANT_SLOTS;
+    await expect(links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toMatchObject({
+      directory: wide,
+    });
     relay.dispose();
   });
 

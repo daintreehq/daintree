@@ -36,11 +36,29 @@
  */
 
 /**
- * Concurrent assistant sessions allowed per project. Each costs a billed CLI
- * process, a PTY, an xterm instance, a live MCP transport and a session
- * directory, so the ceiling is deliberate rather than configurable.
+ * Concurrent assistant sessions allowed per project (#16218). Each running one
+ * costs a billed CLI process, a PTY, an xterm instance, a live MCP transport, a
+ * scratch directory and its lane's own files in the shared session directory,
+ * so the ceiling is deliberate rather than configurable. Six leaves room for a
+ * standing seat per role; splitting one chunk of work further is the agent's
+ * job inside its own terminal, which costs none of that.
+ *
+ * Raising it needs no migration: slot keys and resume pointers carry any slot.
+ * Lowering it would strand what was kept for the slots it drops.
  */
-export const MAX_ASSISTANT_SLOTS = 3;
+export const MAX_ASSISTANT_SLOTS = 6;
+
+/**
+ * The lanes a remote Shell reads when its HELLO doesn't say: a build from
+ * before #16218 validates every lane against a ceiling of three, and refuses a
+ * whole answer that names a higher one.
+ */
+export const LEGACY_REMOTE_ASSISTANT_SLOTS = 3;
+
+/** The lanes a remote Shell that advertised `advertised` can read. */
+export function remoteReadableAssistantSlots(advertised: number | undefined): number {
+  return advertised ?? LEGACY_REMOTE_ASSISTANT_SLOTS;
+}
 
 /** The lane an install had before slots existed. Never re-numbered. */
 export const DEFAULT_ASSISTANT_SLOT = 0;

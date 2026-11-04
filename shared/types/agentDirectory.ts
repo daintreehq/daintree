@@ -194,7 +194,10 @@ export const AgentDirectorySchema = z.object({
   observedAt: z.number().nullable(),
   /** Every source answered. False when a pty shard did not, so entries may be missing. */
   complete: z.boolean(),
-  /** Entries left out for the cap on entries, after the project filter. */
+  /**
+   * Entries left out, after the project filter: for the cap on entries, for
+   * the byte budget, and for lanes the reading Shell's build can't name.
+   */
   omitted: z.number().int().nonnegative(),
   entries: z.array(AgentDirectoryEntrySchema),
 });
@@ -225,6 +228,27 @@ export function agentDirectoryAs(hostId: string, directory: AgentDirectory): Age
         ? { ...entry, subject: { ...entry.subject, hostId } }
         : { ...entry, hostId }
     ),
+  };
+}
+
+/**
+ * The directory a Shell that reads lanes below `laneCount` can parse: entries
+ * in a higher lane are counted in `omitted` rather than sent, since one such
+ * lane fails that Shell's whole answer. Workers carry no lane and always stay.
+ */
+export function agentDirectoryForLanes(
+  directory: AgentDirectory,
+  laneCount: number
+): AgentDirectory {
+  const entries = directory.entries.filter((entry) => {
+    const lane = entry.state === "live" ? entry.subject.lane : entry.lane;
+    return lane === undefined || lane < laneCount;
+  });
+  if (entries.length === directory.entries.length) return directory;
+  return {
+    ...directory,
+    omitted: directory.omitted + directory.entries.length - entries.length,
+    entries,
   };
 }
 
