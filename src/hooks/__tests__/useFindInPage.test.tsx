@@ -77,11 +77,11 @@ describe("useFindInPage", () => {
     act(() => result.current.open());
     act(() => result.current.setQuery("hello"));
 
-    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: false });
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: true, matchCase: false });
     expect(result.current.query).toBe("hello");
   });
 
-  it("calls findInPage with findNext for goNext/goPrev", () => {
+  it("steps through the open session for goNext/goPrev", () => {
     const webview = createMockWebview();
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
 
@@ -92,7 +92,7 @@ describe("useFindInPage", () => {
     act(() => result.current.goNext());
     expect(webview.findInPage).toHaveBeenCalledWith("test", {
       forward: true,
-      findNext: true,
+      findNext: false,
       matchCase: false,
     });
 
@@ -101,7 +101,7 @@ describe("useFindInPage", () => {
     act(() => result.current.goPrev());
     expect(webview.findInPage).toHaveBeenCalledWith("test", {
       forward: false,
-      findNext: true,
+      findNext: false,
       matchCase: false,
     });
   });
@@ -254,7 +254,7 @@ describe("useFindInPage", () => {
       });
     });
 
-    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false, matchCase: false });
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: true, matchCase: false });
   });
 
   it("does not restart find on did-navigate-in-page for non-main frame", () => {
@@ -293,7 +293,7 @@ describe("useFindInPage", () => {
     act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "next" }));
     expect(webview.findInPage).toHaveBeenCalledWith("test", {
       forward: true,
-      findNext: true,
+      findNext: false,
       matchCase: false,
     });
 
@@ -302,7 +302,7 @@ describe("useFindInPage", () => {
     act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "prev" }));
     expect(webview.findInPage).toHaveBeenCalledWith("test", {
       forward: false,
-      findNext: true,
+      findNext: false,
       matchCase: false,
     });
   });
@@ -316,7 +316,7 @@ describe("useFindInPage", () => {
     webview.findInPage.mockClear();
 
     act(() => result.current.toggleMatchCase());
-    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false, matchCase: true });
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: true, matchCase: true });
   });
 
   it("goNext/goPrev preserve current matchCase", () => {
@@ -331,7 +331,7 @@ describe("useFindInPage", () => {
     act(() => result.current.goNext());
     expect(webview.findInPage).toHaveBeenCalledWith("test", {
       forward: true,
-      findNext: true,
+      findNext: false,
       matchCase: true,
     });
   });
@@ -373,7 +373,7 @@ describe("useFindInPage", () => {
       });
     });
 
-    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false, matchCase: true });
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: true, matchCase: true });
   });
 
   it("resumes an open query when the webview becomes ready", () => {
@@ -390,7 +390,7 @@ describe("useFindInPage", () => {
     rerender({ ready: true });
 
     expect(webview.findInPage).toHaveBeenCalledTimes(1);
-    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: false });
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: true, matchCase: false });
   });
 
   it("resumes an open query on a replacement webview and drops the old match state", () => {
@@ -416,7 +416,7 @@ describe("useFindInPage", () => {
     rerender({ webview: webviewB });
 
     expect(webviewB.findInPage).toHaveBeenCalledTimes(1);
-    expect(webviewB.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: true });
+    expect(webviewB.findInPage).toHaveBeenCalledWith("hello", { findNext: true, matchCase: true });
     expect(result.current.activeMatch).toBe(0);
     expect(result.current.matchCount).toBe(0);
 
@@ -493,7 +493,7 @@ describe("useFindInPage", () => {
     rerender({ ready: true });
 
     expect(webview.findInPage).toHaveBeenCalledTimes(1);
-    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: true });
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: true, matchCase: true });
   });
 
   it("clears stale results when readiness drops and resumes once when it returns", () => {
@@ -530,5 +530,91 @@ describe("useFindInPage", () => {
       });
     });
     expect(result.current.matchCount).toBe(5);
+  });
+});
+
+// Mirrors what Electron 42's guest find does, as measured: `findNext: true`
+// opens a session, `false` steps through it, and a step with no session open
+// is never answered. Replies arrive after `findInPage` returns its id.
+function createSessionWebview(matchesFor: (text: string) => number) {
+  const webview = createMockWebview();
+  let nextId = 0;
+  let session: { text: string; active: number } | null = null;
+  const pending: Array<Record<string, unknown>> = [];
+  webview.findInPage.mockImplementation(
+    (text: string, opts: { findNext?: boolean; forward?: boolean }) => {
+      const requestId = ++nextId;
+      const matches = matchesFor(text);
+      if (opts.findNext || (session && session.text !== text)) {
+        session = { text, active: matches > 0 ? 1 : 0 };
+      } else if (session) {
+        const step = opts.forward === false ? -1 : 1;
+        session.active = ((session.active - 1 + step + matches) % matches) + 1;
+      } else {
+        return requestId;
+      }
+      pending.push({ requestId, activeMatchOrdinal: session.active, matches, finalUpdate: true });
+      return requestId;
+    }
+  );
+  webview.stopFindInPage.mockImplementation(() => {
+    session = null;
+  });
+  const flush = () =>
+    act(() => {
+      for (const result of pending.splice(0)) webview._emit("found-in-page", { result });
+    });
+  return { webview, flush };
+}
+
+describe("useFindInPage against Electron's find sessions", () => {
+  it("shows the match count while the query is typed", () => {
+    const { webview, flush } = createSessionWebview((text) => (text.startsWith("FIND") ? 3 : 0));
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+
+    expect(result.current.matchCount).toBe(3);
+    expect(result.current.activeMatch).toBe(1);
+  });
+
+  it("moves through the matches with goNext and goPrev", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FINDME"));
+    flush();
+    act(() => result.current.goNext());
+    flush();
+    expect(result.current.activeMatch).toBe(2);
+
+    act(() => result.current.goNext());
+    flush();
+    expect(result.current.activeMatch).toBe(3);
+
+    act(() => result.current.goPrev());
+    flush();
+    expect(result.current.activeMatch).toBe(2);
+    expect(result.current.matchCount).toBe(3);
+  });
+
+  it("starts a fresh session when match case is toggled", () => {
+    const { webview, flush } = createSessionWebview(() => 2);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("Find"));
+    flush();
+    act(() => result.current.goNext());
+    flush();
+    expect(result.current.activeMatch).toBe(2);
+
+    act(() => result.current.toggleMatchCase());
+    flush();
+    expect(result.current.activeMatch).toBe(1);
+    expect(result.current.matchCount).toBe(2);
   });
 });
