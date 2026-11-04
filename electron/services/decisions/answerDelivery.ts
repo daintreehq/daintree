@@ -1,10 +1,14 @@
 import {
   DecisionsBridge,
   DeliveryEngine,
+  isUndeliveredMessage,
   openAnswerContent,
+  openMessageContent,
   openQuestionContent,
   parseAnswers,
+  parseMessages,
   serializeAnswers,
+  serializeMessages,
   type Identity,
   type InjectionIntent,
   type KeyStore,
@@ -14,6 +18,7 @@ import {
   type QuestionOrigin,
   type QuestionRow,
   type RelayClient,
+  type StoredMessage,
   type TerminalSink,
 } from "@daintreehq/decisions-client";
 import { basename } from "node:path";
@@ -24,20 +29,26 @@ import type {
   DecisionsAnswerOutcome,
   DecisionsAnswerOrigin,
   DecisionsAttentionItem,
+  DecisionsFollowUpPreview,
 } from "../../../shared/types/decisionsAttention.js";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
 import type { LaneWake, OwnPane } from "../mcp-server/terminalNotify.js";
 import {
+  answerNeedsAttention,
   answerPreviewOf,
+  answerRevision,
   copiedAnswerText,
+  heldFollowUps,
   markAnswerHandled,
   needsAttention,
   pendingEntries,
   questionLine,
   readHandledAnswers,
   resumableReason,
-  withoutHandled,
+  threadNeedsAttention,
+  type OpenFollowUp,
 } from "./attentionList.js";
+import { sanitizeAnswerText } from "./answerNotice.js";
 import {
   DaintreeResume,
   RESUMABLE_AGENTS,
@@ -296,15 +307,16 @@ export class AnswerDelivery {
   }
 
   /**
-   * The answers a person has to decide about (#16020), oldest question first,
-   * without those marked handled. Each is opened here, in memory: the
-   * question's first line and the answer waiting to be typed in.
+   * The answers a person has to decide about (#16020), and the follow-ups
+   * after them (#16231), oldest question first, without what was marked
+   * handled. Each is opened here, in memory: the question's first line, the
+   * answer waiting to be typed in, and each follow-up's words.
    */
   async attentionItems(): Promise<DecisionsAttentionItem[]> {
-    const rows = withoutHandled(
-      (await this.store.listQuestions()).filter(needsAttention),
-      await readHandledAnswers(this.store)
-    ).sort((a, b) => a.alias - b.alias);
+    const handled = await readHandledAnswers(this.store);
+    const rows = (await this.store.listQuestions())
+      .filter((row) => threadNeedsAttention(row, handled))
+      .sort((a, b) => a.alias - b.alias);
     if (rows.length === 0) return [];
     const terminals = await this.terminals();
     const projects = new Map<string, Promise<string | null>>();
@@ -319,9 +331,12 @@ export class AnswerDelivery {
     };
     const items: DecisionsAttentionItem[] = [];
     for (const row of rows) {
-      const opened = await this.openPending(row);
+      const answerHeld = answerNeedsAttention(row, handled);
+      const opened = answerHeld ? await this.openPending(row) : [];
       const answer = opened === null ? null : answerPreviewOf(opened);
-      const answerUnavailable = answer !== null ? null : opened === null ? "unreadable" : "none";
+      const answerUnavailable =
+        answer !== null || !answerHeld ? null : opened === null ? "unreadable" : "none";
+      const followUps = await this.followUpPreviews(row);
       let question: string | null;
       try {
         const content = await openQuestionContent(this.owner.ctx, row);
@@ -329,32 +344,49 @@ export class AnswerDelivery {
       } catch {
         question = null;
       }
-      const status = row.delivery_status as DecisionsAttentionItem["status"];
+      const uncertain =
+        (answerHeld && row.delivery_status === "delivery-uncertain") ||
+        followUps.some((followUp) => followUp.status === "delivery-uncertain");
+      const status = uncertain ? "delivery-uncertain" : "needs-attention";
+      const code = answerHeld
+        ? row.error_code
+        : (heldFollowUps(row)[0]?.delivery?.error_code ?? null);
       const reassignable =
-        status === "needs-attention" && answer !== null && this.ownHostId(row.origin);
+        status === "needs-attention" &&
+        (answerHeld ? answer !== null : followUps.length > 0) &&
+        followUps.every((followUp) => !followUp.unreadable) &&
+        this.ownHostId(row.origin);
       items.push({
         questionId: row.question_id,
         alias: row.alias,
         status,
-        reason: reasonOf(row.error_code),
+        reason: reasonOf(code),
         question,
         askedAt: row.origin_created_at,
         origin: await this.originOf(row.origin, terminals, projectName),
         answer,
         answerUnavailable,
-        canResume: reassignable && (await this.resumable(row)),
+        followUps,
+        canResume: reassignable && (await this.resumable(row, code)),
         canReassign: reassignable,
       });
     }
     return items;
   }
 
-  /** The delimited block a person pastes in themselves; null when nothing is waiting to be typed. */
+  /**
+   * The delimited blocks a person pastes in themselves, the answer and the
+   * follow-ups after it in thread order; null when nothing is waiting to be
+   * typed, or part of it can't be opened here.
+   */
   async copiedAnswer(questionId: string): Promise<string | null> {
     const row = await this.store.getQuestion(questionId);
-    if (row === null || !needsAttention(row)) return null;
-    const opened = await this.openPending(row);
-    return opened === null ? null : copiedAnswerText(row, opened);
+    if (row === null) return null;
+    const handled = await readHandledAnswers(this.store);
+    const opened = answerNeedsAttention(row, handled) ? await this.openPending(row) : [];
+    const followUps = await this.openFollowUps(row);
+    if (opened === null || followUps === null) return null;
+    return copiedAnswerText(row, opened, followUps);
   }
 
   /**
@@ -370,10 +402,7 @@ export class AnswerDelivery {
       const early = await this.actionable(row);
       if (early !== null || row === null) return early ?? { result: "resolved" as const };
       this.resume?.allowAgain(row.origin);
-      await this.store.updateQuestion(questionId, {
-        delivery_status: "desktop-received",
-        error_code: null,
-      });
+      await this.store.updateQuestion(questionId, await this.retryPatch(row));
       await this.owner.ctx.audit.log({
         event: "delivery.retry-requested",
         question_id: questionId,
@@ -454,9 +483,8 @@ export class AnswerDelivery {
         worktree_root: terminal.cwd ?? "",
       };
       await this.store.updateQuestion(questionId, {
+        ...(await this.retryPatch(row)),
         origin,
-        delivery_status: "desktop-received",
-        error_code: null,
         agent_resume_strategy: "reassigned",
       });
       await this.owner.ctx.audit.log({
@@ -483,39 +511,82 @@ export class AnswerDelivery {
   /**
    * "Mark handled" (#16020): the person dealt with the answer themselves. It
    * leaves the list, the pane and Canopy, and is never typed in; a later
-   * correction needs a person again. The row itself is left as the library
-   * wrote it.
+   * correction needs a person again. The row keeps the answers and what
+   * became of them, but nothing it holds for a person is delivered any more
+   * (#16231): the answers waiting and the follow-ups that needed a person.
+   * The library holds a thread's later follow-ups behind both, so they then
+   * go on.
    */
   async markHandled(questionId: string): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
     return this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
-      if (row === null || !needsAttention(row)) return { result: "resolved" };
-      await markAnswerHandled(this.store, row);
+      if (row === null) return { result: "resolved" };
+      const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
+      const held = new Set(heldFollowUps(row).map((message) => message.message_id));
+      if (!answerHeld && held.size === 0) return { result: "resolved" };
+      if (answerHeld) await markAnswerHandled(this.store, row);
+      const patch: Partial<QuestionRow> = answerHeld ? undelivered(row) : {};
+      if (held.size > 0) {
+        patch.messages_json = withDelivery(row, held, (delivery) => ({
+          ...delivery,
+          deliver: false,
+        }));
+      }
+      if (Object.keys(patch).length > 0) await this.store.updateQuestion(questionId, patch);
       await this.owner.ctx.audit.log({
         event: "delivery.handled",
         question_id: questionId,
         requirement: row.requirement,
         result: "person",
-        detail: { status: row.delivery_status },
+        detail: { status: row.delivery_status, follow_ups: held.size },
       });
       return { result: "handled" };
     });
   }
 
-  /** Null when a person can act on `row`'s answer; otherwise why not. */
+  /** Null when a person can act on `row`'s answer and follow-ups; otherwise why not. */
   private async actionable(row: QuestionRow | null): Promise<DecisionsAnswerOutcome | null> {
-    if (row === null || !needsAttention(row)) return { result: "resolved" };
-    const handled = await readHandledAnswers(this.store);
-    if (withoutHandled([row], handled).length === 0) return { result: "resolved" };
+    if (row === null) return { result: "resolved" };
+    const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
+    const held = heldFollowUps(row);
+    if (!answerHeld && held.length === 0) return { result: "resolved" };
     if (
-      row.delivery_status === "delivery-uncertain" ||
-      (await this.store.hasUncertainIntent(row.question_id))
+      (answerHeld &&
+        (row.delivery_status === "delivery-uncertain" ||
+          (await this.store.hasUncertainIntent(row.question_id)))) ||
+      held.some((message) => message.delivery?.status === "delivery-uncertain")
     ) {
       return { result: "refused", reason: "uncertain" };
     }
-    if (pendingEntries(row).length === 0) return { result: "refused", reason: "no-answer" };
+    if (held.length === 0 && pendingEntries(row).length === 0) {
+      return { result: "refused", reason: "no-answer" };
+    }
     return null;
+  }
+
+  /**
+   * What sends `row` back to delivery: its answer, if one is waiting to be
+   * typed, and each follow-up that needed a person, as the library's own
+   * retry does it, a new round of receipts for each.
+   */
+  private async retryPatch(row: QuestionRow): Promise<Partial<QuestionRow>> {
+    const patch: Partial<QuestionRow> = {};
+    const handled = await readHandledAnswers(this.store);
+    if (answerNeedsAttention(row, handled) && pendingEntries(row).length > 0) {
+      patch.delivery_status = "desktop-received";
+      patch.error_code = null;
+    }
+    const held = new Set(heldFollowUps(row).map((message) => message.message_id));
+    if (held.size > 0) {
+      patch.messages_json = withDelivery(row, held, (delivery) => ({
+        ...delivery,
+        status: "received",
+        error_code: null,
+        retries: (delivery.retries ?? 0) + 1,
+      }));
+    }
+    return patch;
   }
 
   /** Tries delivery now, and resolves once the attempt that serves this ask is done. */
@@ -527,18 +598,25 @@ export class AnswerDelivery {
   private async outcomeOf(questionId: string): Promise<DecisionsAnswerOutcome> {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return { result: "resolved" };
-    if (needsAttention(row)) {
+    const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
+    const held = heldFollowUps(row);
+    if (answerHeld || held.length > 0) {
+      const uncertain =
+        (answerHeld && row.delivery_status === "delivery-uncertain") ||
+        held.some((message) => message.delivery?.status === "delivery-uncertain");
       return {
         result: "needs-attention",
-        status: row.delivery_status as "needs-attention" | "delivery-uncertain",
-        reason: reasonOf(row.error_code),
+        status: uncertain ? "delivery-uncertain" : "needs-attention",
+        reason: reasonOf(answerHeld ? row.error_code : (held[0]?.delivery?.error_code ?? null)),
       };
     }
     const terminalId = row.origin.pane_id;
     const title =
       (await this.terminals()).find((terminal) => terminal.id === terminalId)?.title?.trim() ||
       null;
-    if (pendingEntries(row).length === 0) return { result: "delivered", terminalId, title };
+    const waiting =
+      pendingEntries(row).length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
+    if (!waiting) return { result: "delivered", terminalId, title };
     return {
       result: "waiting",
       terminalId,
@@ -562,12 +640,50 @@ export class AnswerDelivery {
     return opened;
   }
 
+  /** Each held follow-up's words, opened; null when one can't be opened here. */
+  private async openFollowUps(row: QuestionRow): Promise<OpenFollowUp[] | null> {
+    const opened: OpenFollowUp[] = [];
+    try {
+      for (const message of heldFollowUps(row)) {
+        const { text } = await openMessageContent(this.owner.ctx, row.question_id, message);
+        opened.push({ message, text });
+      }
+    } catch {
+      return null;
+    }
+    return opened;
+  }
+
+  /** The held follow-ups as the list shows them, each opened on its own. */
+  private async followUpPreviews(row: QuestionRow): Promise<DecisionsFollowUpPreview[]> {
+    const previews: DecisionsFollowUpPreview[] = [];
+    for (const message of heldFollowUps(row)) {
+      let text: string | null = null;
+      let unreadable = false;
+      try {
+        text = (await openMessageContent(this.owner.ctx, row.question_id, message)).text;
+      } catch {
+        unreadable = true;
+      }
+      const shown = text === null ? "" : sanitizeAnswerText(text, PREVIEW_TEXT_CHARS);
+      previews.push({
+        messageId: message.message_id,
+        status: message.delivery!.status as DecisionsFollowUpPreview["status"],
+        reason: reasonOf(message.delivery!.error_code),
+        text: shown === "" ? null : shown,
+        unreadable,
+        sentAt: message.created_at,
+      });
+    }
+    return previews;
+  }
+
   /** What a resume needs that can be checked without launching anything. */
-  private async resumable(row: QuestionRow): Promise<boolean> {
+  private async resumable(row: QuestionRow, code: string | null): Promise<boolean> {
     const { origin } = row;
     const isDirectory = this.o.deps.resume?.isDirectory;
     if (this.resume === null || isDirectory === undefined) return false;
-    if (!resumableReason(row.error_code) || !RESUMABLE_AGENTS.has(origin.agent_kind)) return false;
+    if (!resumableReason(code) || !RESUMABLE_AGENTS.has(origin.agent_kind)) return false;
     if ((origin.agent_session_id?.trim() ?? "") === "") return false;
     if (origin.project_id === "" || origin.worktree_id === NO_WORKTREE) return false;
     if (origin.worktree_root.trim() === "") return false;
@@ -857,6 +973,7 @@ export class AnswerDelivery {
    * untyped ones.
    */
   private async recover(): Promise<boolean> {
+    await this.releaseHandled();
     await this.repairRecorded();
     if (this.stopped) return false;
     const probe = await this.probeInterrupted();
@@ -930,6 +1047,23 @@ export class AnswerDelivery {
   }
 
   /**
+   * Answers a person marked handled before marking stopped their delivery
+   * (#16020) stop it now, as `markHandled` does, so they hold back no
+   * follow-up after them (#16231).
+   */
+  private async releaseHandled(): Promise<void> {
+    for (const [questionId, revision] of await readHandledAnswers(this.store)) {
+      if (this.stopped) return;
+      await this.lock.run(async () => {
+        const row = await this.store.getQuestion(questionId);
+        if (row === null || !needsAttention(row) || answerRevision(row) !== revision) return;
+        const patch = undelivered(row);
+        if (patch.answers_json !== undefined) await this.store.updateQuestion(questionId, patch);
+      });
+    }
+  }
+
+  /**
    * Puts right what an interruption between two of the library's writes
    * left, from what was recorded. The library records an intent as typed
    * before it marks the answer delivered, so a crash between the two leaves
@@ -938,12 +1072,23 @@ export class AnswerDelivery {
    * marker, so an interruption there leaves an intent still untyped on an
    * answer already marked delivered under it, which the next recovery would
    * search for again and could call uncertain; that answer's own record says
-   * it was typed.
+   * it was typed. A follow-up's intent is never an answer's (#16231): the
+   * library settles it with its message in one write, and its recovery finds
+   * it by the message or the attempt the message names.
    */
   private async repairRecorded(): Promise<void> {
     const { ctx } = this.owner;
-    for (const intent of await this.store.openIntents()) {
+    const intents = await this.store.openIntents();
+    if (intents.length === 0) return;
+    const attempts = new Set<string>();
+    for (const row of await this.store.listQuestions()) {
+      for (const message of parseMessages(row.messages_json)) {
+        if (message.delivery?.attempt_id) attempts.add(message.delivery.attempt_id);
+      }
+    }
+    for (const intent of intents) {
       if (this.stopped) return;
+      if (intent.message_id != null || attempts.has(intent.injection_id)) continue;
       if (intent.state === "intent") {
         const row = await this.store.getQuestion(intent.question_id);
         const recorded = row
@@ -1074,6 +1219,37 @@ export class AnswerDelivery {
       clear: () => keys.clear(),
     };
   }
+}
+
+/** As much of a follow-up as typing it would keep: the text cap of the typed block. */
+const PREVIEW_TEXT_CHARS = 4_000;
+
+/** `row`'s answers waiting to be typed, no longer to be; nothing when none is waiting. */
+function undelivered(row: QuestionRow): Partial<QuestionRow> {
+  const waiting = new Set(pendingEntries(row).map((entry) => entry.entry_id));
+  if (waiting.size === 0) return {};
+  return {
+    answers_json: serializeAnswers(
+      parseAnswers(row.answers_json).map((entry) =>
+        waiting.has(entry.entry_id) ? { ...entry, deliver: false } : entry
+      )
+    ),
+  };
+}
+
+/** `row`'s follow-ups, serialised, with the delivery of each one in `ids` changed by `change`. */
+function withDelivery(
+  row: QuestionRow,
+  ids: ReadonlySet<string>,
+  change: (delivery: NonNullable<StoredMessage["delivery"]>) => StoredMessage["delivery"]
+): string {
+  return serializeMessages(
+    parseMessages(row.messages_json).map((message) =>
+      ids.has(message.message_id) && message.delivery !== null
+        ? { ...message, delivery: change(message.delivery) }
+        : message
+    )
+  );
 }
 
 function agentNameOf(agentId: string): string | null {

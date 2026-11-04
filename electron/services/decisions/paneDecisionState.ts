@@ -1,4 +1,5 @@
 import { parseAnswers, type QuestionRow } from "@daintreehq/decisions-client";
+import { answerNeedsAttention, heldFollowUps, type HandledAnswers } from "./attentionList.js";
 import type {
   DecisionDeliveryStatus,
   PaneDecisionAttention,
@@ -47,7 +48,8 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  * - **Needs attention:** delivery stopped at `needs-attention` or
  *   `delivery-uncertain`. That status is the observation, with or without an
  *   answer still marked for delivery: the inbox flags an answer it refused
- *   without keeping it.
+ *   without keeping it. A follow-up held for a person (#16231) counts too,
+ *   with its own status and code once the answer is past needing one.
  * - **Waiting:** otherwise, an answer entry still marked for delivery and not
  *   yet delivered, the same test the delivery engine uses.
  *
@@ -56,7 +58,8 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  * settled or not, so settling that question never moves the pane back.
  */
 export function projectPaneDecisionStates(
-  rows: readonly QuestionRow[]
+  rows: readonly QuestionRow[],
+  handled: HandledAnswers = new Map()
 ): Map<string, ProjectedPane> {
   const sorted = [...rows].filter((row) => !row.history_only).sort(byAlias);
   const projectOf = new Map<string, string>();
@@ -74,10 +77,14 @@ export function projectPaneDecisionStates(
 
     const deliveryStatus: DecisionDeliveryStatus = row.delivery_status;
     const open = row.local_status === "queued" || row.local_status === "open";
-    const attention = isAttention(deliveryStatus);
-    const pending = attention
-      ? []
-      : parseAnswers(row.answers_json).filter((entry) => entry.deliver && !entry.delivered);
+    const held = heldFollowUps(row);
+    // A handled answer's status is past needing a person; its follow-ups may not be.
+    const answerHeld = isAttention(deliveryStatus) && answerNeedsAttention(row, handled);
+    const attention = answerHeld || held.length > 0;
+    const pending =
+      attention || isAttention(deliveryStatus)
+        ? []
+        : parseAnswers(row.answers_json).filter((entry) => entry.deliver && !entry.delivered);
     if (!open && !attention && pending.length === 0) continue;
 
     let pane = panes.get(paneId);
@@ -96,14 +103,17 @@ export function projectPaneDecisionStates(
         expiresAt: row.expires_at ?? null,
       });
     }
-    if (isAttention(deliveryStatus)) {
+    if (attention) {
+      const uncertain =
+        (answerHeld && deliveryStatus === "delivery-uncertain") ||
+        held.some((message) => message.delivery?.status === "delivery-uncertain");
       pane.content.needsAttention.push({
         questionId,
         alias,
-        deliveryStatus,
-        reason: reasonOf(row.error_code),
+        deliveryStatus: uncertain ? "delivery-uncertain" : "needs-attention",
+        reason: reasonOf(answerHeld ? row.error_code : (held[0]!.delivery?.error_code ?? null)),
       });
-    } else if (pending.length > 0) {
+    } else if (pending.length > 0 && !isAttention(deliveryStatus)) {
       pane.content.waitingAnswers.push({
         questionId,
         alias,
@@ -150,9 +160,12 @@ export class PaneDecisionStates {
     return this.panes.get(terminalId)?.state ?? null;
   }
 
-  /** Replaces every pane's state with what these rows show, pushing only the panes that changed. */
-  replace(rows: readonly QuestionRow[]): void {
-    const next = projectPaneDecisionStates(rows);
+  /**
+   * Replaces every pane's state with what these rows show, `handled` the
+   * answers a person marked handled, pushing only the panes that changed.
+   */
+  replace(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
+    const next = projectPaneDecisionStates(rows, handled);
     for (const [terminalId, held] of [...this.panes]) {
       if (next.get(terminalId)?.projectId === held.projectId) continue;
       this.panes.delete(terminalId);

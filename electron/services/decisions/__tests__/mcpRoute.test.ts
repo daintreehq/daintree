@@ -353,8 +353,8 @@ describe("/mcp/decisions (#16011)", () => {
     }
   });
 
-  // `get_decision`'s thread is held until Daintree takes the relay's thread events (#16231).
-  it("tells agents about follow-ups in the library's own words, with no thread on get_decision", async () => {
+  // Daintree takes the relay's thread events (#16231), so `get_decision` returns the library's thread.
+  it("tells agents about follow-ups in the library's own words, with get_decision's thread", async () => {
     await boot(false);
     add(pane("pane-a"));
     const port = await openRoute();
@@ -372,24 +372,12 @@ describe("/mcp/decisions (#16011)", () => {
     const list = await rpc(port, "pane-token-pane-a", "tools/list");
     const tools = (JSON.parse(list.body) as { result: { tools: Array<Record<string, unknown>> } })
       .result.tools;
-    const byName = (name: string, from: readonly Record<string, unknown>[]) =>
-      from.find((tool) => tool.name === name);
-    const library = TOOLS as readonly Record<string, unknown>[];
-    for (const name of ["ask_human", "cancel_question", "send_followup"]) {
-      expect(byName(name, tools), name).toEqual(byName(name, library));
-    }
-    const getDecision = byName("get_decision", tools)!;
-    expect(JSON.stringify(getDecision)).not.toMatch(/"thread"|follow-?up/i);
-    // Everything else of the library's get_decision is served as it is.
-    const { description: _description, ...served } = getDecision;
-    const { description: _libraryDescription, ...fromLibrary } = byName("get_decision", library)!;
-    const { thread: _thread, ...properties } = (
-      fromLibrary.outputSchema as { properties: Record<string, unknown> }
-    ).properties;
-    expect(served).toEqual({
-      ...fromLibrary,
-      outputSchema: { ...(fromLibrary.outputSchema as object), properties },
-    });
+    // Every tool exactly as the library has it, get_decision's thread included.
+    expect(tools).toEqual(TOOLS);
+    const getDecision = tools.find((tool) => tool.name === "get_decision")!;
+    expect(
+      (getDecision.outputSchema as { properties: Record<string, unknown> }).properties
+    ).toHaveProperty("thread");
 
     const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Which name?" });
     const alias = (await store.listQuestions())[0].alias;
@@ -404,7 +392,8 @@ describe("/mcp/decisions (#16011)", () => {
     });
     const read = await call(port, "pane-token-pane-a", "get_decision", { question_id: questionId });
     expect(read.structuredContent).toMatchObject({ question_id: questionId, status: "queued" });
-    expect(read.structuredContent).not.toHaveProperty("thread");
+    // The follow-up joins the thread once the relay commits it; until then the thread is empty.
+    expect(read.structuredContent.thread).toEqual([]);
   });
 
   it("commits a follow-up on the pane's own question at once, alone or in a batch, before any network I/O", async () => {
@@ -466,15 +455,14 @@ describe("/mcp/decisions (#16011)", () => {
     });
     expect(note!.result.content![0]!.text).toBe(followupInstruction(alias, false));
     expect(note!.result.structuredContent!.instruction).toBe(note!.result.content![0]!.text);
-    // A follow-up never answers or moves the question, and a batch shows no thread either.
+    // A follow-up never answers or moves the question, and a batch is served as the library answers it.
     expect(read).toMatchObject({
       id: "g",
       result: { structuredContent: { status: "queued", provenance: null, choice: null } },
     });
-    expect(read!.result.structuredContent).not.toHaveProperty("thread");
+    expect(read!.result.structuredContent).toHaveProperty("thread");
     expect(listed!.id).toBe("h");
-    expect(listed!.result.tools!.map((tool) => tool.name)).toContain("send_followup");
-    expect(JSON.stringify(listed!.result.tools)).not.toContain('"thread"');
+    expect(listed!.result.tools).toEqual(TOOLS);
 
     expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual([
       "create",

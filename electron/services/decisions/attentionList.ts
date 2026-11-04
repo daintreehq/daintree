@@ -1,14 +1,22 @@
 import {
-  batchNotices,
   formatAnswerNotice,
+  formatFollowupNotice,
+  noticeChunk,
   parseAnswers,
+  parseMessages,
   type AnswerEntry,
   type LocalStore,
   type OpenAnswerEntry,
   type QuestionRow,
+  type StoredMessage,
 } from "@daintreehq/decisions-client";
 import type { DecisionsAnswerPreview } from "../../../shared/types/decisionsAttention.js";
-import { parseAnswerNotice, renderCopiedAnswer, sanitizeAnswerText } from "./answerNotice.js";
+import {
+  parseDecisionNotice,
+  renderCopiedAnswer,
+  sanitizeAnswerText,
+  type DecisionBlock,
+} from "./answerNotice.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -78,8 +86,40 @@ export function answerRevision(row: QuestionRow): number {
   return revision;
 }
 
+/**
+ * The person's follow-ups (#16231) delivery stopped on at a point where a
+ * person decides, in thread order: the library holds each one on its own,
+ * whatever became of the question's answer. One marked handled is no longer
+ * delivered, so it isn't held either.
+ */
+export function heldFollowUps(row: QuestionRow): StoredMessage[] {
+  if (row.history_only) return [];
+  return parseMessages(row.messages_json)
+    .filter(
+      (message) =>
+        message.side === "human" &&
+        message.delivery?.deliver === true &&
+        (message.delivery.status === "needs-attention" ||
+          message.delivery.status === "delivery-uncertain")
+    )
+    .sort((a, b) => a.event_seq - b.event_seq);
+}
+
+/** The question's answer needs a person, and they haven't marked it handled. */
+export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers): boolean {
+  return needsAttention(row) && handled.get(row.question_id) !== answerRevision(row);
+}
+
+/** Its answer or a follow-up after it needs a person. */
+export function threadNeedsAttention(row: QuestionRow, handled: HandledAnswers): boolean {
+  return answerNeedsAttention(row, handled) || heldFollowUps(row).length > 0;
+}
+
+/** Its answer is handled, and no follow-up needs a person either. */
 export function isHandled(row: QuestionRow, handled: HandledAnswers): boolean {
-  return needsAttention(row) && handled.get(row.question_id) === answerRevision(row);
+  return (
+    needsAttention(row) && !answerNeedsAttention(row, handled) && heldFollowUps(row).length === 0
+  );
 }
 
 /** The rows as panes, Canopy and the list see them: without what a person marked handled. */
@@ -129,19 +169,32 @@ export function answerPreviewOf(opened: readonly OpenAnswerEntry[]): DecisionsAn
   };
 }
 
+/** A held follow-up with its words opened, in memory only. */
+export interface OpenFollowUp {
+  message: StoredMessage;
+  text: string;
+}
+
+const seqOf = (entry: Pick<AnswerEntry, "event_seq">) => entry.event_seq ?? 0;
+
 /**
- * The delimited block for `row`'s waiting answers, as the delivery engine
- * would type them, for a person to paste in themselves: built by the
- * library's own formatter, checked against its exact shape, and rendered
- * again without an injection marker. Null when there is nothing to copy.
+ * The delimited blocks for `row`'s waiting answers and held follow-ups, in
+ * thread order as the delivery engine would type them, for a person to paste
+ * in themselves: built by the library's own formatter, checked against its
+ * exact shape, and rendered again without an injection marker. Null when
+ * there is nothing to copy.
  */
 export function copiedAnswerText(
-  row: Pick<QuestionRow, "question_id" | "alias">,
-  opened: readonly OpenAnswerEntry[]
+  row: Pick<QuestionRow, "question_id" | "alias" | "answers_json">,
+  opened: readonly OpenAnswerEntry[],
+  followUps: readonly OpenFollowUp[] = []
 ): string | null {
-  if (opened.length === 0) return null;
-  const blocks = opened.map((entry, index) =>
-    formatAnswerNotice({
+  if (opened.length === 0 && followUps.length === 0) return null;
+  // Never shown: the copy is rendered without it.
+  const copyId = (index: number) => `copied-${index.toString().padStart(4, "0")}`;
+  const answers = opened.map((entry, index) => ({
+    seq: seqOf(entry),
+    block: formatAnswerNotice({
       kind: entry.kind,
       questionId: row.question_id,
       alias: row.alias,
@@ -153,13 +206,32 @@ export function copiedAnswerText(
       ...(entry.reason ? { reason: entry.reason } : {}),
       ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
       ...(entry.model_id ? { modelId: entry.model_id } : {}),
-      // Never shown: the copy is rendered without it.
-      injectionId: `copied-${index.toString().padStart(4, "0")}`,
-    })
-  );
-  const text = batchNotices(blocks, Number.MAX_SAFE_INTEGER)[0];
-  const parsed = text === undefined ? null : parseAnswerNotice(text);
-  return parsed === null ? null : renderCopiedAnswer(parsed);
+      injectionId: copyId(index),
+    }),
+  }));
+  const given = parseAnswers(row.answers_json).filter((entry) => entry.kind === "answer");
+  const messages = followUps.map(({ message, text }, index) => ({
+    seq: message.event_seq,
+    block: formatFollowupNotice({
+      questionId: row.question_id,
+      alias: row.alias,
+      messageId: message.message_id,
+      text,
+      // As the delivery engine tells it: an answer came before it in the thread.
+      answered: given.some((entry) => seqOf(entry) < message.event_seq),
+      injectionId: copyId(opened.length + index),
+    }),
+  }));
+  // Stable, so answers keep their own order among themselves.
+  const blocks = [...answers, ...messages].sort((a, b) => a.seq - b.seq).map((b) => b.block);
+  // Each on its own, so a long thread is never past what one typed chunk could hold.
+  const parsed: DecisionBlock[] = [];
+  for (const block of blocks) {
+    const one = parseDecisionNotice(noticeChunk([block]));
+    if (one === null) return null;
+    parsed.push(...one);
+  }
+  return renderCopiedAnswer(parsed);
 }
 
 /**

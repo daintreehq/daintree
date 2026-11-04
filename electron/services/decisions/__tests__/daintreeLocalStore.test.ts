@@ -31,6 +31,7 @@ import {
   eraseDecisionsData,
   hasDecisionsData,
 } from "../daintreeLocalStore.js";
+import { messages } from "./questionRows.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../persistence/migrations");
@@ -746,6 +747,75 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(false);
   });
 
+  it("says a follow-up waits while one waits to be typed or its receipt to be sent (#16231)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const settled = { status: "terminal-delivered" as const, injection_id: "i1" };
+    await store.commitNewQuestion(
+      row("q1", 1, {
+        delivery_status: "terminal-delivered",
+        messages_json: messages({ delivery: { ...settled, reported: "terminal-delivered:i1:0" } }),
+      }),
+      item("o1", "q1")
+    );
+    await store.commitNewQuestion(
+      row("q2", 2, { delivery_status: "terminal-delivered", history_only: true }),
+      item("o2", "q2")
+    );
+    expect(await store.hasPendingDelivery()).toBe(false);
+
+    // Received and never yet reported to the relay.
+    await store.updateQuestion("q2", { messages_json: messages({ delivery: { reported: null } }) });
+    expect(await store.hasPendingDelivery()).toBe(false);
+    await store.updateQuestion("q1", {
+      messages_json: messages(
+        { delivery: { ...settled, reported: "terminal-delivered:i1:0" } },
+        {
+          message_id: "message-2",
+          event_seq: 11,
+          delivery: { reported: null },
+        }
+      ),
+    });
+    expect(await store.hasPendingDelivery()).toBe(true);
+
+    // Waiting for the pane, its receipt sent.
+    await store.updateQuestion("q1", { messages_json: messages({}) });
+    expect(await store.hasPendingDelivery()).toBe(true);
+
+    // Typed, its receipt still owed.
+    await store.updateQuestion("q1", { messages_json: messages({ delivery: settled }) });
+    expect(await store.hasPendingDelivery()).toBe(true);
+
+    // Held for a person, its receipt still owed: delivery sends it.
+    for (const status of ["needs-attention", "delivery-uncertain"] as const) {
+      await store.updateQuestion("q1", {
+        messages_json: messages({ delivery: { status, error_code: "pane_gone" } }),
+      });
+      expect(await store.hasPendingDelivery()).toBe(true);
+    }
+
+    // Held for a person and reported: nothing for delivery to do until a person acts.
+    await store.updateQuestion("q1", {
+      messages_json: messages({
+        delivery: {
+          status: "needs-attention",
+          error_code: "pane_gone",
+          reported: "needs-attention:pane_gone:0",
+        },
+      }),
+    });
+    expect(await store.hasPendingDelivery()).toBe(false);
+
+    // Withdrawn while waiting, and an agent's own message: neither is typed.
+    await store.updateQuestion("q1", {
+      messages_json: messages(
+        { delivery: { deliver: false } },
+        { message_id: "message-2", side: "agent", delivery: null }
+      ),
+    });
+    expect(await store.hasPendingDelivery()).toBe(false);
+  });
+
   it("finds a waiting answer through its partial indexes, never a table scan", async () => {
     // The statements the store itself prepares, explained as SQLite will run them.
     const prepared: string[] = [];
@@ -756,14 +826,14 @@ describe("DaintreeLocalStore ordering and failures", () => {
     }) as typeof sqlite.prepare);
     await new DaintreeLocalStore(sqlite).hasPendingDelivery();
     const queries = prepared.filter((source) => /^\s*SELECT 1 FROM/.test(source));
-    expect(queries).toHaveLength(2);
+    expect(queries).toHaveLength(3);
 
     for (const query of queries) {
       const plan = (prepare(`EXPLAIN QUERY PLAN ${query}`).all() as { detail: string }[])
         .map((step) => step.detail)
         .join("\n");
       expect(plan).toMatch(
-        /USING (COVERING )?INDEX decisions_(questions_pending_delivery|injection_intents_open)_idx/
+        /USING (COVERING )?INDEX decisions_(questions_pending_delivery|questions_waiting_messages|injection_intents_open)_idx/
       );
       expect(plan).not.toMatch(/^SCAN decisions_(questions|injection_intents)$/m);
     }

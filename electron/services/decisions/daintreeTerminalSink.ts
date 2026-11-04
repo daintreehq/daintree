@@ -21,9 +21,9 @@ import {
   type OwnPane,
 } from "../mcp-server/terminalNotify.js";
 import {
-  answerKey,
+  blockKey,
   decisionWakeId,
-  parseAnswerNotice,
+  parseDecisionNotice,
   renderDecisionSection,
 } from "./answerNotice.js";
 import {
@@ -82,7 +82,8 @@ const IN_FLIGHT: InjectResult = { outcome: "held", reason: "attempt-in-flight" }
 
 /**
  * The Decisions library's `TerminalSink` over Daintree's wake engine
- * (#16015). An answer is typed only into the exact run that asked (host,
+ * (#16015). An answer, or a follow-up the person sent after it (#16231), is
+ * typed only into the exact run that asked (host,
  * pane, launch generation, ownership principal, agent incarnation, agent
  * session, worktree), through the pane's notice line and its gate, and an
  * injection resolves only once the engine knows what became of the line:
@@ -93,7 +94,8 @@ const IN_FLIGHT: InjectResult = { outcome: "held", reason: "attempt-in-flight" }
  */
 export class DaintreeTerminalSink implements TerminalSink {
   private readonly pending = new Map<string, PendingInjection>();
-  private readonly answersInFlight = new Set<string>();
+  /** The answers and follow-ups an attempt is typing, by `blockKey`. */
+  private readonly inFlight = new Set<string>();
 
   constructor(private readonly deps: DaintreeTerminalSinkDeps) {}
 
@@ -115,20 +117,20 @@ export class DaintreeTerminalSink implements TerminalSink {
   }
 
   async inject(target: TerminalTarget, text: string, injectionId: string): Promise<InjectResult> {
-    const blocks = parseAnswerNotice(text);
+    const blocks = parseDecisionNotice(text);
     if (blocks === null || blocks[0].injectionId !== injectionId) {
       return { outcome: "unavailable", reason: "rejected", detail: "invalid-notice" };
     }
     const id = decisionWakeId(blocks);
     const injectionIds = blocks.map((block) => block.injectionId).join(",");
-    const answers = blocks.map(answerKey);
-    const early = this.joinOrRefuse(id, target, injectionIds, answers);
+    const keys = blocks.map(blockKey);
+    const early = this.joinOrRefuse(id, target, injectionIds, keys);
     if (early !== null) return early;
 
     const observed = await this.observe(target);
-    // Another attempt may have queued these answers while the pane was read,
+    // Another attempt may have queued these blocks while the pane was read,
     // and its wake can still type them whatever this read saw.
-    const raced = this.joinOrRefuse(id, target, injectionIds, answers);
+    const raced = this.joinOrRefuse(id, target, injectionIds, keys);
     if (raced !== null) return raced;
     if (observed.state !== "alive") return { outcome: "unavailable", reason: observed.state };
     const projectId = observed.info.projectId;
@@ -144,12 +146,12 @@ export class DaintreeTerminalSink implements TerminalSink {
       if (settled) return;
       settled = true;
       if (this.pending.get(id) === entry) this.pending.delete(id);
-      for (const answer of answers) this.answersInFlight.delete(answer);
+      for (const key of keys) this.inFlight.delete(key);
       settle(outcome);
     };
     // Installed before queueing: the engine can report synchronously.
     this.pending.set(id, entry);
-    for (const answer of answers) this.answersInFlight.add(answer);
+    for (const key of keys) this.inFlight.add(key);
 
     const wake = createDecisionWake(
       this.deps,
@@ -211,12 +213,12 @@ export class DaintreeTerminalSink implements TerminalSink {
     return screen.replace(WRAP_NOISE, "").includes(injectionId);
   }
 
-  /** The joined attempt's result, a refusal for overlapping answers, or null to go ahead. */
+  /** The joined attempt's result, a refusal for overlapping blocks, or null to go ahead. */
   private joinOrRefuse(
     id: string,
     target: TerminalTarget,
     injectionIds: string,
-    answers: readonly string[]
+    keys: readonly string[]
   ): Promise<InjectResult> | InjectResult | null {
     const pending = this.pending.get(id);
     if (pending !== undefined) {
@@ -224,7 +226,7 @@ export class DaintreeTerminalSink implements TerminalSink {
         ? pending.result
         : IN_FLIGHT;
     }
-    return answers.some((answer) => this.answersInFlight.has(answer)) ? IN_FLIGHT : null;
+    return keys.some((key) => this.inFlight.has(key)) ? IN_FLIGHT : null;
   }
 
   private async resultFor(
