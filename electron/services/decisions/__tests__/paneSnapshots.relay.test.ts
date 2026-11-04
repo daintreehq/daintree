@@ -252,9 +252,10 @@ async function harness() {
 
   /** An agent in the pane asks, the relay takes it, and the store's rows reach the snapshots as the service feeds them. */
   const ask = async (): Promise<string> => {
-    const asked = await new QuestionBridge({ source: source!, isCurrent: () => true }).registerQuestion(
-      { origin: ORIGIN, input: { question: "Keep the cache?" } }
-    );
+    const asked = await new QuestionBridge({
+      source: source!,
+      isCurrent: () => true,
+    }).registerQuestion({ origin: ORIGIN, input: { question: "Keep the cache?" } });
     await vi.waitFor(async () =>
       expect((await store.getQuestion(asked.questionId))?.local_status).toBe("open")
     );
@@ -356,7 +357,11 @@ describe("terminal snapshots through the 0.4.0 bridge (#16230)", () => {
     await vi.waitFor(() => expect(h.relay.snapshots).toHaveLength(2));
 
     const exited = await h.opened(1);
-    expect(exited).toMatchObject({ agent_state: "exited", terminal_lines: [], pane_title: "Claude" });
+    expect(exited).toMatchObject({
+      agent_state: "exited",
+      terminal_lines: [],
+      pane_title: "Claude",
+    });
     h.connection.stop();
   });
 

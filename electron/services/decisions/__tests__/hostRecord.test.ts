@@ -110,12 +110,12 @@ describe("a Host's word on terminal snapshots (#16230)", () => {
   it("keeps what its owner said, and reads a record from before them as sharing none", () => {
     const { ownerTerminalSnapshots: _snapshots, ...earlier } = RECORD;
     expect(sanitizeHostRecord(earlier)?.ownerTerminalSnapshots).toBe(false);
-    expect(sanitizeHostRecord({ ...RECORD, ownerTerminalSnapshots: "yes" })?.ownerTerminalSnapshots).toBe(
-      false
-    );
-    expect(sanitizeHostRecord({ ...RECORD, ownerTerminalSnapshots: true })?.ownerTerminalSnapshots).toBe(
-      true
-    );
+    expect(
+      sanitizeHostRecord({ ...RECORD, ownerTerminalSnapshots: "yes" })?.ownerTerminalSnapshots
+    ).toBe(false);
+    expect(
+      sanitizeHostRecord({ ...RECORD, ownerTerminalSnapshots: true })?.ownerTerminalSnapshots
+    ).toBe(true);
   });
 
   it("tells Hosts snapshots are on only while Decisions is on and they were agreed to", () => {

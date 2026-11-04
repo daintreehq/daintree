@@ -184,7 +184,12 @@ describe("snapshotOf", () => {
 
   it("titles the pane as its header does: a user's title, then the agent's task, then the default", () => {
     const user = snapshotOf(
-      { ...base, title: "My run", titleMode: "user", lastObservedTitle: "Fix the auth tests" } as never,
+      {
+        ...base,
+        title: "My run",
+        titleMode: "user",
+        lastObservedTitle: "Fix the auth tests",
+      } as never,
       "",
       0
     );

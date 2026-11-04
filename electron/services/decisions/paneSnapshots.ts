@@ -90,9 +90,7 @@ interface PaneRead {
 }
 
 type Reading =
-  | { kind: "screen"; input: PaneSnapshotInput }
-  | { kind: "exited" }
-  | { kind: "unreadable" };
+  { kind: "screen"; input: PaneSnapshotInput } | { kind: "exited" } | { kind: "unreadable" };
 
 /**
  * Only an open question is shared: one queued here or open on the relay.
@@ -142,7 +140,11 @@ function verdict(
  * and the screen's newest lines. Both texts are redacted whole, before
  * anything cuts them, so no cut leaves part of a secret behind.
  */
-export function snapshotOf(record: PaneRecord, screen: string, observedAt: number): PaneSnapshotInput {
+export function snapshotOf(
+  record: PaneRecord,
+  screen: string,
+  observedAt: number
+): PaneSnapshotInput {
   const title = composeTitledPanel(
     {
       title: record.title ?? agentName(record.detectedAgentId ?? record.launchAgentId) ?? "",
@@ -209,7 +211,12 @@ export async function readAskers(
 }
 
 function keyOf(input: PaneSnapshotInput): string {
-  return JSON.stringify([input.agentState, input.waitingReason ?? null, input.paneTitle, input.terminal]);
+  return JSON.stringify([
+    input.agentState,
+    input.waitingReason ?? null,
+    input.paneTitle,
+    input.terminal,
+  ]);
 }
 
 function codeOf(error: unknown): string {
@@ -575,7 +582,8 @@ export class PaneSnapshots {
   private enqueue(step: () => Promise<void>): void {
     this.steps = this.steps.then(step).catch((error: unknown) => {
       // Never the content: only what kind of refusal it was.
-      if (!this.stopped) console.warn(`[Decisions] A terminal snapshot wasn't sent (${codeOf(error)})`);
+      if (!this.stopped)
+        console.warn(`[Decisions] A terminal snapshot wasn't sent (${codeOf(error)})`);
     });
   }
 }

@@ -1973,7 +1973,8 @@ export function applyOwnerState(input: OwnerStateAnnouncement): Promise<Decision
       record.ownerDeviceId === input.ownerDeviceId
     ) {
       const off = record.ownerOffAt !== null;
-      const ownerOffAt = off !== input.enabled ? record.ownerOffAt : input.enabled ? null : Date.now();
+      const ownerOffAt =
+        off !== input.enabled ? record.ownerOffAt : input.enabled ? null : Date.now();
       if (
         ownerOffAt !== record.ownerOffAt ||
         record.ownerTerminalSnapshots !== input.terminalSnapshots
@@ -1992,7 +1993,9 @@ export function applyOwnerState(input: OwnerStateAnnouncement): Promise<Decision
 }
 
 /** The owner's Shell said its terminal snapshots are off: this Host stops sharing its panes' at once. */
-function stopHostSnapshots(owner: Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">) {
+function stopHostSnapshots(
+  owner: Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">
+) {
   const record = readHostRecord(store);
   if (
     record?.ownerTerminalSnapshots !== true ||

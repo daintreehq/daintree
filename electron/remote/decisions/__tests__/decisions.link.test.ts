@@ -588,7 +588,9 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     const told: unknown[] = [];
     host.registerCallHandler(
       DecisionsLinkMethod.OWNER_STATE,
-      z.object({ installationId: z.string(), ownerDeviceId: z.string(), enabled: z.boolean() }).strict(),
+      z
+        .object({ installationId: z.string(), ownerDeviceId: z.string(), enabled: z.boolean() })
+        .strict(),
       (payload) => {
         told.push(payload);
         return { runtime: RUNNING };
