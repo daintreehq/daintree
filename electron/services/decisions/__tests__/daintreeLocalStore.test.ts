@@ -93,6 +93,7 @@ const row = (id: string, alias: number, over: Partial<QuestionRow> = {}): Questi
   error_code: null,
   content_sealed: '{"sealed":1}',
   answers_json: "[]",
+  messages_json: "[]",
   history_only: false,
   delivered_revision: 0,
   attachment_digests: [],
@@ -114,6 +115,7 @@ const intent = (id: string, qid: string, over: Partial<InjectionIntent> = {}): I
   injection_id: id,
   question_id: qid,
   answer_revision: 1,
+  message_id: null,
   host_id: "host-local",
   pane_id: "pane-1",
   terminal_generation: 1,
@@ -924,5 +926,94 @@ describe("DaintreeLocalStore ordering and failures", () => {
 
     expect(count(sqlite, "decisions_outbox")).toBe(1);
     expect(count(sqlite, "decisions_questions")).toBe(1);
+  });
+});
+
+describe("DaintreeLocalStore thread messages (Decisions 0.4.0)", () => {
+  /** A database migrated only as far as `lastTag`, as an app from before the next migration left it. */
+  function openAt(lastTag: string): Database.Database {
+    const folder = path.join(dir, "migrations");
+    fs.cpSync(migrationsFolder, folder, { recursive: true });
+    const journalPath = path.join(folder, "meta", "_journal.json");
+    const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
+      entries: { tag: string }[];
+    };
+    const last = journal.entries.findIndex((e) => e.tag === lastTag);
+    expect(last).toBeGreaterThan(-1);
+    for (const later of journal.entries.slice(last + 1)) {
+      fs.rmSync(path.join(folder, `${later.tag}.sql`));
+    }
+    journal.entries = journal.entries.slice(0, last + 1);
+    fs.writeFileSync(journalPath, JSON.stringify(journal));
+    const older = path.join(dir, "older.db");
+    return openDb(older, folder).sqlite;
+  }
+
+  /** A row in `table` with every column given a placeholder, then `values` over it. */
+  function insertRaw(db: Database.Database, table: string, values: Record<string, unknown>): void {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+      type: string;
+    }[];
+    const row = Object.fromEntries(
+      columns.map((c) => [c.name, /int/i.test(c.type) ? 0 : "x"] as const)
+    );
+    Object.assign(row, values);
+    const names = Object.keys(row);
+    db.prepare(
+      `INSERT INTO ${table} (${names.join(", ")}) VALUES (${names.map((n) => `@${n}`).join(", ")})`
+    ).run(row);
+  }
+
+  it("keeps a question's messages and a follow-up's intent across a restart", async () => {
+    const messages = JSON.stringify([{ message_id: "m1", side: "human" }]);
+    const first = new DaintreeLocalStore(sqlite);
+    await first.commitNewQuestion(row("q1", 1, { messages_json: messages }), item("o1", "q1"));
+    await first.putIntent(intent("i1", "q1", { answer_revision: 0, message_id: "m1" }));
+    await first.close();
+    sqlite.close();
+
+    sqlite = openDb(dbPath, migrationsFolder).sqlite;
+    const second = new DaintreeLocalStore(sqlite);
+    expect((await second.getQuestion("q1"))?.messages_json).toBe(messages);
+    expect(await second.getIntent("i1")).toMatchObject({ answer_revision: 0, message_id: "m1" });
+  });
+
+  it("holds a question for an answer's uncertain typing, never for a follow-up's", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    await store.putIntent(
+      intent("i1", "q1", { answer_revision: 0, message_id: "m1", state: "uncertain" })
+    );
+    expect(await store.hasUncertainIntent("q1")).toBe(false);
+
+    await store.putIntent(intent("i2", "q1", { state: "uncertain" }));
+    expect(await store.hasUncertainIntent("q1")).toBe(true);
+  });
+
+  it("migrates a store from before threads: no messages, and every intent an answer's", async () => {
+    const older = openAt("0024_decisions_pending_delivery");
+    insertRaw(older, "decisions_questions", {
+      question_id: "q1",
+      alias: 1,
+      answers_json: "[]",
+      attachment_digests: "[]",
+      expires_at: null,
+    });
+    insertRaw(older, "decisions_injection_intents", {
+      injection_id: "i1",
+      question_id: "q1",
+      answer_revision: 1,
+      state: "uncertain",
+    });
+    const olderPath = older.name;
+    older.close();
+
+    const migrated = openDb(olderPath, migrationsFolder).sqlite;
+    extra.push(migrated);
+    const store = new DaintreeLocalStore(migrated);
+    expect((await store.getQuestion("q1"))?.messages_json).toBe("[]");
+    expect(await store.getIntent("i1")).toMatchObject({ answer_revision: 1, message_id: null });
+    expect(await store.hasUncertainIntent("q1")).toBe(true);
   });
 });

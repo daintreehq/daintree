@@ -156,6 +156,7 @@ describe("socketBridgeStore", () => {
       injection_id: "inj-1",
       question_id: "q-1",
       answer_revision: 1,
+      message_id: null,
       host_id: ORIGIN.host_id,
       pane_id: ORIGIN.pane_id,
       terminal_generation: 3,
