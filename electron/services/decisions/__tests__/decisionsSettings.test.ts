@@ -37,6 +37,8 @@ const connected: DecisionsSettings = {
   modelAdapter: "codex",
   modelConsentedAt: 1_761_955_250_000,
   askHumanAgents: ["claude", "acme.agent-2"],
+  terminalSnapshots: true,
+  terminalSnapshotsConsentedAt: 1_761_955_270_000,
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -193,6 +195,54 @@ describe("sanitizeDecisionsSettings", () => {
     // Consent with learning off is kept, so turning learning on later asks nothing again.
     const off = sanitizeDecisionsSettings({ ...connected, modelLearning: false });
     expect([off.modelLearning, off.modelConsentedAt]).toEqual([false, connected.modelConsentedAt]);
+  });
+
+  it("reads a setting saved before terminal snapshots existed as off, whatever else was agreed", () => {
+    const before: Record<string, unknown> = { ...connected };
+    delete before.terminalSnapshots;
+    delete before.terminalSnapshotsConsentedAt;
+    const settings = sanitizeDecisionsSettings(before);
+    expect([settings.terminalSnapshots, settings.terminalSnapshotsConsentedAt]).toEqual([
+      false,
+      null,
+    ]);
+    // Decisions and learning stay as they were agreed to.
+    expect([settings.enabled, settings.consentedAt, settings.modelLearning]).toEqual([
+      true,
+      connected.consentedAt,
+      true,
+    ]);
+    expect(defaultDecisionsSettings().terminalSnapshots).toBe(false);
+  });
+
+  it("keeps terminal snapshots off unless saved as exactly true with their own consent", () => {
+    for (const flag of [false, "true", 1, {}, [true], null, undefined]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, terminalSnapshots: flag }).terminalSnapshots,
+        String(flag)
+      ).toBe(false);
+    }
+    for (const value of [null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1761955270000"]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        terminalSnapshotsConsentedAt: value,
+      });
+      expect(
+        [settings.terminalSnapshots, settings.terminalSnapshotsConsentedAt],
+        String(value)
+      ).toEqual([false, null]);
+      // Decisions' and the model's consent don't stand in for it, and stay as saved.
+      expect([settings.consentedAt, settings.modelConsentedAt]).toEqual([
+        connected.consentedAt,
+        connected.modelConsentedAt,
+      ]);
+    }
+    // Turned off, the time of the last agreement is kept.
+    const off = sanitizeDecisionsSettings({ ...connected, terminalSnapshots: false });
+    expect([off.terminalSnapshots, off.terminalSnapshotsConsentedAt]).toEqual([
+      false,
+      connected.terminalSnapshotsConsentedAt,
+    ]);
   });
 
   it("reads anything that isn't a settings object as off with no relay, without throwing", () => {

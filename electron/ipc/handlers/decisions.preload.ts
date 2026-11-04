@@ -24,6 +24,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   setProxyAllowlisted: "decisions:set-proxy-allowlisted",
   setDefaultQuestionExpiry: "decisions:set-default-question-expiry",
   setAgentAskHuman: "decisions:set-agent-ask-human",
+  setTerminalSnapshots: "decisions:set-terminal-snapshots",
   exportRecoveryKit: "decisions:export-recovery-kit",
   verifyRecoveryKit: "decisions:verify-recovery-kit",
   revokeDevice: "decisions:revoke-device",

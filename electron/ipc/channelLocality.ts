@@ -260,6 +260,7 @@ export const CHANNEL_LOCALITY = {
   "decisions:set-model": "shell",
   "decisions:set-model-threshold": "shell",
   "decisions:set-proxy-allowlisted": "shell",
+  "decisions:set-terminal-snapshots": "shell",
   "decisions:start-model-evaluation": "shell",
   "decisions:start-pairing": "shell",
   "decisions:start-relay-removal": "shell",

@@ -42,6 +42,7 @@ import {
   type DecisionsRotateKeysResult,
   type DecisionsSettings,
   type SetDecisionsAgentAskHumanPayload,
+  type SetDecisionsTerminalSnapshotsPayload,
   type CancelDecisionsSetupCheckPayload,
   type DecisionsSetupCheckRun,
   type DecisionsSetupCheckStartResult,
@@ -538,6 +539,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...observed,
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
+    ...(settings.terminalSnapshots ? { terminalSnapshots: true } : {}),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     ...(checked !== null
@@ -1154,6 +1156,58 @@ export function setAutoEnrollHosts(enabled: boolean): Promise<DecisionsHostsResu
     publishStatus();
     return hostEnroller.list();
   });
+}
+
+/**
+ * Turns terminal snapshots on or off (#16228). Each turn on needs the
+ * person's agreement given just then, and records when; only while on.
+ * Off is saved to the store before the queue, since a claim or a start ahead
+ * of it can take many seconds and snapshots stop the moment they're turned
+ * off. The service hears of it in turn: updating it out of turn would resume
+ * a connection a disconnect in the queue had suspended.
+ */
+export function setDecisionsTerminalSnapshots(
+  payload: SetDecisionsTerminalSnapshotsPayload
+): Promise<DecisionsStatus> {
+  if (!payload.enabled) {
+    const current = readDecisionsSettings(store);
+    if (current.terminalSnapshots) {
+      writeDecisionsSettings(store, { ...current, terminalSnapshots: false });
+    }
+  }
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (payload.enabled) {
+      if (shutDown || !current.enabled) throw setupRefused();
+      if (payload.consent !== true) {
+        throw new AppError({
+          code: "PERMISSION",
+          message: "Terminal snapshots turn on only after you agree to what they send",
+        });
+      }
+    }
+    const saved = writeDecisionsSettings(store, {
+      ...current,
+      terminalSnapshots: payload.enabled,
+      terminalSnapshotsConsentedAt: payload.enabled
+        ? Date.now()
+        : current.terminalSnapshotsConsentedAt,
+    });
+    service?.updateSettings(saved);
+    publishStatus();
+    return getDecisionsStatus();
+  });
+}
+
+/**
+ * Whether a terminal snapshot may be captured or published now (#16228):
+ * Decisions on in this run, and snapshots on with the person's agreement.
+ * Read from the store each time, so it answers false as soon as either is
+ * turned off, whatever the queue still holds.
+ */
+export function terminalSnapshotsAllowed(): boolean {
+  const settings = readDecisionsSettings(store);
+  return !shutDown && settings.enabled && settings.terminalSnapshots;
 }
 
 /** Makes a one-time invitation for a phone to pair (#16009). */
