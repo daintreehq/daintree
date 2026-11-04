@@ -1268,6 +1268,41 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
     expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
   });
 
+  it("drops the menu once the lanes would fit without it", () => {
+    const { container, rerender } = render(strip({ tabs: SIX.slice(0, 4) }));
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 250 });
+    Object.defineProperty(list, "scrollWidth", { configurable: true, value: 360 });
+    relayout();
+    const trigger = screen.getByTestId("assistant-sessions-overflow");
+    Object.defineProperty(trigger, "offsetWidth", { configurable: true, value: 24 });
+
+    // Back to three, which overflow the 250px the trigger leaves but fit its 274px.
+    rerender(strip({ tabs: SIX.slice(0, 3) }));
+    Object.defineProperty(list, "scrollWidth", { configurable: true, value: 270 });
+    relayout();
+
+    expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+  });
+
+  it("brings the selected lane back into view when the menu picks it", async () => {
+    const onSelect = vi.fn();
+    const { container } = render(strip({ onSelect }));
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    const scrollTo = layOut(container);
+    relayout();
+    // The keyboard scrolled the selected first lane away without selecting another.
+    list.scrollLeft = 340;
+    scrollTo.mockClear();
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "All sessions" }), { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getAllByRole("menuitemradio")[0]!);
+
+    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ left: 0 }));
+  });
+
   it("counts a lane only partly past the edge as overflow", () => {
     const { container } = render(strip({ tabs: SIX.slice(0, 3) }));
     const list = container.querySelector<HTMLElement>('[role="tablist"]')!;

@@ -462,6 +462,7 @@ function AllSessionsMenu({
               className="ml-1 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
               aria-label="All sessions"
               data-testid="assistant-sessions-overflow"
+              data-sessions-overflow=""
             >
               <ChevronDown aria-hidden="true" />
             </Button>
@@ -589,7 +590,17 @@ export function HelpSessionTabs({
   const [isOverflowing, setIsOverflowing] = useState(false);
   useEffect(() => {
     if (!listEl || !slotsKey) return;
-    const measure = () => setIsOverflowing(listEl.scrollWidth > listEl.clientWidth + 1);
+    // The trigger's own room counts as the strip's: it is there only while the strip
+    // overflows, so measured without it three lanes that fit once it goes would keep it.
+    const measure = () => {
+      const trigger = listEl.parentElement?.querySelector<HTMLElement>("[data-sessions-overflow]");
+      const reclaimed = trigger
+        ? trigger.offsetWidth +
+          (parseFloat(getComputedStyle(trigger).marginLeft) || 0) +
+          (parseFloat(getComputedStyle(trigger.parentElement ?? trigger).columnGap) || 0)
+        : 0;
+      setIsOverflowing(listEl.scrollWidth > listEl.clientWidth + reclaimed + 1);
+    };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
@@ -631,6 +642,19 @@ export function HelpSessionTabs({
       revealSlot(slot);
     },
     [disarmKeyboardClose, revealSlot]
+  );
+
+  /**
+   * A lane picked from the menu is brought into view here as well as through the
+   * selection: picking the lane already selected changes no selection, and it is
+   * just as likely the one the strip has scrolled away.
+   */
+  const handleMenuPick = useCallback(
+    (slot: number) => {
+      onSelect(slot);
+      revealSlot(slot);
+    },
+    [onSelect, revealSlot]
   );
 
   /** A pointer close leaves focus where it was; an armed keyboard close must not fire on it. */
@@ -781,7 +805,7 @@ export function HelpSessionTabs({
           tabs={tabs}
           activeSlot={activeSlot}
           showAgent={showAgent}
-          onSelect={onSelect}
+          onSelect={handleMenuPick}
         />
       )}
     </div>

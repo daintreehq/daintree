@@ -195,8 +195,8 @@ export const AgentDirectorySchema = z.object({
   /** Every source answered. False when a pty shard did not, so entries may be missing. */
   complete: z.boolean(),
   /**
-   * Entries left out for the cap on entries, after the project filter, and
-   * those in lanes the reading Shell's build can't name.
+   * Entries left out, after the project filter: for the cap on entries, for
+   * the byte budget, and for lanes the reading Shell's build can't name.
    */
   omitted: z.number().int().nonnegative(),
   entries: z.array(AgentDirectoryEntrySchema),

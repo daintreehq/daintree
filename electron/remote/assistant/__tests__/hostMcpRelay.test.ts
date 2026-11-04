@@ -1445,7 +1445,7 @@ describe("a Shell listing this host's agents (#14455)", () => {
     const wide = {
       ...DIRECTORY,
       omitted: 1,
-      entries: [DIRECTORY.entries[0]!, assistant(2), assistant(4), kept],
+      entries: [DIRECTORY.entries[0]!, assistant(2), assistant(3), kept],
     };
     const { links, relay } = harness([["link-1", "sender-a"]], { readAgents: async () => wide });
 
