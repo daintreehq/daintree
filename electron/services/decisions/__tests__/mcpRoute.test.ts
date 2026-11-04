@@ -380,7 +380,16 @@ describe("/mcp/decisions (#16011)", () => {
     }
     const getDecision = byName("get_decision", tools)!;
     expect(JSON.stringify(getDecision)).not.toMatch(/"thread"|follow-?up/i);
-    expect(getDecision.inputSchema).toEqual(byName("get_decision", library)!.inputSchema);
+    // Everything else of the library's get_decision is served as it is.
+    const { description: _description, ...served } = getDecision;
+    const { description: _libraryDescription, ...fromLibrary } = byName("get_decision", library)!;
+    const { thread: _thread, ...properties } = (
+      fromLibrary.outputSchema as { properties: Record<string, unknown> }
+    ).properties;
+    expect(served).toEqual({
+      ...fromLibrary,
+      outputSchema: { ...(fromLibrary.outputSchema as object), properties },
+    });
 
     const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Which name?" });
     const alias = (await store.listQuestions())[0].alias;
@@ -440,18 +449,32 @@ describe("/mcp/decisions (#16011)", () => {
           method: "tools/call",
           params: { name: "get_decision", arguments: { question_id: questionId } },
         },
+        { jsonrpc: "2.0", id: "h", method: "tools/list", params: {} },
       ]),
     });
-    const [note, read] = JSON.parse(batch.body) as Array<Record<string, unknown>>;
+    const [note, read, listed] = JSON.parse(batch.body) as Array<{
+      id: string;
+      result: Record<string, unknown> & {
+        content?: Array<{ text: string }>;
+        structuredContent?: Record<string, unknown>;
+        tools?: Array<{ name: string }>;
+      };
+    }>;
     expect(note).toMatchObject({
       id: "f",
       result: { structuredContent: { status: "queued", expects_reply: false } },
     });
-    // A follow-up never answers or moves the question.
+    expect(note!.result.content![0]!.text).toBe(followupInstruction(alias, false));
+    expect(note!.result.structuredContent!.instruction).toBe(note!.result.content![0]!.text);
+    // A follow-up never answers or moves the question, and a batch shows no thread either.
     expect(read).toMatchObject({
       id: "g",
       result: { structuredContent: { status: "queued", provenance: null, choice: null } },
     });
+    expect(read!.result.structuredContent).not.toHaveProperty("thread");
+    expect(listed!.id).toBe("h");
+    expect(listed!.result.tools!.map((tool) => tool.name)).toContain("send_followup");
+    expect(JSON.stringify(listed!.result.tools)).not.toContain('"thread"');
 
     expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual([
       "create",

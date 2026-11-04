@@ -15,6 +15,7 @@ import {
   generateDeviceKeys,
   generateEpochKeyBytes,
   serializeDeviceKeys,
+  verifyRecordAndEnvelope,
 } from "@daintreehq/decisions-crypto";
 import { bytesToBase64Url } from "@daintreehq/decisions-protocol";
 
@@ -187,8 +188,15 @@ describe("QuestionBridge", () => {
     const outbox = await store.outboxFor(asked.questionId);
     expect(outbox.map((item) => item.kind)).toEqual(["create", "message"]);
     const { signed } = outbox[1]!.payload as {
-      signed: { record: Record<string, unknown>; envelope: unknown };
+      signed: { record: Record<string, unknown>; envelope: Record<string, unknown> };
     };
+    expect(
+      await verifyRecordAndEnvelope(
+        signed.record,
+        signed.envelope as never,
+        identity!.keys.signing.publicKey
+      )
+    ).toBe(true);
     expect(signed.record).toMatchObject({
       question_id: asked.questionId,
       message_id: posted.messageId,
@@ -286,6 +294,43 @@ describe("QuestionBridge", () => {
     await expect(offline).resolves.toMatchObject({ questionId: asked.questionId });
     await expect(online).resolves.toMatchObject({ messageId: "m_live" });
     expect(order).toEqual(["offline", "live"]);
+  });
+
+  it("picks a post's bridge, and checks its pane, once the asker has been read", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Learned?" } });
+    // A session learned since the question was asked: the asker is read from the store first.
+    const learned = { ...paneIdentityOf(ORIGIN), agent_session_id: "session-9" };
+    const followUp = { question_id: asked.questionId, text: "Now?", expects_reply: false };
+    const getQuestion = store.getQuestion.bind(store);
+    const holdRead = () => {
+      let release!: () => void;
+      vi.spyOn(store, "getQuestion").mockImplementationOnce(async (id) => {
+        await new Promise<void>((resolve) => (release = resolve));
+        return getQuestion(id);
+      });
+      return () => release();
+    };
+
+    // An attempt goes live while the asker is read: the post goes to it, as the question's asker.
+    let release = holdRead();
+    const toLive = b.postMessage(followUp, learned);
+    await vi.waitFor(() => expect(store.getQuestion).toHaveBeenCalled());
+    live = liveBridge();
+    release();
+    await expect(toLive).resolves.toMatchObject({ messageId: "m_live" });
+    expect(live.postMessage).toHaveBeenCalledWith(followUp, paneIdentityOf(ORIGIN));
+
+    // The pane stops being the run it was while the asker is read: nothing is posted or committed.
+    vi.mocked(store.getQuestion).mockClear();
+    live = null;
+    release = holdRead();
+    const revoked = b.postMessage(followUp, learned);
+    await vi.waitFor(() => expect(store.getQuestion).toHaveBeenCalled());
+    current = false;
+    release();
+    await expect(revoked).rejects.toMatchObject({ code: "forbidden" });
+    expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual(["create"]);
   });
 
   it("runs posts one at a time, checking each pane when its turn comes", async () => {

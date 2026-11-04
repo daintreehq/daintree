@@ -23,6 +23,7 @@ import {
   generateDeviceKeys,
   issueDeviceCert,
   newId,
+  verifyRecordAndEnvelope,
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import { EventData, MESSAGE_RECORD_TYPE, type DeviceCert } from "@daintreehq/decisions-protocol";
@@ -847,6 +848,14 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     /** What the phone reads of a message the relay took: its record, and its words opened with the owner's keys. */
     const posted = async (index: number) => {
       const message = relay.messages[index]!;
+      // Signed with the Host's own key, as the phone checks before it shows a message.
+      expect(
+        await verifyRecordAndEnvelope(
+          message.record,
+          message.envelope as never,
+          host.keys.signing.publicKey
+        )
+      ).toBe(true);
       const content = (await decryptEnvelope(message.envelope as never, owner.identity.epochs, {
         questionId: message.questionId,
         recordType: MESSAGE_RECORD_TYPE,
@@ -912,8 +921,23 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     );
     expect(created).toBeGreaterThanOrEqual(0);
     expect(laterPosted).toBeGreaterThan(created);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(relay.messages).toHaveLength(3);
+    // Each was sent once: none is left to send again.
+    await vi.waitFor(
+      async () =>
+        expect(
+          [...(await store.outboxFor(asked)), ...(await store.outboxFor(later))].filter(
+            (item) => item.kind === "message"
+          )
+        ).toEqual([]),
+      { timeout: 15_000 }
+    );
+    expect(new Set(relay.messages.map((message) => message.record.message_id))).toEqual(
+      new Set([
+        live.structuredContent.message_id,
+        away.structuredContent.message_id,
+        laterFollowUp.structuredContent.message_id,
+      ])
+    );
 
     // A follow-up is never typed anywhere, and never moves its question.
     expect(terminals.submitted).toEqual([]);
