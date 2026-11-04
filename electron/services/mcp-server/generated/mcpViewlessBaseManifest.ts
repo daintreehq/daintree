@@ -803,7 +803,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "A vacant slot. Omit for the lowest vacant one.",
           type: "integer",
           minimum: 0,
-          maximum: 2,
+          maximum: 5,
         },
         agentId: {
           description: "claude, codex or copilot. Omit for this machine's default.",

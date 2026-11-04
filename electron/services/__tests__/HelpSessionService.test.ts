@@ -8,7 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { McpRuntimeSnapshot } from "../../../shared/types/ipc/mcpServer.js";
-import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
+import {
+  MAX_ASSISTANT_SLOTS,
+  assistantSlotKey as slotKey,
+} from "../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import {
   setHostControlRuntime,
@@ -3460,6 +3463,25 @@ describe("HelpSessionService", () => {
       await expect(service.provisionSession({ ...provisionInput(), slot: -1 })).rejects.toThrow(
         /slot/
       );
+      await expect(
+        service.provisionSession({ ...provisionInput(), slot: MAX_ASSISTANT_SLOTS })
+      ).rejects.toThrow(/slot/);
+    });
+
+    it("runs the highest lane a project allows beside the default one (#16218)", async () => {
+      const top = MAX_ASSISTANT_SLOTS - 1;
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneTop = await service.provisionSession({ ...provisionInput(), slot: top });
+      if (!laneZero || !laneTop) throw new Error("expected both provisions");
+      service.markTerminalForToken(laneZero.token, "term-slot-0");
+      service.markTerminalForToken(laneTop.token, "term-slot-top");
+
+      expect(service.getAssistantBackends("proj-1")).toEqual([
+        { terminalId: "term-slot-0", webContentsId: 42, slot: 0 },
+        { terminalId: "term-slot-top", webContentsId: 42, slot: top },
+      ]);
+      expect(service.validateToken(laneZero.token)).toBe("core");
+      expect(service.validateToken(laneTop.token)).toBe("core");
     });
 
     it("reports every live lane so a dead one can't mask a live sibling", async () => {

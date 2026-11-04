@@ -169,7 +169,7 @@ describe("AssistantTerminalControl (#13496)", () => {
           startedByYou: true,
         },
       ]);
-      // Every slot this project has holds an assistant.
+      // The slots past the three that hold an assistant.
       expect(listed.vacantSlots).toEqual(
         Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter((slot) => slot > 2)
       );

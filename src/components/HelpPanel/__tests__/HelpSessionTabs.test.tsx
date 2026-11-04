@@ -11,6 +11,7 @@ import {
   type RenderOptions,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -19,6 +20,11 @@ import {
   helpSessionTabId,
   type HelpSessionTab,
 } from "../HelpSessionTabs";
+
+// Which lanes the strip reads as clipped. jsdom lays nothing out, so the observer the
+// real hook builds would never report one.
+const overflow = vi.hoisted(() => ({ hidden: new Set<string>() as ReadonlySet<string> }));
+vi.mock("@/hooks/useTabOverflow", () => ({ useTabOverflow: () => overflow.hidden }));
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: InstantTooltips, ...options });
@@ -474,9 +480,9 @@ describe("HelpSessionTabs", () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
-  it("draws a close only on the selected lane once the strip is full", () => {
+  it("draws a close only on the selected lane once three lanes crowd the strip", () => {
     // A background lane's close is invisible until hover but still holds its width, and
-    // at the ceiling that room clipped every label. Delete still closes any lane.
+    // at three lanes that room clipped every label. Delete still closes any lane.
     const onClose = vi.fn();
     const { container } = renderStrip({
       tabs: [
@@ -497,7 +503,7 @@ describe("HelpSessionTabs", () => {
     expect(onClose).toHaveBeenCalledWith(2);
   });
 
-  it("keeps a hover close on every lane below the ceiling", () => {
+  it("keeps a hover close on every lane below three", () => {
     const { container } = renderStrip();
     expect(closers(container)).toHaveLength(TABS.length);
   });
@@ -1105,5 +1111,114 @@ describe("HelpSessionTabs — lanes on different agents", () => {
     fireEvent.contextMenu(lane(0));
     menu = await screen.findByRole("menu");
     expect(within(menu).queryByRole("menuitem", { name: /New session with/ })).toBeNull();
+  });
+});
+
+describe("HelpSessionTabs past three lanes (#16218)", () => {
+  const SIX: HelpSessionTab[] = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => ({
+    slot,
+    label: `Session ${slot + 1}`,
+    agentState: slot === 4 ? ("working" as const) : undefined,
+  }));
+
+  afterEach(() => {
+    overflow.hidden = new Set();
+  });
+
+  const strip = (props: Partial<Parameters<typeof HelpSessionTabs>[0]> = {}) => (
+    <HelpSessionTabs
+      tabs={SIX}
+      activeSlot={0}
+      onSelect={vi.fn()}
+      onClose={vi.fn()}
+      idBase="six"
+      panelId="six-body"
+      {...props}
+    />
+  );
+
+  /** Lay the strip out as a 200px window over a row of 90px tabs, scrolled to its start. */
+  function layOut(container: HTMLElement) {
+    const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    Object.defineProperty(list, "clientWidth", { configurable: true, value: 200 });
+    list.scrollLeft = 0;
+    list.getBoundingClientRect = () => ({ left: 0 }) as DOMRect;
+    const scrollTo = vi.fn();
+    list.scrollTo = scrollTo as unknown as typeof list.scrollTo;
+    for (const tab of tabs(container)) {
+      const slot = Number(tab.getAttribute("data-slot"));
+      Object.defineProperty(tab, "offsetWidth", { configurable: true, value: 90 });
+      tab.getBoundingClientRect = () => ({ left: slot * 90 }) as DOMRect;
+    }
+    return scrollTo;
+  }
+
+  it("holds a lane in every slot the project allows", () => {
+    const { container } = render(strip());
+    expect(tabs(container).map((t) => t.getAttribute("data-slot"))).toEqual(
+      SIX.map((t) => String(t.slot))
+    );
+    // Crowded, as at three: the selected lane alone draws a close.
+    expect(closers(container)).toHaveLength(1);
+  });
+
+  it("scrolls a lane selected past the edge into view", () => {
+    const { container, rerender } = render(strip());
+    const scrollTo = layOut(container);
+
+    rerender(strip({ activeSlot: 5 }));
+
+    // Its right edge at the strip's: 6 × 90 − 200.
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ left: 340 }));
+  });
+
+  it("leaves the strip where it is when a lane only changes state", () => {
+    const { container, rerender } = render(strip({ activeSlot: 5 }));
+    const scrollTo = layOut(container);
+
+    rerender(
+      strip({
+        activeSlot: 5,
+        tabs: SIX.map((t) => (t.slot === 1 ? { ...t, agentState: "working" as const } : t)),
+      })
+    );
+
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("scrolls the lane an arrow key reaches into view without selecting it", () => {
+    const onSelect = vi.fn();
+    const { container } = render(strip({ onSelect }));
+    const scrollTo = layOut(container);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    tabs(container)[0]!.focus();
+    // Wraps from the first lane to the last.
+    fireEvent.keyDown(list, { key: "ArrowLeft" });
+
+    expect(document.activeElement?.getAttribute("data-slot")).toBe("5");
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ left: 340 }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers every lane in a menu only while the strip clips one", async () => {
+    const onSelect = vi.fn();
+    const { rerender } = render(strip({ onSelect }));
+    expect(screen.queryByTestId("assistant-sessions-overflow")).toBeNull();
+
+    overflow.hidden = new Set(["5"]);
+    rerender(strip({ onSelect }));
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "All sessions" }), { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    const items = within(menu).getAllByRole("menuitemradio");
+    // Every lane, not only the clipped one, with the selected one checked.
+    expect(items).toHaveLength(MAX_ASSISTANT_SLOTS);
+    expect(items[0]!.getAttribute("aria-checked")).toBe("true");
+    // A lane at work says so where its spinner can't be seen.
+    expect(items[4]!.textContent).toContain("working");
+
+    fireEvent.click(items[5]!);
+    expect(onSelect).toHaveBeenCalledWith(5);
   });
 });

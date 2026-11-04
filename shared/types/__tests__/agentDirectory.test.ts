@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { ASSISTANT_SLOTS, MAX_ASSISTANT_SLOTS } from "../../config/assistantSlots.js";
 import {
   AgentDirectoryLiveEntrySchema,
+  AgentDirectoryResumableEntrySchema,
+  AgentDirectorySubjectSchema,
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_LABEL_MAX,
   cutAgentLabel,
@@ -119,5 +122,38 @@ describe("AgentDirectoryLiveEntrySchema handback (#16190)", () => {
       observedAt: 5,
       report: "done",
     });
+  });
+});
+
+describe("assistant lanes (#16218)", () => {
+  const subject = (lane: unknown) => ({
+    hostId: "local",
+    scope: { kind: "project", projectId: "p" },
+    terminalId: "t",
+    incarnation: 1,
+    lane,
+  });
+  const resumable = (lane: unknown) => ({
+    state: "resumable",
+    role: "assistant",
+    hostId: "local",
+    scope: { kind: "project", projectId: "p" },
+    lane,
+    agentId: "claude",
+    capturedAt: 1,
+  });
+
+  it("names every lane a project can hold, live or waiting to resume", () => {
+    for (const lane of ASSISTANT_SLOTS) {
+      expect(AgentDirectorySubjectSchema.safeParse(subject(lane)).success).toBe(true);
+      expect(AgentDirectoryResumableEntrySchema.safeParse(resumable(lane)).success).toBe(true);
+    }
+  });
+
+  it("refuses a lane past the ceiling, below zero or between slots", () => {
+    for (const lane of [MAX_ASSISTANT_SLOTS, -1, 1.5, "1", null]) {
+      expect(AgentDirectorySubjectSchema.safeParse(subject(lane)).success).toBe(false);
+      expect(AgentDirectoryResumableEntrySchema.safeParse(resumable(lane)).success).toBe(false);
+    }
   });
 });

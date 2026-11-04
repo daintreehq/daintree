@@ -337,8 +337,8 @@ interface HelpSessionRecord {
   /**
    * Claude sessions only: the per-lane `--mcp-config` file holding this lane's
    * literal bearer. Lives inside the shared session directory under
-   * `ASSISTANT_LANE_CONFIG_DIR`, is removed on revoke, and is what lets three
-   * lanes share one cwd without sharing one `.mcp.json`.
+   * `ASSISTANT_LANE_CONFIG_DIR`, is removed on revoke, and is what lets a
+   * project's lanes share one cwd without sharing one `.mcp.json`.
    */
   laneMcpConfigPath?: string;
   /** Computed at provision for claude sessions; consumed by lifecycle.ts. */
