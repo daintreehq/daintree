@@ -91,6 +91,18 @@ export interface DecisionsSettings {
    * learning reads as off without it.
    */
   modelConsentedAt: number | null;
+  /**
+   * The agents whose launches get `ask_human` (#16223), by agent id. An agent
+   * not listed launches without the `daintree-decisions` server, so each one
+   * gets it only once the person switches it on; empty until then.
+   */
+  askHumanAgents: string[];
+}
+
+/** Switches one agent's `ask_human` on or off for its launches from now on (#16223). */
+export interface SetDecisionsAgentAskHumanPayload {
+  agentId: string;
+  enabled: boolean;
 }
 
 /** The agent CLIs the decision model can run (#16026), each one only when the person chooses it. */
@@ -354,6 +366,8 @@ export interface DecisionsPolicy {
    * for no policy limit.
    */
   maxQuestionExpiryMs: number | null;
+  /** The agents whose launches get `ask_human` (#16223), as saved; none until the person switches one on. */
+  askHumanAgents: string[];
   /**
    * Increases with each change main saves, so a read that lands after a
    * newer change can't roll it back.

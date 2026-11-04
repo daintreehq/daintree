@@ -48,6 +48,7 @@ import type {
   PaneDecisionState,
   PreparedDecisionsRelayDeploy,
   RestoreDecisionsIdentityPayload,
+  SetDecisionsAgentAskHumanPayload,
   SetDecisionsEnabledPayload,
   StartDecisionsRelayRemovalPayload,
   VerifyDecisionsRecoveryKitPayload,
@@ -236,6 +237,11 @@ const verifyRecoveryKitSchema = z
 // A host id as the host list keeps it.
 const enrollHostSchema = z
   .object({ hostId: z.string().min(1).max(256), allowWeakStorage: z.boolean().optional() })
+  .strict();
+
+// Only the shape here; main refuses any id no agent could have.
+const agentAskHumanSchema = z
+  .object({ agentId: z.string().min(1).max(256), enabled: z.boolean() })
   .strict();
 
 // A run id main minted (a UUID); a cancel names the run it means to end.
@@ -554,6 +560,18 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setDecisionsDefaultQuestionExpiry(ms);
+      }
+    ),
+    // Which agents' launches get ask_human (#16223), one agent at a time, so
+    // two windows switching different agents never undo each other.
+    setAgentAskHuman: opValidated(
+      CHANNELS.DECISIONS_SET_AGENT_ASK_HUMAN,
+      agentAskHumanSchema,
+      async (payload: SetDecisionsAgentAskHumanPayload): Promise<DecisionsPolicy> => {
+        refuseWhileOff("change which agents can ask you");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsAgentAskHuman(payload);
       }
     ),
     // Saving and verifying a recovery kit (#16007). The save dialog belongs to

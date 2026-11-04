@@ -228,6 +228,7 @@ export const SETTING_CATALOG = {
           modelLearning: device,
           modelAdapter: device,
           modelConsentedAt: device,
+          askHumanAgents: device,
         },
       },
       // An enrolled Host's own record of its enrollment, kept on the Host itself.

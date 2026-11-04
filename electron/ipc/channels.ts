@@ -1568,6 +1568,7 @@ export const CHANNELS = {
   DECISIONS_GET_POLICY: "decisions:get-policy",
   DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
   DECISIONS_SET_DEFAULT_QUESTION_EXPIRY: "decisions:set-default-question-expiry",
+  DECISIONS_SET_AGENT_ASK_HUMAN: "decisions:set-agent-ask-human",
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
   DECISIONS_EXPORT_RECOVERY_KIT: "decisions:export-recovery-kit",
   DECISIONS_VERIFY_RECOVERY_KIT: "decisions:verify-recovery-kit",

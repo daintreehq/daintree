@@ -35,7 +35,7 @@ import {
   ListBookmarksPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
-import { decisionsServesPanes, loadDecisionsModule } from "../../../window/serviceRefs.js";
+import { decisionsHostServes, loadDecisionsModule } from "../../../window/serviceRefs.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
@@ -184,13 +184,42 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
 }
 
 /**
+ * A launch of `agentId` gets `ask_human` (#16223). Under the owner's own
+ * switch, only an agent the owner switched on in Settings does, whatever an
+ * old Host record says. An enrolled Host serves its panes as its enrollment
+ * says: the owner's choice of agents never reaches it, and it has no Settings
+ * of its own to choose in. Read from the saved value as it stands, like the
+ * switch itself: every write of it goes through main's sanitiser, and nothing
+ * of Decisions joins the startup graph to read it.
+ */
+function decisionsServesAgent(
+  settings: unknown,
+  hostRecord: unknown,
+  agentId: string | undefined
+): boolean {
+  const owner = (typeof settings === "object" && settings !== null ? settings : {}) as {
+    enabled?: unknown;
+    askHumanAgents?: unknown;
+  };
+  if (owner.enabled !== true) return decisionsHostServes(hostRecord);
+  return (
+    agentId !== undefined &&
+    Array.isArray(owner.askHumanAgents) &&
+    owner.askHumanAgents.includes(agentId)
+  );
+}
+
+/**
  * The listener port for a launch's `daintree-decisions` entry (#16012), or
  * null for none. The setting, and on an enrolled Remote Host its record
  * (#16022), are read before anything of Decisions is imported, so with
- * Decisions off this loads nothing and the launch is exactly what it was.
+ * Decisions off, or for an agent not switched on, this loads nothing and the
+ * launch is exactly what it was.
  */
-async function resolveDecisionsLaunchPort(): Promise<number | null> {
-  if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) return null;
+async function resolveDecisionsLaunchPort(agentId: string | undefined): Promise<number | null> {
+  if (!decisionsServesAgent(store.get("decisions"), store.get("decisionsHost"), agentId)) {
+    return null;
+  }
   try {
     const decisions = await loadDecisionsModule(
       () => import("../../../services/decisions/index.js")
@@ -1092,10 +1121,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             requiredPluginTools
           );
         }
-        // With Decisions on, every agent launch gets `/mcp/decisions` with a
-        // bearer of its own, whatever the tier (#16012). The Assistant asks
-        // through its own tools, never as an agent pane.
-        const decisionsPort = isHelpTerminal ? null : await resolveDecisionsLaunchPort();
+        // With Decisions on, a launch of an agent switched on for it gets
+        // `/mcp/decisions` with a bearer of its own, whatever the tier
+        // (#16012, #16223). The Assistant asks through its own tools, never
+        // as an agent pane.
+        const decisionsPort = isHelpTerminal
+          ? null
+          : await resolveDecisionsLaunchPort(launchAgentId);
         let mcpServerService: McpServerSingleton | null = null;
         let controlPort: number | null = null;
         if (tier !== "off" || pluginServers.length > 0) {

@@ -36,6 +36,7 @@ const connected: DecisionsSettings = {
   modelLearning: true,
   modelAdapter: "codex",
   modelConsentedAt: 1_761_955_250_000,
+  askHumanAgents: ["claude", "acme.agent-2"],
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -80,6 +81,33 @@ describe("sanitizeDecisionsSettings", () => {
     const { store, current } = memoryStore({ ...connected, autoEnrollHosts: false });
     writeDecisionsSettings(store, readDecisionsSettings(store));
     expect(current()).toEqual({ ...connected, autoEnrollHosts: false });
+  });
+
+  it("switches no agent on for ask_human until one is saved, and keeps only agent ids, once each", () => {
+    // A setting saved before the field existed has none, and needs no migration.
+    const { askHumanAgents: _absent, ...beforeTheField } = connected;
+    expect(sanitizeDecisionsSettings(beforeTheField).askHumanAgents).toEqual([]);
+    expect(defaultDecisionsSettings().askHumanAgents).toEqual([]);
+    for (const value of [null, "claude", { claude: true }, 1, true]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, askHumanAgents: value }).askHumanAgents,
+        String(value)
+      ).toEqual([]);
+    }
+    expect(
+      sanitizeDecisionsSettings({
+        ...connected,
+        askHumanAgents: ["codex", "claude", "codex", "", "a b", "../x", 7, null, "x".repeat(129)],
+      }).askHumanAgents
+    ).toEqual(["codex", "claude"]);
+    const many = Array.from({ length: 300 }, (_, i) => `agent-${i}`);
+    expect(
+      sanitizeDecisionsSettings({ ...connected, askHumanAgents: many }).askHumanAgents
+    ).toEqual(many.slice(0, 256));
+    // The choice survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore(connected);
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual(connected);
   });
 
   it("keeps the decision model off with no CLI unless the saved values are exactly a choice", () => {

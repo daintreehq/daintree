@@ -471,6 +471,7 @@ import {
   setDecisionsModelThreshold,
   setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
+  setDecisionsAgentAskHuman,
   startDecisionsModelEvaluation,
   startRelayRemoval,
   startDecisionsIfEnabled,
@@ -1090,8 +1091,158 @@ describe("Decisions entry", () => {
       saved.value = { enabled: false };
       await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+      ).rejects.toMatchObject(CANCELLED);
       expect(store.set).not.toHaveBeenCalled();
       expect(peekDecisionsService()).toBeNull();
+    });
+
+    describe("agents switched on for ask_human (#16223)", () => {
+      it("reads none switched on until the person switches one on", () => {
+        saved.value = { enabled: true };
+        expect(getDecisionsPolicy().askHumanAgents).toEqual([]);
+      });
+
+      it("switches one agent at a time over the setting as saved, keeping every other field", async () => {
+        saved.value = { enabled: true, ...RELAY, consentedAt: 5, askHumanAgents: ["codex"] };
+        await startDecisionsIfEnabled();
+        const before = getDecisionsPolicy().revision;
+        // Launches read the choice from the store; updating the running
+        // lifetime would resume a connection a disconnect had suspended.
+        const updateSettings = vi.spyOn(peekDecisionsService()!, "updateSettings");
+
+        const on = await setDecisionsAgentAskHuman({ agentId: "claude", enabled: true });
+        expect(on.askHumanAgents).toEqual(["codex", "claude"]);
+        expect(on.revision).toBeGreaterThan(before);
+        expect(saved.value).toEqual({
+          ...defaultDecisionsSettings(),
+          enabled: true,
+          ...RELAY,
+          consentedAt: 5,
+          askHumanAgents: ["codex", "claude"],
+        });
+        expect(getDecisionsPolicy()).toEqual(on);
+
+        const off = await setDecisionsAgentAskHuman({ agentId: "codex", enabled: false });
+        expect(off.askHumanAgents).toEqual(["claude"]);
+        expect(off.revision).toBeGreaterThan(on.revision);
+        expect(updateSettings).not.toHaveBeenCalled();
+        expect(connections).toHaveLength(1);
+        expect(connections[0]!.stopped).toBe(0);
+      });
+
+      it("waits its turn behind a switch-on under way, then saves over what that saved", async () => {
+        saved.value = { enabled: true, consentedAt: 5 };
+        await startDecisionsIfEnabled();
+        const service = peekDecisionsService()!;
+        let closed!: () => void;
+        loads.closing = new Promise<void>((resolve) => (closed = resolve));
+        const stopping = service.stop();
+        const enabling = setDecisionsEnabled(true);
+        await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+        let switched = false;
+        const switching = setDecisionsAgentAskHuman({ agentId: "claude", enabled: true }).then(
+          (policy) => {
+            switched = true;
+            return policy;
+          }
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(switched).toBe(false);
+        expect(saved.value).toMatchObject({ askHumanAgents: [] });
+
+        closed();
+        await Promise.all([stopping, enabling, switching]);
+        expect(saved.value).toMatchObject({ enabled: true, askHumanAgents: ["claude"] });
+      });
+
+      it("keeps both changes when two windows switch different agents at once", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+
+        const [claude, codex] = await Promise.all([
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true }),
+          setDecisionsAgentAskHuman({ agentId: "codex", enabled: true }),
+        ]);
+        expect(claude.askHumanAgents).toEqual(["claude"]);
+        expect(codex.askHumanAgents).toEqual(["claude", "codex"]);
+        expect(saved.value).toMatchObject({ askHumanAgents: ["claude", "codex"] });
+      });
+
+      it("saves nothing for a switch already where it was asked to be", async () => {
+        saved.value = { enabled: true, askHumanAgents: ["claude"] };
+        await startDecisionsIfEnabled();
+        const before = getDecisionsPolicy();
+        vi.mocked(store.set).mockClear();
+
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+        ).resolves.toEqual(before);
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "codex", enabled: false })
+        ).resolves.toEqual(before);
+        expect(store.set).not.toHaveBeenCalled();
+      });
+
+      it("tells every window to read the policy again when an agent is switched", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+        const status = (await getDecisionsStatus()).revision ?? 0;
+
+        await setDecisionsAgentAskHuman({ agentId: "claude", enabled: true });
+
+        await vi.waitFor(() =>
+          expect(pushedStatuses().at(-1)?.revision as number).toBeGreaterThan(status)
+        );
+      });
+
+      it("refuses an id no agent could have, saving nothing", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+        const before = getDecisionsPolicy();
+        vi.mocked(store.set).mockClear();
+
+        for (const agentId of ["", "a b", "../claude", "x".repeat(129)]) {
+          for (const enabled of [true, false]) {
+            await expect(
+              setDecisionsAgentAskHuman({ agentId, enabled }),
+              agentId
+            ).rejects.toMatchObject({ code: "VALIDATION" });
+          }
+        }
+        expect(store.set).not.toHaveBeenCalled();
+        expect(getDecisionsPolicy()).toEqual(before);
+      });
+
+      it("refuses one more agent past the cap, saving nothing, and still switches one off", async () => {
+        const full = Array.from({ length: 256 }, (_, i) => `agent-${i}`);
+        saved.value = { enabled: true, askHumanAgents: full };
+        await startDecisionsIfEnabled();
+        vi.mocked(store.set).mockClear();
+
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        expect(store.set).not.toHaveBeenCalled();
+        // Switching one off still works at the cap.
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "agent-0", enabled: false })
+        ).resolves.toMatchObject({ askHumanAgents: full.slice(1) });
+      });
+
+      it("refuses after quit, though the switch still reads on", async () => {
+        saved.value = { enabled: true };
+        await startDecisionsIfEnabled();
+        await stopDecisions();
+        vi.mocked(store.set).mockClear();
+
+        await expect(
+          setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
+        ).rejects.toMatchObject(CANCELLED);
+        expect(store.set).not.toHaveBeenCalled();
+      });
     });
   });
 

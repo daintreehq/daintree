@@ -67,7 +67,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   }, [status]);
 
   const on = status !== null && status.state !== "off";
-  // One read for the two sections it feeds, so one Retry recovers both.
+  // One read for the sections it feeds, so one Retry recovers them all.
   const policy = useDecisionsPolicy(on);
   const model = useDecisionsModel(on);
   const enabled = pending?.enabled ?? on;
@@ -135,7 +135,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             pairFocusRequest={pairFocusRequest}
             onPairFocused={() => setPairFocusRequest(0)}
           />
-          <DecisionsAgentsSection status={status} />
+          <DecisionsAgentsSection status={status} policy={policy} />
           <DecisionsQuestionsSection policy={policy} />
           <DecisionsPolicySection policy={policy} />
           <DecisionsModelSection

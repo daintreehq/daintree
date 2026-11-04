@@ -377,9 +377,17 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
   describe("the Decisions server (#16012)", () => {
     const DECISIONS_PORT = 4100;
 
+    /** On, with every agent these launches use switched on for `ask_human` (#16223). */
     function decisionsOn() {
-      storeData.set("decisions", { enabled: true });
+      storeData.set("decisions", {
+        enabled: true,
+        askHumanAgents: ["claude", "codex", "acme-agent"],
+      });
       mockDecisionsLaunchPort.mockResolvedValue(DECISIONS_PORT);
+    }
+
+    function decisionsEnvKeys(env: Record<string, string> | undefined): string[] {
+      return Object.keys(env ?? {}).filter((key) => key.includes("DECISIONS"));
     }
 
     function decisionsBearerOf(entry: { headers: { Authorization: string } }): string {
@@ -541,11 +549,82 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       expect(ptyClient.spawn).not.toHaveBeenCalled();
     });
 
-    it("launches as before when the route isn't there in time, and never for the Assistant's pane", async () => {
+    it("hands nothing of Decisions to an agent never switched on, or switched off, and loads none of it", async () => {
+      mockDecisionsLaunchPort.mockResolvedValue(DECISIONS_PORT);
+      // Never configured: on, with no agent ever switched on.
       storeData.set("decisions", { enabled: true });
+      await spawn({ id: "term-dec-never" });
+      // Switched off: another agent is on, this one isn't.
+      storeData.set("decisions", { enabled: true, askHumanAgents: ["codex"] });
+      await spawn({ id: "term-dec-switched-off" });
+      mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
+      await spawn({ id: "term-dec-switched-off-core" });
+
+      const [never, off, offCore] = ptyClient.spawn.mock.calls.map((call) => call[1]);
+      // With the tier off there is no listener to open for Decisions alone.
+      expect(never.command).toBe("claude");
+      expect(off.command).toBe("claude");
+      // The control surface still comes, without the Decisions entry beside it.
+      expect(Object.keys(await readServers(configPathFromCommand(offCore.command)))).toEqual([
+        "daintree",
+      ]);
+      for (const { env } of [never, off, offCore]) expect(decisionsEnvKeys(env)).toEqual([]);
+      for (const id of ["term-dec-never", "term-dec-switched-off", "term-dec-switched-off-core"]) {
+        expect(mcpPaneConfigService.getDecisionsPrincipal(id)).toBeNull();
+      }
+      expect(mockDecisionsLaunchPort).not.toHaveBeenCalled();
+    });
+
+    it("reads the choice at each launch, so a switch off leaves a running agent what it launched with", async () => {
+      decisionsOn();
+      await spawn({ id: "term-dec-before" });
+      const before = await readServers(
+        configPathFromCommand(ptyClient.spawn.mock.calls[0][1].command)
+      );
+      const bearer = decisionsBearerOf(before["daintree-decisions"]);
+
+      storeData.set("decisions", { enabled: true, askHumanAgents: ["codex"] });
+      await spawn({ id: "term-dec-after" });
+      await spawn({ id: "term-dec-still-on", command: "codex", launchAgentId: "codex" });
+
+      expect(ptyClient.spawn.mock.calls[1][1].command).toBe("claude");
+      expect(mcpPaneConfigService.getDecisionsBearerForToken(bearer)?.paneId).toBe(
+        "term-dec-before"
+      );
+      const codex = ptyClient.spawn.mock.calls[2][1];
+      expect(codex.command).toContain(
+        `mcp_servers.daintree-decisions.url="http://127.0.0.1:${DECISIONS_PORT}/mcp/decisions"`
+      );
+      expect(decisionsEnvKeys(codex.env)).toEqual(["DAINTREE_DECISIONS_MCP_TOKEN"]);
+    });
+
+    it("serves an enrolled Host's launches by its enrollment, never past the owner's own choice", async () => {
+      // A Host has no switch of its own; its enrollment serves its panes.
+      storeData.set("decisionsHost", {
+        deviceId: "host-device-0001",
+        ownerOffAt: null,
+        revokedAt: null,
+      });
+      mockDecisionsLaunchPort.mockResolvedValue(DECISIONS_PORT);
+      await spawn({ id: "term-dec-host" });
+      // With the owner's own switch on here, its choice decides, whatever the record says.
+      storeData.set("decisions", { enabled: true, askHumanAgents: ["codex"] });
+      await spawn({ id: "term-dec-host-owner" });
+
+      const host = await readServers(
+        configPathFromCommand(ptyClient.spawn.mock.calls[0][1].command)
+      );
+      expect(Object.keys(host)).toEqual(["daintree-decisions"]);
+      expect(ptyClient.spawn.mock.calls[1][1].command).toBe("claude");
+      expect(mockDecisionsLaunchPort).toHaveBeenCalledTimes(1);
+    });
+
+    it("launches as before when the route isn't there in time, and never for the Assistant's pane", async () => {
+      decisionsOn();
       mockDecisionsLaunchPort.mockResolvedValue(null);
       await spawn({ id: "term-dec-unready" });
       expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
+      expect(mockDecisionsLaunchPort).toHaveBeenCalledTimes(1);
 
       decisionsOn();
       mockDecisionsLaunchPort.mockClear();

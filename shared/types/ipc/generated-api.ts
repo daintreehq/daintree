@@ -399,6 +399,9 @@ export interface GeneratedElectronAPI {
     rotateKeys(
       ...args: IpcInvokeMap["decisions:rotate-keys"]["args"]
     ): Promise<IpcInvokeMap["decisions:rotate-keys"]["result"]>;
+    setAgentAskHuman(
+      ...args: IpcInvokeMap["decisions:set-agent-ask-human"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-agent-ask-human"]["result"]>;
     setAutoEnrollHosts(
       ...args: IpcInvokeMap["decisions:set-auto-enroll-hosts"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-auto-enroll-hosts"]["result"]>;

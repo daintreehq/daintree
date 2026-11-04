@@ -72,8 +72,15 @@ export function describeTrustedGates(): DecisionsWorkflowGate[] {
   }));
 }
 
-/** The policy as Settings reads it, for these settings, at this revision. */
-export function decisionsPolicyOf(settings: PolicySettings, revision: number): DecisionsPolicy {
+/**
+ * The policy as Settings reads it, for these settings, at this revision. The
+ * agents switched on for `ask_human` are read only by launches, never by the
+ * registry questions are asked under.
+ */
+export function decisionsPolicyOf(
+  settings: PolicySettings & Pick<DecisionsSettings, "askHumanAgents">,
+  revision: number
+): DecisionsPolicy {
   // The library's own rule for a question with no origin gate, so what
   // Settings says is what the registry does.
   const expiry = questionExpiryPolicy(settings.defaultQuestionExpiryMs);
@@ -82,6 +89,7 @@ export function decisionsPolicyOf(settings: PolicySettings, revision: number): D
     proxyAllowlisted: settings.proxyAllowlisted,
     defaultQuestionExpiryMs: expiry.defaultMs,
     maxQuestionExpiryMs: expiry.maxMs,
+    askHumanAgents: [...settings.askHumanAgents],
     revision,
   };
 }

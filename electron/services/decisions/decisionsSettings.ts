@@ -11,6 +11,7 @@ import {
   DEFAULT_QUESTION_EXPIRY_MS,
   isQuestionExpiryChoice,
 } from "../../../shared/config/decisionsQuestionExpiry.js";
+import { askHumanAgentIds } from "../../../shared/config/decisionsAskHumanAgents.js";
 
 /** The relay protocol's id shape: what a relay mints for installations and devices. */
 const RELAY_ID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -45,6 +46,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     modelLearning: false,
     modelAdapter: null,
     modelConsentedAt: null,
+    askHumanAgents: [],
   };
 }
 
@@ -221,6 +223,7 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     modelLearning: value.modelLearning === true && modelConsentedAt !== null,
     modelAdapter: modelAdapter(value.modelAdapter),
     modelConsentedAt,
+    askHumanAgents: askHumanAgentIds(value.askHumanAgents),
   };
 }
 
