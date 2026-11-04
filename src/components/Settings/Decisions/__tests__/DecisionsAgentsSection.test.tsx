@@ -485,16 +485,28 @@ describe("DecisionsAgentsSection (#16012)", () => {
     it("keeps each agent's failed save until that agent is saved again", async () => {
       setAvailability(INSTALLED);
       await renderSection(CONNECTED);
-      setAgentAskHuman.mockRejectedValueOnce(new Error("claude refused"));
+      const claudeFailed = `Couldn't switch on ask_human for ${nameOf("claude")}`;
+      const codexFailed = `Couldn't switch on ask_human for ${nameOf("codex")}`;
+      setAgentAskHuman
+        .mockRejectedValueOnce(new Error("claude refused"))
+        .mockRejectedValueOnce(new Error("codex refused"));
       await act(async () => {
         fireEvent.click(agentSwitch("claude"));
+        fireEvent.click(agentSwitch("codex"));
       });
+      expect([screen.queryByText(claudeFailed), screen.queryByText(codexFailed)]).not.toContain(
+        null
+      );
+      expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
+
+      // Saving Codex again clears only its own failure.
       setAgentAskHuman.mockResolvedValueOnce(policy({ askHumanAgents: ["codex"], revision: 1 }));
       await act(async () => {
         fireEvent.click(agentSwitch("codex"));
       });
+      expect(screen.queryByText(codexFailed)).toBeNull();
+      expect(screen.getByText(claudeFailed)).toBeTruthy();
 
-      expect(screen.getByText(`Couldn't switch on ask_human for ${nameOf("claude")}`)).toBeTruthy();
       setAgentAskHuman.mockResolvedValueOnce(
         policy({ askHumanAgents: ["codex", "claude"], revision: 2 })
       );
@@ -540,15 +552,39 @@ describe("DecisionsAgentsSection (#16012)", () => {
       const again = deferred<DecisionsPolicy>();
       setAgentAskHuman.mockReturnValueOnce(again.promise);
       fireEvent.click(agentSwitch("claude"));
-      await act(async () => save.resolve(policy({ askHumanAgents: ["claude"], revision: 9 })));
+      await act(async () => save.resolve(policy({ askHumanAgents: ["codex"], revision: 9 })));
+      expect(isOn("codex")).toBe(false);
       expect(agentSwitch("claude").disabled).toBe(true);
       await act(async () => again.resolve(policy({ askHumanAgents: ["claude"], revision: 1 })));
       expect(agentSwitch("claude").disabled).toBe(false);
       expect(isOn("claude")).toBe(true);
     });
 
+    it("drops a save that fails after Decisions turned off and on again, reading nothing for it", async () => {
+      setAvailability(INSTALLED);
+      const view = await renderSection(CONNECTED);
+      const save = deferred<DecisionsPolicy>();
+      setAgentAskHuman.mockReturnValueOnce(save.promise);
+      fireEvent.click(agentSwitch("claude"));
+
+      view.rerender(<Section status={CONNECTED} active={false} />);
+      view.rerender(<Section status={CONNECTED} />);
+      await act(async () => {});
+      const reads = getPolicy.mock.calls.length;
+      await act(async () => save.reject(new Error("refused while off")));
+
+      expect(screen.queryByText(/Couldn't switch on ask_human/)).toBeNull();
+      expect(getPolicy).toHaveBeenCalledTimes(reads);
+      expect(agentSwitch("claude").disabled).toBe(false);
+    });
+
     it("gives an agent whose id names an object method a working switch", async () => {
-      setAvailability({ ...INSTALLED, toString: "ready" });
+      // An object literal can't type a `toString` key against the record, so it goes in by entry.
+      const withMethodName = Object.fromEntries([
+        ...Object.entries(INSTALLED),
+        ["toString", "ready"],
+      ]) as CliAvailability;
+      setAvailability(withMethodName);
       await renderSection(CONNECTED);
       act(() =>
         registerPluginAgents("acme.agents", [{ ...ACME, id: "toString", name: "To String" }])
