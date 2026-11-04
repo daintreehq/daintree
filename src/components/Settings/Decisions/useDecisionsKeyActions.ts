@@ -3,6 +3,9 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { DecisionsDevice } from "@shared/types/decisions";
 import { describeRevokeResult, describeRotateResult } from "./devicesCopy";
 
+/** What a revocation needs of a device: a phone's row or a Remote Host's row both give it. */
+export type DecisionsRevokeTarget = Pick<DecisionsDevice, "deviceId" | "label" | "role">;
+
 /** The latest change to the key, or why one didn't finish, in words. */
 export interface DecisionsKeyNotice {
   message: string;
@@ -17,7 +20,7 @@ export interface UseDecisionsKeyActionsResult {
   /** Why the revocation being confirmed didn't finish; shown in its dialog. */
   revokeError: string | null;
   /** Resolves true when the device needs nothing more (revoked, or no longer listed). */
-  revoke(device: DecisionsDevice): Promise<boolean>;
+  revoke(device: DecisionsRevokeTarget): Promise<boolean>;
   rotate(): void;
   clearRevokeError(): void;
 }
@@ -41,7 +44,7 @@ export function useDecisionsKeyActions(onChanged: () => void): UseDecisionsKeyAc
     };
   }, []);
 
-  const revoke = async (device: DecisionsDevice): Promise<boolean> => {
+  const revoke = async (device: DecisionsRevokeTarget): Promise<boolean> => {
     if (running.current) return false;
     running.current = true;
     setPending("revoke");

@@ -9,7 +9,8 @@ import type {
   DecisionsStatus,
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsDevicesSection } from "../DecisionsDevicesSection";
+import type { DecisionsHost, DecisionsHostsResult } from "@shared/types/decisionsHosts";
+import { DecisionsDevicesAndHosts } from "../DecisionsDevicesAndHosts";
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const STATUS: DecisionsStatus = { state: "connected", relayOrigin: ORIGIN };
@@ -23,10 +24,25 @@ const PIXEL: DecisionsDevice = {
   pushEnabled: true,
 };
 const IPAD: DecisionsDevice = { ...PIXEL, deviceId: "dev_ipad", label: "iPad", role: "tablet" };
+const STUDIO_DEVICE: DecisionsDevice = {
+  ...PIXEL,
+  deviceId: "dev_studio",
+  label: "studio.local",
+  role: "desktop-host",
+  pushEnabled: false,
+};
+const STUDIO: DecisionsHost = {
+  hostId: "studio",
+  name: "studio",
+  connected: true,
+  enrollment: { state: "enrolled", deviceId: "dev_studio" },
+  canEnroll: false,
+};
 
 const listDevices = vi.fn<() => Promise<DecisionsDevicesResult>>();
 const revokeDevice = vi.fn<(deviceId: string) => Promise<DecisionsRevokeDeviceResult>>();
 const rotateKeys = vi.fn<() => Promise<DecisionsRotateKeysResult>>();
+const listHosts = vi.fn<() => Promise<DecisionsHostsResult>>();
 const pushes = new Set<() => void>();
 
 function deferred<T>() {
@@ -40,7 +56,7 @@ function deferred<T>() {
 async function renderSection() {
   render(
     <TooltipProvider>
-      <DecisionsDevicesSection status={STATUS} />
+      <DecisionsDevicesAndHosts status={STATUS} />
     </TooltipProvider>
   );
   await screen.findByText("Pixel 9");
@@ -54,20 +70,21 @@ function dialog(): HTMLElement {
   return screen.getByRole("alertdialog");
 }
 
-describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
+describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
   beforeEach(() => {
     pushes.clear();
     listDevices.mockReset().mockResolvedValue({ result: "listed", devices: [PIXEL, IPAD] });
     revokeDevice.mockReset();
     rotateKeys.mockReset();
+    listHosts.mockReset().mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [] });
     Object.defineProperty(window, "electron", {
       value: {
         decisions: {
           listDevices,
           revokeDevice,
           rotateKeys,
-          // The Remote Hosts group under the list reads its own rows (#16021).
-          listHosts: async () => ({ result: "listed", autoEnroll: true, hosts: [] }),
+          // The Remote Hosts section reads its own rows (#16021).
+          listHosts,
         },
         events: {
           on: (name: string, listener: () => void) => {
@@ -169,7 +186,7 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
     listDevices.mockResolvedValue({ result: "listed", devices: [] });
     render(
       <TooltipProvider>
-        <DecisionsDevicesSection status={STATUS} />
+        <DecisionsDevicesAndHosts status={STATUS} />
       </TooltipProvider>
     );
 
@@ -200,7 +217,7 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
     const onPairFocused = vi.fn();
     render(
       <TooltipProvider>
-        <DecisionsDevicesSection
+        <DecisionsDevicesAndHosts
           status={STATUS}
           pairFocusRequest={1}
           onPairFocused={onPairFocused}
@@ -214,5 +231,77 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
 
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Pair a phone" }));
     expect(onPairFocused).toHaveBeenCalledOnce();
+  });
+
+  it("lists phones and tablets under Devices and each Remote Host once, under Remote Hosts (#16222)", async () => {
+    listDevices.mockResolvedValue({ result: "listed", devices: [PIXEL, STUDIO_DEVICE, IPAD] });
+    listHosts.mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [STUDIO] });
+    await renderSection();
+    await act(async () => {});
+
+    const devices = document.getElementById("decisions-devices")!;
+    const hosts = document.getElementById("decisions-hosts")!;
+    expect(within(devices).getByText("Pixel 9")).toBeTruthy();
+    expect(within(devices).getByText("iPad")).toBeTruthy();
+    expect(within(devices).queryByText(/studio/)).toBeNull();
+    expect(within(devices).queryByRole("switch")).toBeNull();
+    expect(within(hosts).queryByText("Pixel 9")).toBeNull();
+    expect(within(hosts).queryByRole("button", { name: "Pair a phone" })).toBeNull();
+    expect(within(hosts).getAllByText("studio")).toHaveLength(1);
+    expect(within(hosts).queryByText("studio.local")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Revoke studio" })).toHaveLength(1);
+  });
+
+  it("offers pairing under Devices when the relay lists only Remote Hosts", async () => {
+    listDevices.mockResolvedValue({ result: "listed", devices: [STUDIO_DEVICE] });
+    listHosts.mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [STUDIO] });
+    render(
+      <TooltipProvider>
+        <DecisionsDevicesAndHosts status={STATUS} />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+
+    const devices = document.getElementById("decisions-devices")!;
+    expect(within(devices).getByText(/Pair a phone to answer/)).toBeTruthy();
+    expect(within(devices).queryByRole("button", { name: "Refresh devices" })).toBeNull();
+    expect(within(devices).getAllByRole("button", { name: "Pair a phone" })).toHaveLength(1);
+  });
+
+  it("revokes a Remote Host from its row as a phone is revoked, saying it isn't enrolled automatically again", async () => {
+    listDevices.mockResolvedValue({ result: "listed", devices: [PIXEL, STUDIO_DEVICE] });
+    listHosts.mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [STUDIO] });
+    revokeDevice.mockResolvedValue({ result: "revoked", keyEpoch: 2 });
+    await renderSection();
+    await act(async () => {});
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke studio" }));
+    const confirm = dialog();
+    expect(within(confirm).getByText("Revoke 'studio'?")).toBeTruthy();
+    expect(confirm.textContent).toContain("Remote Host 'studio' can no longer reach your relay");
+    expect(confirm.textContent).toContain("isn't enrolled automatically again");
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Revoke device" }));
+    });
+
+    expect(revokeDevice).toHaveBeenCalledExactlyOnceWith("dev_studio");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    const rotate = screen.getByRole("button", { name: "Rotate keys" });
+    await waitFor(() => expect(document.activeElement).toBe(rotate));
+    expect(await screen.findByText(/'studio' is revoked/)).toBeTruthy();
+  });
+
+  it("shows neither Remote Hosts nor the key before a relay is set up", () => {
+    render(
+      <TooltipProvider>
+        <DecisionsDevicesAndHosts status={{ state: "not-connected" }} />
+      </TooltipProvider>
+    );
+
+    expect(screen.getByText("Connect a relay above, then pair a phone here")).toBeTruthy();
+    expect(document.getElementById("decisions-hosts")).toBeNull();
+    expect(document.getElementById("decisions-encryption")).toBeNull();
+    expect(listDevices).not.toHaveBeenCalled();
+    expect(listHosts).not.toHaveBeenCalled();
   });
 });

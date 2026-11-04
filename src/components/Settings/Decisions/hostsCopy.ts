@@ -14,6 +14,10 @@ import type {
 export const AUTO_ENROLL_SUBTITLE =
   "Each Remote Host you connect to gets its own keys, so its agents can ask you even while this computer sleeps, and it can read every question and answer. Turning Decisions off here turns it off on each Host when this computer next connects to it. Turn this off to enroll Hosts one at a time.";
 
+/** A Remote Host device the relay lists that no Host this computer knows claims (#16222). */
+export const RELAY_ONLY_HOST_TEXT =
+  "The relay lists it as an enrolled Remote Host, but this computer has no record of it.";
+
 function sentence(detail: string | undefined): string {
   if (!detail) return "";
   const trimmed = detail.trim().replace(/[.!?…]+$/, "");

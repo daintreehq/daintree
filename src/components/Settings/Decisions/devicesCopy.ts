@@ -59,6 +59,25 @@ export function deviceRoleLabel(role: DecisionsDeviceRole): string {
   }
 }
 
+/**
+ * Where a listed device belongs in Settings (#16222): `answers` for what a
+ * person answers from (Devices), `host` for a Remote Host (Remote Hosts),
+ * `owner` for this computer. The relay admits only the pinned owner as an
+ * owner device, and main leaves this computer out of the list, so an `owner`
+ * row is never shown: Connection is this computer's place.
+ */
+export function deviceKind(role: DecisionsDeviceRole): "answers" | "host" | "owner" {
+  switch (role) {
+    case "phone":
+    case "tablet":
+      return "answers";
+    case "desktop-host":
+      return "host";
+    case "owner-desktop":
+      return "owner";
+  }
+}
+
 /** `123456` as `123 456`, the grouping a person compares fastest. */
 export function groupPairingCode(code: string): string {
   return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
