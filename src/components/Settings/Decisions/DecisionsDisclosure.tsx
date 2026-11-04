@@ -32,9 +32,11 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         A photo you attach to an answer or follow-up reaches the relay end-to-end encrypted, then is
         saved unencrypted on the computer whose agent asked, or on the Remote Host for a pane on
         one, in a .daintree/decisions folder Git ignores inside the folder the agent started in, so
-        the agent can open it. On macOS and Linux only your user account can read it; on Windows it
-        has that folder&apos;s permissions. It&apos;s deleted with its question, when you delete
-        Decisions&apos; local data, and seven days after it was typed in.
+        agents like Claude Code and Codex can open it. Gemini CLI can&apos;t open a file Git
+        ignores. On macOS and Linux only your user account can read it; on Windows it has that
+        folder&apos;s permissions. It&apos;s kept while anything on its question waits to be typed
+        in, then for seven days, and deleted sooner with its question or when you delete
+        Decisions&apos; local data.
       </li>
       <li>
         <span className="font-medium text-text-primary">Routing details the relay can read.</span>{" "}

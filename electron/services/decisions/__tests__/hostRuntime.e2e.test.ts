@@ -13,6 +13,7 @@ import {
   acceptHostEnrollment,
   createHostRequest,
   enrollHost,
+  parseAnswers,
   parseMessages,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
@@ -191,7 +192,7 @@ class FakeRelay {
     envelope: Record<string, unknown>;
   }> = [];
   /** Phone images' ciphertext, by attachment id, as the relay's R2 holds it. */
-  readonly attachments = new Map<string, Uint8Array>();
+  readonly attachments = new Map<string, Uint8Array<ArrayBuffer>>();
   /** While true, the socket isn't reachable: tickets fail and nothing connects. */
   down = false;
   hostDeviceId = "";
@@ -347,7 +348,7 @@ async function phonePhoto(
     { installationId: owner.installationId, questionId, attachmentId, keyEpoch: 1 },
     bytes
   );
-  if (uploaded) relay.attachments.set(attachmentId, sealed.ciphertext);
+  if (uploaded) relay.attachments.set(attachmentId, new Uint8Array(sealed.ciphertext));
   return {
     attachment_id: attachmentId,
     mime: "image/png",
@@ -975,7 +976,9 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     ).toBe("");
     // Kept with the answer, so a retried delivery types the same file.
     const row = await new DaintreeLocalStore(sqlite).getQuestion(asked);
-    expect(JSON.stringify(row?.answers_json)).toContain(photo.attachment_id);
+    expect(parseAnswers(row!.answers_json).flatMap((entry) => entry.stored_images ?? [])).toEqual([
+      { attachment_id: photo.attachment_id, path: stored },
+    ]);
 
     // The relay deletes the question: its photo goes from the Host.
     relay.append({

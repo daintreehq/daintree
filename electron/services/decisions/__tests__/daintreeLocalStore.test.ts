@@ -1100,16 +1100,27 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
 
   it("names a question once its deletion is applied and the commit holding it is on disk", async () => {
     const store = new DaintreeLocalStore(sqlite);
-    const heard: string[] = [];
-    store.onQuestionDeleted((id) => heard.push(id));
+    const heard: Array<{ id: string; processedOnDisk: unknown }> = [];
+    // What another connection reads is only what has committed.
+    store.onQuestionDeleted((id) =>
+      heard.push({
+        id,
+        processedOnDisk: (
+          reader()
+            .prepare("SELECT processed_at FROM decisions_inbound_events WHERE seq = 1")
+            .get() as { processed_at: number | null }
+        ).processed_at,
+      })
+    );
     await store.commitNewQuestion(row("q1", 1, { local_status: "open" }), item("o1", "q1"));
     await store.insertEvent(deletion(1, "q1"));
     expect(await store.deletedQuestionIds()).toEqual(new Set());
 
-    // The inbox applies it, then marks it processed.
+    // The inbox applies it, then marks it processed: applied but not yet processed names nothing.
     await store.updateQuestion("q1", { local_status: "cancelled", remote_event_seq: 1 });
+    expect(await store.deletedQuestionIds()).toEqual(new Set());
     await store.markEventProcessed(1, 5);
-    expect(heard).toEqual(["q1"]);
+    expect(heard).toEqual([{ id: "q1", processedOnDisk: 5 }]);
     expect(await store.deletedQuestionIds()).toEqual(new Set(["q1"]));
     // Still known after a restart.
     expect(await new DaintreeLocalStore(sqlite).deletedQuestionIds()).toEqual(new Set(["q1"]));
@@ -1124,11 +1135,17 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
       row("q2", 2, { local_status: "cancelled", history_only: true }),
       item("o2", "q2")
     );
+    await store.commitNewQuestion(row("q3", 3, { local_status: "cancelled" }), item("o3", "q3"));
     await store.insertEvent(deletion(1, "q1"));
     await store.insertEvent(deletion(2, "q2"));
     await store.insertEvent(deletion(3, "q-unknown"));
     await store.insertEvent(deletion(4, null));
-    await store.insertEvent(event(5));
+    // Withdrawn by a cancel, not deleted by the relay.
+    await store.insertEvent({
+      ...deletion(5, "q3"),
+      event_type: "decision.cancelled",
+      json: JSON.stringify({ seq: 5, event_type: "decision.cancelled", question_id: "q3" }),
+    });
     for (const seq of [1, 2, 3, 4, 5]) await store.markEventProcessed(seq, 5);
 
     expect(heard).toEqual([]);

@@ -14,6 +14,7 @@ import {
 import {
   DecisionsPhoneImages,
   PHONE_IMAGE_RETENTION_MS,
+  PHONE_IMAGE_SWEEP_INTERVAL_MS,
   erasePhoneImages,
   phoneImageRootsFile,
   type PhoneImageFacts,
@@ -218,6 +219,13 @@ describe("DecisionsPhoneImages.store (#16233)", () => {
     await expect(images().store({ ...image(), sha256: "0".repeat(64) })).rejects.toThrow();
   });
 
+  it("refuses a directory whose path the typed block would change, so the answer's words still go in", async () => {
+    const marked = path.join(dir, "[decision-injection abcdefgh]");
+    fs.mkdirSync(marked);
+    await expect(images().store(image({ root: marked }))).rejects.toThrow();
+    expect(fs.readdirSync(marked)).toEqual([]);
+  });
+
   it.runIf(POSIX)("never writes through a symlink a repository or an agent planted", async () => {
     const outside = path.join(dir, "outside");
     fs.mkdirSync(outside);
@@ -272,10 +280,12 @@ describe("DecisionsPhoneImages sweeps (#16233)", () => {
     expect(fs.existsSync(path.dirname(gone))).toBe(false);
     expect(fs.existsSync(kept)).toBe(true);
 
+    const { id } = JSON.parse(fs.readFileSync(rootsFile, "utf8")) as { id: string };
     deleted.add(qid(2));
     await store.sweep();
     expect(fs.existsSync(kept)).toBe(false);
-    expect(fs.existsSync(rootsFile)).toBe(false);
+    // The root is forgotten; the installation's id is kept, so it never changes.
+    expect(JSON.parse(fs.readFileSync(rootsFile, "utf8"))).toMatchObject({ id, roots: [] });
     expect(git(repo, "status", "--porcelain", "--untracked-files=all")).toBe("");
   });
 
@@ -297,7 +307,12 @@ describe("DecisionsPhoneImages sweeps (#16233)", () => {
     await store.sweep();
     expect(fs.existsSync(photo)).toBe(true);
 
-    clock = typedAt + PHONE_IMAGE_RETENTION_MS + 1;
+    // Typed in up to a sweep after the last one that saw it wait: it gets that sweep's time too.
+    clock = typedAt + PHONE_IMAGE_RETENTION_MS + PHONE_IMAGE_SWEEP_INTERVAL_MS - 1;
+    await store.sweep();
+    expect(fs.existsSync(photo)).toBe(true);
+
+    clock = typedAt + PHONE_IMAGE_RETENTION_MS + PHONE_IMAGE_SWEEP_INTERVAL_MS;
     await store.sweep();
     expect(fs.existsSync(photo)).toBe(false);
   });
@@ -335,9 +350,28 @@ describe("DecisionsPhoneImages sweeps (#16233)", () => {
     const store = images();
     const photo = await stored(store, { questionId: asked });
     // Written a moment after the clock was read.
-    clock += PHONE_IMAGE_RETENTION_MS + 60_000;
+    clock += PHONE_IMAGE_RETENTION_MS + PHONE_IMAGE_SWEEP_INTERVAL_MS + 60_000;
     await store.sweep();
     expect(fs.existsSync(photo)).toBe(false);
+  });
+
+  it("keeps a photo for a follow-up still waiting after a handled answer", async () => {
+    const asked = "0190f0aa11112222333344445555bbbb";
+    rows = [
+      row(1, {
+        question_id: asked,
+        origin: { worktree_root: repo },
+        delivery_status: "needs-attention",
+        answers_json: answers({}),
+        messages_json: JSON.stringify([message({ delivery: { status: "received" } })]),
+      }),
+    ];
+    meta.set(HANDLED_ANSWERS_META_KEY, JSON.stringify({ [asked]: 1 }));
+    const store = images();
+    const photo = await stored(store, { questionId: asked });
+    clock += PHONE_IMAGE_RETENTION_MS + PHONE_IMAGE_SWEEP_INTERVAL_MS + DAY;
+    await store.sweep();
+    expect(fs.existsSync(photo)).toBe(true);
   });
 
   it("deletes photos whose question this store no longer has, never another installation's", async () => {
@@ -385,9 +419,53 @@ describe("DecisionsPhoneImages sweeps (#16233)", () => {
   it("sweeps when it opens, so photos a lifetime left for gone questions go first", async () => {
     const photo = await stored(images());
     rows = [];
-    const next = images();
-    await next.sweep();
+    images();
+    await vi.waitFor(() => expect(fs.existsSync(photo)).toBe(false));
+  });
+
+  it("keeps a root that's missing for now, a drive not mounted, and forgets one gone for good", async () => {
+    const store = images();
+    const photo = await stored(store);
+    const away = path.join(dir, "unmounted");
+    fs.renameSync(repo, away);
+    await store.sweep();
+    const record = () =>
+      JSON.parse(fs.readFileSync(rootsFile, "utf8")) as {
+        roots: string[];
+        missing: Record<string, number>;
+      };
+    expect(record().roots).toEqual([repo]);
+    expect(record().missing).toEqual({ [repo]: clock });
+
+    // Back again: swept as ever, and no longer missing.
+    fs.renameSync(away, repo);
+    rows = [];
+    clock += DAY;
+    await store.sweep();
     expect(fs.existsSync(photo)).toBe(false);
+    expect(record().missing).toEqual({});
+
+    const other = path.join(dir, "other");
+    fs.mkdirSync(other);
+    rows = [row(2, { origin: { worktree_root: other } })];
+    await stored(store, { root: other, questionId: qid(2) });
+    fs.rmSync(other, { recursive: true });
+    await store.sweep();
+    expect(record().roots).toContain(other);
+    clock += 91 * DAY;
+    await store.sweep();
+    expect(record().roots).not.toContain(other);
+  });
+
+  it("deletes only the files it writes, leaving anything else put in its folder", async () => {
+    const store = images();
+    const photo = await stored(store);
+    const notes = path.join(path.dirname(photo), "notes.txt");
+    fs.writeFileSync(notes, "mine");
+    rows = [];
+    await store.sweep();
+    expect(fs.existsSync(photo)).toBe(false);
+    expect(fs.readFileSync(notes, "utf8")).toBe("mine");
   });
 
   it.runIf(POSIX)("never deletes through a symlink planted in its directory", async () => {
@@ -433,5 +511,21 @@ describe("erasePhoneImages (#16233)", () => {
 
   it("is done when nothing was ever stored", async () => {
     expect(await erasePhoneImages(rootsFile)).toBe(true);
+  });
+
+  it("keeps a directory out of reach recorded, so a later sweep deletes it", async () => {
+    const store = images();
+    const photo = (await store.store(image())).path;
+    await store.close();
+    const away = path.join(dir, "unmounted");
+    fs.renameSync(repo, away);
+
+    expect(await erasePhoneImages(rootsFile)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(rootsFile, "utf8")).roots).toEqual([repo]);
+
+    fs.renameSync(away, repo);
+    rows = [];
+    await images().sweep();
+    expect(fs.existsSync(photo)).toBe(false);
   });
 });

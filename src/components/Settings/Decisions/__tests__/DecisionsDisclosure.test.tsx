@@ -40,10 +40,12 @@ describe("Decisions disclosure", () => {
       "saved unencrypted on the computer whose agent asked",
       "on the Remote Host for a pane on one",
       "a .daintree/decisions folder Git ignores",
+      "agents like Claude Code and Codex can open it",
+      "Gemini CLI can't open a file Git ignores",
       "On macOS and Linux only your user account can read it",
-      "deleted with its question",
-      "when you delete Decisions' local data",
-      "seven days after it was typed in",
+      "on Windows it has that folder's permissions",
+      "kept while anything on its question waits to be typed in, then for seven days",
+      "deleted sooner with its question or when you delete Decisions' local data",
     ]) {
       expect(text, promise).toContain(promise);
     }

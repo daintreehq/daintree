@@ -16,7 +16,6 @@ import {
 import type { Stats } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import {
-  isTypablePath,
   parseAnswers,
   parseMessages,
   type InjectionIntent,
@@ -34,6 +33,7 @@ import {
   resilientUnlink,
   syncParentDirectory,
 } from "../../utils/fs.js";
+import { isTypedImagePath } from "./answerNotice.js";
 import { isHandled, readHandledAnswers, type MetaStore } from "./attentionList.js";
 
 /**
@@ -53,7 +53,10 @@ import { isHandled, readHandledAnswers, type MetaStore } from "./attentionList.j
  * Every directory below the launch cwd is checked with `lstat` (the agent
  * can write there, and a repository can commit a symlink), the ones this
  * makes are owner-only, and each image is written to a part file opened
- * O_EXCL|O_NOFOLLOW at 0600, synced, then renamed into place. The launch
+ * O_EXCL|O_NOFOLLOW at 0600, synced, then renamed into place and checked
+ * again. Deleting takes only Daintree's own file names, from a directory
+ * that is still the one checked. Path checks narrow a race with a directory
+ * swapped for a link but can't close it; Node has no `openat`. The launch
  * roots that hold images are recorded beside the keys, so the images can be
  * found after their rows are gone.
  *
@@ -65,7 +68,14 @@ import { isHandled, readHandledAnswers, type MetaStore } from "./attentionList.j
 
 /** How long an image stays once nothing of its question is waiting to be typed in. */
 export const PHONE_IMAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+/**
+ * How often a running store sweeps. A sweep touches what still waits, so an
+ * image goes only once this much more than the retention has passed: what
+ * waited was typed in at most one sweep after the last one that saw it wait.
+ */
+export const PHONE_IMAGE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+/** A root missing this long went with its worktree; one missing less long may be a drive not mounted. */
+const MISSING_ROOT_MS = 90 * 24 * 60 * 60 * 1000;
 
 const DECISIONS_DIR = [".daintree", "decisions"] as const;
 const IMAGES_DIR = "images";
@@ -75,6 +85,8 @@ const IGNORE_ALL = "*\n";
 const ID = /^[A-Za-z0-9_-]{1,80}$/;
 const STORE_ID = /^[0-9a-f]{32}$/;
 const PART = /^\.part-[0-9a-f]{16}$/;
+/** The only files a sweep or a deletion takes: the images this writes, and its part files. */
+const OWN_FILE = /^(?:[A-Za-z0-9_-]{1,80}\.(?:png|jpg|webp)|\.part-[0-9a-f]{16})$/;
 const MAX_ROOTS = 1_000;
 const EXTENSIONS: Record<ImageMime, string> = {
   "image/png": "png",
@@ -106,9 +118,11 @@ export interface DecisionsPhoneImagesOptions {
 
 interface RootsRecord {
   v: 1;
-  /** This installation's directory under each root's images directory. */
+  /** This installation's directory under each root's images directory; kept, so it never changes. */
   id: string;
   roots: string[];
+  /** When a sweep first found a root missing, by root. */
+  missing?: Record<string, number>;
 }
 
 function codeOf(error: unknown): string | undefined {
@@ -232,22 +246,49 @@ async function sha256OfFile(path: string): Promise<string | null> {
   }
 }
 
-/**
- * Deletes what is in a question's directory and the directory itself. Never
- * follows a link: a symlink planted in it goes as a link, and a directory in
- * it, which Daintree never makes, is left alone with its parent.
- */
-async function removeQuestionDir(dir: string): Promise<void> {
+/** A real directory of this user's, or null. */
+async function ownDirectory(dir: string): Promise<Stats | null> {
   const stats = await lstatOrNull(dir);
-  if (stats === null || stats.isSymbolicLink() || !stats.isDirectory() || !owned(stats)) return;
+  return stats !== null && !stats.isSymbolicLink() && stats.isDirectory() && owned(stats)
+    ? stats
+    : null;
+}
+
+/** Still the directory `checked` was: not swapped for a link, or for another directory. */
+async function stillDirectory(dir: string, checked: Stats): Promise<boolean> {
+  const now = await ownDirectory(dir);
+  return now !== null && now.ino === checked.ino && now.dev === checked.dev;
+}
+
+/**
+ * Each of Daintree's own files in a question's directory, while it is still
+ * the directory first checked: what else is in it, a directory Daintree never
+ * makes included, is left alone with its parent.
+ */
+async function ownEntries(
+  dir: string,
+  each: (entry: string, name: string, stats: Stats) => Promise<void>
+): Promise<void> {
+  const checked = await ownDirectory(dir);
+  if (checked === null) return;
   for (const name of await readdir(dir)) {
+    if (!OWN_FILE.test(name)) continue;
+    if (!(await stillDirectory(dir, checked))) return;
     const entry = join(dir, name);
-    const entryStats = await lstatOrNull(entry);
-    if (entryStats === null || entryStats.isDirectory()) continue;
-    await unlink(entry).catch((error: unknown) => {
-      if (!isMissing(error)) throw error;
-    });
+    const stats = await lstatOrNull(entry);
+    if (stats === null || stats.isDirectory()) continue;
+    await each(entry, name, stats);
   }
+}
+
+/** Unlinks a link as a link, never what it points to. */
+async function unlinkQuietly(entry: string): Promise<void> {
+  await unlink(entry).catch(() => {});
+}
+
+/** Deletes Daintree's files in a question's directory, then the directory if that empties it. */
+async function removeQuestionDir(dir: string): Promise<void> {
+  await ownEntries(dir, (entry) => unlinkQuietly(entry));
   await rmdirIfEmpty(dir);
 }
 
@@ -278,14 +319,22 @@ async function readRecord(file: string): Promise<RootsRecord | null> {
   ) {
     throw new Error("The phone images' record is damaged");
   }
-  const roots = parsed.roots.filter(
-    (root): root is string => typeof root === "string" && isAbsolute(root)
-  );
-  return { v: 1, id: parsed.id, roots: [...new Set(roots)].slice(0, MAX_ROOTS) };
+  const roots = [
+    ...new Set(
+      parsed.roots.filter((root): root is string => typeof root === "string" && isAbsolute(root))
+    ),
+  ].slice(0, MAX_ROOTS);
+  const missing: Record<string, number> = {};
+  for (const root of roots) {
+    const since = parsed.missing?.[root];
+    if (typeof since === "number" && Number.isFinite(since)) missing[root] = since;
+  }
+  return { v: 1, id: parsed.id, roots, missing };
 }
 
-async function writeRecord(file: string, record: RootsRecord): Promise<void> {
-  if (record.roots.length === 0) {
+/** Writes the record, keeping its id; `drop` removes the file instead once no root is left. */
+async function writeRecord(file: string, record: RootsRecord, drop = false): Promise<void> {
+  if (drop && record.roots.length === 0) {
     try {
       await resilientUnlink(file);
     } catch (error) {
@@ -309,10 +358,11 @@ function questionsInUse(
   const inUse = new Set<string>();
   const unsettled = new Set(intents.map((intent) => intent.question_id));
   for (const row of rows) {
-    if (row.history_only || isHandled(row, handled)) continue;
-    const answerWaits = parseAnswers(row.answers_json).some(
-      (entry) => entry.deliver && !entry.delivered
-    );
+    if (row.history_only) continue;
+    // A handled answer is never typed in; a follow-up after it still may be.
+    const answerWaits =
+      !isHandled(row, handled) &&
+      parseAnswers(row.answers_json).some((entry) => entry.deliver && !entry.delivered);
     const messageWaits = parseMessages(row.messages_json).some(
       (message) =>
         message.side === "human" &&
@@ -340,7 +390,7 @@ export class DecisionsPhoneImages implements PhoneImageStore {
   constructor(private readonly o: DecisionsPhoneImagesOptions) {
     this.now = o.now ?? Date.now;
     this.retentionMs = o.retentionMs ?? PHONE_IMAGE_RETENTION_MS;
-    const interval = o.sweepIntervalMs ?? SWEEP_INTERVAL_MS;
+    const interval = o.sweepIntervalMs ?? PHONE_IMAGE_SWEEP_INTERVAL_MS;
     this.timer = interval > 0 ? setInterval(() => void this.sweep(), interval) : null;
     this.timer?.unref?.();
     void this.sweep();
@@ -410,7 +460,8 @@ export class DecisionsPhoneImages implements PhoneImageStore {
       image.questionId,
       `${image.attachmentId}.${ext}`
     );
-    if (!isTypablePath(target)) throw new Error("A phone image's path can't be typed");
+    // One the library types verbatim and Daintree's block takes as it is, or the words would be refused too.
+    if (!isTypedImagePath(target)) throw new Error("A phone image's path can't be typed");
     // Recorded before any file exists, so nothing written can go unfound.
     if (!record.roots.includes(root)) {
       if (record.roots.length >= MAX_ROOTS) throw new Error("Too many directories hold images");
@@ -440,20 +491,32 @@ export class DecisionsPhoneImages implements PhoneImageStore {
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       OWNER_RW_FILE_MODE
     );
+    let written: Stats;
     try {
       try {
         await handle.writeFile(image.bytes);
         // The umask can take away the owner's read too.
         if (process.platform !== "win32") await handle.chmod(OWNER_RW_FILE_MODE);
         await handle.sync();
+        written = await handle.stat();
       } finally {
         await handle.close();
       }
       // Replaces a damaged or planted file there, never following a link.
       await rename(part, target);
     } catch (error) {
-      await unlink(part).catch(() => {});
+      await unlinkQuietly(part);
       throw error;
+    }
+    // A directory swapped for a link meanwhile took the file elsewhere: it goes, and the store fails.
+    const placed = await lstatOrNull(target);
+    const same = placed !== null && placed.ino === written.ino && placed.dev === written.dev;
+    if (
+      !same ||
+      (await existingChain(decisions, [IMAGES_DIR, record.id, image.questionId])) !== dir
+    ) {
+      if (same) await unlinkQuietly(target);
+      throw new Error("A phone image's directory changed while it was written");
     }
     await syncParentDirectory(target);
     return target;
@@ -473,15 +536,27 @@ export class DecisionsPhoneImages implements PhoneImageStore {
     const inUse = questionsInUse(rows, intents, handled);
     const now = this.now();
     const roots: string[] = [];
+    const missing: Record<string, number> = {};
     for (const root of record.roots) {
-      if (await this.sweepRoot(root, record.id, { known, deleted, inUse, now })) roots.push(root);
+      const swept = await this.sweepRoot(root, record.id, { known, deleted, inUse, now });
+      if (swept === "missing") {
+        const since = record.missing?.[root] ?? now;
+        if (now - since >= MISSING_ROOT_MS) continue;
+        missing[root] = since;
+      }
+      if (swept !== "empty") roots.push(root);
     }
-    if (roots.length !== record.roots.length) {
-      await writeRecord(this.o.rootsFile, { ...record, roots });
+    const before = JSON.stringify([record.roots, record.missing ?? {}]);
+    if (JSON.stringify([roots, missing]) !== before) {
+      await writeRecord(this.o.rootsFile, { ...record, roots, missing });
     }
   }
 
-  /** True while the root still holds this installation's images. */
+  /**
+   * `empty` once the root is reached and holds none of this installation's
+   * images, `missing` when the root itself isn't there (gone with its
+   * worktree, or a drive not mounted), `kept` otherwise.
+   */
   private async sweepRoot(
     root: string,
     storeId: string,
@@ -491,17 +566,17 @@ export class DecisionsPhoneImages implements PhoneImageStore {
       inUse: ReadonlySet<string>;
       now: number;
     }
-  ): Promise<boolean> {
+  ): Promise<"empty" | "missing" | "kept"> {
     let rootStats: Stats;
     try {
       rootStats = await stat(root);
     } catch (error) {
-      // Gone with its worktree, and its images with it; unreachable for now is kept.
-      return !isMissing(error);
+      return isMissing(error) ? "missing" : "kept";
     }
-    if (!rootStats.isDirectory()) return false;
+    if (!rootStats.isDirectory()) return "missing";
     const dir = await existingChain(root, [...DECISIONS_DIR, IMAGES_DIR, storeId]);
-    if (dir === null) return (await lstatOrNull(imagesDir(root, storeId))) !== null;
+    if (dir === null)
+      return (await lstatOrNull(imagesDir(root, storeId))) === null ? "empty" : "kept";
     for (const name of await readdir(dir)) {
       if (!ID.test(name)) continue;
       const question = join(dir, name);
@@ -511,7 +586,7 @@ export class DecisionsPhoneImages implements PhoneImageStore {
       }
       await this.ageQuestionDir(question, facts.inUse.has(name), facts.now);
     }
-    return !(await rmdirIfEmpty(dir));
+    return (await rmdirIfEmpty(dir)) ? "empty" : "kept";
   }
 
   /**
@@ -520,25 +595,16 @@ export class DecisionsPhoneImages implements PhoneImageStore {
    * no write is making.
    */
   private async ageQuestionDir(dir: string, inUse: boolean, now: number): Promise<void> {
-    const stats = await lstatOrNull(dir);
-    if (stats === null || stats.isSymbolicLink() || !stats.isDirectory() || !owned(stats)) return;
-    for (const name of await readdir(dir)) {
-      const entry = join(dir, name);
-      const entryStats = await lstatOrNull(entry);
-      if (entryStats === null || entryStats.isDirectory()) continue;
-      if (PART.test(name) || entryStats.isSymbolicLink()) {
-        await unlink(entry).catch(() => {});
-        continue;
+    await ownEntries(dir, async (entry, name, stats) => {
+      if (PART.test(name) || stats.isSymbolicLink()) {
+        await unlinkQuietly(entry);
+      } else if (inUse) {
+        const at = new Date(now);
+        await lutimes(entry, at, at).catch(() => {});
+      } else if (now - stats.mtimeMs >= this.retentionMs + PHONE_IMAGE_SWEEP_INTERVAL_MS) {
+        await unlinkQuietly(entry);
       }
-      if (inUse) {
-        if (now - entryStats.mtimeMs > SWEEP_INTERVAL_MS) {
-          const at = new Date(now);
-          await lutimes(entry, at, at).catch(() => {});
-        }
-      } else if (now - entryStats.mtimeMs >= this.retentionMs) {
-        await unlink(entry).catch(() => {});
-      }
-    }
+    });
     await rmdirIfEmpty(dir);
   }
 }
@@ -560,6 +626,8 @@ export async function erasePhoneImages(rootsFile: string): Promise<boolean> {
   const left: string[] = [];
   for (const root of record.roots) {
     try {
+      // A root not there may be a drive not mounted: kept for a sweep to find.
+      if (!(await stat(root)).isDirectory()) continue;
       const dir = await existingChain(root, [...DECISIONS_DIR, IMAGES_DIR, record.id]);
       if (dir === null) {
         if ((await lstatOrNull(imagesDir(root, record.id))) !== null) left.push(root);
@@ -569,12 +637,15 @@ export async function erasePhoneImages(rootsFile: string): Promise<boolean> {
         if (ID.test(name)) await removeQuestionDir(join(dir, name));
       }
       if (!(await rmdirIfEmpty(dir))) left.push(root);
-    } catch (error) {
-      if (!isMissing(error)) left.push(root);
+    } catch {
+      left.push(root);
     }
   }
+  const missing = Object.fromEntries(
+    Object.entries(record.missing ?? {}).filter(([root]) => left.includes(root))
+  );
   try {
-    await writeRecord(rootsFile, { ...record, roots: left });
+    await writeRecord(rootsFile, { ...record, roots: left, missing }, true);
   } catch {
     return false;
   }

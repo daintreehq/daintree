@@ -250,8 +250,7 @@ function takeImages(cursor: Cursor): DecisionImage[] | null {
     let image: DecisionImage;
     const path = cursor.take(`image_${n}`);
     if (path !== null) {
-      if (!isTypablePath(path) || !isAbsolutePath(path)) return null;
-      if (sanitizeAnswerText(path, path.length) !== path) return null;
+      if (!isTypedImagePath(path)) return null;
       image = { path, alt: null };
     } else {
       const reason = cursor.take(`image_${n}_unavailable`);
@@ -268,9 +267,18 @@ function takeImages(cursor: Cursor): DecisionImage[] | null {
   return images;
 }
 
-/** POSIX or Windows, whichever host stored it: the block is typed on the machine that did. */
-function isAbsolutePath(path: string): boolean {
-  return path.startsWith("/") || /^[A-Za-z]:\\/.test(path) || path.startsWith("\\\\");
+/**
+ * An image path a block can list: one the library types verbatim
+ * (`isTypablePath`), absolute (POSIX or Windows, whichever host stored it),
+ * and one nothing here would change, a marker-like run of text included. The
+ * store refuses any other, so a pane's path can never get its answer refused.
+ */
+export function isTypedImagePath(path: string): boolean {
+  return (
+    isTypablePath(path) &&
+    (path.startsWith("/") || /^[A-Za-z]:\\/.test(path) || path.startsWith("\\\\")) &&
+    sanitizeAnswerText(path, path.length) === path
+  );
 }
 
 function parseBlock(cursor: Cursor): AnswerBlock | null {
