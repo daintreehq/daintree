@@ -29,6 +29,26 @@ afterEach(() => {
 });
 
 describe("Decisions disclosure", () => {
+  it("says phone photos are stored on this computer, where, and when they're deleted (#16233)", () => {
+    render(<DecisionsDisclosure />);
+    const item = [...document.querySelectorAll("li")].find((li) =>
+      li.textContent?.startsWith("Photos from your phone are stored on this computer.")
+    );
+    const text = item?.textContent ?? "";
+    for (const promise of [
+      "end-to-end encrypted",
+      "saved unencrypted on the computer whose agent asked",
+      "on the Remote Host for a pane on one",
+      "a .daintree/decisions folder Git ignores",
+      "On macOS and Linux only your user account can read it",
+      "deleted with its question",
+      "when you delete Decisions' local data",
+      "seven days after it was typed in",
+    ]) {
+      expect(text, promise).toContain(promise);
+    }
+  });
+
   it("says what terminal snapshots send, when, and how, and that they're off until asked for", () => {
     render(<DecisionsDisclosure />);
     const text = snapshotItem().textContent ?? "";

@@ -271,6 +271,25 @@ describe("copiedAnswerText", () => {
       copiedAnswerText({ question_id: qid(41), alias: 41, answers_json: "[]" }, [])
     ).toBeNull();
   });
+
+  it("lists the photos of the answer and of its follow-up, as delivery would type them (#16233)", () => {
+    const photo = "/repo/.daintree/decisions/images/s/q/a.png";
+    const followUp = message({ message_id: "0193f1a2b3c4d5e6aaaa000000000001", event_seq: 20 });
+    const text = copiedAnswerText(
+      { ...row(41), answers_json: serializeAnswers([entry({ event_seq: 15 })]) },
+      [opened({ entry_id: "entry-1", event_seq: 15 })],
+      [{ message: followUp, text: "And this one." }],
+      new Map([
+        ["entry-1", [{ attachmentId: "a1", alt: "The connector", path: photo }]],
+        [followUp.message_id, [{ attachmentId: "a2", unavailable: "fetch_failed" as const }]],
+      ])
+    )!;
+    expect(text).toContain(
+      `comment: Proceed with the compact sidebar.\nimage_1: ${photo}\nimage_1_alt: The connector\n`
+    );
+    expect(text).toContain("text: And this one.\nimage_1_unavailable: fetch_failed\n");
+    expect(text).not.toContain("decision-injection");
+  });
 });
 
 describe("resumableReason", () => {

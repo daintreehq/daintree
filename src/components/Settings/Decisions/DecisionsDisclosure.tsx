@@ -9,7 +9,8 @@ import { cn } from "@/lib/utils";
  * transcript with the question and its options to a model provider. The
  * decision model's item is #16027's: its CLI sends from this computer, under
  * learning's own consent. Terminal snapshots are #16228's, under their own
- * consent, which shows `TerminalSnapshotsDisclosure` too.
+ * consent, which shows `TerminalSnapshotsDisclosure` too. Phone photos are
+ * #16233's: stored in the asking pane's folder so its agent can open them.
  */
 export function DecisionsDisclosure({ className }: { className?: string }) {
   return (
@@ -23,6 +24,17 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         your paired phones and enrolled Remote Hosts can read them. Each Remote Host you connect to
         is enrolled automatically, unless you turn that off under Remote Hosts, and can read every
         question and answer.
+      </li>
+      <li>
+        <span className="font-medium text-text-primary">
+          Photos from your phone are stored on this computer.
+        </span>{" "}
+        A photo you attach to an answer or follow-up reaches the relay end-to-end encrypted, then is
+        saved unencrypted on the computer whose agent asked, or on the Remote Host for a pane on
+        one, in a .daintree/decisions folder Git ignores inside the folder the agent started in, so
+        the agent can open it. On macOS and Linux only your user account can read it; on Windows it
+        has that folder&apos;s permissions. It&apos;s deleted with its question, when you delete
+        Decisions&apos; local data, and seven days after it was typed in.
       </li>
       <li>
         <span className="font-medium text-text-primary">Routing details the relay can read.</span>{" "}
