@@ -18,7 +18,11 @@ import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { logError, logWarn } from "../utils/logger.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { PrepareWindowRecreation } from "./windowRecreation.js";
-import { holdReloadNotice, rendererReloadNotice } from "./rendererReloadNotice.js";
+import {
+  dropReloadNotice,
+  holdReloadNotice,
+  rendererReloadNotice,
+} from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
@@ -39,6 +43,7 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
   const rendererCrashTimestamps: number[] = [];
 
   appWebContents.on("render-process-gone", (_event, details) => {
+    dropReloadNotice(appWebContents);
     if (details.reason === "clean-exit") return;
     const pvm = getProjectViewManager();
     const projectId = pvm?.getProjectIdForWebContents(appWebContents.id) ?? undefined;

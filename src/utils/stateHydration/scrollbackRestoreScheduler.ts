@@ -312,7 +312,9 @@ export function resetScrollbackRestoreBatch(): void {
   disposeDestroyedListener?.();
   disposeDestroyedListener = null;
   restoreQueue.length = 0;
+  const waiting = [...awaitingSpawn.values()];
   awaitingSpawn.clear();
+  for (const queued of waiting) queued.abandon();
   activeRestores = 0;
   queueGeneration++;
   syncFocusSubscription();

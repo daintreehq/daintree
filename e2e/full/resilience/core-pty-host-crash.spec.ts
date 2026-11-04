@@ -592,11 +592,18 @@ test.describe.serial("Resilience: real pty-host death and renderer crash", () =>
     const wcId = view.wcId;
 
     await test.step("the reloaded view tells the user it was reloaded", async () => {
+      // Read from the view's notification history, not the screen: a toast
+      // shows only in a focused window, and nothing restores Playwright's
+      // focus emulation on the reloaded renderer before the notice lands.
       await expect
-        .poll(() => viewEval<string>(wcId, "document.body.innerText"), {
-          timeout: T_LONG,
-          message: "the reload notice should be on screen",
-        })
+        .poll(
+          () =>
+            viewEval<string>(
+              wcId,
+              `(window.__daintreeNotificationsE2E?.historyMessages() ?? []).join(" | ")`
+            ),
+          { timeout: T_LONG, message: "the reloaded view should record the reload notice" }
+        )
         .toMatch(
           /(A project view|The renderer process) (crashed and was automatically reloaded|was stopped from outside Daintree and was reloaded|was restarted)/
         );

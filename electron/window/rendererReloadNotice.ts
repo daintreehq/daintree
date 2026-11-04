@@ -50,6 +50,17 @@ export function holdReloadNotice(
   });
 }
 
+/**
+ * The view died again before its reload reported in. Whatever recovery is
+ * chosen this time holds its own notice, if any; a crash loop that ends on the
+ * recovery page must not leave an "automatically reloaded" notice for the next
+ * document the view loads.
+ */
+export function dropReloadNotice(wc: WebContents): void {
+  heldNotices.get(wc.id)?.forget();
+  heldNotices.delete(wc.id);
+}
+
 /** The view reported first-interactive: show it the notice held for its reload. */
 export function releaseReloadNotice(wc: WebContents): void {
   const held = heldNotices.get(wc.id);

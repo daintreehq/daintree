@@ -334,6 +334,14 @@ describe("useFindInPage", () => {
       findNext: false,
       matchCase: true,
     });
+
+    webview.findInPage.mockClear();
+    act(() => result.current.goPrev());
+    expect(webview.findInPage).toHaveBeenCalledWith("test", {
+      forward: false,
+      findNext: false,
+      matchCase: true,
+    });
   });
 
   it("resets matchCase on close", () => {
@@ -536,15 +544,15 @@ describe("useFindInPage", () => {
 // Mirrors what Electron 42's guest find does, as measured: `findNext: true`
 // opens a session, `false` steps through it, and a step with no session open
 // is never answered. Replies arrive after `findInPage` returns its id.
-function createSessionWebview(matchesFor: (text: string) => number) {
+function createSessionWebview(matchesFor: (text: string, matchCase: boolean) => number) {
   const webview = createMockWebview();
   let nextId = 0;
   let session: { text: string; active: number } | null = null;
   const pending: Array<Record<string, unknown>> = [];
   webview.findInPage.mockImplementation(
-    (text: string, opts: { findNext?: boolean; forward?: boolean }) => {
+    (text: string, opts: { findNext?: boolean; forward?: boolean; matchCase?: boolean }) => {
       const requestId = ++nextId;
-      const matches = matchesFor(text);
+      const matches = matchesFor(text, opts.matchCase ?? false);
       if (opts.findNext || (session && session.text !== text)) {
         session = { text, active: matches > 0 ? 1 : 0 };
       } else if (session) {
@@ -602,7 +610,7 @@ describe("useFindInPage against Electron's find sessions", () => {
   });
 
   it("starts a fresh session when match case is toggled", () => {
-    const { webview, flush } = createSessionWebview(() => 2);
+    const { webview, flush } = createSessionWebview((_text, matchCase) => (matchCase ? 3 : 4));
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
 
     act(() => result.current.open());
@@ -611,10 +619,11 @@ describe("useFindInPage against Electron's find sessions", () => {
     act(() => result.current.goNext());
     flush();
     expect(result.current.activeMatch).toBe(2);
+    expect(result.current.matchCount).toBe(4);
 
     act(() => result.current.toggleMatchCase());
     flush();
     expect(result.current.activeMatch).toBe(1);
-    expect(result.current.matchCount).toBe(2);
+    expect(result.current.matchCount).toBe(3);
   });
 });

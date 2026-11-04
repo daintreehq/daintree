@@ -14,6 +14,7 @@ vi.mock("../../ipc/errorHandlers.js", () => ({ notifyError: vi.fn() }));
 vi.mock("../rendererReloadNotice.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../rendererReloadNotice.js")>()),
   holdReloadNotice: vi.fn(),
+  dropReloadNotice: vi.fn(),
 }));
 
 const availableMemory = { mb: null as number | null };
@@ -25,7 +26,7 @@ vi.mock("../../utils/logger.js", () => ({ logError: vi.fn(), logWarn: vi.fn() })
 
 import { app } from "electron";
 import { notifyError } from "../../ipc/errorHandlers.js";
-import { holdReloadNotice } from "../rendererReloadNotice.js";
+import { dropReloadNotice, holdReloadNotice } from "../rendererReloadNotice.js";
 import { logError, logWarn } from "../../utils/logger.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { isWindowRecreating } from "../../lifecycle/windowRecreationState.js";
@@ -167,6 +168,14 @@ describe("app-view render-process-gone (#12954)", () => {
 
     expect(onViewCrashed).toHaveBeenCalledTimes(3);
     expect(appWebContents.loadURL).toHaveBeenCalledWith("app://daintree/recovery.html?crashed-1");
+    // Every death drops the notice the last reload held; the recovery page
+    // that ends the loop holds none of its own.
+    expect(dropReloadNotice).toHaveBeenCalledTimes(3);
+    expect(dropReloadNotice).toHaveBeenCalledWith(appWebContents);
+    expect(holdReloadNotice).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(dropReloadNotice).mock.invocationCallOrder[2]).toBeGreaterThan(
+      vi.mocked(holdReloadNotice).mock.invocationCallOrder[1]!
+    );
   });
 
   it.each([

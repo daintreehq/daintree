@@ -33,7 +33,11 @@ import { isWebviewSrcAllowed } from "./webviewSrcGate.js";
 import { gateHtmlPreviewWebviewAttach } from "../setup/htmlPreviewSession.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
-import { holdReloadNotice, rendererReloadNotice } from "./rendererReloadNotice.js";
+import {
+  dropReloadNotice,
+  holdReloadNotice,
+  rendererReloadNotice,
+} from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 import {
   forgetRendererDocumentState,
@@ -168,6 +172,7 @@ export function setupViewHandlers(
     // A dead renderer never reports `responsive`, and its last input snapshot
     // belongs to the document that died with it.
     forgetRendererDocumentState(wc.id);
+    dropReloadNotice(wc);
     if (details.reason === "clean-exit") return;
 
     const projectId = host.webContentsToProject.get(wc.id);

@@ -3,6 +3,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import type { WebContents } from "electron";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
+  dropReloadNotice,
   holdReloadNotice,
   releaseReloadNotice,
   rendererReloadNotice,
@@ -96,9 +97,22 @@ describe("held reload notices", () => {
     holdReloadNotice(wc, "reloaded");
     wc.destroy();
 
+    // A live WebContents reusing the id must not inherit it.
+    const successor = fakeWebContents(7);
+    releaseReloadNotice(successor);
+
+    expect(successor.send).not.toHaveBeenCalled();
+  });
+
+  it("drops the notice when the view dies again before its reload reports in", () => {
+    const wc = fakeWebContents(7);
+    holdReloadNotice(wc, "A project view crashed and was automatically reloaded.");
+
+    dropReloadNotice(wc);
     releaseReloadNotice(wc);
 
     expect(wc.send).not.toHaveBeenCalled();
+    expect(wc.listenerCount("destroyed")).toBe(0);
   });
 
   it("keeps the notice for the next report when the send throws", () => {
@@ -110,8 +124,30 @@ describe("held reload notices", () => {
 
     releaseReloadNotice(wc);
     releaseReloadNotice(wc);
+    releaseReloadNotice(wc);
 
     expect(wc.send).toHaveBeenCalledTimes(2);
+    expect(wc.send).toHaveBeenLastCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "warning",
+      message: "reloaded",
+      urgent: true,
+    });
     expect(wc.listenerCount("destroyed")).toBe(0);
+  });
+
+  it("forgets every held notice and its listener on reset", () => {
+    const a = fakeWebContents(7);
+    const b = fakeWebContents(8);
+    holdReloadNotice(a, "reloaded");
+    holdReloadNotice(b, "reloaded");
+
+    resetReloadNoticesForTest();
+    releaseReloadNotice(a);
+    releaseReloadNotice(b);
+
+    expect(a.send).not.toHaveBeenCalled();
+    expect(b.send).not.toHaveBeenCalled();
+    expect(a.listenerCount("destroyed")).toBe(0);
+    expect(b.listenerCount("destroyed")).toBe(0);
   });
 });
