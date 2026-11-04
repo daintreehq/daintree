@@ -91,6 +91,12 @@ export interface DecisionsSettings {
    * learning reads as off without it.
    */
   modelConsentedAt: number | null;
+  /**
+   * The agents whose launches get `ask_human` (#16223), by agent id. An agent
+   * not listed launches without the `daintree-decisions` server, so each one
+   * gets it only once the person switches it on; empty until then.
+   */
+  askHumanAgents: string[];
 }
 
 /** The agent CLIs the decision model can run (#16026), each one only when the person chooses it. */
