@@ -149,6 +149,26 @@ describe("QuestionBridge", () => {
     expect(live.getDecision).toHaveBeenCalledWith(result.questionId, paneIdentityOf(ORIGIN));
   });
 
+  // The 0.4.0 bridge's follow-ups would skip `admit` and land in the outbox a live attempt publishes (#16232).
+  it("refuses an agent's follow-up, with or without a live attempt, and commits nothing", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Later?" } });
+    const followUp = { question_id: asked.questionId, text: "And then?", expects_reply: true };
+
+    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject({
+      code: "not_supported",
+    });
+    const posting = { ...liveBridge(), postMessage: vi.fn() };
+    live = posting;
+    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toBeInstanceOf(
+      BridgeError
+    );
+
+    expect(posting.postMessage).not.toHaveBeenCalled();
+    expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual(["create"]);
+    expect((await store.getQuestion(asked.questionId))?.messages_json).toBe("[]");
+  });
+
   it("asks under the lifetime's own policy, as the attempts do", async () => {
     const b = bridge();
     const strict = await b.registerQuestion({

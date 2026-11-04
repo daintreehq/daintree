@@ -305,10 +305,10 @@ describe("DecisionsConnectionSection relay check", () => {
     });
 
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
-    expect(screen.getByText("The relay needs an update")).toBeTruthy();
+    expect(screen.getByText("The relay is an older release")).toBeTruthy();
     expect(
       screen.getByText(
-        /The relay runs 0\.0\.9, protocol 1\. Daintree expects 0\.1\.0, protocol 1\./
+        /The relay runs 0\.0\.9, protocol 1\. Daintree expects 0\.1\.0, protocol 1\. Both speak protocol 1, so questions and answers work\./
       )
     ).toBeTruthy();
     expect(checkButton("Check again")).toBeTruthy();

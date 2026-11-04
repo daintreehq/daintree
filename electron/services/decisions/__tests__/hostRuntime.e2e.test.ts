@@ -16,6 +16,7 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   buildSignedAction,
+  buildSignedMessage,
   encryptEnvelope,
   exportPublicKey,
   generateDeviceKeys,
@@ -23,7 +24,7 @@ import {
   newId,
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
-import { EventData, type DeviceCert } from "@daintreehq/decisions-protocol";
+import { EventData, MESSAGE_RECORD_TYPE, type DeviceCert } from "@daintreehq/decisions-protocol";
 
 vi.mock("electron", () => ({
   app: {
@@ -324,6 +325,50 @@ async function phoneAnswers(
   });
 }
 
+/** The phone sends a follow-up on `questionId`, signed and sealed as the 0.4.0 phone app does. */
+async function phoneFollowsUp(
+  relay: FakeRelay,
+  owner: Awaited<ReturnType<typeof makeOwner>>,
+  phone: Phone,
+  questionId: string,
+  text: string
+): Promise<LedgerEvent> {
+  const messageId = newId();
+  const envelope = await encryptEnvelope({
+    epochKey: owner.identity.epochs.get(1)!,
+    installationId: owner.installationId,
+    questionId,
+    recordId: messageId,
+    recordType: MESSAGE_RECORD_TYPE,
+    revision: 0,
+    senderDeviceId: phone.deviceId,
+    purpose: "message-content",
+    plaintext: { content_version: 1, side: "human", text, images: [] },
+  });
+  const signed = await buildSignedMessage({
+    installationId: owner.installationId,
+    questionId,
+    messageId,
+    side: "human",
+    signerDeviceId: phone.deviceId,
+    signingKey: phone.keys.signing.privateKey,
+    envelope,
+  });
+  return relay.append({
+    event_type: "decision.message.posted",
+    question_id: questionId,
+    question_revision: null,
+    origin_device_id: phone.deviceId,
+    data: EventData.messagePosted.parse({
+      message_seq: 1,
+      committed_at: new Date().toISOString(),
+      record: signed.record,
+      envelope: signed.envelope,
+      target_host_id: relay.questions.get(questionId)!.target_host_id,
+    }) as Record<string, unknown>,
+  });
+}
+
 /** The Host's terminals: two agent panes at their prompts, and every line typed into them. */
 class HostTerminals implements TerminalNotifyPtyClient, DecisionSinkPtyClient, PaneTerminalReader {
   readonly terminals = new Map<string, NotifyTerminalInfo & PaneTerminalInfo>();
@@ -486,134 +531,140 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/** The Host enrolled and its owner gone, with Decisions connected to the fake relay. */
+async function startHost() {
+  // The owner enrolls the Host as its own device, then closes: nothing of the owner runs after this.
+  const owner = await makeOwner();
+  const pending = new MemoryPendingHostStore();
+  const { request } = await createHostRequest({ pending, label: "studio", fresh: true });
+  const { response } = await enrollHost(owner.client, request);
+  const hostKeys = new MemoryKeyStore();
+  const host = await acceptHostEnrollment({
+    response,
+    pending,
+    keyStore: hostKeys,
+    verifyWithRelay: false,
+  });
+  const phoneKeys = await generateDeviceKeys(false);
+  const phoneId = newId();
+  const phone: Phone = {
+    deviceId: phoneId,
+    keys: phoneKeys,
+    cert: await issueDeviceCert({
+      issuerDeviceId: owner.deviceId,
+      issuerSigningKey: owner.identity.keys.signing.privateKey,
+      installationId: owner.installationId,
+      deviceId: phoneId,
+      role: "phone",
+      label: "Phone",
+      signingPub: await exportPublicKey(phoneKeys.signing.publicKey),
+      exchangePub: await exportPublicKey(phoneKeys.exchange.publicKey),
+    }),
+  };
+  const relay = new FakeRelay([
+    ...owner.devices,
+    {
+      device_id: phone.deviceId,
+      role: "phone",
+      label: "Phone",
+      cert: phone.cert,
+      created_at: new Date().toISOString(),
+      last_seen_at: null,
+      revoked_at: null,
+      push_enabled: true,
+    },
+  ]);
+  relay.hostDeviceId = host.config.deviceId;
+
+  // The Host's own terminals, panes and listener.
+  const terminals = new HostTerminals();
+  terminals.add("pane-1");
+  terminals.add("pane-2");
+  const bearers = new Map([
+    ["token-pane-1", { paneId: "pane-1", principal: "principal-1", workspaceId: "project-1" }],
+    ["token-pane-2", { paneId: "pane-2", principal: "principal-2", workspaceId: "project-1" }],
+  ]);
+  const principalFor = (paneId: string) =>
+    [...bearers.values()].find((bearer) => bearer.paneId === paneId)?.principal ?? null;
+  const listener = await loopbackListener();
+  cleanups.push(() => listener.close());
+  const stateListeners = new Set<(payload: NotifyStateChange) => void>();
+  const notify = new TerminalNotifyService({
+    getPtyClient: () => terminals,
+    onStateChanged: (listen) => {
+      stateListeners.add(listen);
+      return () => stateListeners.delete(listen);
+    },
+    onKilled: () => () => {},
+    onTrashed: () => () => {},
+    isEnabled: () => false,
+    publish: () => {},
+  });
+
+  const record = {
+    relayOrigin: host.config.relayOrigin,
+    installationId: host.config.installationId,
+    deviceId: host.config.deviceId,
+    ownerDeviceId: host.owner.deviceId,
+    hostId: "host_studio_0001",
+    ownerOffAt: null,
+    revokedAt: null,
+    credentialsRemovedAt: null,
+  };
+  const service: DecisionsService = new DecisionsService({
+    openStore: async () => new DaintreeLocalStore(sqlite),
+    keyFilePath: () => path.join(dir, "keys.bin"),
+    openQuestions: (source, previousClosed) =>
+      openDecisionsMcpRoute(
+        source,
+        {
+          bearerFor: (token) => bearers.get(token) ?? null,
+          principalFor,
+          hostId: () => service.getSettings()?.hostId ?? null,
+          getPtyClient: () => terminals,
+          holdListener: listener.hold,
+        },
+        previousClosed
+      ),
+    delivery: {
+      principalFor,
+      getPtyClient: () => terminals,
+      holdWakes: () => {
+        const scope = notify.openWakeScope();
+        return {
+          queueWake: (pane, projectId, wake) => scope.enqueueWake(pane, projectId, wake),
+          cancelQueued: () => scope.cancelQueued(),
+          release: () => scope.release(),
+        };
+      },
+      watchPanes: () => () => {},
+    },
+    // The Host's sealed keys stand in for its keychain; the relay is the fake one.
+    connect: (options) =>
+      new RelayConnection({
+        ...options,
+        keys: hostKeys,
+        rotations: undefined,
+        webSocket: relay.webSocket,
+        fetchImpl: relay.fetch,
+        watchResume: () => () => {},
+        watchNetwork: () => () => {},
+        rand: () => 0,
+        pumpIntervalMs: 0,
+      }),
+  });
+  cleanups.push(() => service.dispose());
+
+  await service.start(hostLifetimeSettings(record), "host");
+  await vi.waitFor(() => expect(service.getStatus().state).toBe("connected"), {
+    timeout: 15_000,
+  });
+  return { owner, phone, relay, host, terminals, listener, record, service };
+}
+
 describe("Decisions on an enrolled Remote Host, with its owner's computer gone (#16022)", () => {
   it("asks from the Host's pane, and types the phone's answer into it, live and after being away", async () => {
-    // The owner enrolls the Host as its own device, then closes: nothing of the owner runs after this.
-    const owner = await makeOwner();
-    const pending = new MemoryPendingHostStore();
-    const { request } = await createHostRequest({ pending, label: "studio", fresh: true });
-    const { response } = await enrollHost(owner.client, request);
-    const hostKeys = new MemoryKeyStore();
-    const host = await acceptHostEnrollment({
-      response,
-      pending,
-      keyStore: hostKeys,
-      verifyWithRelay: false,
-    });
-    const phoneKeys = await generateDeviceKeys(false);
-    const phoneId = newId();
-    const phone: Phone = {
-      deviceId: phoneId,
-      keys: phoneKeys,
-      cert: await issueDeviceCert({
-        issuerDeviceId: owner.deviceId,
-        issuerSigningKey: owner.identity.keys.signing.privateKey,
-        installationId: owner.installationId,
-        deviceId: phoneId,
-        role: "phone",
-        label: "Phone",
-        signingPub: await exportPublicKey(phoneKeys.signing.publicKey),
-        exchangePub: await exportPublicKey(phoneKeys.exchange.publicKey),
-      }),
-    };
-    const relay = new FakeRelay([
-      ...owner.devices,
-      {
-        device_id: phone.deviceId,
-        role: "phone",
-        label: "Phone",
-        cert: phone.cert,
-        created_at: new Date().toISOString(),
-        last_seen_at: null,
-        revoked_at: null,
-        push_enabled: true,
-      },
-    ]);
-    relay.hostDeviceId = host.config.deviceId;
-
-    // The Host's own terminals, panes and listener.
-    const terminals = new HostTerminals();
-    terminals.add("pane-1");
-    terminals.add("pane-2");
-    const bearers = new Map([
-      ["token-pane-1", { paneId: "pane-1", principal: "principal-1", workspaceId: "project-1" }],
-      ["token-pane-2", { paneId: "pane-2", principal: "principal-2", workspaceId: "project-1" }],
-    ]);
-    const principalFor = (paneId: string) =>
-      [...bearers.values()].find((bearer) => bearer.paneId === paneId)?.principal ?? null;
-    const listener = await loopbackListener();
-    cleanups.push(() => listener.close());
-    const stateListeners = new Set<(payload: NotifyStateChange) => void>();
-    const notify = new TerminalNotifyService({
-      getPtyClient: () => terminals,
-      onStateChanged: (listen) => {
-        stateListeners.add(listen);
-        return () => stateListeners.delete(listen);
-      },
-      onKilled: () => () => {},
-      onTrashed: () => () => {},
-      isEnabled: () => false,
-      publish: () => {},
-    });
-
-    const record = {
-      relayOrigin: host.config.relayOrigin,
-      installationId: host.config.installationId,
-      deviceId: host.config.deviceId,
-      ownerDeviceId: host.owner.deviceId,
-      hostId: "host_studio_0001",
-      ownerOffAt: null,
-      revokedAt: null,
-      credentialsRemovedAt: null,
-    };
-    const service: DecisionsService = new DecisionsService({
-      openStore: async () => new DaintreeLocalStore(sqlite),
-      keyFilePath: () => path.join(dir, "keys.bin"),
-      openQuestions: (source, previousClosed) =>
-        openDecisionsMcpRoute(
-          source,
-          {
-            bearerFor: (token) => bearers.get(token) ?? null,
-            principalFor,
-            hostId: () => service.getSettings()?.hostId ?? null,
-            getPtyClient: () => terminals,
-            holdListener: listener.hold,
-          },
-          previousClosed
-        ),
-      delivery: {
-        principalFor,
-        getPtyClient: () => terminals,
-        holdWakes: () => {
-          const scope = notify.openWakeScope();
-          return {
-            queueWake: (pane, projectId, wake) => scope.enqueueWake(pane, projectId, wake),
-            cancelQueued: () => scope.cancelQueued(),
-            release: () => scope.release(),
-          };
-        },
-        watchPanes: () => () => {},
-      },
-      // The Host's sealed keys stand in for its keychain; the relay is the fake one.
-      connect: (options) =>
-        new RelayConnection({
-          ...options,
-          keys: hostKeys,
-          rotations: undefined,
-          webSocket: relay.webSocket,
-          fetchImpl: relay.fetch,
-          watchResume: () => () => {},
-          watchNetwork: () => () => {},
-          rand: () => 0,
-          pumpIntervalMs: 0,
-        }),
-    });
-    cleanups.push(() => service.dispose());
-
-    await service.start(hostLifetimeSettings(record), "host");
-    await vi.waitFor(() => expect(service.getStatus().state).toBe("connected"), {
-      timeout: 15_000,
-    });
+    const { owner, phone, relay, host, terminals, listener, record, service } = await startHost();
 
     // An agent on the Host asks; the question is the Host's own, with its host id.
     const first = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
@@ -689,5 +740,51 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     // Everything the relay was asked was signed by the Host's own device: the owner signed nothing.
     const signers = new Set(relay.requests.map((request) => request.deviceId));
     expect(signers).toEqual(new Set([host.config.deviceId]));
+  }, 60_000);
+
+  // A 0.4.0 relay sends thread messages only to a desktop that declared them, and Daintree declares
+  // nothing until it types follow-ups (#16231). One that arrives anyway is stored and ignored (#16229).
+  it("ignores a phone's follow-up from a 0.4.0 relay, declares no 0.4.0 feature, and still types the answer", async () => {
+    const { owner, phone, relay, terminals, listener, service } = await startHost();
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const store = new DaintreeLocalStore(sqlite);
+    const before = (await store.getQuestion(asked))!;
+
+    const followUp = await phoneFollowsUp(relay, owner, phone, asked, "Actually, what about B?");
+    await vi.waitFor(
+      () =>
+        expect(
+          sqlite
+            .prepare("SELECT processed_at FROM decisions_inbound_events WHERE seq = ?")
+            .get(followUp.seq)
+        ).toEqual({ processed_at: expect.any(Number) }),
+      { timeout: 15_000 }
+    );
+    const after = (await store.getQuestion(asked))!;
+    expect(after).toMatchObject({
+      local_status: before.local_status,
+      delivery_status: before.delivery_status,
+      question_revision: before.question_revision,
+      answers_json: before.answers_json,
+      delivered_revision: before.delivered_revision,
+      messages_json: "[]",
+    });
+    expect(terminals.submitted).toEqual([]);
+    expect(service.getStatus().state).toBe("connected");
+
+    await phoneAnswers(relay, owner, phone, asked, "a");
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    expect(typedChoices(terminals.submitted[0]!.text)).toEqual(["a"]);
+    expect(terminals.submitted[0]!.text).not.toContain("what about B");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals.submitted).toHaveLength(1);
+    expect(relay.requests.some((request) => request.path === "/api/v1/deliveries/messages")).toBe(
+      false
+    );
+
+    const tickets = relay.requests.filter((request) => request.path === "/api/v1/socket-ticket");
+    expect(tickets.length).toBeGreaterThan(0);
+    for (const ticket of tickets) expect(ticket.body).not.toHaveProperty("features");
   }, 60_000);
 });

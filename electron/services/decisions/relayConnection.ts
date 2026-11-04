@@ -20,6 +20,7 @@ import { AnswerDelivery, type AnswerDeliveryDeps } from "./answerDelivery.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
 import { KeyRotations, pendingRotationOf } from "./keyRotation.js";
 import type { RelayFetch } from "./relayCheck.js";
+import { DaintreeRelayClient } from "./relayFeatures.js";
 import { relayRequests } from "./relayIdentity.js";
 import {
   ObservedSocket,
@@ -440,7 +441,7 @@ export class RelayConnection {
       store: this.o.store,
       keys: this.o.keys,
       // Reports are retried on every pass while they fail, so each is tried once.
-      client: new RelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
+      client: new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
       onKeysUnusable: () => this.halt({ state: "not-connected", problem: "keys" }),
     });
     this.delivery = delivery;
@@ -486,7 +487,7 @@ export class RelayConnection {
       if (attempt.retired) return;
       const retired = () => attempt.retired;
       // The outbox keeps its own retry times, so a request is tried once per pass.
-      const client = new RelayClient({ identity, fetch: requests.fetch, maxRetries: 0 });
+      const client = new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 });
       const settled = await this.settleKeys(attempt, client);
       if (attempt.retired) return;
       bridge = new DecisionsBridge({

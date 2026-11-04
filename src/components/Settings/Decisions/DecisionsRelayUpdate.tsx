@@ -10,7 +10,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { selectViewProject, selectViewScratch } from "@/store/viewWorkspace";
 import type { DecisionsRelayCompatibility } from "@shared/types/decisions";
-import { relayIsBehind, type RelayObservation } from "./relayCheckCopy";
+import { relayNeedsUpdate, type RelayObservation } from "./relayCheckCopy";
 import { openRelayUpdateTerminal } from "./relayUpdate";
 
 /** Where the update's pane would go, or why it can't go anywhere this window shows. */
@@ -66,7 +66,7 @@ export function DecisionsRelayUpdate({
 }) {
   const placement = useUpdatePlacement();
   const [starting, setStarting] = useState(false);
-  const behind = compatibility !== null && relayIsBehind(compatibility);
+  const behind = compatibility !== null && relayNeedsUpdate(compatibility);
 
   const disabledReason = running
     ? "An update is running in its terminal"

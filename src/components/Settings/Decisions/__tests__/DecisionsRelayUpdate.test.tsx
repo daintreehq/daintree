@@ -203,8 +203,14 @@ describe("Decisions relay update", () => {
     resetRelayUpdateRunForTests();
   });
 
-  it("puts the update forward for a relay behind this Daintree, and points the prompt at it", async () => {
-    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+  it("puts the update forward for a relay behind this Daintree that shares no protocol with it", async () => {
+    const relay = { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" };
+    const daintree = { protocolMin: 2, protocolMax: 2, workerVersion: "0.2.0" };
+    checkRelay.mockResolvedValue({
+      result: "claimed",
+      origin: ORIGIN,
+      compatibility: { relay, daintree, diverges: true },
+    });
     await renderSection();
 
     expect(updateButton().dataset.variant).toBe("contrast");
@@ -212,6 +218,18 @@ describe("Decisions relay update", () => {
     const versions = document.getElementById("decisions-relay-versions")!;
     expect(within(versions).getByText(/Update relay finds a release/)).toBeTruthy();
     expect(versions.textContent).not.toMatch(/never updates/);
+  });
+
+  // An older release on the same protocol keeps asking and answering (a 0.3.0 relay under 0.4.0 libraries, #16229).
+  it("offers an older relay that shares a protocol a newer release, without putting it forward", async () => {
+    checkRelay.mockResolvedValue(claimedAt("0.1.0"));
+    await renderSection();
+
+    expect(updateButton().dataset.variant).toBe("outline");
+    expect(updateButton().disabled).toBe(false);
+    const versions = document.getElementById("decisions-relay-versions")!;
+    expect(within(versions).getByText(/so questions and answers work/)).toBeTruthy();
+    expect(within(versions).getByText(/Update relay looks for a newer release/)).toBeTruthy();
   });
 
   it("still offers a look for a newer release when the versions match", async () => {
@@ -228,7 +246,7 @@ describe("Decisions relay update", () => {
     await renderSection();
 
     expect(document.getElementById("decisions-relay-update")).toBeNull();
-    expect(screen.getByText(/Update it from Daintree on the Host/)).toBeTruthy();
+    expect(screen.getByText(/Daintree on the Host, where it's set up, can update it/)).toBeTruthy();
   });
 
   it("waits for a check that reads the relay's version", async () => {
