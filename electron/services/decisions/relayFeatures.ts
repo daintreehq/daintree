@@ -7,12 +7,14 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * phone offers follow-ups, images or a terminal refresh on a question only
  * when the desktop that asked it declared that feature, so each one joins
  * this list with the Daintree work that handles it: follow-ups with their
- * typing (#16231), and pane snapshots with #16230, which a bridge asks for
- * only when its connection publishes them.
+ * typing (#16231), pane snapshots with #16230, which a bridge asks for only
+ * when its connection publishes them, and phone images with their storing
+ * (#16233).
  */
 export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "thread-messages-v1",
   "pane-snapshots-v1",
+  "phone-images-v1",
 ];
 
 function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {
@@ -21,10 +23,8 @@ function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {
 
 /**
  * The library's client, declaring only `DAINTREE_PROTOCOL_FEATURES` on its
- * socket tickets and event pages. The 0.4.0 bridge always asks for
- * `phone-images-v1`, which would let a phone attach images to an answer that
- * Daintree's sink can't yet type. The declaration is cut here, before the
- * request is signed.
+ * socket tickets and event pages, so a feature a later bridge asks for is
+ * cut here, before the request is signed, until Daintree handles it.
  */
 export class DaintreeRelayClient extends RelayClient {
   override events(

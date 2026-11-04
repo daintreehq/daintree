@@ -7,10 +7,14 @@ import {
   FOLLOWUP_NOTE_ANSWERED,
   FOLLOWUP_NOTE_UNANSWERED,
   MAX_FOLLOWUP_QUESTION_CHARS,
+  MAX_IMAGE_ALT_CHARS,
   PREFACE,
   THREAD_PREFACE,
+  isTypablePath,
   markerFor,
+  type PhoneImageUnavailableReason,
 } from "@daintreehq/decisions-client";
+import { LIMITS } from "@daintreehq/decisions-protocol";
 
 /**
  * The text Daintree types for a Decisions answer (#16015). The library hands
@@ -19,8 +23,14 @@ import {
  * place, and rendered again: Daintree's own wording around one delimited block
  * per answer, each carrying its injection marker, with every field of answer
  * text sanitised again as data. A follow-up the person sent from their phone
- * (#16231) is its own block, parsed and rendered the same way.
+ * (#16231) is its own block, parsed and rendered the same way, and either one
+ * lists the photos the person attached (#16233).
  */
+
+/** A phone image as a block lists it: the path the agent can open, or why there is none. */
+export type DecisionImage =
+  | { path: string; alt: string | null }
+  | { unavailable: PhoneImageUnavailableReason; alt: string | null };
 
 /** One answer block, as parsed from the library's notice. */
 export interface AnswerBlock {
@@ -41,6 +51,8 @@ export interface AnswerBlock {
   /** A correction's reason, as the person gave it on the phone; null when none. */
   reason: string | null;
   comment: string | null;
+  /** A person's answer only: the photos they attached, in order. */
+  images: DecisionImage[];
 }
 
 /** One follow-up message from the person, as parsed from the library's notice (#16231). */
@@ -56,6 +68,7 @@ export interface FollowupBlock {
   answered: boolean;
   /** Null for a message without words. */
   text: string | null;
+  images: DecisionImage[];
 }
 
 export type DecisionBlock = AnswerBlock | FollowupBlock;
@@ -101,6 +114,21 @@ const MAX_QUESTION_CHARS = 1_000;
 const MAX_REASON_CHARS = 1_000;
 const MAX_CHOICE_CHARS = 1_000;
 const MAX_MODEL_CHARS = 80;
+/** Twice the protocol's cap: a mismatch lists the signed ids the content leaves out as well. */
+const MAX_IMAGES = LIMITS.phoneImagesPerContent * 2;
+const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set<PhoneImageUnavailableReason>([
+  "record_mismatch",
+  "key_unavailable",
+  "fetch_failed",
+  "size_mismatch",
+  "decrypt_failed",
+  "digest_mismatch",
+  "unsupported_type",
+  "type_mismatch",
+  "no_image_store",
+  "store_failed",
+  "timed_out",
+]);
 /**
  * A rendered block's budget in UTF-8 bytes, met by cutting its free text, the
  * comment first; every other field has its own cap.
@@ -207,6 +235,44 @@ function takeQuestionId(cursor: Cursor): { questionId: string; alias: number | n
   return { questionId: asked[1], alias: asked[2] === undefined ? null : Number(asked[2]) };
 }
 
+/**
+ * The image lines after a person's words, numbered from 1 as the library
+ * writes them: `image_N` with a path, or `image_N_unavailable` with one of
+ * the library's reasons, each optionally followed by `image_N_alt`. A path
+ * has to be one the library could type verbatim and that nothing here would
+ * change; the alt text is sanitised again. Null when anything is out of
+ * place, which refuses the notice.
+ */
+function takeImages(cursor: Cursor): DecisionImage[] | null {
+  const images: DecisionImage[] = [];
+  for (let n = 1; cursor.peek()?.startsWith("image_") === true; n++) {
+    if (n > MAX_IMAGES) return null;
+    let image: DecisionImage;
+    const path = cursor.take(`image_${n}`);
+    if (path !== null) {
+      if (!isTypablePath(path) || !isAbsolutePath(path)) return null;
+      if (sanitizeAnswerText(path, path.length) !== path) return null;
+      image = { path, alt: null };
+    } else {
+      const reason = cursor.take(`image_${n}_unavailable`);
+      if (reason === null || !UNAVAILABLE_REASONS.has(reason)) return null;
+      image = { unavailable: reason as PhoneImageUnavailableReason, alt: null };
+    }
+    const alt = cursor.take(`image_${n}_alt`);
+    if (alt !== null) {
+      const text = oneLine(alt, MAX_IMAGE_ALT_CHARS + TRUNCATED.length);
+      image.alt = text === "" ? null : text;
+    }
+    images.push(image);
+  }
+  return images;
+}
+
+/** POSIX or Windows, whichever host stored it: the block is typed on the machine that did. */
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/") || /^[A-Za-z]:\\/.test(path) || path.startsWith("\\\\");
+}
+
 function parseBlock(cursor: Cursor): AnswerBlock | null {
   if (!cursor.takeExact(BLOCK_START)) return null;
   const asked = takeQuestionId(cursor);
@@ -232,6 +298,7 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     choiceLabel: null,
     reason: null,
     comment: null,
+    images: [],
   };
 
   if (source === "system") {
@@ -270,16 +337,19 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
       block.reason = reason;
     }
     block.comment = takeText(cursor, "comment", MAX_COMMENT_CHARS);
+    // The library lists images on a person's answer alone.
+    if (source === "human") {
+      const images = takeImages(cursor);
+      if (images === null) return null;
+      block.images = images;
+    }
   } else {
     return null;
   }
   return cursor.takeExact(BLOCK_END) ? block : null;
 }
 
-/**
- * A follow-up block. Images aren't declared to the relay (#16233), so a block
- * listing any is refused with the rest of its notice.
- */
+/** A follow-up block, with the photos the person attached after its words. */
 function parseFollowup(cursor: Cursor): FollowupBlock | null {
   if (!cursor.takeExact(FOLLOWUP_BLOCK_START)) return null;
   const asked = takeQuestionId(cursor);
@@ -295,7 +365,8 @@ function parseFollowup(cursor: Cursor): FollowupBlock | null {
   else if (cursor.takeExact(FOLLOWUP_NOTE_UNANSWERED)) answered = false;
   else return null;
   const text = takeText(cursor, "text", MAX_COMMENT_CHARS);
-  if (!cursor.takeExact(FOLLOWUP_BLOCK_END)) return null;
+  const images = takeImages(cursor);
+  if (images === null || !cursor.takeExact(FOLLOWUP_BLOCK_END)) return null;
   const question = excerpt === null ? null : oneLine(excerpt, MAX_FOLLOWUP_QUESTION_CHARS);
   return {
     kind: "followup",
@@ -305,6 +376,7 @@ function parseFollowup(cursor: Cursor): FollowupBlock | null {
     question: question === "" ? null : question,
     answered,
     text: text === null || text === "" ? null : text,
+    images,
   };
 }
 
@@ -375,6 +447,19 @@ export function decisionWakeId(blocks: readonly DecisionBlock[]): string {
   return `dec-${createHash("sha256").update(subject).digest("hex").slice(0, 60)}`;
 }
 
+/** The library's own image lines, so an agent reads the same fields either way. */
+function imageLines(images: readonly DecisionImage[]): string[] {
+  return images.flatMap((image, i) => {
+    const n = i + 1;
+    const lines =
+      "path" in image
+        ? [`image_${n}: ${image.path}`]
+        : [`image_${n}_unavailable: ${image.unavailable}`];
+    if (image.alt !== null) lines.push(`image_${n}_alt: ${image.alt}`);
+    return lines;
+  });
+}
+
 function renderBlock(block: AnswerBlock, marked = true): string {
   const lines = [
     DECISION_BLOCK_START,
@@ -405,6 +490,7 @@ function renderBlock(block: AnswerBlock, marked = true): string {
     };
     if (block.correction) text("reason", block.reason);
     text("comment", block.comment);
+    lines.push(...imageLines(block.images));
   }
   lines.push(DECISION_BLOCK_END);
   return lines.join("\n");
@@ -429,30 +515,43 @@ function renderFollowup(block: FollowupBlock, marked = true): string {
     const [first, ...rest] = block.text.split("\n");
     lines.push(`text: ${first}`, ...rest.map((line) => `  ${line}`));
   }
+  lines.push(...imageLines(block.images));
   lines.push(DECISION_FOLLOWUP_END);
   return lines.join("\n");
 }
 
+/** The images' alt lines, dropped whole when a block still runs long, as the library does. */
+const IMAGE_ALTS = Symbol("image alts");
+
 /**
  * Text that may be cut to fit, in the order it is cut: the quoted question
- * first (the agent can read it whole with get_decision), then the library's own order.
+ * first (the agent can read it whole with get_decision), then the library's
+ * own order. An image's path or reason is never cut.
  */
-const CUTTABLE = ["question", "comment", "reason", "choiceLabel", "choice"] as const;
-const FOLLOWUP_CUTTABLE = ["question", "text"] as const;
+const CUTTABLE = ["question", "comment", "reason", IMAGE_ALTS, "choiceLabel", "choice"] as const;
+const FOLLOWUP_CUTTABLE = ["question", "text", IMAGE_ALTS] as const;
 
 /**
  * One rendering within {@link MAX_DECISION_BLOCK_BYTES}, cutting the `fields`
- * in order. Only free text is cut; the delimiters, ids, marker and notes
- * always survive, and fit with room to spare once the cuttable fields are gone.
+ * in order. Only free text is cut; the delimiters, ids, marker, notes and
+ * image paths always survive, and fit with room to spare once the cuttable
+ * fields are gone.
  */
-function bounded<T, K extends keyof T>(
+function bounded<T extends { images: DecisionImage[] }, K extends keyof T>(
   original: T,
-  fields: readonly K[],
+  fields: readonly (K | typeof IMAGE_ALTS)[],
   render: (block: T) => string
 ): string {
   const block = { ...original };
   let out = render(block);
   for (const field of fields) {
+    if (field === IMAGE_ALTS) {
+      if (byteLength(out) > MAX_DECISION_BLOCK_BYTES && block.images.some((m) => m.alt !== null)) {
+        block.images = block.images.map((image) => ({ ...image, alt: null }));
+        out = render(block);
+      }
+      continue;
+    }
     for (let i = 0; i < 12 && byteLength(out) > MAX_DECISION_BLOCK_BYTES; i++) {
       const value = block[field] as string | null;
       if (value === null) break;
