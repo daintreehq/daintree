@@ -21,6 +21,7 @@ const RECORD = {
   ownerOffAt: null,
   revokedAt: null,
   credentialsRemovedAt: null,
+  ownerTerminalSnapshots: false,
 };
 
 function memoryStore(initial?: unknown) {
@@ -105,6 +106,32 @@ describe("an enrolled Host's record (#16022)", () => {
   });
 });
 
+describe("a Host's word on terminal snapshots (#16230)", () => {
+  it("keeps what its owner said, and reads a record from before them as sharing none", () => {
+    const { ownerTerminalSnapshots: _snapshots, ...earlier } = RECORD;
+    expect(sanitizeHostRecord(earlier)?.ownerTerminalSnapshots).toBe(false);
+    expect(sanitizeHostRecord({ ...RECORD, ownerTerminalSnapshots: "yes" })?.ownerTerminalSnapshots).toBe(
+      false
+    );
+    expect(sanitizeHostRecord({ ...RECORD, ownerTerminalSnapshots: true })?.ownerTerminalSnapshots).toBe(
+      true
+    );
+  });
+
+  it("tells Hosts snapshots are on only while Decisions is on and they were agreed to", () => {
+    const owner = {
+      enabled: true,
+      relayOrigin: "https://relay.example.com",
+      installationId: "inst_12345678",
+      deviceId: "dev_owner_0001",
+    };
+    const consented = { terminalSnapshots: true, terminalSnapshotsConsentedAt: 1_000 };
+    expect(ownerStateOf({ ...owner, ...consented })?.terminalSnapshots).toBe(true);
+    expect(ownerStateOf({ ...owner, ...consented, enabled: false })?.terminalSnapshots).toBe(false);
+    expect(ownerStateOf({ ...owner, terminalSnapshots: true })?.terminalSnapshots).toBe(false);
+  });
+});
+
 describe("what a Shell tells its Hosts of its Decisions (#16022)", () => {
   it("speaks only as an owner identity, on or off as the switch is saved", () => {
     expect(ownerStateOf(undefined)).toBeNull();
@@ -116,7 +143,12 @@ describe("what a Shell tells its Hosts of its Decisions (#16022)", () => {
         installationId: "inst_12345678",
         deviceId: "dev_owner_0001",
       })
-    ).toEqual({ installationId: "inst_12345678", ownerDeviceId: "dev_owner_0001", enabled: true });
+    ).toEqual({
+      installationId: "inst_12345678",
+      ownerDeviceId: "dev_owner_0001",
+      enabled: true,
+      terminalSnapshots: false,
+    });
     expect(
       ownerStateOf({
         enabled: false,

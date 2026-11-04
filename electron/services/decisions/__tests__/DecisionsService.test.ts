@@ -1741,6 +1741,74 @@ describe("DecisionsService as an enrolled Remote Host (#16022)", () => {
   });
 });
 
+describe("DecisionsService terminal snapshots (#16230)", () => {
+  const RELAY = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_12345678",
+    hostId: "host_12345678",
+  };
+
+  function sharing(allowed: (role: string) => boolean) {
+    const made: Array<{ options: RelayConnectionOptions; rows: unknown[]; changed: number }> = [];
+    const watchPanes = vi.fn(() => () => {});
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => ABSENT_KEY_FILE,
+      snapshots: {
+        allowed,
+        principalFor: () => null,
+        getPtyClient: () => null,
+        watchPanes,
+      },
+      connect: (options) => {
+        const record = { options, rows: [] as unknown[], changed: 0 };
+        made.push(record);
+        return {
+          start: () => {},
+          stop: () => {},
+          observeQuestions: (rows) => record.rows.push(rows),
+          snapshotsChanged: () => {
+            record.changed += 1;
+          },
+        };
+      },
+    });
+    return { service, made, watchPanes };
+  }
+
+  it("hands each lifetime's connection the gate for its own role, and its host id", async () => {
+    const roles: string[] = [];
+    const { service, made } = sharing((role) => {
+      roles.push(role);
+      return role === "host";
+    });
+
+    await service.start(on(RELAY));
+    expect(made[0]!.options.snapshots!.allowed()).toBe(false);
+    expect(made[0]!.options.snapshots!.hostId()).toBe(RELAY.hostId);
+    await service.start(on(RELAY), "host");
+    expect(made[1]!.options.snapshots!.allowed()).toBe(true);
+    expect(roles).toEqual(["owner", "host"]);
+    await service.stop();
+  });
+
+  it("passes the connection every row the panes are fed, and each turn of the switch", async () => {
+    const { service, made } = sharing(() => true);
+    service.observeQuestions([row(1)]);
+    service.snapshotsChanged();
+    expect(made).toHaveLength(0);
+
+    await service.start(on(RELAY));
+    service.observeQuestions([row(1), row(2)]);
+    service.snapshotsChanged();
+
+    expect(made[0]!.rows).toEqual([[row(1), row(2)]]);
+    expect(made[0]!.changed).toBe(1);
+    await service.stop();
+  });
+});
+
 describe("DecisionsService removing a revoked Host's keys (#16022)", () => {
   it("refuses while a lifetime runs, and reads the file in its own turn when stopped", async () => {
     const service = new DecisionsService({

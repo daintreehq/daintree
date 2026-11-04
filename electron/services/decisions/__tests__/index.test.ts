@@ -283,6 +283,7 @@ const connections = vi.hoisted(
       options: import("../relayConnection.js").RelayConnectionOptions;
       started: number;
       stopped: number;
+      snapshotsChanged: number;
       keyFileAtStop?: boolean;
     }>
 );
@@ -379,11 +380,15 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             options: connectionOptions,
             started: 0,
             stopped: 0,
+            snapshotsChanged: 0,
           };
           connections.push(made);
           return {
             start: () => {
               made.started += 1;
+            },
+            snapshotsChanged: () => {
+              made.snapshotsChanged += 1;
             },
             stop: () => {
               made.stopped += 1;
@@ -937,6 +942,40 @@ describe("Decisions entry", () => {
   describe("terminal snapshots (#16228)", () => {
     afterEach(async () => {
       await peekDecisionsService()?.stop();
+    });
+
+    it("lets the connection publish them only while on, and tells it and the Hosts of each turn (#16230)", async () => {
+      const announceOwnerState = vi.fn();
+      const withdraw = setDecisionsHostsPort({
+        hosts: () => [],
+        linkFor: () => null,
+        onLinkOpened: () => () => {},
+        onHostsChanged: () => () => {},
+        runtimeOf: () => null,
+        announceOwnerState,
+      });
+      try {
+        saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+        await startDecisionsIfEnabled();
+        const connection = connections.at(-1)!;
+        const snapshots = connection.options.snapshots!;
+        expect(snapshots.allowed()).toBe(false);
+        expect(snapshots.hostId()).toBe(RELAY.hostId);
+
+        await setDecisionsTerminalSnapshots({ enabled: true, consent: true });
+        expect(snapshots.allowed()).toBe(true);
+        expect(connection.snapshotsChanged).toBe(1);
+        expect(announceOwnerState).toHaveBeenCalledTimes(1);
+
+        // Off reaches the connection before the queue gets to it.
+        const off = setDecisionsTerminalSnapshots({ enabled: false });
+        expect(snapshots.allowed()).toBe(false);
+        expect(connection.snapshotsChanged).toBe(2);
+        expect(announceOwnerState).toHaveBeenCalledTimes(2);
+        await off;
+      } finally {
+        withdraw();
+      }
     });
 
     it("turns snapshots on only with an agreement given each time, keeping every other field", async () => {
@@ -3011,7 +3050,11 @@ describe("Decisions entry", () => {
   });
 
   describe("enrolled Remote Host (#16022)", () => {
-    const OWNER = { installationId: RELAY.installationId, ownerDeviceId: "dev_owner_0001" };
+    const OWNER = {
+      installationId: RELAY.installationId,
+      ownerDeviceId: "dev_owner_0001",
+      terminalSnapshots: false,
+    };
     const HOST_RECORD = {
       relayOrigin: RELAY.relayOrigin,
       installationId: RELAY.installationId,
@@ -3112,6 +3155,36 @@ describe("Decisions entry", () => {
       expect(savedHost.value).toMatchObject({ ownerOffAt: null });
       expect(connections).toHaveLength(1);
       expect(connections[0]!.started).toBe(1);
+      await stopDecisions();
+    });
+
+    it("shares its own panes' snapshots only as its owner's Shell last said (#16230)", async () => {
+      savedHost.value = HOST_RECORD;
+      await startDecisionsIfEnabled();
+      const connection = connections[0]!;
+      const snapshots = connection.options.snapshots!;
+      expect(snapshots.allowed()).toBe(false);
+      expect(snapshots.hostId()).toBe(HOST_RECORD.hostId);
+
+      // Another owner's word isn't heard.
+      await applyOwnerState({
+        ...OWNER,
+        ownerDeviceId: "dev_other_0001",
+        enabled: true,
+        terminalSnapshots: true,
+      });
+      expect(snapshots.allowed()).toBe(false);
+
+      await applyOwnerState({ ...OWNER, enabled: true, terminalSnapshots: true });
+      expect(savedHost.value).toMatchObject({ ownerTerminalSnapshots: true });
+      expect(snapshots.allowed()).toBe(true);
+      expect(connection.snapshotsChanged).toBe(1);
+
+      // Off goes in at once, ahead of the queue; a restart keeps it.
+      const off = applyOwnerState({ ...OWNER, enabled: true, terminalSnapshots: false });
+      expect(snapshots.allowed()).toBe(false);
+      expect(savedHost.value).toMatchObject({ ownerTerminalSnapshots: false });
+      await off;
       await stopDecisions();
     });
 

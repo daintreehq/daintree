@@ -206,6 +206,22 @@ describe("terminal input from a remote view", () => {
     }
   });
 
+  it("announces an observed title once it reaches the record, and never one it refused (#16230)", async () => {
+    const announced = () =>
+      emitMock.mock.calls.filter(([name]) => name === "terminal:observed-title-changed");
+    remoteSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-b", title: "Fix auth" });
+    remoteSend(CHANNELS.TERMINAL_INPUT, "term-a", "marker");
+    await vi.waitFor(() => expect(ptyClient.write).toHaveBeenCalledWith("term-a", "marker"));
+    expect(announced()).toEqual([]);
+
+    localSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-a", title: "Fix auth" });
+
+    expect(ptyClient.updateObservedTitle).toHaveBeenCalledWith("term-a", "Fix auth");
+    expect(announced()).toEqual([
+      ["terminal:observed-title-changed", { id: "term-a", timestamp: expect.any(Number) }],
+    ]);
+  });
+
   it("drops foreign ids from a fan-out and keeps the owned ones", async () => {
     remoteSend(CHANNELS.TERMINAL_BROADCAST_WRITE, ["term-a", "term-b"], "y");
     remoteSend(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ["term-b", "term-a", "term-unknown"]);
