@@ -7,6 +7,7 @@ import {
   openQuestionContent,
   parseAnswers,
   parseMessages,
+  resolvePhoneImages,
   serializeAnswers,
   serializeMessages,
   type Identity,
@@ -15,12 +16,16 @@ import {
   type LocalStore,
   type LocateResult,
   type OpenAnswerEntry,
+  type PhoneImageCarrier,
+  type PhoneImageStore,
   type QuestionOrigin,
   type QuestionRow,
   type RelayClient,
+  type ResolvedPhoneImage,
   type StoredMessage,
   type TerminalSink,
 } from "@daintreehq/decisions-client";
+import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
 import { basename } from "node:path";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type {
@@ -141,9 +146,14 @@ export interface AnswerDeliveryOptions {
   keys: KeyStore;
   /** Reports deliveries to the relay; failures leave them to be reported on a later pass. */
   client: RelayClient;
+  /** Where a person's phone images go before an answer listing them is typed (#16233). */
+  phoneImages?: PhoneImageStore;
   /** The keys couldn't be reloaded: the connection stops, and nothing more is written. */
   onKeysUnusable(): void;
 }
+
+/** A phone image's path as delivery keeps it with its answer or follow-up. */
+type StoredImage = { attachment_id: string; path: string };
 
 export const DELIVERY_CHECK_INTERVAL_MS = 60_000;
 /** Past the wake's settle grace, so a pane that just settled reads as idle when delivery looks. */
@@ -300,6 +310,7 @@ export class AnswerDelivery {
       store: this.resume ? withResumeReasons(this.store, this.resume) : this.store,
       sink: this.routed,
       client: options.client,
+      ...(options.phoneImages ? { phoneImages: options.phoneImages } : {}),
       ...(this.resume ? { adapters: this.resume.adapters } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
@@ -386,7 +397,117 @@ export class AnswerDelivery {
     const opened = answerNeedsAttention(row, handled) ? await this.openPending(row) : [];
     const followUps = await this.openFollowUps(row);
     if (opened === null || followUps === null) return null;
-    return copiedAnswerText(row, opened, followUps);
+    return copiedAnswerText(
+      row,
+      opened,
+      followUps,
+      await this.copiedImages(row, opened, followUps)
+    );
+  }
+
+  /**
+   * The photos in what a person copies (#16233), fetched and stored as
+   * delivery would before typing them, by entry or message id, and the paths
+   * kept with them as delivery keeps them, so a later copy or delivery reuses
+   * the files. Each is a path, or the reason it's unavailable; the words are
+   * copied either way.
+   */
+  private async copiedImages(
+    row: QuestionRow,
+    opened: readonly OpenAnswerEntry[],
+    followUps: readonly OpenFollowUp[]
+  ): Promise<Map<string, ResolvedPhoneImage[]>> {
+    const images = new Map<string, ResolvedPhoneImage[]>();
+    const resolve = async (
+      carrier: PhoneImageCarrier,
+      signedIds: readonly string[],
+      refs: readonly PhoneImageReference[],
+      stored: readonly StoredImage[]
+    ) => {
+      const known = new Map(stored.map((s) => [s.attachment_id, s.path]));
+      const resolved = await resolvePhoneImages(this.owner.ctx, this.o.phoneImages, {
+        questionId: row.question_id,
+        carrier,
+        origin: row.origin,
+        signedIds,
+        images: refs,
+        stored: known,
+      });
+      const fresh = resolved.flatMap((image) =>
+        "path" in image && known.get(image.attachmentId) !== image.path
+          ? [{ attachment_id: image.attachmentId, path: image.path }]
+          : []
+      );
+      if (fresh.length > 0) await this.rememberImages(row.question_id, carrier, fresh);
+      return resolved;
+    };
+    for (const entry of opened) {
+      // The library lists images on a person's answer alone.
+      if (entry.kind !== "answer" || entry.source !== "human") continue;
+      const refs = entry.images ?? [];
+      const signedIds = entry.image_ids ?? [];
+      if (refs.length === 0 && signedIds.length === 0) continue;
+      images.set(
+        entry.entry_id,
+        await resolve(
+          { kind: "answer", actionId: entry.entry_id },
+          signedIds,
+          refs,
+          entry.stored_images ?? []
+        )
+      );
+    }
+    for (const { message, images: refs = [] } of followUps) {
+      if (refs.length === 0 && message.attachment_ids.length === 0) continue;
+      images.set(
+        message.message_id,
+        await resolve(
+          { kind: "message", messageId: message.message_id },
+          message.attachment_ids,
+          refs,
+          message.delivery?.stored_images ?? []
+        )
+      );
+    }
+    return images;
+  }
+
+  /** As the library's delivery records them: merged into a fresh read of the row, under the shared lock. */
+  private async rememberImages(
+    questionId: string,
+    carrier: PhoneImageCarrier,
+    fresh: readonly StoredImage[]
+  ): Promise<void> {
+    const ids = new Set(fresh.map((image) => image.attachment_id));
+    const merge = (prev: readonly StoredImage[] = []) => [
+      ...prev.filter((image) => !ids.has(image.attachment_id)),
+      ...fresh,
+    ];
+    await this.owner.ctx.lock.run(async () => {
+      const row = await this.store.getQuestion(questionId);
+      if (row === null) return;
+      if (carrier.kind === "answer") {
+        const entries = parseAnswers(row.answers_json).map((entry) =>
+          entry.entry_id === carrier.actionId
+            ? { ...entry, stored_images: merge(entry.stored_images) }
+            : entry
+        );
+        await this.store.updateQuestion(questionId, { answers_json: serializeAnswers(entries) });
+      } else {
+        const messages = parseMessages(row.messages_json).map((message) =>
+          message.message_id === carrier.messageId && message.delivery
+            ? {
+                ...message,
+                delivery: {
+                  ...message.delivery,
+                  stored_images: merge(message.delivery.stored_images),
+                },
+              }
+            : message
+        );
+        await this.store.updateQuestion(questionId, { messages_json: serializeMessages(messages) });
+      }
+    });
   }
 
   /**
@@ -645,8 +766,8 @@ export class AnswerDelivery {
     const opened: OpenFollowUp[] = [];
     try {
       for (const message of heldFollowUps(row)) {
-        const { text } = await openMessageContent(this.owner.ctx, row.question_id, message);
-        opened.push({ message, text });
+        const { text, images } = await openMessageContent(this.owner.ctx, row.question_id, message);
+        opened.push({ message, text, images });
       }
     } catch {
       return null;

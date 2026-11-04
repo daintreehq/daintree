@@ -293,12 +293,12 @@ afterEach(() => {
 });
 
 describe("terminal snapshots through the 0.4.0 bridge (#16230)", () => {
-  it("declares pane snapshots to the relay, and not phone images, which Daintree doesn't take yet", async () => {
+  // Phone images are declared beside snapshots now that Daintree stores them (#16233).
+  it("declares pane snapshots to the relay, beside follow-ups and phone images", async () => {
     const h = await harness();
 
     const features = (h.relay.tickets[0] as { features?: string[] }).features;
-    expect(features).toContain("pane-snapshots-v1");
-    expect(features).not.toContain("phone-images-v1");
+    expect(features).toEqual(["pane-snapshots-v1", "phone-images-v1", "thread-messages-v1"]);
     h.connection.stop();
   });
 

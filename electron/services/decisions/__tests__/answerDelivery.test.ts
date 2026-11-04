@@ -20,16 +20,23 @@ import {
   type InjectionIntent,
   type QuestionOrigin,
   type QuestionRow,
+  type PhoneImageFile,
+  type PhoneImageStore,
   type StoredIdentity,
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import {
+  encryptAttachment,
   encryptEnvelope,
   generateDeviceKeys,
   generateEpochKeyBytes,
   serializeDeviceKeys,
 } from "@daintreehq/decisions-crypto";
-import { MESSAGE_RECORD_TYPE, bytesToBase64Url } from "@daintreehq/decisions-protocol";
+import {
+  MESSAGE_RECORD_TYPE,
+  bytesToBase64Url,
+  type PhoneImageReference,
+} from "@daintreehq/decisions-protocol";
 
 vi.mock("electron", () => ({
   app: {
@@ -309,6 +316,8 @@ function setup(
     listTerminals?: boolean;
     /** Runs while the panes are being listed, before the list comes back. */
     whileListing?: () => Promise<void>;
+    /** Where phone images go (#16233). */
+    phoneImages?: PhoneImageStore;
   } = {}
 ) {
   const store = options.store ?? new DaintreeLocalStore(sqlite);
@@ -335,9 +344,19 @@ function setup(
   const holds = { taken: 0, released: 0 };
   const pty = { ready: options.ptyReady ?? true };
   const keysUnusable = vi.fn();
+  /** Phone images' ciphertext the relay serves, by attachment id. */
+  const attachments = new Map<string, Uint8Array<ArrayBuffer>>();
   const fetch = async (input: string | URL | Request, init?: RequestInit) => {
     if (!relay.up) throw new TypeError("fetch failed");
     const url = new URL(typeof input === "string" ? input : input.toString());
+    const attachment = /\/attachments\/([^/]+)\/content$/.exec(url.pathname);
+    if (attachment !== null) {
+      const bytes = attachments.get(attachment[1]!);
+      reports.push({ path: url.pathname, body: {} });
+      return bytes === undefined
+        ? new Response(JSON.stringify({ code: "not_found" }), { status: 404 })
+        : new Response(bytes, { status: 200 });
+    }
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     const report: Report = { path: url.pathname, body };
     if (url.pathname.endsWith("/deliveries/terminal")) {
@@ -444,6 +463,7 @@ function setup(
     store,
     keys,
     client: new RelayClient({ identity, fetch, maxRetries: 0 }),
+    ...(options.phoneImages ? { phoneImages: options.phoneImages } : {}),
     onKeysUnusable: keysUnusable,
   });
   live.push(delivery);
@@ -501,6 +521,7 @@ function setup(
     principals,
     reports,
     relay,
+    attachments,
     holds,
     pty,
     patch,
@@ -613,8 +634,13 @@ async function followedUp(
   questionId: string,
   messageId: string,
   text: string,
-  over: { event_seq?: number; delivery?: Partial<MessageDelivery> } = {}
+  over: {
+    event_seq?: number;
+    delivery?: Partial<MessageDelivery>;
+    images?: PhoneImageReference[];
+  } = {}
 ): Promise<void> {
+  const images = over.images ?? [];
   const envelope = await encryptEnvelope({
     epochKey: identity.epochs.get(1)!,
     installationId: identity.config.installationId,
@@ -624,7 +650,7 @@ async function followedUp(
     revision: 0,
     senderDeviceId: "phone-1",
     purpose: "message-content",
-    plaintext: { content_version: 1, side: "human", text, images: [] },
+    plaintext: { content_version: 1, side: "human", text, images },
   });
   const message: StoredMessage = {
     message_id: messageId,
@@ -633,7 +659,7 @@ async function followedUp(
     side: "human",
     expects_reply: false,
     signer_device_id: "phone-1",
-    attachment_ids: [],
+    attachment_ids: images.map((image) => image.attachment_id),
     created_at: "2026-11-01T09:30:00.000Z",
     committed_at: "2026-11-01T09:30:01.000Z",
     envelope_digest: `digest-${messageId}`,
@@ -1707,6 +1733,71 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
       expect(h.client.submitted[0].text).not.toContain(DECISION_FOLLOWUP_START);
     }
   );
+
+  it("copies a follow-up's photo as a path, and keeps the path so a later copy needs no download (#16233)", async () => {
+    const stored: PhoneImageFile[] = [];
+    const phoneImages: PhoneImageStore = {
+      store: async (image) => {
+        stored.push(image);
+        return { path: `/repo/wt-1/.daintree/decisions/images/s/${image.attachmentId}.png` };
+      },
+    };
+    const h = setup({ listTerminals: true, phoneImages });
+    const png = Buffer.from(
+      "89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+        "1f15c4890000000d4944415478da63f8cfc0f01f0005000201a1b0b4" +
+        "e60000000049454e44ae426082",
+      "hex"
+    );
+    const attachmentId = "0190f0aa11112222333344445555a771";
+    const sealed = await encryptAttachment(
+      identity.epochs.get(1)!,
+      { installationId: identity.config.installationId, questionId: Q1, attachmentId, keyEpoch: 1 },
+      png
+    );
+    h.attachments.set(attachmentId, new Uint8Array(sealed.ciphertext));
+    await answeredAndTyped(h.store, Q1, 1);
+    await followedUp(h.store, Q1, M1, "This connector.", {
+      images: [
+        {
+          attachment_id: attachmentId,
+          mime: "image/png",
+          size: png.length,
+          sha256: sealed.sha256Plaintext,
+          nonce: sealed.nonce,
+          key_epoch: 1,
+          alt: "The left one",
+        },
+      ],
+    });
+    h.client.terminals.delete(PANE);
+    h.delivery.start();
+    await until(async () => (await messageOf(h, M1)).delivery?.status === "needs-attention");
+    // The pane was gone, so nothing was about to be typed and nothing was fetched.
+    expect(stored).toEqual([]);
+
+    const path = `/repo/wt-1/.daintree/decisions/images/s/${attachmentId}.png`;
+    const copied = (await h.delivery.copiedAnswer(Q1))!;
+    expect(copied).toContain(
+      `text: This connector.\nimage_1: ${path}\nimage_1_alt: The left one\n`
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      questionId: Q1,
+      carrier: { kind: "message", messageId: M1 },
+      attachmentId,
+      mime: "image/png",
+    });
+    expect(Buffer.from(stored[0]!.bytes).equals(png)).toBe(true);
+    expect((await messageOf(h, M1)).delivery?.stored_images).toEqual([
+      { attachment_id: attachmentId, path },
+    ]);
+
+    // Copied again with the relay away: the file kept is listed, not fetched.
+    h.relay.up = false;
+    expect(await h.delivery.copiedAnswer(Q1)).toContain(`image_1: ${path}\n`);
+    expect(stored).toHaveLength(1);
+  });
 
   it("lists a follow-up its pane couldn't take, copies it, and types it once a person resumes it", async () => {
     const h = setup({ listTerminals: true });

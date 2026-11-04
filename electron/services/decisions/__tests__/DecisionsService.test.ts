@@ -44,6 +44,7 @@ function fakeStore(): FakeStore & DaintreeLocalStore {
   return {
     close: vi.fn(async () => {}),
     onCommit: () => () => {},
+    onQuestionDeleted: () => () => {},
     listQuestions: async () => [],
     referencedAttachmentIds: vi.fn(async () => new Set<string>()),
   } as unknown as FakeStore & DaintreeLocalStore;

@@ -13,6 +13,7 @@ import {
   acceptHostEnrollment,
   createHostRequest,
   enrollHost,
+  parseAnswers,
   parseMessages,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
@@ -20,6 +21,7 @@ import {
   buildSignedAction,
   buildSignedMessage,
   decryptEnvelope,
+  encryptAttachment,
   encryptEnvelope,
   exportPublicKey,
   generateDeviceKeys,
@@ -28,7 +30,13 @@ import {
   verifyRecordAndEnvelope,
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
-import { EventData, MESSAGE_RECORD_TYPE, type DeviceCert } from "@daintreehq/decisions-protocol";
+import { execFileSync } from "node:child_process";
+import {
+  EventData,
+  MESSAGE_RECORD_TYPE,
+  type DeviceCert,
+  type PhoneImageReference,
+} from "@daintreehq/decisions-protocol";
 
 vi.mock("electron", () => ({
   app: {
@@ -183,6 +191,8 @@ class FakeRelay {
     record: Record<string, unknown>;
     envelope: Record<string, unknown>;
   }> = [];
+  /** Phone images' ciphertext, by attachment id, as the relay's R2 holds it. */
+  readonly attachments = new Map<string, Uint8Array<ArrayBuffer>>();
   /** While true, the socket isn't reachable: tickets fail and nothing connects. */
   down = false;
   hostDeviceId = "";
@@ -293,6 +303,15 @@ class FakeRelay {
     if (method === "POST" && pathname.startsWith("/api/v1/deliveries/")) {
       return json(200, { ok: true });
     }
+    const attachment = /^\/api\/v1\/attachments\/([^/]+)\/content$/.exec(pathname);
+    if (method === "GET" && attachment !== null) {
+      const bytes = this.attachments.get(attachment[1]!);
+      if (bytes === undefined) return json(404, { code: "not_found", message: "no attachment" });
+      return new Response(bytes, {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      });
+    }
     return json(404, { code: "not_found", message: "no route" });
   };
 
@@ -311,13 +330,44 @@ interface Phone {
   cert: DeviceCert;
 }
 
+/**
+ * A photo the phone attaches to `questionId`, encrypted as the phone app does
+ * and uploaded to the relay unless `uploaded` is false.
+ */
+async function phonePhoto(
+  relay: FakeRelay,
+  owner: Awaited<ReturnType<typeof makeOwner>>,
+  questionId: string,
+  bytes: Uint8Array,
+  alt: string,
+  uploaded = true
+): Promise<PhoneImageReference> {
+  const attachmentId = newId();
+  const sealed = await encryptAttachment(
+    owner.identity.epochs.get(1)!,
+    { installationId: owner.installationId, questionId, attachmentId, keyEpoch: 1 },
+    bytes
+  );
+  if (uploaded) relay.attachments.set(attachmentId, new Uint8Array(sealed.ciphertext));
+  return {
+    attachment_id: attachmentId,
+    mime: "image/png",
+    size: bytes.length,
+    sha256: sealed.sha256Plaintext,
+    nonce: sealed.nonce,
+    key_epoch: 1,
+    alt,
+  };
+}
+
 /** The phone answers `questionId` with `option`, signed and sealed as the phone app does. */
 async function phoneAnswers(
   relay: FakeRelay,
   owner: Awaited<ReturnType<typeof makeOwner>>,
   phone: Phone,
   questionId: string,
-  option: string
+  option: string,
+  images: PhoneImageReference[] = []
 ): Promise<void> {
   const envelope = await encryptEnvelope({
     epochKey: owner.identity.epochs.get(1)!,
@@ -333,6 +383,7 @@ async function phoneAnswers(
       selected_option_ids: [option],
       text: `Go with ${option}.`,
       reviewed_attachment_digests: [],
+      ...(images.length > 0 ? { images } : {}),
     },
   });
   const signed = await buildSignedAction({
@@ -343,6 +394,7 @@ async function phoneAnswers(
     signingKey: phone.keys.signing.privateKey,
     expectedRevision: 0,
     envelope,
+    ...(images.length > 0 ? { attachmentIds: images.map((image) => image.attachment_id) } : {}),
   });
   relay.append({
     event_type: "decision.answer.committed",
@@ -881,9 +933,64 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const tickets = relay.requests.filter((request) => request.path === "/api/v1/socket-ticket");
     expect(tickets.length).toBeGreaterThan(0);
     for (const ticket of tickets) {
-      expect(ticket.body).toHaveProperty("features", ["thread-messages-v1"]);
+      expect(ticket.body).toHaveProperty("features", ["phone-images-v1", "thread-messages-v1"]);
     }
   }, 60_000);
+  // A photo from the phone is stored on the Host, in the asking pane's directory, and typed as its path (#16233).
+  it("stores a phone's photo where the Host's agent can open it, types its path, and deletes it with the question", async () => {
+    const { owner, phone, relay, terminals, listener } = await startHost();
+    const project = path.join(dir, "host-project");
+    fs.mkdirSync(project);
+    execFileSync("git", ["init", "-q"], { cwd: project });
+    terminals.terminals.get("pane-1")!.cwd = project;
+    const asked = await askHuman(listener.port, "token-pane-1", "Which connector is it?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+
+    // The smallest valid PNG: its bytes are what the phone signed and what the agent opens.
+    const png = Buffer.from(
+      "89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+        "1f15c4890000000d4944415478da63f8cfc0f01f0005000201a1b0b4" +
+        "e60000000049454e44ae426082",
+      "hex"
+    );
+    const photo = await phonePhoto(relay, owner, asked, png, "The label on the left connector");
+    const lost = await phonePhoto(relay, owner, asked, png, "A second angle", false);
+    await phoneAnswers(relay, owner, phone, asked, "a", [photo, lost]);
+
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 20_000 });
+    const typed = terminals.submitted[0]!.text;
+    const stored = /^image_1: (.+)$/m.exec(typed)?.[1];
+    expect(stored, typed).toBeDefined();
+    expect(typed).toContain(`image_1: ${stored}\nimage_1_alt: The label on the left connector\n`);
+    expect(typed).toContain("image_2_unavailable: fetch_failed\nimage_2_alt: A second angle\n");
+
+    // A real file on the Host, under the pane's own directory, owner-only and out of Git.
+    expect(stored!.startsWith(path.join(project, ".daintree", "decisions") + path.sep)).toBe(true);
+    expect(fs.readFileSync(stored!).equals(png)).toBe(true);
+    if (process.platform !== "win32") expect(fs.statSync(stored!).mode & 0o777).toBe(0o600);
+    expect(
+      execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+        cwd: project,
+        encoding: "utf8",
+      })
+    ).toBe("");
+    // Kept with the answer, so a retried delivery types the same file.
+    const row = await new DaintreeLocalStore(sqlite).getQuestion(asked);
+    expect(parseAnswers(row!.answers_json).flatMap((entry) => entry.stored_images ?? [])).toEqual([
+      { attachment_id: photo.attachment_id, path: stored },
+    ]);
+
+    // The relay deletes the question: its photo goes from the Host.
+    relay.append({
+      event_type: "decision.deleted",
+      question_id: asked,
+      question_revision: null,
+      origin_device_id: null,
+      data: {},
+    });
+    await vi.waitFor(() => expect(fs.existsSync(stored!)).toBe(false), { timeout: 15_000 });
+  }, 60_000);
+
   it("publishes a Host pane's follow-ups on its own questions, signed by the Host, live and after being away", async () => {
     const { owner, relay, host, terminals, listener, service } = await startHost();
     const store = new DaintreeLocalStore(sqlite);

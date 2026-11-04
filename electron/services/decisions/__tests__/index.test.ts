@@ -405,6 +405,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
           return {
             close: () => loads.closing ?? Promise.resolve(),
             onCommit: () => () => {},
+            onQuestionDeleted: () => () => {},
             listQuestions: async () => [],
           } as never;
         },
