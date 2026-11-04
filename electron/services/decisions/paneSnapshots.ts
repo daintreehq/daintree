@@ -52,10 +52,17 @@ export const SNAPSHOTS_SHARED_META_KEY = "daintree:snapshots-shared";
 const SHARED_REFRESH_MS = 60 * 60_000;
 /**
  * Past this the relay has deleted a snapshot it took (its retention runs from
- * receipt), with a day's room for a late delivery, both clocks and the
- * refresh. Only for a share no snapshot can still be waiting to send.
+ * receipt), with a day's room for both clocks and the refresh. Only for a
+ * share no snapshot can still be waiting to send: while one may, its time is
+ * kept fresh, so it bounds when the relay last took any.
  */
 const SHARED_FORGET_MS = LIMITS.snapshotRetentionMs + 24 * 60 * 60_000;
+/**
+ * The clears a new bridge finds owed go a few at a time, each batch given
+ * this long to settle, so a phone's refresh never waits behind them all.
+ */
+const REPLAY_BATCH = 4;
+const REPLAY_WAIT_MS = 2_000;
 
 /** The whole screen: no line or byte cut before redaction, which sees it all. */
 const WHOLE_SCREEN = { scrollbackRows: 0, maxBytes: Number.MAX_SAFE_INTEGER };
@@ -323,6 +330,9 @@ export class PaneSnapshots {
   private readonly settledInRun = new Map<string, number>();
   private offPanes: (() => void) | null = null;
   private tick: ReturnType<typeof setInterval> | null = null;
+  /** Keeps the times of this run's shares fresh while a snapshot of them may still wait to send. */
+  private keepalive: ReturnType<typeof setInterval> | null = null;
+  private readonly pauses = new Set<{ timer: ReturnType<typeof setTimeout>; done: () => void }>();
   private steps: Promise<void> = Promise.resolve();
   private stopped = false;
 
@@ -387,14 +397,14 @@ export class PaneSnapshots {
       const shared = await this.loadShared();
       if (this.bridge !== bridge) return;
       this.observe(rows);
+      // Shared before, by an earlier bridge or run, for a question that no longer asks; every one while off.
+      const owed = [...shared.keys()].filter((id) => !this.sharing || !this.asking.has(id));
+      for (const id of owed) this.toClear.delete(id);
       if (this.sharing) {
-        // Shared before, by an earlier bridge or run, for a question that no longer asks.
-        for (const id of shared.keys()) if (!this.asking.has(id)) this.toClear.add(id);
         this.requestAll();
         this.flushClears(bridge);
-      } else if (shared.size > 0) {
-        this.clearAll();
       }
+      this.replay(bridge, owed);
     });
     this.follow();
   }
@@ -420,7 +430,7 @@ export class PaneSnapshots {
     this.enqueue(async () => {
       const row = await this.o.store.getQuestion(request.questionId);
       if (row === null || this.bridge !== bridge) return;
-      this.handOver(bridge.snapshots.clear(row));
+      void this.handOver(bridge.snapshots.clear(row));
     });
   }
 
@@ -452,6 +462,33 @@ export class PaneSnapshots {
       clearInterval(this.tick);
       this.tick = null;
     }
+    const waiting = !this.stopped && this.bridge !== null && this.mayWaitToSend().length > 0;
+    if (waiting && this.keepalive === null) {
+      this.keepalive = setInterval(() => this.keepFresh(), SHARED_REFRESH_MS);
+      this.keepalive.unref?.();
+    } else if (!waiting && this.keepalive !== null) {
+      clearInterval(this.keepalive);
+      this.keepalive = null;
+    }
+  }
+
+  /** This run's shares a snapshot of may still wait to send: none of their clears has settled since. */
+  private mayWaitToSend(): string[] {
+    const shared = this.shared;
+    if (shared === null) return [];
+    return [...this.generations]
+      .filter(([id, generation]) => shared.has(id) && this.settledInRun.get(id) !== generation)
+      .map(([id]) => id);
+  }
+
+  private keepFresh(): void {
+    this.enqueue(async () => {
+      const ids = this.mayWaitToSend();
+      if (ids.length === 0 || this.shared === null) return;
+      const now = this.now();
+      for (const id of ids) this.shared.set(id, now);
+      await this.saveShared();
+    });
   }
 
   private panes(): Set<string> {
@@ -505,6 +542,11 @@ export class PaneSnapshots {
     for (const retry of this.retries.values()) clearTimeout(retry);
     this.retries.clear();
     this.failures.clear();
+    for (const pause of this.pauses) {
+      clearTimeout(pause.timer);
+      pause.done();
+    }
+    this.pauses.clear();
   }
 
   private async run(paneId: string, read: PaneRead): Promise<void> {
@@ -614,6 +656,7 @@ export class PaneSnapshots {
       if (result === "queued") {
         asking.sent = key;
         this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+        this.follow();
       }
     });
   }
@@ -659,36 +702,98 @@ export class PaneSnapshots {
    * clear already settled on this bridge, with nothing queued since, isn't
    * sent again there.
    */
-  private async takeBack(bridge: SnapshotBridge, id: string): Promise<void> {
+  private async takeBack(
+    bridge: SnapshotBridge,
+    id: string
+  ): Promise<{ settled: Promise<void> } | null> {
     const row = await this.o.store.getQuestion(id);
     const shared = await this.loadShared();
     if (this.bridge !== bridge) {
       this.toClear.add(id);
-      return;
+      return null;
     }
     const last = shared.get(id);
-    if (last === undefined) return;
+    if (last === undefined) return null;
     // An earlier run's share past the relay's retention: no snapshot of it can still wait to send.
     const aged = !this.generations.has(id) && this.now() - last > SHARED_FORGET_MS;
     if (row === null || keepsNone(row) || aged) {
       this.forget(id);
       await this.saveShared();
-      return;
+      return null;
     }
     const generation = this.generations.get(id) ?? 0;
-    if (this.settledOnBridge.get(id) === generation) return;
-    // A row given, the library queues the record before its first await.
-    this.handOver(bridge.snapshots.clear(row), () => {
+    if (this.settledOnBridge.get(id) === generation) return null;
+    // A row given, the library queues the record before its first await. Wrapped, so the
+    // caller's await of this step doesn't wait for the relay.
+    const settled = this.handOver(bridge.snapshots.clear(row), () => {
       // Settled, not necessarily taken: the record keeps it for the next bridge either way.
-      if (this.bridge !== bridge) return;
+      if (this.bridge !== bridge || !this.shared?.has(id)) return;
       this.settledOnBridge.set(id, generation);
       this.settledInRun.set(id, generation);
+      this.follow();
     });
+    return { settled };
   }
 
+  /**
+   * The clears a new bridge finds owed, `REPLAY_BATCH` at a time, off the
+   * step chain: each batch is given `REPLAY_WAIT_MS` to settle before the
+   * next, and steps in between (a refresh's answer, a publish) go first.
+   */
+  private replay(bridge: SnapshotBridge, ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    void (async () => {
+      for (let at = 0; at < ids.length; at += REPLAY_BATCH) {
+        const batch = ids.slice(at, at + REPLAY_BATCH);
+        const handed = await new Promise<Array<Promise<void>>>((resolve) => {
+          this.enqueue(async () => {
+            const settles: Array<Promise<void>> = [];
+            try {
+              for (const id of batch) {
+                if (this.bridge !== bridge || (this.sharing && this.asking.has(id))) continue;
+                const handed = await this.takeBack(bridge, id);
+                if (handed !== null) settles.push(handed.settled);
+              }
+            } finally {
+              resolve(settles);
+            }
+          });
+        });
+        if (this.stopped || this.bridge !== bridge) return;
+        const pause = this.pause(REPLAY_WAIT_MS);
+        await Promise.race([Promise.all(handed), pause.done]);
+        pause.cancel();
+      }
+    })();
+  }
+
+  /** A wait that stopping, a detach or its own `cancel` ends early. */
+  private pause(ms: number): { done: Promise<void>; cancel(): void } {
+    let entry!: { timer: ReturnType<typeof setTimeout>; done: () => void };
+    const done = new Promise<void>((resolve) => {
+      entry = {
+        timer: setTimeout(() => {
+          this.pauses.delete(entry);
+          resolve();
+        }, ms),
+        done: resolve,
+      };
+    });
+    entry.timer.unref?.();
+    this.pauses.add(entry);
+    return {
+      done,
+      cancel: () => {
+        clearTimeout(entry.timer);
+        this.pauses.delete(entry);
+        entry.done();
+      },
+    };
+  }
+
+  /** Forgets an entry; its generation stays, so a clear settling late can't stand for a later share. */
   private forget(id: string): void {
     this.shared?.delete(id);
-    this.generations.delete(id);
     this.settledOnBridge.delete(id);
     this.settledInRun.delete(id);
   }
@@ -709,9 +814,9 @@ export class PaneSnapshots {
     }
   }
 
-  /** Follows a record handed to the bridge without holding up the next step. */
-  private handOver(settled: Promise<void>, then?: () => void): void {
-    settled.then(then, (error: unknown) => {
+  /** Follows a record handed to the bridge without holding up the next step; never rejects. */
+  private handOver(settled: Promise<void>, then?: () => void): Promise<void> {
+    return settled.then(then, (error: unknown) => {
       if (!this.stopped)
         console.warn(`[Decisions] A terminal snapshot wasn't cleared (${codeOf(error)})`);
     });

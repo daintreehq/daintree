@@ -688,6 +688,8 @@ describe("PaneSnapshots", () => {
       env.snapshots.sharingChanged();
       await vi.advanceTimersByTimeAsync(0);
       expect(cleared(env.bridge)).toEqual(["q1", "q1"]);
+      // Settled, and kept: a refusal settles too.
+      expect(env.shared()).toEqual(["q1"]);
 
       // That one settled with nothing shared since: answering sends nothing more on this bridge.
       const answered = [row("q1", { local_status: "human-answered" })];
@@ -739,6 +741,81 @@ describe("PaneSnapshots", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(env.shared()).toEqual(["q2"]);
+    });
+
+    it("lets no clear settling after its entry was forgotten stand for a later share", async () => {
+      const env = await attached();
+      const answered = row("q1", { local_status: "human-answered" });
+      env.setRows([answered]);
+      env.snapshots.observe([answered]);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(49 * 60 * 60_000);
+
+      // A new bridge owes it a clear, which stays out while the entry ages out.
+      const next = fakeBridge();
+      let settle!: () => void;
+      next.snapshots.clear.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          })
+      );
+      env.snapshots.detach(env.bridge);
+      env.snapshots.attach(next);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(cleared(next)).toEqual(["q1"]);
+      const asked = [answered, row("q2", { origin: origin({ pane_id: "pane-2" }) })];
+      env.setRows(asked);
+      env.snapshots.observe(asked);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(env.shared()).toEqual(["q2"]);
+      settle();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Reopened and shared again, then turned off: its clear goes.
+      const reopened = [row("q1"), asked[1]!];
+      env.setRows(reopened);
+      env.snapshots.observe(reopened);
+      await vi.advanceTimersByTimeAsync(250);
+      env.setAllowed(false);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(cleared(next).filter((id) => id === "q1")).toHaveLength(2);
+    });
+
+    it("keeps a share's time fresh while a snapshot of it may still wait to send", async () => {
+      const env = await attached();
+      const recordedAt = () =>
+        (JSON.parse(env.meta.get(SNAPSHOTS_SHARED_META_KEY)!) as Record<string, number>).q1!;
+      const first = recordedAt();
+
+      await vi.advanceTimersByTimeAsync(61 * 60_000);
+
+      expect(recordedAt()).toBeGreaterThanOrEqual(first + 60 * 60_000);
+    });
+
+    it("sends what a new bridge owes a few at a time, so other steps go between", async () => {
+      const owed = Array.from({ length: 10 }, (_, i) => `q-old-${i}`);
+      const env = setup({
+        meta: JSON.stringify(Object.fromEntries(owed.map((id) => [id, Date.now()]))),
+        rows: [row("q1"), ...owed.map((id) => row(id, { local_status: "human-answered" }))],
+      });
+      const bridge = fakeBridge();
+      // The relay keeps them waiting: each batch has its own time to settle.
+      bridge.snapshots.clear.mockImplementation(() => new Promise(() => {}));
+      env.snapshots.attach(bridge);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(cleared(bridge)).toHaveLength(4);
+      expect(bridge.publishSnapshot).toHaveBeenCalledTimes(1);
+
+      env.snapshots.refreshRequested(bridge, { questionId: "q1" } as never);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(bridge.publishSnapshot).toHaveBeenCalledTimes(2);
+      expect(cleared(bridge)).toHaveLength(4);
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(cleared(bridge)).toHaveLength(10);
     });
 
     it("forgets a question the relay keeps nothing of, without a clear", async () => {
