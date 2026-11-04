@@ -97,6 +97,7 @@ interface QuestionRecord {
   error_code: string | null;
   content_sealed: string | null;
   answers_json: string;
+  messages_json: string;
   history_only: number;
   delivered_revision: number;
   attachment_digests: string;
@@ -131,6 +132,7 @@ const QUESTION_COLUMNS = [
   "error_code",
   "content_sealed",
   "answers_json",
+  "messages_json",
   "history_only",
   "delivered_revision",
   "attachment_digests",
@@ -174,6 +176,7 @@ function toRecord(q: QuestionRow): QuestionRecord {
     error_code: q.error_code,
     content_sealed: q.content_sealed,
     answers_json: q.answers_json,
+    messages_json: q.messages_json,
     history_only: q.history_only ? 1 : 0,
     delivered_revision: q.delivered_revision,
     attachment_digests: JSON.stringify(q.attachment_digests),
@@ -213,6 +216,7 @@ function fromRecord(r: QuestionRecord): QuestionRow {
     error_code: r.error_code ?? null,
     content_sealed: r.content_sealed ?? null,
     answers_json: r.answers_json,
+    messages_json: r.messages_json,
     history_only: Number(r.history_only) === 1,
     delivered_revision: Number(r.delivered_revision),
     attachment_digests: JSON.parse(r.attachment_digests) as string[],
@@ -309,6 +313,7 @@ function intentFrom(r: InjectionIntent): InjectionIntent {
     injection_id: r.injection_id,
     question_id: r.question_id,
     answer_revision: Number(r.answer_revision),
+    message_id: r.message_id ?? null,
     host_id: r.host_id,
     pane_id: r.pane_id,
     terminal_generation: Number(r.terminal_generation),
@@ -692,7 +697,7 @@ export class DaintreeLocalStore implements LocalStore {
     return this.enqueue("read", () => {
       const r = this.st(
         `SELECT 1 FROM decisions_injection_intents
-         WHERE question_id = ? AND state = 'uncertain' LIMIT 1`
+         WHERE question_id = ? AND message_id IS NULL AND state = 'uncertain' LIMIT 1`
       ).get(questionId);
       return r !== undefined;
     });
@@ -958,9 +963,10 @@ export class DaintreeLocalStore implements LocalStore {
   private writeIntent(i: InjectionIntent): void {
     this.st(
       `INSERT OR REPLACE INTO decisions_injection_intents
-         (injection_id, question_id, answer_revision, host_id, pane_id, terminal_generation,
-          ownership_principal, agent_incarnation, state, created_at, updated_at)
-       VALUES (@injection_id, @question_id, @answer_revision, @host_id, @pane_id,
+         (injection_id, question_id, answer_revision, message_id, host_id, pane_id,
+          terminal_generation, ownership_principal, agent_incarnation, state, created_at,
+          updated_at)
+       VALUES (@injection_id, @question_id, @answer_revision, @message_id, @host_id, @pane_id,
          @terminal_generation, @ownership_principal, @agent_incarnation, @state, @created_at,
          @updated_at)`
     ).run(intentFrom(i));

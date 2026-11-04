@@ -1105,6 +1105,7 @@ describe("RelayConnection", () => {
       injection_id: "inj_12345678",
       question_id: "q_12345678",
       answer_revision: 1,
+      message_id: null,
       host_id: "host_12345678",
       pane_id: "pane-1",
       terminal_generation: 1,

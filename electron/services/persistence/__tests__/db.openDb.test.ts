@@ -558,6 +558,12 @@ describe("openDb (integration)", () => {
       if (createdTables.includes(table)) continue;
       seed.exec(`CREATE TABLE IF NOT EXISTS ${table} (${columns.join(", ")})`);
     }
+    // And an added column needs its table, which the minimal seed may not have
+    // (the Decisions tables, from 0022).
+    for (const { table } of additions) {
+      if (createdTables.includes(table)) continue;
+      seed.exec(`CREATE TABLE IF NOT EXISTS ${table} (seeded_id INTEGER)`);
+    }
     seed.close();
 
     // Those columns must be absent before the upgrade for the test to mean

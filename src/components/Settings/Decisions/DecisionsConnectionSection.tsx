@@ -512,7 +512,7 @@ export function DecisionsConnectionSection({
             accessory={
               compatibility.diverges ? (
                 <SeverityMark
-                  severity="warning"
+                  severity={versions.severity}
                   label={versions.label}
                   className="h-3.5 w-3.5"
                   decorative

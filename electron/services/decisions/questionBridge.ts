@@ -4,9 +4,11 @@ import {
   paneIdentityOf,
   type DecisionView,
   type PaneIdentity,
+  type PostMessageResult,
   type QuestionOrigin,
   type RegisterResult,
 } from "@daintreehq/decisions-client";
+import { FOLLOW_UPS_NOT_SERVED } from "./mcpSurface.js";
 import type { QuestionSource } from "./relayConnection.js";
 import { holdingTerminalSink } from "./relayTransport.js";
 
@@ -83,6 +85,15 @@ export class QuestionBridge extends DecisionsBridge {
     await live.getDecision(questionId, asker);
     await this.keepCreate(questionId);
     return live.cancelQuestion(questionId, asker);
+  }
+
+  /**
+   * An agent's follow-up (0.4.0) is refused before anything is read or
+   * committed: this bridge would commit it to the lifetime's outbox past
+   * `admit`, and a live attempt would publish it (#16232).
+   */
+  override postMessage(_input: unknown, _pane: PaneIdentity): Promise<PostMessageResult> {
+    return Promise.reject(new BridgeError("not_supported", FOLLOW_UPS_NOT_SERVED));
   }
 
   override async listPending(pane?: PaneIdentity): Promise<DecisionView[]> {

@@ -9,11 +9,11 @@ import { DECISIONS_DEPLOY_TERMINAL_PREFIX } from "@shared/config/terminalScreenP
  * The published CLI the guided deploy runs. Pinned, never `latest`: its
  * `deploy` uploads the relay of its own version, and the relay and the
  * libraries are released together, so it matches the protocol package this
- * build pins and the relay check expects. 0.3.0 is the first to ask its setup
+ * build pins and the relay check expects. 0.3.0 was the first to ask its setup
  * questions before changing anything (daintreehq/decisions#21) and to take
  * its defaults from, and hand its result to, a host app (daintreehq/decisions#22).
  */
-export const DECISIONS_CLI_VERSION = "0.3.0";
+export const DECISIONS_CLI_VERSION = "0.4.0";
 
 export const RELAY_DEPLOY_TERMINAL_TITLE = "Deploy Decisions relay";
 

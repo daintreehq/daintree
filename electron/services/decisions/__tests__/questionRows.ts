@@ -89,6 +89,7 @@ export function row(
       attachments: [{ alt: SECRET }],
     }),
     answers_json: "[]",
+    messages_json: "[]",
     history_only: false,
     delivered_revision: 0,
     attachment_digests: [SECRET],

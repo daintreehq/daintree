@@ -6,6 +6,7 @@ import {
 } from "@daintreehq/decisions-client";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { ListenerRoute } from "../mcp-server/listenerHold.js";
+import { withoutFollowUps } from "./mcpSurface.js";
 import { createPaneAccess, type PaneAccessSources } from "./paneAccess.js";
 import { QuestionBridge } from "./questionBridge.js";
 import type { QuestionSource } from "./relayConnection.js";
@@ -41,7 +42,8 @@ function notFound(res: http.ServerResponse): void {
  * refuses any Origin at all, and authenticates every request by its pane
  * bearer. It keeps no session, so a revoked bearer is refused on its next
  * request. One handler serves the route's whole life, so a pane's rate limit
- * carries across relay attempts and listener moves.
+ * carries across relay attempts and listener moves. Agents get the tools and
+ * words from before follow-ups (`mcpSurface.ts`).
  */
 export class DecisionsMcpRoute {
   private readonly handler: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
@@ -54,11 +56,13 @@ export class DecisionsMcpRoute {
     authenticator: PaneAuthenticator,
     private readonly holdListener: DecisionsHoldListener
   ) {
-    this.handler = createDecisionsMcpHandler(bridge, authenticator, {
-      path: DECISIONS_MCP_PATH,
-      allowedHosts: () =>
-        this.port === null ? [] : [`127.0.0.1:${this.port}`, `localhost:${this.port}`],
-    });
+    this.handler = withoutFollowUps(
+      createDecisionsMcpHandler(bridge, authenticator, {
+        path: DECISIONS_MCP_PATH,
+        allowedHosts: () =>
+          this.port === null ? [] : [`127.0.0.1:${this.port}`, `localhost:${this.port}`],
+      })
+    );
   }
 
   /**

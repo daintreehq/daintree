@@ -348,6 +348,86 @@ describe("/mcp/decisions (#16011)", () => {
     }
   });
 
+  // The 0.4.0 library adds thread follow-ups; agents get none of it until Daintree delivers them (#16231, #16232).
+  it("keeps agents on the surface from before follow-ups: words, tools and results", async () => {
+    await boot(false);
+    add(pane("pane-a"));
+    const port = await openRoute();
+
+    const init = await rpc(port, "pane-token-pane-a", "initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "claude-code", version: "1.0.0" },
+    });
+    const instructions = (JSON.parse(init.body) as { result: { instructions: string } }).result
+      .instructions;
+    expect(instructions).toContain("Use ask_human for decisions that belong to the human.");
+    expect(instructions).not.toMatch(/follow-?up|send_followup/i);
+
+    const list = await rpc(port, "pane-token-pane-a", "tools/list");
+    expect(list.body).not.toMatch(/follow-?up|send_followup|"thread"/i);
+
+    const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Which name?" });
+    const alias = (await store.listQuestions())[0].alias;
+    expect(asked.content[0].text).toBe(
+      `Asked as q-${alias}. Carry on with anything that does not depend on the answer; once you cannot go further without it, end your turn. The answer arrives as a new message in this terminal, with your question quoted.`
+    );
+    expect(asked.structuredContent.instruction).toBe(asked.content[0].text);
+    const questionId = asked.structuredContent.question_id as string;
+
+    const read = await call(port, "pane-token-pane-a", "get_decision", { question_id: questionId });
+    expect(read.structuredContent).toMatchObject({ question_id: questionId, status: "queued" });
+    expect(read.structuredContent).not.toHaveProperty("thread");
+    expect(read.content[0].text).not.toMatch(/follow-?up/i);
+  });
+
+  it("answers send_followup as an unknown tool, alone or in a batch, and commits nothing", async () => {
+    await boot(false);
+    add(pane("pane-a"));
+    const port = await openRoute();
+    const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Which name?" });
+    const questionId = asked.structuredContent.question_id as string;
+    const followUp = { question_id: questionId, text: "One more thing", expects_reply: true };
+
+    const alone = await rpc(port, "pane-token-pane-a", "tools/call", {
+      name: "send_followup",
+      arguments: followUp,
+    });
+    expect(alone.status).toBe(200);
+    expect(JSON.parse(alone.body)).toMatchObject({
+      error: { code: -32602, message: "Unknown tool" },
+    });
+
+    const batch = await request(port, DECISIONS_MCP_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer pane-token-pane-a" },
+      body: JSON.stringify([
+        {
+          jsonrpc: "2.0",
+          id: "f",
+          method: "tools/call",
+          params: { name: "send_followup", arguments: followUp },
+        },
+        {
+          jsonrpc: "2.0",
+          id: "g",
+          method: "tools/call",
+          params: { name: "get_decision", arguments: { question_id: questionId } },
+        },
+      ]),
+    });
+    const [refused, read] = JSON.parse(batch.body) as Array<Record<string, unknown>>;
+    expect(refused).toEqual({
+      jsonrpc: "2.0",
+      id: "f",
+      error: { code: -32602, message: "Unknown tool" },
+    });
+    expect(read).toMatchObject({ id: "g", result: { structuredContent: { status: "queued" } } });
+
+    expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual(["create"]);
+    expect((await store.getQuestion(questionId))?.messages_json).toBe("[]");
+  });
+
   it("commits the question with its full origin from the bearer and the pane, before any network I/O", async () => {
     await boot(false);
     add(pane("pane-a"));

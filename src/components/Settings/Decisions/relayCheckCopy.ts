@@ -54,7 +54,10 @@ export function hostOf(origin: string): string {
   }
 }
 
-export function protocolRange({ protocolMin, protocolMax }: DecisionsRelayVersions): string {
+export function protocolRange({
+  protocolMin,
+  protocolMax,
+}: Pick<DecisionsRelayVersions, "protocolMin" | "protocolMax">): string {
   return protocolMin === protocolMax
     ? `protocol ${protocolMin}`
     : `protocols ${protocolMin}–${protocolMax}`;
@@ -155,6 +158,28 @@ export function relayIsBehind(compatibility: DecisionsRelayCompatibility): boole
   return compatibility.diverges && newerSide(compatibility) === "daintree";
 }
 
+/** The protocol versions both sides speak; null when they share none. */
+function sharedProtocols({
+  relay,
+  daintree,
+}: DecisionsRelayCompatibility): Pick<
+  DecisionsRelayVersions,
+  "protocolMin" | "protocolMax"
+> | null {
+  const protocolMin = Math.max(relay.protocolMin, daintree.protocolMin);
+  const protocolMax = Math.min(relay.protocolMax, daintree.protocolMax);
+  return protocolMin <= protocolMax ? { protocolMin, protocolMax } : null;
+}
+
+/**
+ * Whether the relay is behind and can't work with this Daintree until it's
+ * updated. An older release that still shares a protocol keeps asking and
+ * answering, so its update is offered, not put forward.
+ */
+export function relayNeedsUpdate(compatibility: DecisionsRelayCompatibility): boolean {
+  return relayIsBehind(compatibility) && sharedProtocols(compatibility) === null;
+}
+
 /**
  * Where an update to the relay comes from, for the words that point at it:
  * `offered` is Update relay in this Settings (#16201); `host` is a remote
@@ -170,6 +195,13 @@ const UPDATE_THE_RELAY: Record<RelayUpdateRoute, string> = {
   cli: "Update it with decisions update from the Decisions CLI.",
 };
 
+const NEWER_RELAY: Record<RelayUpdateRoute, string> = {
+  offered:
+    "Update relay looks for a newer release that works with this Daintree and asks before changing anything.",
+  host: "Daintree on the Host, where it's set up, can update it.",
+  cli: "decisions update from the Decisions CLI can update it.",
+};
+
 const OR_UPDATE_THE_RELAY: Record<RelayUpdateRoute, string> = {
   offered:
     "Update Daintree, or use Update relay to move the relay to a release that works with it.",
@@ -180,36 +212,50 @@ const OR_UPDATE_THE_RELAY: Record<RelayUpdateRoute, string> = {
 /**
  * The relay's versions beside the ones this Daintree expects, and when they
  * diverge, what would bring them together, pointing at where the relay's
- * update comes from.
+ * update comes from. Versions that differ but share a protocol still ask and
+ * answer, so they're information; only ranges that share none are a warning.
  */
 export function describeCompatibility(
   compatibility: DecisionsRelayCompatibility,
   route: RelayUpdateRoute = "cli"
 ): {
+  severity: StatusSeverity;
   label: string;
   detail: string;
 } {
   const versions = `The relay runs ${versionsOf(compatibility.relay)}. Daintree expects ${versionsOf(compatibility.daintree)}.`;
   if (!compatibility.diverges) {
     return {
+      severity: "info",
       label: "Relay and Daintree versions match",
       detail: `Both on ${versionsOf(compatibility.relay)}`,
     };
   }
+  const shared = sharedProtocols(compatibility);
+  const severity: StatusSeverity = shared === null ? "warning" : "info";
   const newer = newerSide(compatibility);
   switch (newer) {
     case "relay":
       return {
+        severity,
         label: "The relay is newer than Daintree",
         detail: `${versions} Update Daintree to match it.`,
       };
     case "daintree":
-      return {
-        label: "The relay needs an update",
-        detail: `${versions} ${UPDATE_THE_RELAY[route]}`,
-      };
+      return shared === null
+        ? {
+            severity,
+            label: "The relay needs an update",
+            detail: `${versions} ${UPDATE_THE_RELAY[route]}`,
+          }
+        : {
+            severity,
+            label: "The relay is behind Daintree",
+            detail: `${versions} Both speak ${protocolRange(shared)}, so questions and answers work. ${NEWER_RELAY[route]}`,
+          };
     default:
       return {
+        severity,
         label: "Relay and Daintree versions differ",
         detail: `${versions} ${OR_UPDATE_THE_RELAY[route]}`,
       };

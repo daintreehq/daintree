@@ -5,6 +5,7 @@ import {
   describeRelayCheck,
   protocolRange,
   relayIsBehind,
+  relayNeedsUpdate,
 } from "../relayCheckCopy";
 
 const DAINTREE: DecisionsRelayVersions = { protocolMin: 1, protocolMax: 2, workerVersion: "0.3.0" };
@@ -29,8 +30,43 @@ describe("relay check copy", () => {
     });
 
     const older = describeCompatibility(compare({ workerVersion: "0.2.9" }));
-    expect(older.label).toBe("The relay needs an update");
+    expect(older.label).toBe("The relay is behind Daintree");
     expect(older.detail).not.toMatch(/never updates/);
+  });
+
+  // A 0.3.0 relay under Daintree's 0.4.0 libraries (#16229): both speak protocol 1.
+  it("says an older relay on the same protocol still asks and answers, and doesn't press its update", () => {
+    const daintree = { protocolMin: 1, protocolMax: 1, workerVersion: "0.4.0" };
+    const compatibility = {
+      relay: { ...daintree, workerVersion: "0.3.0" },
+      daintree,
+      diverges: true,
+    };
+
+    expect(describeCompatibility(compatibility, "offered")).toEqual({
+      severity: "info",
+      label: "The relay is behind Daintree",
+      detail:
+        "The relay runs 0.3.0, protocol 1. Daintree expects 0.4.0, protocol 1. Both speak protocol 1, so questions and answers work. Update relay looks for a newer release that works with this Daintree and asks before changing anything.",
+    });
+    expect(relayIsBehind(compatibility)).toBe(true);
+    expect(relayNeedsUpdate(compatibility)).toBe(false);
+  });
+
+  it("warns, and presses the update, only when the versions share no protocol", () => {
+    const daintree = { protocolMin: 2, protocolMax: 3, workerVersion: "0.5.0" };
+    const older = { relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.4.0" }, daintree };
+    const newer = { relay: { protocolMin: 4, protocolMax: 4, workerVersion: "0.6.0" }, daintree };
+
+    expect(describeCompatibility({ ...older, diverges: true })).toMatchObject({
+      severity: "warning",
+      label: "The relay needs an update",
+    });
+    expect(relayNeedsUpdate({ ...older, diverges: true })).toBe(true);
+    expect(describeCompatibility({ ...newer, diverges: true }).severity).toBe("warning");
+    expect(relayNeedsUpdate({ ...newer, diverges: true })).toBe(false);
+    expect(describeCompatibility(compare({ workerVersion: "0.10.0" })).severity).toBe("info");
+    expect(describeCompatibility(compare({ workerVersion: "dev" })).severity).toBe("info");
   });
 
   it.each([
@@ -57,8 +93,8 @@ describe("relay check copy", () => {
   it.each([
     ["a major release ahead", "1.0.0", "The relay is newer than Daintree"],
     ["a patch ahead", "0.3.1", "The relay is newer than Daintree"],
-    ["a patch behind, with a higher protocol", "0.2.9", "The relay needs an update"],
-    ["a prerelease of the same release", "0.3.0-rc.1", "The relay needs an update"],
+    ["a patch behind, with a higher protocol", "0.2.9", "The relay is behind Daintree"],
+    ["a prerelease of the same release", "0.3.0-rc.1", "The relay is behind Daintree"],
   ])("orders a relay %s by release", (_label, workerVersion, label) => {
     const protocolMax = workerVersion === "0.2.9" ? 3 : DAINTREE.protocolMax;
 
@@ -70,7 +106,7 @@ describe("relay check copy", () => {
       "The relay is newer than Daintree"
     );
     expect(describeCompatibility(compare({ workerVersion: "dev", protocolMax: 1 })).label).toBe(
-      "The relay needs an update"
+      "The relay is behind Daintree"
     );
     expect(describeCompatibility(compare({ workerVersion: "dev" })).label).toBe(
       "Relay and Daintree versions differ"
@@ -85,9 +121,7 @@ describe("relay check copy", () => {
   });
 
   it("reads a one-version range as a single protocol", () => {
-    expect(protocolRange({ protocolMin: 1, protocolMax: 1, workerVersion: "x" })).toBe(
-      "protocol 1"
-    );
+    expect(protocolRange({ protocolMin: 1, protocolMax: 1 })).toBe("protocol 1");
     expect(protocolRange(DAINTREE)).toBe("protocols 1–2");
   });
 

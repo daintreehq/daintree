@@ -23,6 +23,7 @@ vi.mock("electron", () => ({
   powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
+import { FOLLOW_UPS_NOT_SERVED } from "../mcpSurface.js";
 import { QuestionBridge } from "../questionBridge.js";
 import type { QuestionSource } from "../relayConnection.js";
 
@@ -147,6 +148,26 @@ describe("QuestionBridge", () => {
     live = liveBridge();
     await b.getDecision(result.questionId, paneIdentityOf(ORIGIN));
     expect(live.getDecision).toHaveBeenCalledWith(result.questionId, paneIdentityOf(ORIGIN));
+  });
+
+  // The 0.4.0 bridge's follow-ups would skip `admit` and land in the outbox a live attempt publishes (#16232).
+  it("refuses an agent's follow-up, with or without a live attempt, and commits nothing", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Later?" } });
+    const followUp = { question_id: asked.questionId, text: "And then?", expects_reply: true };
+
+    // The MCP route answers exactly this refusal as an unknown tool, so both states must give it.
+    const refusal = { code: "not_supported", message: FOLLOW_UPS_NOT_SERVED };
+    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject(refusal);
+    const posting = { ...liveBridge(), postMessage: vi.fn() };
+    live = posting;
+    const whileLive = b.postMessage(followUp, paneIdentityOf(ORIGIN));
+    await expect(whileLive).rejects.toBeInstanceOf(BridgeError);
+    await expect(whileLive).rejects.toMatchObject(refusal);
+
+    expect(posting.postMessage).not.toHaveBeenCalled();
+    expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual(["create"]);
+    expect((await store.getQuestion(asked.questionId))?.messages_json).toBe("[]");
   });
 
   it("asks under the lifetime's own policy, as the attempts do", async () => {
