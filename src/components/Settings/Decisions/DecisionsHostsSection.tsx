@@ -24,7 +24,7 @@ import type { DecisionsRevokeTarget } from "./useDecisionsKeyActions";
 
 export const HOSTS_SECTION_ID = "decisions-hosts";
 const HOSTS_DESCRIPTION =
-  "Each Remote Host you've connected to, and whether its agents can ask you through your relay";
+  "Remote Hosts you're connected to or have enrolled, and whether each one's agents can ask you through your relay";
 
 /** A Host as main lists it, with the relay's device for it when the relay lists one. */
 interface HostRow {
@@ -34,10 +34,10 @@ interface HostRow {
 
 /**
  * Each Host once (#16222): main's Hosts, each joined to the relay's Remote
- * Host device it is known by (its enrollment's device, else the one the Host
- * reports holding), and then every Remote Host device the relay lists that
- * no Host claims, so it stays revocable. Those wait for a Hosts read that
- * settled, or each would show alone until the Hosts land.
+ * Host device it is known by (its enrollment's or its recorded device, else
+ * the one the Host reports holding), and then every Remote Host device the
+ * relay lists that no Host claims, so it stays revocable. Those wait for a
+ * Hosts read that settled, or each would show alone until the Hosts land.
  */
 export function joinHostsToDevices(
   hosts: readonly DecisionsHost[] | null,
@@ -56,7 +56,9 @@ export function joinHostsToDevices(
   };
   const rows: HostRow[] = (hosts ?? []).map((host) => ({
     host,
-    device: claim(host.enrollment.state === "enrolled" ? host.enrollment.deviceId : undefined),
+    device:
+      claim(host.enrollment.state === "enrolled" ? host.enrollment.deviceId : undefined) ??
+      claim(host.recordedDeviceId),
   }));
   for (const row of rows) {
     if (row.device !== null) continue;
@@ -250,8 +252,14 @@ export function DecisionsHostsSection({
           const deviceId =
             device?.deviceId ??
             (host.enrollment.state === "enrolled" ? host.enrollment.deviceId : null);
+          const recordedHost =
+            deviceId !== null &&
+            (host.recordedDeviceId === deviceId ||
+              (host.enrollment.state === "enrolled" && host.enrollment.deviceId === deviceId));
           const target: DecisionsRevokeTarget | null =
-            deviceId === null ? null : { deviceId, label: host.name, role: "desktop-host" };
+            deviceId === null
+              ? null
+              : { deviceId, label: host.name, role: "desktop-host", recordedHost };
           const enrollControl =
             weakOnly && host.canEnroll && !busy ? (
               <Button

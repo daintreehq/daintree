@@ -268,14 +268,22 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     expect(within(devices).getAllByRole("button", { name: "Pair a phone" })).toHaveLength(1);
   });
 
-  it("revokes a Remote Host from its row as a phone is revoked, saying it isn't enrolled automatically again", async () => {
+  it("revokes a Remote Host from its row as a phone is revoked, and its row stays to enroll it again", async () => {
     listDevices.mockResolvedValue({ result: "listed", devices: [PIXEL, STUDIO_DEVICE] });
     listHosts.mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [STUDIO] });
     revokeDevice.mockResolvedValue({ result: "revoked", keyEpoch: 2 });
-    await renderSection();
+    const view = render(
+      <TooltipProvider>
+        <DecisionsDevicesAndHosts status={{ ...STATUS, revision: 1 }} />
+      </TooltipProvider>
+    );
     await act(async () => {});
+    // The reread after the revocation no longer lists the Host's device.
+    listDevices.mockResolvedValue({ result: "listed", devices: [PIXEL] });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Revoke studio" }));
+    const opener = screen.getByRole("button", { name: "Revoke studio" });
+    opener.focus();
+    fireEvent.click(opener);
     const confirm = dialog();
     expect(within(confirm).getByText("Revoke 'studio'?")).toBeTruthy();
     expect(confirm.textContent).toContain("Remote Host 'studio' can no longer reach your relay");
@@ -289,6 +297,91 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     const rotate = screen.getByRole("button", { name: "Rotate keys" });
     await waitFor(() => expect(document.activeElement).toBe(rotate));
     expect(await screen.findByText(/'studio' is revoked/)).toBeTruthy();
+
+    // Main records the revocation and says so with the next status push.
+    listHosts.mockResolvedValue({
+      result: "listed",
+      autoEnroll: true,
+      hosts: [{ ...STUDIO, enrollment: { state: "revoked" }, canEnroll: true }],
+    });
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsDevicesAndHosts status={{ ...STATUS, revision: 2 }} />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    const row = document.getElementById("decisions-host-studio")!;
+    expect(row.textContent).toContain("Revoked, so it isn't enrolled automatically again");
+    expect(within(row).getByRole("button", { name: "Enroll" })).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: /^Revoke/ })).toBeNull();
+    expect(document.activeElement).toBe(rotate);
+  });
+
+  it("doesn't promise a relay-only Host stays unenrolled, since nothing here records it", async () => {
+    listDevices.mockResolvedValue({ result: "listed", devices: [STUDIO_DEVICE] });
+    listHosts.mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [] });
+    await act(async () => {
+      render(
+        <TooltipProvider>
+          <DecisionsDevicesAndHosts status={STATUS} />
+        </TooltipProvider>
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke studio.local" }));
+    expect(dialog().textContent).toContain("Remote Host 'studio.local' can no longer reach");
+    expect(dialog().textContent).not.toContain("enrolled automatically");
+  });
+
+  it("refreshes the Remote Hosts and the relay's devices together", async () => {
+    listDevices.mockResolvedValue({ result: "listed", devices: [STUDIO_DEVICE] });
+    listHosts.mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [STUDIO] });
+    await act(async () => {
+      render(
+        <TooltipProvider>
+          <DecisionsDevicesAndHosts status={STATUS} />
+        </TooltipProvider>
+      );
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(listHosts).toHaveBeenCalledTimes(1);
+    listDevices.mockResolvedValue({
+      result: "listed",
+      devices: [{ ...STUDIO_DEVICE, lastSeenAt: new Date().toISOString() }],
+    });
+    listHosts.mockResolvedValue({
+      result: "listed",
+      autoEnroll: true,
+      hosts: [{ ...STUDIO, connected: false }],
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh Remote Hosts" }));
+    });
+
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    expect(listHosts).toHaveBeenCalledTimes(2);
+    const row = document.getElementById("decisions-host-studio")!.textContent ?? "";
+    expect(row).toContain("Not connected.");
+    expect(row).toContain("Seen ");
+    expect(row).not.toContain("Not seen since it was enrolled");
+  });
+
+  it("keeps the notification state on phones and tablets, and none of it on a Remote Host", async () => {
+    const quiet: DecisionsDevice = { ...PIXEL, pushEnabled: false };
+    listDevices.mockResolvedValue({ result: "listed", devices: [quiet, IPAD, STUDIO_DEVICE] });
+    listHosts.mockResolvedValue({ result: "listed", autoEnroll: true, hosts: [STUDIO] });
+    await renderSection();
+    await act(async () => {});
+
+    const phone = document.getElementById("decisions-device-dev_pixel")!.textContent ?? "";
+    const tablet = document.getElementById("decisions-device-dev_ipad")!.textContent ?? "";
+    const hostRow = document.getElementById("decisions-host-studio")!.textContent ?? "";
+    expect(phone).toContain("No notifications");
+    expect(phone).toContain("To get notified, open Decisions on it");
+    expect(tablet).toContain("Tablet");
+    expect(tablet).toContain("Notifications on");
+    expect(hostRow).not.toMatch(/notif/i);
   });
 
   it("says to connect a relay first, under Devices and Remote Hosts, and shows no key until then", () => {

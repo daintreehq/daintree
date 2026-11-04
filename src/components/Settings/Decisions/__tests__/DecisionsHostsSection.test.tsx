@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { DecisionsDevice } from "@shared/types/decisions";
 import type {
   DecisionsHost,
@@ -436,7 +436,7 @@ describe("Remote Host copy", () => {
 });
 
 describe("each Remote Host once (#16222)", () => {
-  it("joins a Host to the relay's device it is enrolled as, or else the one it reports holding", () => {
+  it("joins a Host to the relay's device it is enrolled as or recorded as, or else the one it reports holding", () => {
     const enrolled = host({
       hostId: "lab",
       name: "lab",
@@ -453,24 +453,54 @@ describe("each Remote Host once (#16222)", () => {
         live: true,
       },
     });
+    // A recorded Host whose later attempt failed before it reported anything.
+    const failed = host({
+      hostId: "box",
+      name: "box",
+      enrollment: { state: "failed", failure: { reason: "relay-unreachable", at: 1 } },
+      recordedDeviceId: "dev_box",
+    });
     const lab = relayDevice({ deviceId: "dev_lab", label: "lab" });
     const studio = relayDevice({ deviceId: "dev_studio" });
+    const box = relayDevice({ deviceId: "dev_box", label: "box" });
     const orphan = relayDevice({ deviceId: "dev_orphan", label: "old-box" });
     const phone = relayDevice({ deviceId: "dev_phone", label: "Pixel", role: "phone" });
 
-    const joined = joinHostsToDevices([enrolled, checking], [phone, lab, studio, orphan], true);
+    const joined = joinHostsToDevices(
+      [enrolled, checking, failed],
+      [phone, lab, studio, box, orphan],
+      true
+    );
 
     expect(joined.rows.map((row) => row.device?.deviceId ?? null)).toEqual([
       "dev_lab",
       "dev_studio",
+      "dev_box",
     ]);
     expect(joined.relayOnly.map((device) => device.deviceId)).toEqual(["dev_orphan"]);
   });
 
-  it("holds back the relay's unclaimed Hosts until a Hosts read settles", () => {
-    const orphan = relayDevice({ deviceId: "dev_orphan" });
-    expect(joinHostsToDevices(null, [orphan], false).relayOnly).toEqual([]);
-    expect(joinHostsToDevices(null, [orphan], true).relayOnly).toEqual([orphan]);
+  it("shows a relay-listed Host alone only once the Hosts read has answered", async () => {
+    const onRevoke = vi.fn();
+    let answer!: (read: DecisionsHostsResult) => void;
+    listHosts.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const studio = relayDevice({ deviceId: "dev_studio" });
+    await renderGroup({ devices: [studio], onRevoke });
+    expect(document.querySelector("#decisions-host-device-dev_studio")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Revoke/ })).toBeNull();
+
+    await act(async () => {
+      answer(
+        listed([
+          host({ enrollment: { state: "enrolled", deviceId: "dev_studio" }, canEnroll: false }),
+        ])
+      );
+    });
+    expect(document.querySelector("#decisions-host-device-dev_studio")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^Revoke/ })).toHaveLength(1);
+    expect(
+      document.querySelector("#decisions-host-studio")?.querySelector("button")?.textContent
+    ).toBe("Revoke");
   });
 
   it("offers Revoke on an enrolled Host's own row, naming it, with when the relay last saw it", async () => {
@@ -499,8 +529,42 @@ describe("each Remote Host once (#16222)", () => {
       deviceId: "dev_lab",
       label: "lab",
       role: "desktop-host",
+      recordedHost: true,
     });
     expect(screen.queryByText("lab-cert")).toBeNull();
+  });
+
+  it("offers no Revoke on a Host that holds no device the relay lists", async () => {
+    listHosts.mockResolvedValue(
+      listed([
+        host({ hostId: "fresh", name: "fresh" }),
+        host({
+          hostId: "old",
+          name: "old",
+          enrollment: { state: "needs-update" },
+          canEnroll: false,
+        }),
+        host({
+          hostId: "elsewhere",
+          name: "elsewhere",
+          enrollment: { state: "other-setup" },
+          canEnroll: false,
+          runtime: {
+            runtime: { state: "running", deviceId: "dev_other_relay", connection: "connected" },
+            at: 1,
+            live: true,
+          },
+        }),
+      ])
+    );
+    await renderGroup({ devices: [relayDevice({ deviceId: "dev_unrelated" })] });
+
+    for (const id of ["fresh", "old", "elsewhere"]) {
+      const row = document.querySelector(`#decisions-host-${id}`)!;
+      expect(row).not.toBeNull();
+      expect(within(row as HTMLElement).queryByRole("button", { name: /^Revoke/ })).toBeNull();
+    }
+    expect(enrollButtons()).toHaveLength(1);
   });
 
   it("puts Enroll and Revoke on the same row when a Host that could be enrolled still holds a listed device", async () => {
@@ -519,22 +583,48 @@ describe("each Remote Host once (#16222)", () => {
     );
     await renderGroup({ devices: [relayDevice({ deviceId: "dev_studio" })], onRevoke });
 
-    const row = document.querySelector("#decisions-host-studio")!;
-    expect(row.querySelector("[data-settings-row-actions]")).not.toBeNull();
-    expect(enrollButtons()).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Revoke studio" }));
-    expect(onRevoke).toHaveBeenCalledWith(expect.objectContaining({ deviceId: "dev_studio" }));
+    const actions = document.querySelector<HTMLElement>(
+      "#decisions-host-studio [data-settings-row-actions]"
+    )!;
+    const buttons = within(actions).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual(["Enroll", "Revoke"]);
+    enrollHost.mockResolvedValue({ result: "done", host: host() });
+    await act(async () => {
+      fireEvent.click(buttons[0]!);
+    });
+    expect(enrollHost).toHaveBeenCalledExactlyOnceWith({ hostId: "studio" });
+    fireEvent.click(buttons[1]!);
+    // Joined by what the Host reports alone: no record here keeps it from enrolling again.
+    expect(onRevoke).toHaveBeenCalledExactlyOnceWith({
+      deviceId: "dev_studio",
+      label: "studio",
+      role: "desktop-host",
+      recordedHost: false,
+    });
   });
 
-  it("keeps a Host enrolled here revocable while the relay's devices haven't been read", async () => {
+  it("keeps a Host enrolled here revocable when the relay's devices are unread or don't list it", async () => {
     const onRevoke = vi.fn();
     listHosts.mockResolvedValue(
       listed([host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false })])
     );
-    await renderGroup({ devices: null, onRevoke });
-
+    const view = await renderGroup({ devices: null, onRevoke });
     fireEvent.click(screen.getByRole("button", { name: "Revoke studio" }));
-    expect(onRevoke).toHaveBeenCalledWith(expect.objectContaining({ deviceId: "dev_x" }));
+    expect(onRevoke).toHaveBeenLastCalledWith(expect.objectContaining({ deviceId: "dev_x" }));
+
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsHostsSection
+          enabled
+          revision={1}
+          devicesRead={devicesRead([])}
+          onRevoke={onRevoke}
+        />
+      </TooltipProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Revoke studio" }));
+    expect(onRevoke).toHaveBeenCalledTimes(2);
+    expect(onRevoke).toHaveBeenLastCalledWith(expect.objectContaining({ deviceId: "dev_x" }));
   });
 
   it("lists a Remote Host device the relay holds with no Host record here, and keeps it revocable when the Hosts can't be read", async () => {

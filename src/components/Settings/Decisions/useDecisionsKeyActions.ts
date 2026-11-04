@@ -4,7 +4,16 @@ import type { DecisionsDevice } from "@shared/types/decisions";
 import { describeRevokeResult, describeRotateResult } from "./devicesCopy";
 
 /** What a revocation needs of a device: a phone's row or a Remote Host's row both give it. */
-export type DecisionsRevokeTarget = Pick<DecisionsDevice, "deviceId" | "label" | "role">;
+export interface DecisionsRevokeTarget extends Pick<
+  DecisionsDevice,
+  "deviceId" | "label" | "role"
+> {
+  /**
+   * A Host this computer recorded enrolling as this device, so main records
+   * its revocation and never enrolls it automatically again (#16021).
+   */
+  recordedHost?: boolean;
+}
 
 /** The latest change to the key, or why one didn't finish, in words. */
 export interface DecisionsKeyNotice {
