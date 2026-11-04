@@ -512,6 +512,7 @@ describe("each Remote Host once (#16222)", () => {
           name: "lab",
           enrollment: { state: "enrolled", deviceId: "dev_lab" },
           canEnroll: false,
+          recordedDeviceId: "dev_lab",
         }),
       ])
     );
@@ -605,12 +606,15 @@ describe("each Remote Host once (#16222)", () => {
 
   it("keeps a Host enrolled here revocable when the relay's devices are unread or don't list it", async () => {
     const onRevoke = vi.fn();
+    // Enrolled, but the record of it couldn't be saved: nothing here would keep it from enrolling again.
     listHosts.mockResolvedValue(
       listed([host({ enrollment: { state: "enrolled", deviceId: "dev_x" }, canEnroll: false })])
     );
     const view = await renderGroup({ devices: null, onRevoke });
     fireEvent.click(screen.getByRole("button", { name: "Revoke studio" }));
-    expect(onRevoke).toHaveBeenLastCalledWith(expect.objectContaining({ deviceId: "dev_x" }));
+    expect(onRevoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({ deviceId: "dev_x", recordedHost: false })
+    );
 
     view.rerender(
       <TooltipProvider>

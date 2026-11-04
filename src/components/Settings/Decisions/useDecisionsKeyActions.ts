@@ -9,8 +9,8 @@ export interface DecisionsRevokeTarget extends Pick<
   "deviceId" | "label" | "role"
 > {
   /**
-   * A Host this computer recorded enrolling as this device, so main records
-   * its revocation and never enrolls it automatically again (#16021).
+   * A Host this computer saved a record of enrolling as this device, so main
+   * records its revocation and never enrolls it automatically again (#16021).
    */
   recordedHost?: boolean;
 }

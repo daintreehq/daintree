@@ -24,7 +24,7 @@ import type { DecisionsRevokeTarget } from "./useDecisionsKeyActions";
 
 export const HOSTS_SECTION_ID = "decisions-hosts";
 const HOSTS_DESCRIPTION =
-  "Remote Hosts you're connected to or have enrolled, and whether each one's agents can ask you through your relay";
+  "Remote Hosts you've connected to or enrolled, and whether each one's agents can ask you through your relay";
 
 /** A Host as main lists it, with the relay's device for it when the relay lists one. */
 interface HostRow {
@@ -252,10 +252,9 @@ export function DecisionsHostsSection({
           const deviceId =
             device?.deviceId ??
             (host.enrollment.state === "enrolled" ? host.enrollment.deviceId : null);
-          const recordedHost =
-            deviceId !== null &&
-            (host.recordedDeviceId === deviceId ||
-              (host.enrollment.state === "enrolled" && host.enrollment.deviceId === deviceId));
+          // Only a saved record keeps a revoked Host from enrolling again: main
+          // shows `enrolled` even when saving that record failed.
+          const recordedHost = deviceId !== null && host.recordedDeviceId === deviceId;
           const target: DecisionsRevokeTarget | null =
             deviceId === null
               ? null

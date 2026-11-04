@@ -37,6 +37,7 @@ const STUDIO: DecisionsHost = {
   connected: true,
   enrollment: { state: "enrolled", deviceId: "dev_studio" },
   canEnroll: false,
+  recordedDeviceId: "dev_studio",
 };
 
 const listDevices = vi.fn<() => Promise<DecisionsDevicesResult>>();
