@@ -1,8 +1,11 @@
 import {
+  parseMessages,
+  serializeMessages,
   targetOf,
   type AgentResumeAdapter,
   type LocalStore,
   type QuestionOrigin,
+  type QuestionRow,
   type TerminalTarget,
 } from "@daintreehq/decisions-client";
 import {
@@ -462,23 +465,58 @@ export class DaintreeResume {
 }
 
 /**
+ * A follow-up this write sends to needs-attention with a generic code, given
+ * `reason` instead (#16231). One already there keeps its code, so a later
+ * write to the thread never changes what was reported for it.
+ */
+function followUpReasons(row: QuestionRow, messagesJson: string, reason: string): string | null {
+  const before = new Map(parseMessages(row.messages_json).map((m) => [m.message_id, m.delivery]));
+  let changed = false;
+  const messages = parseMessages(messagesJson).map((message) => {
+    const delivery = message.delivery;
+    if (
+      delivery?.status !== "needs-attention" ||
+      delivery.error_code === null ||
+      !RESUMABLE_UNAVAILABLE_CODES.has(delivery.error_code)
+    ) {
+      return message;
+    }
+    const prior = before.get(message.message_id);
+    if (prior?.status === delivery.status && prior.error_code === delivery.error_code)
+      return message;
+    changed = true;
+    return { ...message, delivery: { ...delivery, error_code: reason } };
+  });
+  return changed ? serializeMessages(messages) : null;
+}
+
+/**
  * The store as the delivery engine writes to it, with a resume's own reason
- * in place of the library's generic code when a question goes to
- * needs-attention because its run couldn't be resumed. The question is read
- * again so the reason is the one recorded for its own origin. The report to
- * the relay and the library's audit keep the generic code.
+ * in place of the library's generic code when a question, or a follow-up
+ * after it (#16231), goes to needs-attention because its run couldn't be
+ * resumed. The question is read again so the reason is the one recorded for
+ * its own origin. An answer's report to the relay and the library's audit
+ * keep the generic code; a follow-up's receipt is read from the store, so it
+ * carries the resume's.
  */
 export function withResumeReasons<T extends LocalStore>(store: T, resume: DaintreeResume): T {
   const updateQuestion: LocalStore["updateQuestion"] = async (questionId, patch) => {
-    if (
+    const answer =
       patch.delivery_status === "needs-attention" &&
       typeof patch.error_code === "string" &&
-      RESUMABLE_UNAVAILABLE_CODES.has(patch.error_code)
-    ) {
+      RESUMABLE_UNAVAILABLE_CODES.has(patch.error_code);
+    if (answer || typeof patch.messages_json === "string") {
       const row = await store.getQuestion(questionId);
       const reason = row ? resume.reasonFor(row.origin) : null;
-      if (reason !== null)
-        return store.updateQuestion(questionId, { ...patch, error_code: reason });
+      if (row !== null && reason !== null) {
+        const next = { ...patch };
+        if (answer) next.error_code = reason;
+        if (typeof patch.messages_json === "string") {
+          next.messages_json =
+            followUpReasons(row, patch.messages_json, reason) ?? patch.messages_json;
+        }
+        return store.updateQuestion(questionId, next);
+      }
     }
     return store.updateQuestion(questionId, patch);
   };

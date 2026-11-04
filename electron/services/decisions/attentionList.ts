@@ -11,7 +11,12 @@ import {
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import type { DecisionsAnswerPreview } from "../../../shared/types/decisionsAttention.js";
-import { parseDecisionNotice, renderCopiedAnswer, sanitizeAnswerText } from "./answerNotice.js";
+import {
+  parseDecisionNotice,
+  renderCopiedAnswer,
+  sanitizeAnswerText,
+  type DecisionBlock,
+} from "./answerNotice.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -219,8 +224,14 @@ export function copiedAnswerText(
   }));
   // Stable, so answers keep their own order among themselves.
   const blocks = [...answers, ...messages].sort((a, b) => a.seq - b.seq).map((b) => b.block);
-  const parsed = parseDecisionNotice(noticeChunk(blocks));
-  return parsed === null ? null : renderCopiedAnswer(parsed);
+  // Each on its own, so a long thread is never past what one typed chunk could hold.
+  const parsed: DecisionBlock[] = [];
+  for (const block of blocks) {
+    const one = parseDecisionNotice(noticeChunk([block]));
+    if (one === null) return null;
+    parsed.push(...one);
+  }
+  return renderCopiedAnswer(parsed);
 }
 
 /**

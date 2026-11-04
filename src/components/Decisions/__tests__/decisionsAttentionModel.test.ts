@@ -3,7 +3,15 @@ import type {
   DecisionsAttentionItem,
   DecisionsFollowUpPreview,
 } from "@shared/types/decisionsAttention";
-import { canCopy, copyLabel, outcomeText, statusText, subjectOf } from "../decisionsAttentionModel";
+import {
+  canCopy,
+  copyLabel,
+  outcomeText,
+  reasonText,
+  remainingText,
+  statusText,
+  subjectOf,
+} from "../decisionsAttentionModel";
 
 function followUp(over: Partial<DecisionsFollowUpPreview> = {}): DecisionsFollowUpPreview {
   return {
@@ -74,6 +82,20 @@ describe("follow-ups in the needs-attention list (#16231)", () => {
     ).toBe(false);
     expect(canCopy(item({ followUps: [followUp({ unreadable: true })] }))).toBe(false);
     expect(copyLabel(item({ followUps: [followUp()] }))).toBe("Copy answer and follow-up");
+  });
+
+  it("explains a follow-up's own code in its words, and counts questions", () => {
+    expect(reasonText("inject_rejected", "follow-up")).toBe("The terminal refused the follow-up.");
+    expect(reasonText("resume_exited", "follow-ups")).toBe(
+      "The resumed agent exited before the follow-ups were typed in."
+    );
+    expect(reasonText("inject_rejected", "answer and follow-up")).toBe(
+      "The terminal refused the answer."
+    );
+    expect(reasonText("message_unreadable", "follow-up")).toBe(
+      "The follow-up couldn't be decrypted on this computer."
+    );
+    expect(remainingText(1)).toBe("1 question needs attention");
   });
 
   it("tells what became of a follow-up, in agreement with how many there were", () => {

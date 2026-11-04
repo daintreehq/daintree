@@ -36,9 +36,11 @@ import type { LaneWake, OwnPane } from "../mcp-server/terminalNotify.js";
 import {
   answerNeedsAttention,
   answerPreviewOf,
+  answerRevision,
   copiedAnswerText,
   heldFollowUps,
   markAnswerHandled,
+  needsAttention,
   pendingEntries,
   questionLine,
   readHandledAnswers,
@@ -509,10 +511,11 @@ export class AnswerDelivery {
   /**
    * "Mark handled" (#16020): the person dealt with the answer themselves. It
    * leaves the list, the pane and Canopy, and is never typed in; a later
-   * correction needs a person again. The row itself is left as the library
-   * wrote it, but for the follow-ups that needed a person (#16231): each is
-   * no longer delivered, keeping what became of it, so the follow-ups after
-   * it are no longer held behind it.
+   * correction needs a person again. The row keeps the answers and what
+   * became of them, but nothing it holds for a person is delivered any more
+   * (#16231): the answers waiting and the follow-ups that needed a person.
+   * The library holds a thread's later follow-ups behind both, so they then
+   * go on.
    */
   async markHandled(questionId: string): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
@@ -523,11 +526,14 @@ export class AnswerDelivery {
       const held = new Set(heldFollowUps(row).map((message) => message.message_id));
       if (!answerHeld && held.size === 0) return { result: "resolved" };
       if (answerHeld) await markAnswerHandled(this.store, row);
+      const patch: Partial<QuestionRow> = answerHeld ? undelivered(row) : {};
       if (held.size > 0) {
-        await this.store.updateQuestion(questionId, {
-          messages_json: withDelivery(row, held, (delivery) => ({ ...delivery, deliver: false })),
-        });
+        patch.messages_json = withDelivery(row, held, (delivery) => ({
+          ...delivery,
+          deliver: false,
+        }));
       }
+      if (Object.keys(patch).length > 0) await this.store.updateQuestion(questionId, patch);
       await this.owner.ctx.audit.log({
         event: "delivery.handled",
         question_id: questionId,
@@ -967,6 +973,7 @@ export class AnswerDelivery {
    * untyped ones.
    */
   private async recover(): Promise<boolean> {
+    await this.releaseHandled();
     await this.repairRecorded();
     if (this.stopped) return false;
     const probe = await this.probeInterrupted();
@@ -1037,6 +1044,23 @@ export class AnswerDelivery {
       hasMarker: async (_target, injectionId) => markers.get(injectionId) === true,
     };
     return { include, complete, sink };
+  }
+
+  /**
+   * Answers a person marked handled before marking stopped their delivery
+   * (#16020) stop it now, as `markHandled` does, so they hold back no
+   * follow-up after them (#16231).
+   */
+  private async releaseHandled(): Promise<void> {
+    for (const [questionId, revision] of await readHandledAnswers(this.store)) {
+      if (this.stopped) return;
+      await this.lock.run(async () => {
+        const row = await this.store.getQuestion(questionId);
+        if (row === null || !needsAttention(row) || answerRevision(row) !== revision) return;
+        const patch = undelivered(row);
+        if (patch.answers_json !== undefined) await this.store.updateQuestion(questionId, patch);
+      });
+    }
   }
 
   /**
@@ -1199,6 +1223,19 @@ export class AnswerDelivery {
 
 /** As much of a follow-up as typing it would keep: the text cap of the typed block. */
 const PREVIEW_TEXT_CHARS = 4_000;
+
+/** `row`'s answers waiting to be typed, no longer to be; nothing when none is waiting. */
+function undelivered(row: QuestionRow): Partial<QuestionRow> {
+  const waiting = new Set(pendingEntries(row).map((entry) => entry.entry_id));
+  if (waiting.size === 0) return {};
+  return {
+    answers_json: serializeAnswers(
+      parseAnswers(row.answers_json).map((entry) =>
+        waiting.has(entry.entry_id) ? { ...entry, deliver: false } : entry
+      )
+    ),
+  };
+}
 
 /** `row`'s follow-ups, serialised, with the delivery of each one in `ids` changed by `change`. */
 function withDelivery(

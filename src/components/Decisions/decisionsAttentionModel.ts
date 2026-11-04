@@ -26,6 +26,7 @@ const REASONS: Record<string, string> = {
   inject_rejected: "The terminal refused the answer.",
   unavailable_unknown_reason: "The terminal refused the answer.",
   answer_unreadable: "The answer couldn't be decrypted on this computer.",
+  message_unreadable: "The follow-up couldn't be decrypted on this computer.",
   no_target: "Nothing matches the terminal that asked.",
   target_mismatch: "Nothing matches the terminal that asked.",
   choice_required: "The answer doesn't fit what the question allows.",
@@ -59,8 +60,20 @@ const REASONS: Record<string, string> = {
   resume_failed: "Resuming the agent failed.",
 };
 
-export function reasonText(code: string): string | null {
-  return REASONS[code] ?? null;
+/**
+ * A follow-up's own code says what stopped the follow-up, so with no answer
+ * needing a person its words name the follow-up.
+ */
+export function reasonText(code: string, subject: AttentionSubject = "answer"): string | null {
+  const text = REASONS[code];
+  if (text === undefined) return null;
+  if (subject === "follow-up") return text.replace("the answer", "the follow-up");
+  if (subject === "follow-ups") {
+    return text
+      .replace("the answer was", "the follow-ups were")
+      .replace("the answer", "the follow-ups");
+  }
+  return text;
 }
 
 export function aliasLabel(alias: number): string {
@@ -183,9 +196,9 @@ export function toLines(
   };
 }
 
-/** The footer's count of what is left. */
+/** The footer's count of what is left: questions, whose answer or follow-ups need a person. */
 export function remainingText(count: number): string {
-  return pluralize(count, "answer needs attention", "answers need attention");
+  return pluralize(count, "question needs attention", "questions need attention");
 }
 
 /** A destination's second line: its agent, then where it runs. */

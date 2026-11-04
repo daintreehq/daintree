@@ -1674,29 +1674,39 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
     expect(h.client.submitted).toEqual([]);
   });
 
-  it("keeps a follow-up's typed intent from marking an answer delivered that never was", async () => {
-    const h = setup();
-    await answered(h.store, Q1, 1, "approve");
-    const [entry] = parseAnswers((await h.question(Q1))!.answers_json);
-    await h.store.updateQuestion(Q1, {
-      answers_json: serializeAnswers([
-        { ...entry, kind: "expired", action: "expire", revision: 0 },
-      ]),
-    });
-    await followedUp(h.store, Q1, M1, "Typed.", {
-      delivery: { status: "terminal-delivered", injection_id: CRASHED, attempt_id: CRASHED },
-    });
-    await h.store.putIntent(
-      intent(CRASHED, Q1, { answer_revision: 0, message_id: M1, state: "typed" })
-    );
+  it.each([
+    ["names its follow-up", "message-1"],
+    ["names only its attempt, as a store that lost the message id leaves it", null],
+  ] as const)(
+    "keeps a follow-up's typed intent that %s from marking an answer delivered that never was",
+    async (_label, named) => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      const [entry] = parseAnswers((await h.question(Q1))!.answers_json);
+      await h.store.updateQuestion(Q1, {
+        answers_json: serializeAnswers([
+          { ...entry, kind: "expired", action: "expire", revision: 0 },
+        ]),
+      });
+      await followedUp(h.store, Q1, M1, "Typed.", {
+        delivery: { status: "terminal-delivered", injection_id: CRASHED, attempt_id: CRASHED },
+      });
+      await h.store.putIntent(
+        intent(CRASHED, Q1, {
+          answer_revision: 0,
+          message_id: named === null ? null : M1,
+          state: "typed",
+        })
+      );
 
-    h.delivery.start();
-    await until(async () => (await h.store.getIntent(CRASHED))?.state === "acked");
-    await until(() => h.client.submitted.length === 1);
-    // The expiry was typed on its own; the follow-up's record proved nothing about it.
-    expect(h.client.submitted[0].text).toContain("status: expired");
-    expect(h.client.submitted[0].text).not.toContain(DECISION_FOLLOWUP_START);
-  });
+      h.delivery.start();
+      await until(async () => (await h.store.getIntent(CRASHED))?.state === "acked");
+      await until(() => h.client.submitted.length === 1);
+      // The expiry was typed on its own; the follow-up's record proved nothing about it.
+      expect(h.client.submitted[0].text).toContain("status: expired");
+      expect(h.client.submitted[0].text).not.toContain(DECISION_FOLLOWUP_START);
+    }
+  );
 
   it("lists a follow-up its pane couldn't take, copies it, and types it once a person resumes it", async () => {
     const h = setup({ listTerminals: true });
@@ -1732,20 +1742,126 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
     expect(copied).not.toContain(DECISION_BLOCK_START);
     expect(copied).not.toContain("[decision-injection");
 
+    const resume = async () => {
+      let outcome: unknown = null;
+      void h.delivery.resumeAnswer(Q1).then((result) => (outcome = result));
+      await until(() => outcome !== null);
+      return outcome;
+    };
+    // Tried again while the pane is still gone: the same failure, in a new round of receipts.
+    expect(await resume()).toMatchObject({ result: "needs-attention", reason: "pane_gone" });
+    expect((await messageOf(h, M1)).delivery).toMatchObject({
+      status: "needs-attention",
+      retries: 1,
+    });
+    await until(() => receipts(h).length === 3);
+
     h.client.terminals.set(PANE, pane);
-    let outcome: unknown = null;
-    void h.delivery.resumeAnswer(Q1).then((result) => (outcome = result));
-    await until(() => outcome !== null);
-    expect(outcome).toMatchObject({ result: "delivered", terminalId: PANE });
+    expect(await resume()).toMatchObject({ result: "delivered", terminalId: PANE });
     expect(h.client.submitted).toHaveLength(1);
     expect(h.client.submitted[0].text).toContain("text: Use the staging bucket.");
     expect(await h.delivery.attentionItems()).toEqual([]);
-    await until(() => receipts(h).length === 3);
+    await until(() => receipts(h).length === 4);
     expect(receipts(h)).toEqual([
       "ee01:received",
       "ee01:needs-attention",
+      "ee01:needs-attention",
       "ee01:terminal-delivered",
     ]);
+    const keys = h.reports
+      .filter((r) => r.path.endsWith("/deliveries/messages"))
+      .map((r) => r.body.idempotency_key);
+    expect(new Set(keys).size).toBe(4);
+    expect((await h.question(Q1))?.delivered_revision).toBe(1);
+  });
+
+  it("holds a follow-up behind its answer while the answer needs a person, then types both in order", async () => {
+    const h = setup({ listTerminals: true });
+    await answered(h.store, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+    await followedUp(h.store, Q1, M1, "And keep it compact.");
+
+    h.delivery.start();
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+    // Behind the answer, not itself held for a person: the answer's item carries it.
+    expect((await messageOf(h, M1)).delivery?.status).toBe("received");
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({ followUps: [], answer: { choices: ["approve"] } });
+
+    let outcome: unknown = null;
+    void h.delivery.resumeAnswer(Q1).then((result) => (outcome = result));
+    await until(() => outcome !== null);
+    expect(outcome).toMatchObject({ result: "delivered" });
+    expect(h.client.submitted).toHaveLength(1);
+    const typed = h.client.submitted[0].text;
+    expect(typedChoices(typed)).toEqual(["approve"]);
+    expect(typed.indexOf(DECISION_BLOCK_START)).toBeLessThan(
+      typed.indexOf(DECISION_FOLLOWUP_START)
+    );
+    expect(typed).toContain("text: And keep it compact.");
+  });
+
+  it("lets the follow-ups after an answer marked handled go on, the answer itself never typed", async () => {
+    const h = setup({ listTerminals: true });
+    await answered(h.store, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "unknown_option",
+    });
+    h.delivery.start();
+    await advance(1_000);
+    expect(await h.delivery.markHandled(Q1)).toEqual({ result: "handled" });
+    expect(parseAnswers((await h.question(Q1))!.answers_json)[0]).toMatchObject({
+      deliver: false,
+      delivered: false,
+      revision: 1,
+    });
+
+    await followedUp(h.store, Q1, M1, "After the handled answer.");
+    h.delivery.request();
+    await until(() => h.client.submitted.length === 1);
+    expect(h.client.submitted[0].text).toContain("text: After the handled answer.");
+    expect(typedChoices(h.client.submitted[0].text)).toEqual([]);
+    expect(await h.delivery.attentionItems()).toEqual([]);
+  });
+
+  it("releases an answer marked handled before handling stopped its delivery, when delivery starts", async () => {
+    const earlier = new DaintreeLocalStore(sqlite);
+    await answered(earlier, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "unknown_option",
+    });
+    await earlier.setMeta("daintree:handled-answers", JSON.stringify({ [Q1]: 1 }));
+    await followedUp(earlier, Q1, M1, "Sent after it was handled.");
+    await earlier.close();
+    const h = setup();
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1);
+    expect(h.client.submitted[0].text).toContain("text: Sent after it was handled.");
+    expect(typedChoices(h.client.submitted[0].text)).toEqual([]);
+    expect(parseAnswers((await h.question(Q1))!.answers_json)[0]).toMatchObject({ deliver: false });
+  });
+
+  it("gives a follow-up the resume's own reason when its run couldn't be resumed", async () => {
+    const h = setup({
+      listTerminals: true,
+      resume: {
+        wait: async (terminalId) => ({ terminalId, outcome: "timeout", state: "working" }),
+      },
+    });
+    await answeredAndTyped(h.store, Q1, 1);
+    await followedUp(h.store, Q1, M1, "Waiting for the resume.");
+    h.client.terminals.delete(PANE);
+
+    h.delivery.start();
+    await until(async () => (await messageOf(h, M1)).delivery?.status === "needs-attention");
+    expect((await messageOf(h, M1)).delivery?.error_code).toBe("resume_timeout");
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({ reason: "resume_timeout", canResume: true });
+    expect((await h.question(Q1))?.error_code).toBeNull();
   });
 
   it("refuses to resume or move a follow-up that may already have been typed", async () => {

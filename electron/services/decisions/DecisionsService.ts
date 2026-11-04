@@ -10,7 +10,7 @@ import type {
 import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
-import { readHandledAnswers, withoutHandled } from "./attentionList.js";
+import { readHandledAnswers, withoutHandled, type HandledAnswers } from "./attentionList.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import {
   DecisionModelRuntime,
@@ -485,9 +485,9 @@ export class DecisionsService {
    * pane's state becomes what they show, and the panes that changed are
    * pushed. Ignored while stopped, so nothing is pushed while Decisions is off.
    */
-  observeQuestions(rows: readonly QuestionRow[]): void {
+  observeQuestions(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
     if (this.disposed || this.state === "off") return;
-    this.panes.replace(rows);
+    this.panes.replace(rows, handled);
   }
 
   /**
@@ -913,9 +913,14 @@ export class DecisionsService {
     this.offCommit = null;
     if (store === null) return Promise.resolve();
     // What a person marked handled (#16020) shows nowhere: not on its pane, in Canopy or the list.
+    // Reads run one at a time, so each is fed with the record it was read with.
+    let handled: HandledAnswers = new Map();
     const feed = new QuestionRowsFeed(
-      async () => withoutHandled(await store.listQuestions(), await readHandledAnswers(store)),
-      (rows) => this.observeQuestions(rows)
+      async () => {
+        handled = await readHandledAnswers(store);
+        return withoutHandled(await store.listQuestions(), handled);
+      },
+      (rows) => this.observeQuestions(rows, handled)
     );
     this.feed = feed;
     this.offCommit = store.onCommit(() => void feed.refresh());

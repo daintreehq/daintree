@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MemoryLocalStore,
   type QuestionOrigin,
+  type QuestionRow,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
 
@@ -215,12 +216,39 @@ describe("socketBridgeStore", () => {
       created_at: 0,
       last_error: null,
     });
+    // Writes that commit only when the test says, as the store's own commit can lag.
+    const commits: Array<{ commit: () => void; fail: () => void }> = [];
+    const slow = new Proxy(store, {
+      get(object, property) {
+        if (property !== "updateQuestion") {
+          const value: unknown = Reflect.get(object, property, object);
+          return typeof value === "function"
+            ? (value as (...args: unknown[]) => unknown).bind(object)
+            : value;
+        }
+        return (id: string, patch: Partial<QuestionRow>) =>
+          new Promise((resolve, reject) => {
+            commits.push({
+              commit: () => resolve(object.updateQuestion(id, patch)),
+              fail: () => reject(new Error("refused")),
+            });
+          });
+      },
+    });
     const received = vi.fn();
-    const view = socketBridgeStore(store, received);
+    const view = socketBridgeStore(slow, received);
 
     const written = view.updateQuestion("q-1", { messages_json: "[]" });
+    await Promise.resolve();
+    await Promise.resolve();
     expect(received).not.toHaveBeenCalled();
+    commits[0]!.commit();
     await written;
+    expect(received).toHaveBeenCalledTimes(1);
+
+    const failed = view.updateQuestion("q-1", { messages_json: "[]" });
+    commits[1]!.fail();
+    await expect(failed).rejects.toThrow("refused");
     expect(received).toHaveBeenCalledTimes(1);
 
     const refused = socketBridgeStore(

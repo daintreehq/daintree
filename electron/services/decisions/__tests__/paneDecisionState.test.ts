@@ -65,6 +65,31 @@ describe("projectPaneDecisionStates", () => {
     expect(JSON.stringify(state)).not.toContain(SECRET);
   });
 
+  it("shows a follow-up's own status and code over its question's handled answer", () => {
+    const refused = row(1, {
+      local_status: "human-answered",
+      delivery_status: "delivery-uncertain",
+      error_code: "unknown_option",
+      answers_json: answers({}),
+      messages_json: messages({ delivery: { status: "needs-attention", error_code: "pane_gone" } }),
+    });
+    const handled = new Map([[qid(1), 1]]);
+    expect(
+      projectPaneDecisionStates([refused], handled).get("pane-a")?.content.needsAttention
+    ).toEqual([
+      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+    ]);
+    // Not handled, the answer's own status and code show.
+    expect(projectPaneDecisionStates([refused]).get("pane-a")?.content.needsAttention).toEqual([
+      {
+        questionId: qid(1),
+        alias: 1,
+        deliveryStatus: "delivery-uncertain",
+        reason: "unknown_option",
+      },
+    ]);
+  });
+
   it("lists a queued or open question with its alias, asked time and expiry", () => {
     const state = only([
       row(1, { local_status: "queued" }),

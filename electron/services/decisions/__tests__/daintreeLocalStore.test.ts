@@ -786,6 +786,14 @@ describe("DaintreeLocalStore ordering and failures", () => {
     await store.updateQuestion("q1", { messages_json: messages({ delivery: settled }) });
     expect(await store.hasPendingDelivery()).toBe(true);
 
+    // Held for a person, its receipt still owed: delivery sends it.
+    for (const status of ["needs-attention", "delivery-uncertain"] as const) {
+      await store.updateQuestion("q1", {
+        messages_json: messages({ delivery: { status, error_code: "pane_gone" } }),
+      });
+      expect(await store.hasPendingDelivery()).toBe(true);
+    }
+
     // Held for a person and reported: nothing for delivery to do until a person acts.
     await store.updateQuestion("q1", {
       messages_json: messages({

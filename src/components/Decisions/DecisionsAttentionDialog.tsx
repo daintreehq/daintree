@@ -258,7 +258,7 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
     item,
     worktreeName(item.origin.worktreeId, item.origin.worktreeName)
   );
-  const reason = reasonText(item.reason);
+  const reason = reasonText(item.reason, subjectOf(item));
   const [destinations, setDestinations] = useState<DecisionsAnswerDestinations | null>(null);
   const [destinationsError, setDestinationsError] = useState<string | null>(null);
   const locked = busy !== null;
@@ -702,7 +702,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
             {count > 0 && (
               <ul
                 ref={listRef}
-                aria-label={`${pluralize(count, "answer")} needing attention`}
+                aria-label={`${pluralize(count, "question")} needing attention`}
                 className="flex flex-col divide-y divide-divider"
               >
                 {items.map((item) => (

@@ -360,6 +360,35 @@ describe("DaintreeTerminalSink", () => {
       expect(first.value).toMatchObject({ outcome: "delivered" });
     });
 
+    it("holds a chunk that overlaps a follow-up already being typed in another chunk", async () => {
+      const h = setup();
+      h.patch({ agentState: "working" });
+      const alone = track(h.sink.inject(TARGET, followUpNotice(), I2));
+      await vi.advanceTimersByTimeAsync(0);
+      const withAnswer = followUpNotice(M1, "0190f0aa11112222333344440000cccc", [
+        formatAnswerNotice({
+          kind: "answer",
+          questionId: Q1,
+          alias: 1,
+          revision: 1,
+          source: "human",
+          choices: [{ id: "approve" }],
+          injectionId: I1,
+        }),
+      ]);
+      await expect(h.sink.inject(TARGET, withAnswer, I1)).resolves.toEqual({
+        outcome: "held",
+        reason: "attempt-in-flight",
+      });
+      expect(h.queued).toHaveLength(1);
+
+      h.client.terminals.set(PANE, atPrompt());
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushLine();
+      expect(alone.value).toMatchObject({ outcome: "delivered" });
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
     it("refuses a follow-up chunk the parser doesn't take whole", async () => {
       const h = setup();
       const withImage = followUpNotice().replace(
