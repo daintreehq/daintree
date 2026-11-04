@@ -41,6 +41,7 @@ function policy(overrides: Partial<DecisionsPolicy> = {}): DecisionsPolicy {
     proxyAllowlisted: false,
     defaultQuestionExpiryMs: 2 * DAY,
     maxQuestionExpiryMs: 20 * DAY,
+    askHumanAgents: [],
     revision: 0,
     ...overrides,
   };

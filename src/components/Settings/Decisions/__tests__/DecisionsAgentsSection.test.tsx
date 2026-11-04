@@ -16,12 +16,18 @@ import {
   unregisterPluginAgents,
 } from "@shared/config/pluginAgentRegistry";
 import type { CliAvailability } from "@shared/types";
-import type { DecisionsStatus } from "@shared/types/decisions";
+import type {
+  DecisionsPolicy,
+  DecisionsStatus,
+  SetDecisionsAgentAskHumanPayload,
+} from "@shared/types/decisions";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   DecisionsAgentsSection,
   decisionsAgentSupport,
   decisionsLaunchesGetAsk,
 } from "../DecisionsAgentsSection";
+import { useDecisionsPolicy } from "../useDecisionsPolicy";
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const CONNECTED: DecisionsStatus = { state: "connected", relayOrigin: ORIGIN, revision: 3 };
@@ -53,6 +59,70 @@ const PLAIN = {
 
 // Tests stub the store's refresh; each starts from the real one.
 const REFRESH = useCliAvailabilityStore.getState().refresh;
+
+function policy(overrides: Partial<DecisionsPolicy> = {}): DecisionsPolicy {
+  return {
+    gates: [],
+    proxyAllowlisted: false,
+    defaultQuestionExpiryMs: 1,
+    maxQuestionExpiryMs: 2,
+    askHumanAgents: [],
+    revision: 0,
+    ...overrides,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const getPolicy = vi.fn<() => Promise<DecisionsPolicy>>();
+const setAgentAskHuman =
+  vi.fn<(payload: SetDecisionsAgentAskHumanPayload) => Promise<DecisionsPolicy>>();
+const statusListeners = new Set<() => void>();
+
+/** Main's status push, which another window's change sends. */
+async function statusPushed() {
+  await act(async () => {
+    for (const listener of [...statusListeners]) listener();
+  });
+}
+
+/** The section as the Decisions tab renders it, fed by the tab's one policy read. */
+function Section({ status }: { status: DecisionsStatus }) {
+  const read = useDecisionsPolicy(true);
+  return (
+    <TooltipProvider>
+      <DecisionsAgentsSection status={status} policy={read} />
+    </TooltipProvider>
+  );
+}
+
+async function renderSection(status: DecisionsStatus) {
+  const view = render(<Section status={status} />);
+  await act(async () => {});
+  return view;
+}
+
+function agentSwitch(id: string): HTMLButtonElement {
+  return screen.getByRole("switch", { name: `ask_human for ${nameOf(id)}` }) as HTMLButtonElement;
+}
+
+function isOn(id: string): boolean {
+  return agentSwitch(id).getAttribute("aria-checked") === "true";
+}
+
+/** Every control inside the group under `label`. */
+function controlsUnder(label: string): Element[] {
+  const group = screen.getByText(label).parentElement!;
+  return [...group.querySelectorAll("button, code, pre, input, a")];
+}
 
 function setAvailability(
   availability: CliAvailability,
@@ -90,6 +160,24 @@ describe("DecisionsAgentsSection (#16012)", () => {
   beforeEach(() => {
     clearPluginAgentRegistryForTests();
     remote.hostName = null;
+    getPolicy.mockReset();
+    getPolicy.mockResolvedValue(policy());
+    setAgentAskHuman.mockReset();
+    statusListeners.clear();
+    Object.defineProperty(window, "electron", {
+      value: {
+        decisions: { getPolicy, setAgentAskHuman },
+        events: {
+          on: (name: string, listener: () => void) => {
+            if (name !== "decisions:status-changed") return () => {};
+            statusListeners.add(listener);
+            return () => statusListeners.delete(listener);
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
   });
 
   afterEach(() => {
@@ -109,29 +197,33 @@ describe("DecisionsAgentsSection (#16012)", () => {
     expect(unsupported).toEqual(["cursor", "grok"]);
   });
 
-  it("lists exactly the installed agents that get ask_human and the ones not supported yet, with nothing to set up", () => {
+  it("lists the installed agents that can get ask_human, each with a switch, and the ones not supported yet without one", async () => {
     setAvailability(INSTALLED);
-    const { container } = render(<DecisionsAgentsSection status={CONNECTED} />);
+    const { container } = await renderSection(CONNECTED);
 
-    expect(namesUnder("Get ask_human")).toEqual(namesOf(["claude", "codex"]));
+    expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
     expect(namesUnder("Not supported yet")).toEqual(namesOf(["cursor", "grok"]));
+    expect(controlsUnder("Supported").map((control) => control.getAttribute("role"))).toEqual([
+      "switch",
+      "switch",
+    ]);
     // Nothing to copy, run or click: an unsupported agent has no way in.
-    expect(container.querySelectorAll("button, code, pre, input, a")).toHaveLength(0);
+    expect(controlsUnder("Not supported yet")).toEqual([]);
     expect(container.textContent).not.toMatch(/gemini|decisions mcp|npx|config/i);
   });
 
   it("follows a plugin's agents in and out, by the launch-time MCP each declares", () => {
     setAvailability({ ...INSTALLED, "acme-agent": "ready", "acme-plain": "ready" });
-    render(<DecisionsAgentsSection status={CONNECTED} />);
+    render(<Section status={CONNECTED} />);
     expect(screen.queryByText("Acme Agent")).toBeNull();
 
     act(() => registerPluginAgents("acme.agents", [ACME, PLAIN]));
-    expect(namesUnder("Get ask_human")).toEqual(namesOf(["claude", "codex", "acme-agent"]));
+    expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex", "acme-agent"]));
     expect(namesUnder("Not supported yet")).toEqual(namesOf(["cursor", "grok", "acme-plain"]));
 
     // A reload that drops its launch-time MCP moves it; an unload removes both.
     act(() => registerPluginAgents("acme.agents", [{ ...ACME, launchMcp: undefined }, PLAIN]));
-    expect(namesUnder("Get ask_human")).not.toContain("Acme Agent");
+    expect(namesUnder("Supported")).not.toContain("Acme Agent");
     expect(namesUnder("Not supported yet")).toContain("Acme Agent");
     act(() => unregisterPluginAgents("acme.agents"));
     expect(screen.queryByText("Acme Agent")).toBeNull();
@@ -140,22 +232,22 @@ describe("DecisionsAgentsSection (#16012)", () => {
 
   it("says it is still checking before the first result, and follows the store once one lands", () => {
     setAvailability({}, { hasRealData: false });
-    render(<DecisionsAgentsSection status={CONNECTED} />);
+    render(<Section status={CONNECTED} />);
     expect(screen.getByText("Checking which agents are installed…")).toBeTruthy();
 
     act(() => setAvailability({ claude: "missing" }));
     expect(screen.getByText(/No agent CLIs found\. Install one/)).toBeTruthy();
-    expect(namesUnder("Get ask_human")).toBeNull();
+    expect(namesUnder("Supported")).toBeNull();
 
     act(() => setAvailability({ claude: "ready" }));
-    expect(namesUnder("Get ask_human")).toEqual([nameOf("claude")]);
+    expect(namesUnder("Supported")).toEqual([nameOf("claude")]);
   });
 
   it("shows a failed check with Retry rather than checking forever", () => {
     const refresh = vi.fn(async () => {});
     useCliAvailabilityStore.setState({ refresh });
     setAvailability({}, { hasRealData: false, error: "probe failed" });
-    render(<DecisionsAgentsSection status={CONNECTED} />);
+    render(<Section status={CONNECTED} />);
 
     expect(screen.queryByText("Checking which agents are installed…")).toBeNull();
     expect(screen.getByText("Couldn't check which agents are installed")).toBeTruthy();
@@ -173,7 +265,7 @@ describe("DecisionsAgentsSection (#16012)", () => {
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
     try {
-      render(<DecisionsAgentsSection status={CONNECTED} />);
+      render(<Section status={CONNECTED} />);
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(refresh).toHaveBeenCalledOnce();
@@ -199,16 +291,16 @@ describe("DecisionsAgentsSection (#16012)", () => {
 
   it("with no relay, says launches get ask_human once one is connected and points to Connection, keeping both lists (#16203)", () => {
     setAvailability(INSTALLED);
-    const { container } = render(<DecisionsAgentsSection status={NO_RELAY} />);
+    const { container } = render(<Section status={NO_RELAY} />);
 
     expect(notice()).toMatch(/No relay.*without ask_human/);
     expect(notice()).toMatch(/Connection/);
-    expect(container.textContent).toMatch(/launched while a relay is connected/);
-    expect(namesUnder("Get ask_human")).toBeNull();
-    expect(namesUnder("Get ask_human once connected")).toEqual(namesOf(["claude", "codex"]));
+    expect(container.textContent).toMatch(
+      /switch on can ask you with ask_human once a relay is connected/
+    );
+    expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
     expect(namesUnder("Not supported yet")).toEqual(namesOf(["cursor", "grok"]));
-    expect(container.textContent).not.toMatch(/launched while Decisions is on/);
-    expect(container.querySelectorAll("button, code, pre, input, a")).toHaveLength(0);
+    expect(controlsUnder("Not supported yet")).toEqual([]);
   });
 
   it("with a relay set up that isn't connecting, or revoked, points to Connection for why", () => {
@@ -219,58 +311,193 @@ describe("DecisionsAgentsSection (#16012)", () => {
       { state: "not-connected", relayOrigin: ORIGIN, problem: "other-relay" },
       { state: "revoked", relayOrigin: ORIGIN },
     ];
-    const { rerender } = render(<DecisionsAgentsSection status={CONNECTED} />);
+    const { rerender } = render(<Section status={CONNECTED} />);
     for (const status of stopped) {
-      rerender(<DecisionsAgentsSection status={status} />);
+      rerender(<Section status={status} />);
       expect(notice()).toMatch(/relay isn't connected.*without ask_human/);
       expect(notice()).toMatch(/Connection.*why/);
-      expect(namesUnder("Get ask_human once connected")).toEqual(namesOf(["claude", "codex"]));
+      expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
       expect(namesUnder("Not supported yet")).toEqual(namesOf(["cursor", "grok"]));
     }
   });
 
   it("reads as it always has while a connection runs, between attempts included", () => {
     setAvailability(INSTALLED);
-    const { container, rerender } = render(<DecisionsAgentsSection status={CONNECTED} />);
+    const { container, rerender } = render(<Section status={CONNECTED} />);
     for (const state of ["connecting", "connected", "reconnecting", "replaced"] as const) {
-      rerender(<DecisionsAgentsSection status={{ state, relayOrigin: ORIGIN }} />);
+      rerender(<Section status={{ state, relayOrigin: ORIGIN }} />);
       expect(notice()).toBeNull();
-      expect(namesUnder("Get ask_human")).toEqual(namesOf(["claude", "codex"]));
-      expect(namesUnder("Get ask_human once connected")).toBeNull();
-      expect(container.textContent).toMatch(/launched while Decisions is on/);
+      expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
+      expect(container.textContent).not.toMatch(/once a relay is connected/);
     }
   });
 
   it("follows the connection as it comes and goes", () => {
     setAvailability(INSTALLED);
-    const { rerender } = render(<DecisionsAgentsSection status={NO_RELAY} />);
-    expect(namesUnder("Get ask_human once connected")).toEqual(namesOf(["claude", "codex"]));
+    const { rerender } = render(<Section status={NO_RELAY} />);
+    expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
 
-    rerender(<DecisionsAgentsSection status={CONNECTED} />);
+    rerender(<Section status={CONNECTED} />);
     expect(notice()).toBeNull();
-    expect(namesUnder("Get ask_human")).toEqual(namesOf(["claude", "codex"]));
+    expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
 
-    rerender(<DecisionsAgentsSection status={{ state: "revoked", relayOrigin: ORIGIN }} />);
+    rerender(<Section status={{ state: "revoked", relayOrigin: ORIGIN }} />);
     expect(notice()).toMatch(/The relay isn't connected/);
-    expect(namesUnder("Get ask_human")).toBeNull();
+    expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
   });
 
   it("keeps the not-connected notice while the agent check is running or has failed", () => {
     setAvailability({}, { hasRealData: false });
-    const { rerender } = render(<DecisionsAgentsSection status={NO_RELAY} />);
+    const { rerender } = render(<Section status={NO_RELAY} />);
     expect(screen.getByText("Checking which agents are installed…")).toBeTruthy();
     expect(notice()).toMatch(/No relay is connected/);
 
     act(() => setAvailability({}, { hasRealData: false, error: "probe failed" }));
-    rerender(<DecisionsAgentsSection status={NO_RELAY} />);
+    rerender(<Section status={NO_RELAY} />);
     expect(screen.getByText("Couldn't check which agents are installed")).toBeTruthy();
     expect(notice()).toMatch(/No relay is connected/);
+  });
+
+  describe("switching an agent's ask_human (#16223)", () => {
+    it("starts every agent off, and shows the ones main holds switched on", async () => {
+      setAvailability(INSTALLED);
+      await renderSection(CONNECTED);
+      expect([isOn("claude"), isOn("codex")]).toEqual([false, false]);
+      cleanup();
+
+      getPolicy.mockResolvedValue(policy({ askHumanAgents: ["codex", "not-installed"] }));
+      await renderSection(CONNECTED);
+      expect([isOn("claude"), isOn("codex")]).toEqual([false, true]);
+      // On is the one change from the default, and only it can be reset.
+      expect(
+        screen.queryByRole("button", { name: `Switch off ask_human for ${nameOf("claude")}` })
+      ).toBeNull();
+      expect(
+        screen.getByRole("button", { name: `Switch off ask_human for ${nameOf("codex")}` })
+      ).toBeTruthy();
+    });
+
+    it("keeps the switches still until the policy has loaded, and a failed read offers Retry", async () => {
+      setAvailability(INSTALLED);
+      const read = deferred<DecisionsPolicy>();
+      getPolicy.mockReturnValueOnce(read.promise);
+      render(<Section status={CONNECTED} />);
+      expect(agentSwitch("claude").disabled).toBe(true);
+      fireEvent.click(agentSwitch("claude"));
+      expect(setAgentAskHuman).not.toHaveBeenCalled();
+
+      await act(async () => read.reject(new Error("read failed")));
+      expect(screen.getByText("Couldn't read which agents can ask you")).toBeTruthy();
+      getPolicy.mockResolvedValueOnce(policy({ askHumanAgents: ["claude"] }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(screen.queryByText("Couldn't read which agents can ask you")).toBeNull();
+      expect(agentSwitch("claude").disabled).toBe(false);
+      expect(isOn("claude")).toBe(true);
+    });
+
+    it("switches one agent at a time, showing what was asked while main saves it", async () => {
+      setAvailability(INSTALLED);
+      await renderSection(CONNECTED);
+      const save = deferred<DecisionsPolicy>();
+      setAgentAskHuman.mockReturnValueOnce(save.promise);
+
+      fireEvent.click(agentSwitch("claude"));
+      expect(setAgentAskHuman).toHaveBeenCalledExactlyOnceWith({
+        agentId: "claude",
+        enabled: true,
+      });
+      expect(isOn("claude")).toBe(true);
+      expect(agentSwitch("claude").disabled).toBe(true);
+      // Another agent isn't held up by it.
+      expect(agentSwitch("codex").disabled).toBe(false);
+
+      await act(async () => save.resolve(policy({ askHumanAgents: ["claude"], revision: 1 })));
+      expect(isOn("claude")).toBe(true);
+      expect(agentSwitch("claude").disabled).toBe(false);
+
+      setAgentAskHuman.mockResolvedValueOnce(policy({ askHumanAgents: [], revision: 2 }));
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: `Switch off ask_human for ${nameOf("claude")}` })
+        );
+      });
+      expect(setAgentAskHuman).toHaveBeenLastCalledWith({ agentId: "claude", enabled: false });
+      expect(isOn("claude")).toBe(false);
+    });
+
+    it("shows a failed save with Retry, and the switch goes back to what main holds", async () => {
+      setAvailability(INSTALLED);
+      await renderSection(CONNECTED);
+      setAgentAskHuman.mockRejectedValueOnce(new Error("store refused"));
+
+      await act(async () => {
+        fireEvent.click(agentSwitch("codex"));
+      });
+      expect(screen.getByText(`Couldn't switch on ask_human for ${nameOf("codex")}`)).toBeTruthy();
+      expect(screen.getByText("store refused")).toBeTruthy();
+      expect(isOn("codex")).toBe(false);
+
+      setAgentAskHuman.mockResolvedValueOnce(policy({ askHumanAgents: ["codex"], revision: 1 }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(setAgentAskHuman).toHaveBeenLastCalledWith({ agentId: "codex", enabled: true });
+      expect(screen.queryByText(`Couldn't switch on ask_human for ${nameOf("codex")}`)).toBeNull();
+      expect(isOn("codex")).toBe(true);
+    });
+
+    it("follows another window's change, and never rolls back to an older read", async () => {
+      setAvailability(INSTALLED);
+      getPolicy.mockResolvedValue(policy({ askHumanAgents: [], revision: 2 }));
+      await renderSection(CONNECTED);
+
+      getPolicy.mockResolvedValueOnce(policy({ askHumanAgents: ["claude"], revision: 3 }));
+      await statusPushed();
+      expect(isOn("claude")).toBe(true);
+
+      getPolicy.mockResolvedValueOnce(policy({ askHumanAgents: [], revision: 1 }));
+      await statusPushed();
+      expect(isOn("claude")).toBe(true);
+    });
+
+    it("gives a plugin's supported agent a switch of its own", async () => {
+      setAvailability({ ...INSTALLED, "acme-agent": "ready", "acme-plain": "ready" });
+      await renderSection(CONNECTED);
+      act(() => registerPluginAgents("acme.agents", [ACME, PLAIN]));
+      setAgentAskHuman.mockResolvedValueOnce(
+        policy({ askHumanAgents: ["acme-agent"], revision: 1 })
+      );
+
+      await act(async () => {
+        fireEvent.click(agentSwitch("acme-agent"));
+      });
+      expect(setAgentAskHuman).toHaveBeenCalledExactlyOnceWith({
+        agentId: "acme-agent",
+        enabled: true,
+      });
+      expect(isOn("acme-agent")).toBe(true);
+      expect(screen.queryByRole("switch", { name: "ask_human for Acme Plain" })).toBeNull();
+    });
+
+    it("can be switched with no relay connected, to apply once one is", async () => {
+      setAvailability(INSTALLED);
+      await renderSection(NO_RELAY);
+      setAgentAskHuman.mockResolvedValueOnce(policy({ askHumanAgents: ["claude"], revision: 1 }));
+
+      await act(async () => {
+        fireEvent.click(agentSwitch("claude"));
+      });
+      expect(isOn("claude")).toBe(true);
+      expect(notice()).toMatch(/No relay is connected/);
+    });
   });
 
   it("shows nothing in a remote window, whose agents are the host's", () => {
     remote.hostName = "build-box";
     setAvailability(INSTALLED);
-    const { container } = render(<DecisionsAgentsSection status={CONNECTED} />);
+    const { container } = render(<Section status={CONNECTED} />);
 
     expect(container.textContent).toBe("");
   });

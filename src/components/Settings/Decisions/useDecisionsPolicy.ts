@@ -12,6 +12,12 @@ export interface DecisionsExpirySaveFailure {
   message: string;
 }
 
+export interface DecisionsAgentSaveFailure {
+  agentId: string;
+  enabled: boolean;
+  message: string;
+}
+
 export interface UseDecisionsPolicyResult {
   /** Null until main has answered, and while Decisions is off. */
   policy: DecisionsPolicy | null;
@@ -22,9 +28,13 @@ export interface UseDecisionsPolicyResult {
   /** The default expiry being saved, boxed because null is "never"; null when nothing is saving. */
   pendingExpiry: { ms: number | null } | null;
   expirySaveFailure: DecisionsExpirySaveFailure | null;
+  /** Each agent's `ask_human` switch being saved, by agent id, so its row shows what was asked while main acts. */
+  pendingAgents: Readonly<Record<string, boolean>>;
+  agentSaveFailure: DecisionsAgentSaveFailure | null;
   reload(): Promise<void>;
   setProxyAllowlisted(allowed: boolean): Promise<void>;
   setDefaultQuestionExpiry(ms: number | null): Promise<void>;
+  setAgentAskHuman(agentId: string, enabled: boolean): Promise<void>;
 }
 
 const READ_FAILED = "Decisions' policy couldn't be read.";
@@ -37,8 +47,9 @@ const READ_FAILED = "Decisions' policy couldn't be read.";
  * read that lands after a newer change can't roll the switch back. Turning
  * off forgets what was read, and anything still in flight from before lands
  * nowhere, so turning on again starts from main's answer, never a stale one.
- * Each field saves on its own, so changing one never waits on, or resends, the
- * other; main applies them in turn over the setting as it stands.
+ * Each field saves on its own, and each agent's `ask_human` switch too, so
+ * changing one never waits on, or resends, another; main applies them in turn
+ * over the setting as it stands.
  * Promise chains rather than try/finally, which the React Compiler can't lower.
  */
 export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
@@ -50,8 +61,11 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   const [expirySaveFailure, setExpirySaveFailure] = useState<DecisionsExpirySaveFailure | null>(
     null
   );
+  const [pendingAgents, setPendingAgents] = useState<Readonly<Record<string, boolean>>>({});
+  const [agentSaveFailure, setAgentSaveFailure] = useState<DecisionsAgentSaveFailure | null>(null);
   const savingRef = useRef(false);
   const savingExpiryRef = useRef(false);
+  const savingAgentsRef = useRef(new Set<string>());
   const revisionRef = useRef(-1);
   /** Moves on each turn on and off; an answer asked for in another one is dropped. */
   const generationRef = useRef(0);
@@ -102,6 +116,7 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
       setLoadError(null);
       setSaveFailure(null);
       setExpirySaveFailure(null);
+      setAgentSaveFailure(null);
     };
   }, [active]);
 
@@ -158,6 +173,36 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
       });
   };
 
+  const setAgentAskHuman = (agentId: string, enabled: boolean): Promise<void> => {
+    if (savingAgentsRef.current.has(agentId)) return Promise.resolve();
+    savingAgentsRef.current.add(agentId);
+    setPendingAgents((current) => ({ ...current, [agentId]: enabled }));
+    setAgentSaveFailure(null);
+    const generation = generationRef.current;
+    return window.electron.decisions
+      .setAgentAskHuman({ agentId, enabled })
+      .then(
+        (next) => accept(next, generation),
+        (error: unknown) => {
+          if (generation !== generationRef.current) return;
+          setAgentSaveFailure({
+            agentId,
+            enabled,
+            message: formatErrorMessage(error, "Try again in a moment."),
+          });
+          void read();
+        }
+      )
+      .then(() => {
+        savingAgentsRef.current.delete(agentId);
+        setPendingAgents((current) => {
+          const next = { ...current };
+          delete next[agentId];
+          return next;
+        });
+      });
+  };
+
   return {
     policy: active ? policy : null,
     loadError: active ? loadError : null,
@@ -165,8 +210,11 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
     saveFailure: active ? saveFailure : null,
     pendingExpiry,
     expirySaveFailure: active ? expirySaveFailure : null,
+    pendingAgents,
+    agentSaveFailure: active ? agentSaveFailure : null,
     reload,
     setProxyAllowlisted,
     setDefaultQuestionExpiry,
+    setAgentAskHuman,
   };
 }

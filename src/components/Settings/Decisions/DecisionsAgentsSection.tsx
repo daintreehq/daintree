@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Callout } from "@/components/ui/Callout";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -14,6 +15,7 @@ import {
 import type { CliAvailability } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
 
 export interface DecisionsAgentSupport {
   /** Installed agents with launch-time MCP, the only way a launch can hand them `ask_human`. */
@@ -59,33 +61,92 @@ export function decisionsLaunchesGetAsk(status: DecisionsStatus): boolean {
   }
 }
 
+function agentName(id: string): string {
+  return getAgentConfig(id)?.name ?? id;
+}
+
+function AgentLabel({ id }: { id: string }) {
+  const Icon = getAgentConfig(id)?.icon;
+  return (
+    <span className="inline-flex items-center gap-2">
+      {Icon && <Icon size={16} />}
+      {agentName(id)}
+    </span>
+  );
+}
+
 function AgentRow({ id }: { id: string }) {
-  const config = getAgentConfig(id);
-  const Icon = config?.icon;
   return (
     <SettingsRow
       id={`decisions-agent-${id}`}
-      label={
-        <span className="inline-flex items-center gap-2">
-          {Icon && <Icon size={16} />}
-          {config?.name ?? id}
-        </span>
-      }
-      labelText={config?.name ?? id}
+      label={<AgentLabel id={id} />}
+      labelText={agentName(id)}
     />
   );
 }
 
 /**
- * Agents (#16012): which installed agents a launch hands `ask_human`, and
- * which can't be handed it yet. An agent gets it only through its launch-time
- * MCP path, so there is no manual setup to offer the rest: a server set up
- * by hand has no pane to answer into. With no relay connection, launches get
- * nothing, so the list says it applies once one is connected (#16203). Not
- * shown in a remote window: its agents are the host's, launched there under
- * the host's own Decisions.
+ * A supported agent's switch for whether its launches get `ask_human`
+ * (#16223): off until switched on, so on reads as modified, and reset
+ * switches it off.
  */
-export function DecisionsAgentsSection({ status }: { status: DecisionsStatus }) {
+function AgentSwitchRow({
+  id,
+  saved,
+  shown,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  /** As main holds it; false until the policy has loaded. */
+  saved: boolean;
+  /** What the switch shows: the value being saved, or the saved one. */
+  shown: boolean;
+  disabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  const name = agentName(id);
+  return (
+    <SettingsRow
+      id={`decisions-agent-${id}`}
+      label={<AgentLabel id={id} />}
+      labelText={name}
+      isModified={saved}
+      onReset={() => onChange(false)}
+      resetAriaLabel={`Switch off ask_human for ${name}`}
+      disabled={disabled}
+      onRowClick={() => onChange(!shown)}
+      control={({ descriptionId, disabled: rowDisabled }) => (
+        <SettingsSwitch
+          checked={shown}
+          onCheckedChange={() => onChange(!shown)}
+          disabled={rowDisabled}
+          aria-label={`ask_human for ${name}`}
+          aria-describedby={descriptionId}
+        />
+      )}
+    />
+  );
+}
+
+/**
+ * Agents (#16012): which installed agents can be handed `ask_human`, each
+ * with its own switch (#16223), and which can't be handed it yet. Every
+ * agent is off until switched on, and a change applies from its next launch.
+ * An agent gets it only through its launch-time MCP path, so there is no
+ * manual setup to offer the rest: a server set up by hand has no pane to
+ * answer into. With no relay connection, launches get nothing, so the section
+ * says the switches apply once one is connected (#16203). Not shown in a
+ * remote window: its agents are the host's, launched there under the host's
+ * own Decisions.
+ */
+export function DecisionsAgentsSection({
+  status,
+  policy: read,
+}: {
+  status: DecisionsStatus;
+  policy: UseDecisionsPolicyResult;
+}) {
   const availability = useCliAvailabilityStore((state) => state.availability);
   const hasRealData = useCliAvailabilityStore((state) => state.hasRealData);
   const loadError = useCliAvailabilityStore((state) => state.error);
@@ -100,6 +161,15 @@ export function DecisionsAgentsSection({ status }: { status: DecisionsStatus }) 
   const none = supported.length === 0 && unsupported.length === 0;
   const failed = !hasRealData && loadError !== null;
   const launchesGetAsk = decisionsLaunchesGetAsk(status);
+  const {
+    policy,
+    loadError: policyLoadError,
+    reload,
+    pendingAgents,
+    agentSaveFailure,
+    setAgentAskHuman,
+  } = read;
+  const switchedOn = new Set(policy?.askHumanAgents ?? []);
 
   return (
     <SettingsSection
@@ -107,8 +177,8 @@ export function DecisionsAgentsSection({ status }: { status: DecisionsStatus }) 
       id="decisions-agents"
       description={
         launchesGetAsk
-          ? "Agents launched while Decisions is on can ask you with ask_human. One already running gets it at its next launch."
-          : "Agents launched while a relay is connected can ask you with ask_human. One already running gets it at its next launch."
+          ? "Agents you switch on can ask you with ask_human. Each is off until you switch it on, and a change applies from its next launch."
+          : "Agents you switch on can ask you with ask_human once a relay is connected. Each is off until you switch it on, and a change applies from its next launch."
       }
     >
       {!launchesGetAsk && (
@@ -135,14 +205,42 @@ export function DecisionsAgentsSection({ status }: { status: DecisionsStatus }) 
         </SettingsGroup>
       ) : (
         <>
+          {supported.length > 0 && policy === null && policyLoadError !== null && (
+            <SettingsLoadErrorBanner
+              title="Couldn't read which agents can ask you"
+              message={policyLoadError}
+              onRetry={() => void reload()}
+            />
+          )}
           {supported.length > 0 && (
-            <SettingsGroup
-              label={launchesGetAsk ? "Get ask_human" : "Get ask_human once connected"}
-            >
-              {supported.map((id) => (
-                <AgentRow key={id} id={id} />
-              ))}
+            <SettingsGroup label="Supported">
+              {supported.map((id) => {
+                const saved = switchedOn.has(id);
+                return (
+                  <AgentSwitchRow
+                    key={id}
+                    id={id}
+                    saved={saved}
+                    shown={pendingAgents[id] ?? saved}
+                    disabled={policy === null || pendingAgents[id] !== undefined}
+                    onChange={(enabled) => void setAgentAskHuman(id, enabled)}
+                  />
+                );
+              })}
             </SettingsGroup>
+          )}
+          {agentSaveFailure && (
+            <SettingsLoadErrorBanner
+              title={
+                agentSaveFailure.enabled
+                  ? `Couldn't switch on ask_human for ${agentName(agentSaveFailure.agentId)}`
+                  : `Couldn't switch off ask_human for ${agentName(agentSaveFailure.agentId)}`
+              }
+              message={agentSaveFailure.message}
+              onRetry={() =>
+                void setAgentAskHuman(agentSaveFailure.agentId, agentSaveFailure.enabled)
+              }
+            />
           )}
           {unsupported.length > 0 && (
             <SettingsGroup label="Not supported yet">
