@@ -11,6 +11,21 @@ import {
   type PhoneImageFile,
   type QuestionRow,
 } from "@daintreehq/decisions-client";
+/** Runs once, just before the store renames a written image into place. */
+const hooks = vi.hoisted(() => ({ beforeRename: null as null | (() => void) }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: async (from: string, to: string) => {
+      const hook = hooks.beforeRename;
+      hooks.beforeRename = null;
+      hook?.();
+      return actual.rename(from, to);
+    },
+  };
+});
+
 import {
   DecisionsPhoneImages,
   PHONE_IMAGE_RETENTION_MS,
@@ -252,6 +267,22 @@ describe("DecisionsPhoneImages.store (#16233)", () => {
     expect(fs.existsSync(path.join(decisions, "images"))).toBe(false);
   });
 
+  it.runIf(POSIX)(
+    "fails a store whose directory was swapped for a link while it wrote, leaving nothing there",
+    async () => {
+      const store = images();
+      await store.store(image({ attachmentId: "att_first" }));
+      const decisions = path.join(repo, ".daintree", "decisions");
+      const elsewhere = path.join(dir, "elsewhere");
+      hooks.beforeRename = () => {
+        fs.renameSync(decisions, elsewhere);
+        fs.symlinkSync(elsewhere, decisions);
+      };
+      await expect(store.store(image({ attachmentId: "att_second" }))).rejects.toThrow();
+      expect(filesUnder(elsewhere).filter((file) => file.includes("att_second"))).toEqual([]);
+    }
+  );
+
   it("takes nothing once closed", async () => {
     const store = images();
     await store.close();
@@ -261,7 +292,7 @@ describe("DecisionsPhoneImages.store (#16233)", () => {
 });
 
 describe("DecisionsPhoneImages sweeps (#16233)", () => {
-  async function stored(store: DecisionsPhoneImages, overrides: Partial<PhoneImageFile> = {}) {
+  async function stored(store: DecisionsPhoneImages, overrides: Parameters<typeof image>[0] = {}) {
     return (await store.store(image(overrides))).path;
   }
 
@@ -455,6 +486,54 @@ describe("DecisionsPhoneImages sweeps (#16233)", () => {
     clock += 91 * DAY;
     await store.sweep();
     expect(record().roots).not.toContain(other);
+  });
+
+  it("keeps a root whose images vanished without it, as a drive's empty mount point, until it's back", async () => {
+    const store = images();
+    const photo = await stored(store);
+    const away = path.join(dir, "unmounted");
+    fs.renameSync(repo, away);
+    fs.mkdirSync(repo);
+    await store.sweep();
+    const record = () =>
+      JSON.parse(fs.readFileSync(rootsFile, "utf8")) as {
+        roots: string[];
+        missing: Record<string, number>;
+      };
+    expect(record()).toMatchObject({ roots: [repo], missing: { [repo]: clock } });
+
+    fs.rmdirSync(repo);
+    fs.renameSync(away, repo);
+    rows = [];
+    await store.sweep();
+    expect(fs.existsSync(photo)).toBe(false);
+  });
+
+  it("starts a photo's time again when its drive is back, since it may have waited while away", async () => {
+    rows = [row(1, { origin: { worktree_root: repo }, answers_json: answers({}) })];
+    const store = images();
+    const photo = await stored(store);
+    const away = path.join(dir, "unmounted");
+    fs.renameSync(repo, away);
+    clock += PHONE_IMAGE_RETENTION_MS + DAY;
+    await store.sweep();
+
+    // Handled while the drive was away, then back: its time starts now, not when it was last seen.
+    rows = [
+      row(1, { origin: { worktree_root: repo }, answers_json: answers({ delivered: true }) }),
+    ];
+    fs.renameSync(away, repo);
+    clock += PHONE_IMAGE_SWEEP_INTERVAL_MS;
+    await store.sweep();
+    expect(fs.existsSync(photo)).toBe(true);
+    const backAt = clock;
+
+    clock = backAt + PHONE_IMAGE_RETENTION_MS - DAY;
+    await store.sweep();
+    expect(fs.existsSync(photo)).toBe(true);
+    clock = backAt + PHONE_IMAGE_RETENTION_MS + PHONE_IMAGE_SWEEP_INTERVAL_MS;
+    await store.sweep();
+    expect(fs.existsSync(photo)).toBe(false);
   });
 
   it("deletes only the files it writes, leaving anything else put in its folder", async () => {

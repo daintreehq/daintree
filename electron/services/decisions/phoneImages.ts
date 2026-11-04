@@ -475,13 +475,18 @@ export class DecisionsPhoneImages implements PhoneImageStore {
       [IMAGES_DIR, record.id, image.questionId],
       () => true
     );
+    // Every directory from the launch cwd down, as checked: an ancestor swapped for a link fails it.
+    const intact = async () =>
+      (await existingChain(root, [...DECISIONS_DIR, IMAGES_DIR, record.id, image.questionId])) ===
+      dir;
 
     const existing = await lstatOrNull(target);
     if (
       existing?.isFile() &&
       existing.nlink === 1 &&
       owned(existing) &&
-      (await sha256OfFile(target)) === image.sha256
+      (await sha256OfFile(target)) === image.sha256 &&
+      (await intact())
     ) {
       return target;
     }
@@ -511,10 +516,7 @@ export class DecisionsPhoneImages implements PhoneImageStore {
     // A directory swapped for a link meanwhile took the file elsewhere: it goes, and the store fails.
     const placed = await lstatOrNull(target);
     const same = placed !== null && placed.ino === written.ino && placed.dev === written.dev;
-    if (
-      !same ||
-      (await existingChain(decisions, [IMAGES_DIR, record.id, image.questionId])) !== dir
-    ) {
+    if (!same || !(await intact())) {
       if (same) await unlinkQuietly(target);
       throw new Error("A phone image's directory changed while it was written");
     }
@@ -538,7 +540,14 @@ export class DecisionsPhoneImages implements PhoneImageStore {
     const roots: string[] = [];
     const missing: Record<string, number> = {};
     for (const root of record.roots) {
-      const swept = await this.sweepRoot(root, record.id, { known, deleted, inUse, now });
+      const returning = record.missing?.[root] !== undefined;
+      const swept = await this.sweepRoot(root, record.id, {
+        known,
+        deleted,
+        inUse,
+        now,
+        returning,
+      });
       if (swept === "missing") {
         const since = record.missing?.[root] ?? now;
         if (now - since >= MISSING_ROOT_MS) continue;
@@ -553,9 +562,11 @@ export class DecisionsPhoneImages implements PhoneImageStore {
   }
 
   /**
-   * `empty` once the root is reached and holds none of this installation's
-   * images, `missing` when the root itself isn't there (gone with its
-   * worktree, or a drive not mounted), `kept` otherwise.
+   * `empty` once this emptied the root's images directory, `missing` when the
+   * root or that directory isn't there and this didn't remove it (gone with
+   * its worktree, or a drive not mounted, its mount point left empty), `kept`
+   * otherwise. Back after being missing, its images' time starts again: what
+   * a sweep couldn't touch while it was away may have waited all along.
    */
   private async sweepRoot(
     root: string,
@@ -565,6 +576,7 @@ export class DecisionsPhoneImages implements PhoneImageStore {
       deleted: ReadonlySet<string>;
       inUse: ReadonlySet<string>;
       now: number;
+      returning: boolean;
     }
   ): Promise<"empty" | "missing" | "kept"> {
     let rootStats: Stats;
@@ -575,8 +587,9 @@ export class DecisionsPhoneImages implements PhoneImageStore {
     }
     if (!rootStats.isDirectory()) return "missing";
     const dir = await existingChain(root, [...DECISIONS_DIR, IMAGES_DIR, storeId]);
-    if (dir === null)
-      return (await lstatOrNull(imagesDir(root, storeId))) === null ? "empty" : "kept";
+    if (dir === null) {
+      return (await lstatOrNull(imagesDir(root, storeId))) === null ? "missing" : "kept";
+    }
     for (const name of await readdir(dir)) {
       if (!ID.test(name)) continue;
       const question = join(dir, name);
@@ -584,21 +597,21 @@ export class DecisionsPhoneImages implements PhoneImageStore {
         await removeQuestionDir(question);
         continue;
       }
-      await this.ageQuestionDir(question, facts.inUse.has(name), facts.now);
+      await this.ageQuestionDir(question, facts.inUse.has(name) || facts.returning, facts.now);
     }
     return (await rmdirIfEmpty(dir)) ? "empty" : "kept";
   }
 
   /**
-   * An image waiting to be typed in is touched, so its time starts once
-   * nothing waits; one that has had its time goes, and so does a part file
-   * no write is making.
+   * An image waiting to be typed in (or `touch`ed for another reason) is
+   * touched, so its time starts once nothing waits; one that has had its time
+   * goes, and so does a part file no write is making.
    */
-  private async ageQuestionDir(dir: string, inUse: boolean, now: number): Promise<void> {
+  private async ageQuestionDir(dir: string, touch: boolean, now: number): Promise<void> {
     await ownEntries(dir, async (entry, name, stats) => {
       if (PART.test(name) || stats.isSymbolicLink()) {
         await unlinkQuietly(entry);
-      } else if (inUse) {
+      } else if (touch) {
         const at = new Date(now);
         await lutimes(entry, at, at).catch(() => {});
       } else if (now - stats.mtimeMs >= this.retentionMs + PHONE_IMAGE_SWEEP_INTERVAL_MS) {
@@ -629,8 +642,9 @@ export async function erasePhoneImages(rootsFile: string): Promise<boolean> {
       // A root not there may be a drive not mounted: kept for a sweep to find.
       if (!(await stat(root)).isDirectory()) continue;
       const dir = await existingChain(root, [...DECISIONS_DIR, IMAGES_DIR, record.id]);
+      // Not there and not removed by this: perhaps a drive's empty mount point, so kept too.
       if (dir === null) {
-        if ((await lstatOrNull(imagesDir(root, record.id))) !== null) left.push(root);
+        left.push(root);
         continue;
       }
       for (const name of await readdir(dir)) {
