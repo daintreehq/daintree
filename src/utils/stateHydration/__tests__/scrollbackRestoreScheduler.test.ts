@@ -304,6 +304,34 @@ describe("scheduleScrollbackRestore — waiting for a spawn", () => {
     scheduleScrollbackRestore([spawned("t1")], () => true);
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
   });
+
+  it("drains restores a listener schedules while reset abandons the waiting ones", async () => {
+    const ids = ["w", "a", "b", "c", "d"];
+    const managedById = new Map(ids.map((id) => [id, fakeManaged("none")]));
+    getMock.mockImplementation((id: string) => managedById.get(id));
+    fetchAndRestoreMock.mockResolvedValue(true);
+    setPanelSpawn("w", "spawning");
+    scheduleScrollbackRestore([spawned("w")], () => true);
+
+    let rescheduled = false;
+    notifyScrollbackRestoreListenersMock.mockImplementation(() => {
+      if (rescheduled || managedById.get("w")!.scrollbackRestoreState !== "none") return;
+      rescheduled = true;
+      scheduleScrollbackRestore(
+        ["a", "b", "c", "d"].map((id) => ({
+          terminalId: id,
+          label: id,
+          location: "grid" as const,
+        })),
+        () => true
+      );
+    });
+    resetScrollbackRestoreBatch();
+
+    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 4; i++) await getScheduledDoRestore(i)();
+    expect(fetchAndRestoreMock.mock.calls.map(([id]) => id)).toEqual(["a", "b", "c", "d"]);
+  });
 });
 
 describe("scheduleScrollbackRestore — background mode", () => {

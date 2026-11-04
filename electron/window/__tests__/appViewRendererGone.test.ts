@@ -173,9 +173,13 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(dropReloadNotice).toHaveBeenCalledTimes(3);
     expect(dropReloadNotice).toHaveBeenCalledWith(appWebContents);
     expect(holdReloadNotice).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(dropReloadNotice).mock.invocationCallOrder[2]).toBeGreaterThan(
-      vi.mocked(holdReloadNotice).mock.invocationCallOrder[1]!
-    );
+    // Each death drops before its own hold, or a fresh notice would be wiped.
+    const drops = vi.mocked(dropReloadNotice).mock.invocationCallOrder;
+    const holds = vi.mocked(holdReloadNotice).mock.invocationCallOrder;
+    expect(drops[0]).toBeLessThan(holds[0]!);
+    expect(holds[0]).toBeLessThan(drops[1]!);
+    expect(drops[1]).toBeLessThan(holds[1]!);
+    expect(holds[1]).toBeLessThan(drops[2]!);
   });
 
   it.each([

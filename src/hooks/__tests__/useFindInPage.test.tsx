@@ -625,5 +625,9 @@ describe("useFindInPage against Electron's find sessions", () => {
     flush();
     expect(result.current.activeMatch).toBe(1);
     expect(result.current.matchCount).toBe(3);
+
+    act(() => result.current.toggleMatchCase());
+    flush();
+    expect(result.current.matchCount).toBe(4);
   });
 });

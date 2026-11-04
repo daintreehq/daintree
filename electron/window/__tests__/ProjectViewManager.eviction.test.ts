@@ -295,7 +295,11 @@ import {
   settleCachedViewFlush,
 } from "../../services/cachedViewFlush.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import { releaseReloadNotice, resetReloadNoticesForTest } from "../rendererReloadNotice.js";
+import {
+  holdReloadNotice,
+  releaseReloadNotice,
+  resetReloadNoticesForTest,
+} from "../rendererReloadNotice.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -450,6 +454,8 @@ describe("ProjectViewManager — eviction safety", () => {
         .webContents as unknown as ReturnType<typeof createMockWebContents>;
       await manager.switchTo("proj-c", "/path/c");
       await flushImmediates();
+      // Left by an earlier reload that never reported in.
+      holdReloadNotice(wcB as never, "A project view crashed and was automatically reloaded.");
 
       emitProcessGone(wcB, "crashed");
       await flushImmediates();
@@ -457,6 +463,12 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(wcB.reload).not.toHaveBeenCalled();
       expect(wcB.close).toHaveBeenCalled();
       expect(manager.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+      // Evicted, not reloaded: the stale notice goes with it.
+      releaseReloadNotice(wcB as never);
+      expect(
+        wcB.send.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST)
+      ).toEqual([]);
+      resetReloadNoticesForTest();
     });
 
     it("a crashed ACTIVE view still auto-reloads", async () => {

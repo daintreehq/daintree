@@ -314,9 +314,11 @@ export function resetScrollbackRestoreBatch(): void {
   restoreQueue.length = 0;
   const waiting = [...awaitingSpawn.values()];
   awaitingSpawn.clear();
-  for (const queued of waiting) queued.abandon();
   activeRestores = 0;
   queueGeneration++;
   syncFocusSubscription();
   syncSpawnSubscription();
+  // Last: abandoning notifies listeners, and one that schedules again must land
+  // in the fresh queue, not one this reset is about to wipe.
+  for (const queued of waiting) queued.abandon();
 }
