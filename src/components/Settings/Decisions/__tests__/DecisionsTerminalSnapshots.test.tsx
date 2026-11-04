@@ -161,6 +161,33 @@ describe("Decisions terminal snapshots switch", () => {
     expect(on()).toBe("false");
   });
 
+  it("keeps the agreement open and locked until main answers, then hands focus back to the switch", async () => {
+    const saving = deferred<DecisionsStatus>();
+    setTerminalSnapshots.mockReturnValue(saving.promise);
+    await renderSection({ state: "connected" });
+
+    snapshotsSwitch().focus();
+    fireEvent.click(snapshotsSwitch());
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: "Turn on snapshots" })
+      );
+    });
+    expect(setTerminalSnapshots).toHaveBeenCalledExactlyOnceWith({ enabled: true, consent: true });
+    // Still open while main saves, and Cancel can't take back what's being saved.
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await act(async () =>
+      saving.resolve({ state: "connected", terminalSnapshots: true, revision: 1 })
+    );
+    await gone();
+    expect(on()).toBe("true");
+    expect(snapshotsSwitch().disabled).toBe(false);
+    await vi.waitFor(() => expect(document.activeElement).toBe(snapshotsSwitch()));
+  });
+
   it("can't change while the Decisions switch is changing", async () => {
     await renderSection({ state: "connected" }, { locked: true });
     expect(snapshotsSwitch().disabled).toBe(true);
@@ -189,5 +216,22 @@ describe("Decisions terminal snapshots switch", () => {
     });
     expect(setTerminalSnapshots).toHaveBeenLastCalledWith({ enabled: false });
     expect(screen.queryByText("Couldn't turn off terminal snapshots")).toBeNull();
+  });
+
+  it("retries nothing while the Decisions switch is changing", async () => {
+    setTerminalSnapshots.mockRejectedValueOnce(new Error("The settings file is read-only"));
+    getStatus.mockResolvedValue({ state: "connected", terminalSnapshots: true, revision: 2 });
+    const view = render(<Section initial={{ state: "connected", terminalSnapshots: true }} />);
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(snapshotsSwitch());
+    });
+    expect(screen.getByText("Couldn't turn off terminal snapshots")).toBeTruthy();
+
+    view.rerender(<Section initial={{ state: "connected", terminalSnapshots: true }} locked />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(setTerminalSnapshots).toHaveBeenCalledTimes(1);
   });
 });

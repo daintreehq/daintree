@@ -112,12 +112,14 @@ export function DecisionsQuestionsSection({
           isEnabled={snapshots.enabled}
           onChange={() => {
             if (snapshotsLocked) return;
-            if (snapshots.enabled) snapshots.set({ enabled: false });
+            if (snapshots.enabled) void snapshots.set({ enabled: false });
             else setSnapshotsConsentOpen(true);
           }}
           disabled={snapshotsLocked}
           isModified={status.terminalSnapshots === true}
-          onReset={() => snapshots.set({ enabled: false })}
+          onReset={() => {
+            if (!snapshotsLocked) void snapshots.set({ enabled: false });
+          }}
           resetAriaLabel="Turn off terminal snapshots"
         />
         <SettingsRow
@@ -158,7 +160,9 @@ export function DecisionsQuestionsSection({
               : "Couldn't turn off terminal snapshots"
           }
           message={snapshotsFailure.message}
-          onRetry={() => snapshots.set(snapshotsFailure.payload)}
+          onRetry={() => {
+            if (!snapshotsLocked) void snapshots.set(snapshotsFailure.payload);
+          }}
         />
       )}
       {expirySaveFailure && (
@@ -168,12 +172,16 @@ export function DecisionsQuestionsSection({
           onRetry={() => void setDefaultQuestionExpiry(expirySaveFailure.ms)}
         />
       )}
+      {/* Open until main answers, so focus goes back to a switch that takes it again. */}
       <DecisionsTerminalSnapshotsConsentDialog
         isOpen={snapshotsConsentOpen}
+        saving={snapshots.saving}
         onCancel={() => setSnapshotsConsentOpen(false)}
         onAccept={() => {
-          setSnapshotsConsentOpen(false);
-          snapshots.set({ enabled: true, consent: true });
+          if (snapshotsLocked) return;
+          void snapshots
+            .set({ enabled: true, consent: true })
+            .then(() => setSnapshotsConsentOpen(false));
         }}
       />
     </SettingsSection>

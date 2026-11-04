@@ -1158,6 +1158,9 @@ export function setAutoEnrollHosts(enabled: boolean): Promise<DecisionsHostsResu
   });
 }
 
+/** Rises with each turn off of terminal snapshots, so a turn on queued before one never lands after it. */
+let terminalSnapshotsOffs = 0;
+
 /**
  * Turns terminal snapshots on or off (#16228). Each turn on needs the
  * person's agreement given just then, and records when; only while on.
@@ -1169,6 +1172,7 @@ export function setAutoEnrollHosts(enabled: boolean): Promise<DecisionsHostsResu
 export function setDecisionsTerminalSnapshots(
   payload: SetDecisionsTerminalSnapshotsPayload
 ): Promise<DecisionsStatus> {
+  const offs = payload.enabled ? terminalSnapshotsOffs : ++terminalSnapshotsOffs;
   if (!payload.enabled) {
     const current = readDecisionsSettings(store);
     if (current.terminalSnapshots) {
@@ -1185,6 +1189,8 @@ export function setDecisionsTerminalSnapshots(
           message: "Terminal snapshots turn on only after you agree to what they send",
         });
       }
+      // Turned off since this was asked for, here or in another window: the later off stands.
+      if (offs !== terminalSnapshotsOffs) return getDecisionsStatus();
     }
     const saved = writeDecisionsSettings(store, {
       ...current,

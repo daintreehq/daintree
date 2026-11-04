@@ -985,6 +985,47 @@ describe("Decisions entry", () => {
         code: "PERMISSION",
       });
       expect(saved.value).toMatchObject({ terminalSnapshots: false });
+
+      // A new agreement records its own time.
+      const later = agreedAt + 60_000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(later);
+      await setDecisionsTerminalSnapshots({ enabled: true, consent: true }).finally(() =>
+        now.mockRestore()
+      );
+      expect(saved.value).toMatchObject({
+        terminalSnapshots: true,
+        terminalSnapshotsConsentedAt: later,
+      });
+    });
+
+    it("lets a turn off stand over a turn on queued before it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      // One window agrees and turns them on; another turns them off before that lands.
+      const turningOn = setDecisionsTerminalSnapshots({ enabled: true, consent: true });
+      const turningOff = setDecisionsTerminalSnapshots({ enabled: false });
+      closed();
+      const [, , on, off] = await Promise.all([stopping, enabling, turningOn, turningOff]);
+
+      const wroteOn = vi
+        .mocked(store.set)
+        .mock.calls.some(
+          ([, value]) => (value as { terminalSnapshots?: boolean }).terminalSnapshots === true
+        );
+      expect(wroteOn).toBe(false);
+      expect(on.terminalSnapshots).toBeUndefined();
+      expect(off.terminalSnapshots).toBeUndefined();
+      expect(saved.value).toMatchObject({ terminalSnapshots: false });
+      expect(terminalSnapshotsAllowed()).toBe(false);
+      expect(service.getSettings()!.terminalSnapshots).toBe(false);
     });
 
     it("saves off at once, ahead of a change still in the queue, and the service follows in turn", async () => {

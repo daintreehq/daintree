@@ -4,7 +4,6 @@ import type {
   DecisionsStatus,
   SetDecisionsTerminalSnapshotsPayload,
 } from "@shared/types/decisions";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export interface DecisionsTerminalSnapshotsFailure {
   payload: SetDecisionsTerminalSnapshotsPayload;
@@ -16,8 +15,11 @@ export interface UseDecisionsTerminalSnapshotsResult {
   enabled: boolean;
   saving: boolean;
   failure: DecisionsTerminalSnapshotsFailure | null;
-  /** Turning on sends `consent` only from the dialog the person just agreed in. */
-  set(payload: SetDecisionsTerminalSnapshotsPayload): void;
+  /**
+   * Turning on sends `consent` only from the dialog the person just agreed
+   * in. Settles once main has answered, failure included; never rejects.
+   */
+  set(payload: SetDecisionsTerminalSnapshotsPayload): Promise<void>;
 }
 
 /**
@@ -35,27 +37,24 @@ export function useDecisionsTerminalSnapshots(
   const [failure, setFailure] = useState<DecisionsTerminalSnapshotsFailure | null>(null);
   const savingRef = useRef(false);
 
-  const set = (payload: SetDecisionsTerminalSnapshotsPayload) => {
-    if (savingRef.current) return;
+  const set = (payload: SetDecisionsTerminalSnapshotsPayload): Promise<void> => {
+    if (savingRef.current) return Promise.resolve();
     savingRef.current = true;
     setPending(payload);
     setFailure(null);
-    safeFireAndForget(
-      window.electron.decisions
-        .setTerminalSnapshots(payload)
-        .then(
-          (next) => onChanged(next),
-          (error: unknown) => {
-            setFailure({ payload, message: formatErrorMessage(error, "Try again in a moment.") });
-            onChanged(null);
-          }
-        )
-        .then(() => {
-          savingRef.current = false;
-          setPending(null);
-        }),
-      { context: "Changing Decisions terminal snapshots" }
-    );
+    return window.electron.decisions
+      .setTerminalSnapshots(payload)
+      .then(
+        (next) => onChanged(next),
+        (error: unknown) => {
+          setFailure({ payload, message: formatErrorMessage(error, "Try again in a moment.") });
+          onChanged(null);
+        }
+      )
+      .then(() => {
+        savingRef.current = false;
+        setPending(null);
+      });
   };
 
   return {

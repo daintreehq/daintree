@@ -1,8 +1,12 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { TerminalSnapshotsDisclosure } from "./DecisionsDisclosure";
 
 interface DecisionsTerminalSnapshotsConsentDialogProps {
   isOpen: boolean;
+  /** The agreed turn on is being saved: the dialog stays, locked, until main answers. */
+  saving?: boolean;
   onCancel: () => void;
   onAccept: () => void;
 }
@@ -14,9 +18,11 @@ interface DecisionsTerminalSnapshotsConsentDialogProps {
  */
 export function DecisionsTerminalSnapshotsConsentDialog({
   isOpen,
+  saving = false,
   onCancel,
   onAccept,
 }: DecisionsTerminalSnapshotsConsentDialogProps) {
+  const showSpinner = useDeferredLoading(saving, UI_DOHERTY_THRESHOLD);
   return (
     <ConfirmDialog
       isOpen={isOpen}
@@ -28,6 +34,8 @@ export function DecisionsTerminalSnapshotsConsentDialog({
       confirmLabel="Turn on snapshots"
       cancelLabel="Cancel"
       onConfirm={onAccept}
+      isConfirmLoading={showSpinner}
+      isBusy={saving}
     >
       <ul className="space-y-2 text-xs text-text-secondary select-text">
         <li>
