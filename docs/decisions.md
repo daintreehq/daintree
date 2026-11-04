@@ -92,7 +92,7 @@ When the update's command ends, Settings checks the relay again and says what ha
 
 ## Agents
 
-With Decisions on and a relay connected, every launch of a supported agent gets a `daintree-decisions` MCP server beside your own, whatever the project's MCP setting, with three tools: `ask_human`, `get_decision` and `cancel_question`. Daintree hands it over at launch only: nothing is written into your agent's config or your project. An agent that was already running gets it at its next launch. **Agents** in Settings lists your installed agents under **Get ask_human** and **Not supported yet**. Before a relay is set up, or once its connection has stopped or been revoked, agents launch without it: the section says so, points to **Connection**, and lists the supported ones under **Get ask_human once connected**. A launch while the connection is retrying still gets it, and its questions go out once the relay is back.
+With Decisions on and a relay connected, every launch of a supported agent gets a `daintree-decisions` MCP server beside your own, whatever the project's MCP setting, with four tools: `ask_human`, `get_decision`, `cancel_question` and `send_followup`. Daintree hands it over at launch only: nothing is written into your agent's config or your project. An agent that was already running gets it at its next launch. **Agents** in Settings lists your installed agents under **Get ask_human** and **Not supported yet**. Before a relay is set up, or once its connection has stopped or been revoked, agents launch without it: the section says so, points to **Connection**, and lists the supported ones under **Get ask_human once connected**. A launch while the connection is retrying still gets it, and its questions go out once the relay is back.
 
 | Agent | Gets `ask_human` | Resumed to deliver an answer when its terminal is gone |
 | --- | --- | --- |
@@ -112,11 +112,19 @@ When a launch can't reach Decisions within five seconds (no relay set up yet, a 
 
 ### Asking
 
-An agent asks with `ask_human`: a self-contained question, optional context, up to 12 options, and up to 8 screenshots. It gets back `Asked as q-N. Carry on with anything that does not depend on the answer; once you cannot go further without it, end your turn. The answer arrives as a new message in this terminal, with your question quoted.` The question is saved on this computer before anything is sent, so one asked while the relay is out of reach goes out when it's back. A terminal can have at most 10 open questions.
+An agent asks with `ask_human`: a self-contained question, optional context, up to 12 options, and up to 8 screenshots. It gets back `Asked as q-N. Carry on with anything that does not depend on the answer; once you cannot go further without it, end your turn. The answer arrives as a new message in this terminal, with your question quoted. The answer is final: the person may still send follow-ups, even after answering, which arrive here marked as follow-ups without changing it, so a reconsidered decision arrives as a follow-up. To clarify, reply or ask a follow-up, call send_followup with this question_id instead of asking a new question; replies arrive the same way.` The question is saved on this computer before anything is sent, so one asked while the relay is out of reach goes out when it's back. A terminal can have at most 10 open questions.
 
 Screenshots are given as paths relative to the folder the agent's terminal was launched in, and must stay inside it once symlinks are followed. Each must be a PNG, JPEG or WebP image of up to 20 MiB, 64 MiB in total per question; SVG is refused.
 
 `get_decision` reads back a question this terminal asked, and `cancel_question` withdraws one that's no longer needed. An agent sees only the questions its own terminal asked.
+
+### Follow-ups
+
+Agents are told, when they connect and in what `ask_human` returns, that your answer is final and that a question's thread carries on in both directions. `send_followup` posts a message in the thread of a question the agent's own terminal asked, instead of asking a new one: a clarification before you answer, something more after, or a reply. Like a question, it's saved on this computer first and returns at once (`Queued in q-N's thread and sent in the background.`), then goes out after its question once the relay is reachable, so one sent while the relay is out of reach goes when it's back. Your phone shows it in the question's thread, and one sent with `expects_reply` brings an answered question back to **Needs you**.
+
+A follow-up never answers the question, changes your answer or satisfies a gate, and it's never typed into any terminal. A terminal can't post on another terminal's questions, or on one that was withdrawn or expired, and a question takes at most 200 follow-ups. A relay older than 0.4.0 doesn't take them: a follow-up already queued for one is dropped once Daintree reads that, and after that it can refuse new ones outright until the relay is updated.
+
+Replying from your phone needs a later Daintree: until then, your phone says **Follow-ups need a newer Daintree on the computer that asked**, so an agent waiting on a reply gets it only if you type it into its terminal.
 
 ## Answers
 
@@ -149,6 +157,7 @@ comment: Proceed with the compact sidebar.
 - `choice` and `choice_label` appear when you picked an option, and `comment` when you wrote something; later lines of a comment are indented.
 - `injection_id` and the `[decision-injection …]` line are how Daintree recognises its own typing if it stops partway through.
 - A correction you send from the phone arrives as a new revision with `note: This corrects an earlier answer. Reassess any work that depended on the earlier one.`, and the reason you gave as `reason:`, after the choice and before any comment.
+- Follow-ups aren't typed: an agent's goes to your phone, and replying from the phone needs a later Daintree (see [Follow-ups](#follow-ups)).
 - A question that expires unanswered is typed as `source: system`, `status: expired`, `authorised: no`, with a note that the agent isn't authorised to continue the gated step.
 - Answer text is treated as data: control and escape sequences are stripped, and anything that looks like the block's delimiters or marker is neutralised. A comment is cut at 4,000 characters and a correction's reason at 1,000, or sooner to fit the block's size limit (the comment first), ending in `…[truncated]`. That limits what an answer can do to the terminal; it can't stop an agent from being swayed by what you wrote.
 
@@ -199,7 +208,7 @@ A workflow uses the gate from your own skill, command or runbook. Daintree insta
 5. If the screenshots change, ask again: an approval covers only the images it was given.
 ```
 
-`reviewed_digests_match` is true only when your phone's answer names exactly the images attached, so an approval of earlier screenshots doesn't carry over to new ones, even under the same `correlation_id`. The gate needs at least one image, not exactly a before and an after. It says the images reached your phone with your answer, not that you studied them, and it checks the answer, not the agent: a workflow that skips step 4 isn't stopped by Daintree.
+`reviewed_digests_match` is true only when your phone's answer names exactly the images attached, so an approval of earlier screenshots doesn't carry over to new ones, even under the same `correlation_id`. The gate needs at least one image, not exactly a before and an after. It says the images reached your phone with your answer, not that you studied them, and it checks the answer, not the agent: a workflow that skips step 4 isn't stopped by Daintree. Only an answer counts: a follow-up in the question's thread approves nothing.
 
 ## Remote Hosts
 
