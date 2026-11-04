@@ -6,7 +6,6 @@ import {
 } from "@daintreehq/decisions-client";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { ListenerRoute } from "../mcp-server/listenerHold.js";
-import { withoutThreads } from "./mcpSurface.js";
 import { createPaneAccess, type PaneAccessSources } from "./paneAccess.js";
 import { QuestionBridge } from "./questionBridge.js";
 import type { QuestionSource } from "./relayConnection.js";
@@ -43,8 +42,9 @@ function notFound(res: http.ServerResponse): void {
  * bearer. It keeps no session, so a revoked bearer is refused on its next
  * request. One handler serves the route's whole life, so a pane's rate limit
  * carries across relay attempts and listener moves. Agents get the library's
- * tools and words, follow-ups included, with no thread on `get_decision` yet
- * (`mcpSurface.ts`).
+ * tools and words as they are, follow-ups and `get_decision`'s thread
+ * included: the thread's messages are stored here since Daintree takes the
+ * relay's thread events (#16231).
  */
 export class DecisionsMcpRoute {
   private readonly handler: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
@@ -57,13 +57,11 @@ export class DecisionsMcpRoute {
     authenticator: PaneAuthenticator,
     private readonly holdListener: DecisionsHoldListener
   ) {
-    this.handler = withoutThreads(
-      createDecisionsMcpHandler(bridge, authenticator, {
-        path: DECISIONS_MCP_PATH,
-        allowedHosts: () =>
-          this.port === null ? [] : [`127.0.0.1:${this.port}`, `localhost:${this.port}`],
-      })
-    );
+    this.handler = createDecisionsMcpHandler(bridge, authenticator, {
+      path: DECISIONS_MCP_PATH,
+      allowedHosts: () =>
+        this.port === null ? [] : [`127.0.0.1:${this.port}`, `localhost:${this.port}`],
+    });
   }
 
   /**
