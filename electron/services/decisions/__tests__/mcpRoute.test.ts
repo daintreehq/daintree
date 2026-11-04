@@ -751,6 +751,14 @@ describe("/mcp/decisions (#16011)", () => {
     expect(cancelled.isError).toBeUndefined();
     expect((await store.getQuestion(questionId))?.local_status).toBe("cancelled");
     expect(await store.outboxFor(questionId)).toEqual([]);
+    // A withdrawn question's thread takes nothing more, from its own pane either.
+    const closed = await call(port, "pane-token-pane-a", "send_followup", {
+      question_id: questionId,
+      text: "Never mind.",
+      expects_reply: false,
+    });
+    expect(closed).toMatchObject({ isError: true, structuredContent: { error: "invalid_state" } });
+    expect(await store.outboxFor(questionId)).toEqual([]);
   });
 
   it.each([

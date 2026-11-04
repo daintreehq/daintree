@@ -220,6 +220,16 @@ describe("QuestionBridge", () => {
     await expect(
       b.postMessage({ ...followUp, question_id: "q_unknown" }, paneIdentityOf(ORIGIN))
     ).rejects.toMatchObject({ code: "not_found", message: "unknown question" });
+    for (const malformed of [
+      { ...followUp, text: "   " },
+      { ...followUp, question_id: 7 },
+      { question_id: asked.questionId, text: "No flag" },
+      null,
+    ]) {
+      await expect(b.postMessage(malformed, paneIdentityOf(ORIGIN))).rejects.toMatchObject({
+        code: "validation_error",
+      });
+    }
     current = false;
     await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject({
       code: "forbidden",
@@ -232,6 +242,50 @@ describe("QuestionBridge", () => {
     });
     expect(live.postMessage).not.toHaveBeenCalled();
     expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual(["create"]);
+  });
+
+  it("finishes a post committed between attempts before the next goes to an attempt just live", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Handover?" } });
+    const pane = paneIdentityOf(ORIGIN);
+    const order: string[] = [];
+    let commit!: () => void;
+    const putOutbox = store.putOutbox.bind(store);
+    vi.spyOn(store, "putOutbox").mockImplementation(async (item) => {
+      if (item.kind === "message") {
+        await new Promise<void>((resolve) => (commit = resolve));
+        order.push("offline");
+      }
+      return putOutbox(item);
+    });
+
+    const offline = b.postMessage(
+      { question_id: asked.questionId, text: "First", expects_reply: false },
+      pane
+    );
+    await vi.waitFor(() => expect(commit).toBeTypeOf("function"));
+    live = liveBridge();
+    live.postMessage.mockImplementation(async () => {
+      order.push("live");
+      return {
+        questionId: asked.questionId,
+        messageId: "m_live",
+        alias: asked.alias,
+        status: "queued",
+        expectsReply: true,
+      };
+    });
+    const online = b.postMessage(
+      { question_id: asked.questionId, text: "Second", expects_reply: true },
+      pane
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(live.postMessage).not.toHaveBeenCalled();
+
+    commit();
+    await expect(offline).resolves.toMatchObject({ questionId: asked.questionId });
+    await expect(online).resolves.toMatchObject({ messageId: "m_live" });
+    expect(order).toEqual(["offline", "live"]);
   });
 
   it("runs posts one at a time, checking each pane when its turn comes", async () => {
@@ -302,8 +356,15 @@ describe("QuestionBridge", () => {
     const b = bridge();
     const rotated = await identityOf(await storedIdentity());
     identity = rotated;
-    await b.registerQuestion({ origin: ORIGIN, input: { question: "Rotated?" } });
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Rotated?" } });
     expect(b.ctx.identity).toBe(rotated);
+    const again = await identityOf(await storedIdentity());
+    identity = again;
+    await b.postMessage(
+      { question_id: asked.questionId, text: "Signed now", expects_reply: false },
+      paneIdentityOf(ORIGIN)
+    );
+    expect(b.ctx.identity).toBe(again);
   });
 
   it("never falls back to itself once the connection has ended, as after a revocation", async () => {

@@ -227,6 +227,9 @@ class FakeRelay {
       const { message } = body as {
         message: { record: Record<string, unknown>; envelope: Record<string, unknown> };
       };
+      if (!this.questions.has(thread[1]!)) {
+        return json(404, { code: "not_found", message: "unknown question" });
+      }
       this.messages.push({
         questionId: thread[1]!,
         deviceId: this.requests.at(-1)!.deviceId,

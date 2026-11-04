@@ -104,9 +104,11 @@ export class QuestionBridge extends DecisionsBridge {
    */
   override postMessage(input: unknown, pane: PaneIdentity): Promise<PostMessageResult> {
     const post = async (): Promise<PostMessageResult> => {
-      const live = this.admit(pane);
+      this.admit(pane);
       const questionId = questionIdOf(input);
       const asker = questionId === null ? pane : await this.askerOf(questionId, pane);
+      // Admitted again: an attempt may have gone live or retired while the asker was read.
+      const live = this.admit(pane);
       return live ? live.postMessage(input, asker) : super.postMessage(input, asker);
     };
     const run = this.posts.then(post);
