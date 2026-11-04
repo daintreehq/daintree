@@ -30,7 +30,7 @@ describe("relay check copy", () => {
     });
 
     const older = describeCompatibility(compare({ workerVersion: "0.2.9" }));
-    expect(older.label).toBe("The relay is an older release");
+    expect(older.label).toBe("The relay is behind Daintree");
     expect(older.detail).not.toMatch(/never updates/);
   });
 
@@ -45,7 +45,7 @@ describe("relay check copy", () => {
 
     expect(describeCompatibility(compatibility, "offered")).toEqual({
       severity: "info",
-      label: "The relay is an older release",
+      label: "The relay is behind Daintree",
       detail:
         "The relay runs 0.3.0, protocol 1. Daintree expects 0.4.0, protocol 1. Both speak protocol 1, so questions and answers work. Update relay looks for a newer release that works with this Daintree and asks before changing anything.",
     });
@@ -93,8 +93,8 @@ describe("relay check copy", () => {
   it.each([
     ["a major release ahead", "1.0.0", "The relay is newer than Daintree"],
     ["a patch ahead", "0.3.1", "The relay is newer than Daintree"],
-    ["a patch behind, with a higher protocol", "0.2.9", "The relay is an older release"],
-    ["a prerelease of the same release", "0.3.0-rc.1", "The relay is an older release"],
+    ["a patch behind, with a higher protocol", "0.2.9", "The relay is behind Daintree"],
+    ["a prerelease of the same release", "0.3.0-rc.1", "The relay is behind Daintree"],
   ])("orders a relay %s by release", (_label, workerVersion, label) => {
     const protocolMax = workerVersion === "0.2.9" ? 3 : DAINTREE.protocolMax;
 
@@ -106,7 +106,7 @@ describe("relay check copy", () => {
       "The relay is newer than Daintree"
     );
     expect(describeCompatibility(compare({ workerVersion: "dev", protocolMax: 1 })).label).toBe(
-      "The relay is an older release"
+      "The relay is behind Daintree"
     );
     expect(describeCompatibility(compare({ workerVersion: "dev" })).label).toBe(
       "Relay and Daintree versions differ"
@@ -121,9 +121,7 @@ describe("relay check copy", () => {
   });
 
   it("reads a one-version range as a single protocol", () => {
-    expect(protocolRange({ protocolMin: 1, protocolMax: 1, workerVersion: "x" })).toBe(
-      "protocol 1"
-    );
+    expect(protocolRange({ protocolMin: 1, protocolMax: 1 })).toBe("protocol 1");
     expect(protocolRange(DAINTREE)).toBe("protocols 1–2");
   });
 

@@ -761,6 +761,12 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         ).toEqual({ processed_at: expect.any(Number) }),
       { timeout: 15_000 }
     );
+    // Ignored, not refused: the cursor is past it, and nothing was rejected or failed.
+    expect(await store.getCursor()).toBeGreaterThanOrEqual(followUp.seq);
+    const refused = (await store.listAudit(1_000)).filter((entry) =>
+      ["event.rejected", "event.error"].includes(entry.event)
+    );
+    expect(refused).toEqual([]);
     const after = (await store.getQuestion(asked))!;
     expect(after).toMatchObject({
       local_status: before.local_status,

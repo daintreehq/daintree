@@ -13,7 +13,7 @@ import {
   serializeDeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import { bytesToBase64Url, type ProtocolFeature } from "@daintreehq/decisions-protocol";
-import { DAINTREE_PROTOCOL_FEATURES, DaintreeRelayClient } from "../relayFeatures.js";
+import { DaintreeRelayClient } from "../relayFeatures.js";
 
 async function identity(): Promise<Identity> {
   const keys = new MemoryKeyStore();
@@ -35,12 +35,13 @@ async function identity(): Promise<Identity> {
 /** What each request asked for, answered as the relay would. */
 async function clients() {
   const sent: Array<{ url: URL; body: unknown }> = [];
-  const fetch = async (url: string, init: RequestInit): Promise<Response> => {
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
     sent.push({
-      url: new URL(url),
-      body: typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : null,
+      url,
+      body: typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : null,
     });
-    const body = url.includes("/socket-ticket")
+    const body = url.pathname.endsWith("/socket-ticket")
       ? { ticket: "t", expires_at: new Date(Date.now() + 30_000).toISOString(), ws_path: "/ws" }
       : {
           protocol_version: 1,
@@ -66,7 +67,8 @@ describe("DaintreeRelayClient (#16229)", () => {
     snapshots: { onRefresh: () => {} },
   });
 
-  it("declares on event pages and socket tickets only the features Daintree handles", async () => {
+  // Daintree declares none until it handles each one; a feature joins with its own work, and changes this test.
+  it("declares no feature on event pages or socket tickets, whatever the bridge asks", async () => {
     const { sent, stock, daintree } = await clients();
     expect(BRIDGE_FEATURES.length).toBeGreaterThan(0);
 
@@ -78,13 +80,10 @@ describe("DaintreeRelayClient (#16229)", () => {
     await daintree.events(5, 10, asked);
     await daintree.socketTicket(asked);
     const [page, ticket] = sent.slice(2);
-    const declared = page!.url.searchParams.get("features");
-    expect(declared === null ? [] : declared.split(",")).toEqual([...DAINTREE_PROTOCOL_FEATURES]);
+    expect(page!.url.searchParams.has("features")).toBe(false);
     expect(page!.url.searchParams.get("after")).toBe("5");
     expect(page!.url.searchParams.get("limit")).toBe("10");
-    expect((ticket!.body as { features?: unknown }).features ?? []).toEqual([
-      ...DAINTREE_PROTOCOL_FEATURES,
-    ]);
+    expect(ticket!.body).not.toHaveProperty("features");
   });
 
   it("keeps the library's defaults when the caller declares nothing", async () => {

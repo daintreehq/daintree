@@ -207,7 +207,7 @@ describe("Decisions relay update", () => {
     const relay = { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" };
     const daintree = { protocolMin: 2, protocolMax: 2, workerVersion: "0.2.0" };
     checkRelay.mockResolvedValue({
-      result: "claimed",
+      result: "incompatible",
       origin: ORIGIN,
       compatibility: { relay, daintree, diverges: true },
     });

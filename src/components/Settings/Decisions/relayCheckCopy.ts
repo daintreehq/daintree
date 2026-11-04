@@ -250,7 +250,7 @@ export function describeCompatibility(
           }
         : {
             severity,
-            label: "The relay is an older release",
+            label: "The relay is behind Daintree",
             detail: `${versions} Both speak ${protocolRange(shared)}, so questions and answers work. ${NEWER_RELAY[route]}`,
           };
     default:

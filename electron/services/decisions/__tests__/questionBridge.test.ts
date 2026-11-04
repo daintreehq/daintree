@@ -23,6 +23,7 @@ vi.mock("electron", () => ({
   powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
+import { FOLLOW_UPS_NOT_SERVED } from "../mcpSurface.js";
 import { QuestionBridge } from "../questionBridge.js";
 import type { QuestionSource } from "../relayConnection.js";
 
@@ -155,14 +156,14 @@ describe("QuestionBridge", () => {
     const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Later?" } });
     const followUp = { question_id: asked.questionId, text: "And then?", expects_reply: true };
 
-    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject({
-      code: "not_supported",
-    });
+    // The MCP route answers exactly this refusal as an unknown tool, so both states must give it.
+    const refusal = { code: "not_supported", message: FOLLOW_UPS_NOT_SERVED };
+    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toMatchObject(refusal);
     const posting = { ...liveBridge(), postMessage: vi.fn() };
     live = posting;
-    await expect(b.postMessage(followUp, paneIdentityOf(ORIGIN))).rejects.toBeInstanceOf(
-      BridgeError
-    );
+    const whileLive = b.postMessage(followUp, paneIdentityOf(ORIGIN));
+    await expect(whileLive).rejects.toBeInstanceOf(BridgeError);
+    await expect(whileLive).rejects.toMatchObject(refusal);
 
     expect(posting.postMessage).not.toHaveBeenCalled();
     expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual(["create"]);

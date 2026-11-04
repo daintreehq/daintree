@@ -148,6 +148,11 @@ describe("DecisionsConnectionSection relay check", () => {
     ).toBeTruthy();
     expect(screen.getByText("The relay is newer than Daintree")).toBeTruthy();
     expect(screen.getByText(/Update Daintree to match it/)).toBeTruthy();
+    // No protocol in common: the versions row warns.
+    const versions = document.getElementById("decisions-relay-versions")!;
+    expect(
+      versions.querySelector("[data-severity-glyph]")?.classList.contains("lucide-triangle-alert")
+    ).toBe(true);
   });
 
   it("puts an address main refused to send on the field itself", async () => {
@@ -305,12 +310,17 @@ describe("DecisionsConnectionSection relay check", () => {
     });
 
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
-    expect(screen.getByText("The relay is an older release")).toBeTruthy();
+    expect(screen.getByText("The relay is behind Daintree")).toBeTruthy();
     expect(
       screen.getByText(
         /The relay runs 0\.0\.9, protocol 1\. Daintree expects 0\.1\.0, protocol 1\. Both speak protocol 1, so questions and answers work\./
       )
     ).toBeTruthy();
+    // Still asking and answering: information, not a warning.
+    const versions = document.getElementById("decisions-relay-versions")!;
+    expect(versions.querySelector("[data-severity-glyph]")?.classList.contains("lucide-info")).toBe(
+      true
+    );
     expect(checkButton("Check again")).toBeTruthy();
   });
 
