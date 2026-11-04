@@ -202,6 +202,34 @@ describe("socketBridgeStore", () => {
     await expect(refused).rejects.toBeInstanceOf(RetiredAttemptError);
     expect(received).toHaveBeenCalledTimes(1);
   });
+
+  it("passes on a follow-up the inbox stored, once its write is stored (#16231)", async () => {
+    const store = new MemoryLocalStore();
+    await store.commitNewQuestion(question("q-1"), {
+      id: "o-1",
+      kind: "create",
+      question_id: "q-1",
+      payload: {},
+      attempts: 0,
+      next_attempt_at: 0,
+      created_at: 0,
+      last_error: null,
+    });
+    const received = vi.fn();
+    const view = socketBridgeStore(store, received);
+
+    const written = view.updateQuestion("q-1", { messages_json: "[]" });
+    expect(received).not.toHaveBeenCalled();
+    await written;
+    expect(received).toHaveBeenCalledTimes(1);
+
+    const refused = socketBridgeStore(
+      retireable(store, () => true),
+      received
+    ).updateQuestion("q-1", { messages_json: "[]" });
+    await expect(refused).rejects.toBeInstanceOf(RetiredAttemptError);
+    expect(received).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("networkFingerprint", () => {

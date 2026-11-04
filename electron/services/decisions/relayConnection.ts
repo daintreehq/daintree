@@ -498,6 +498,8 @@ export class RelayConnection {
           socketBridgeStore(retireable(this.store, retired), () => this.delivery?.request())
         ),
         sink: holdingTerminalSink,
+        // Its inbox stores the person's follow-ups; the lifetime's delivery types them.
+        followUps: true,
         policy: this.o.policy,
         ...(this.o.attachments
           ? { resolver: this.o.attachments.resolver, spool: this.o.attachments.spool }

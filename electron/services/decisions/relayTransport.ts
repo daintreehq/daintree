@@ -128,9 +128,10 @@ export const holdingTerminalSink: TerminalSink = {
  * lifetime (#16017). The attempt's own delivery engine never types, so it
  * sees no injection intents: on start it would otherwise reconcile the
  * lifetime engine's injections as ones a crash interrupted. Each answer its
- * inbox makes deliverable is passed on once that write has committed.
+ * inbox makes deliverable, and each change to a question's follow-ups
+ * (#16231), is passed on once that write has committed.
  */
-export function socketBridgeStore<T extends LocalStore>(store: T, onAnswerReceived: () => void): T {
+export function socketBridgeStore<T extends LocalStore>(store: T, onDeliverable: () => void): T {
   return new Proxy(store, {
     get(object, property) {
       const value: unknown = Reflect.get(object, property, object);
@@ -138,8 +139,8 @@ export function socketBridgeStore<T extends LocalStore>(store: T, onAnswerReceiv
       if (property === "updateQuestion") {
         return (id: string, patch: Partial<QuestionRow>) => {
           const written = object.updateQuestion(id, patch);
-          if (patch.delivery_status === "desktop-received") {
-            written.then(onAnswerReceived, () => {});
+          if (patch.delivery_status === "desktop-received" || patch.messages_json !== undefined) {
+            written.then(onDeliverable, () => {});
           }
           return written;
         };
