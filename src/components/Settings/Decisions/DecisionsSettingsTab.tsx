@@ -136,7 +136,12 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onPairFocused={() => setPairFocusRequest(0)}
           />
           <DecisionsAgentsSection status={status} policy={policy} />
-          <DecisionsQuestionsSection policy={policy} />
+          <DecisionsQuestionsSection
+            policy={policy}
+            status={status}
+            locked={pending !== null}
+            onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+          />
           <DecisionsPolicySection policy={policy} />
           <DecisionsModelSection
             model={model}

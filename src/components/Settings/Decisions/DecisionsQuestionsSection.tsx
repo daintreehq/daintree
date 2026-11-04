@@ -1,5 +1,8 @@
+import { useState } from "react";
+import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { Button } from "@/components/ui/button";
@@ -31,6 +34,8 @@ import {
 } from "@shared/config/decisionsQuestionExpiry";
 import { questionExpiryLabel, questionExpiryText } from "./policyCopy";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
+import { useDecisionsTerminalSnapshots } from "./useDecisionsTerminalSnapshots";
+import { DecisionsTerminalSnapshotsConsentDialog } from "./DecisionsTerminalSnapshotsConsentDialog";
 
 const NEVER = "never";
 
@@ -44,15 +49,34 @@ const EXPIRY_OPTIONS = QUESTION_EXPIRY_CHOICES.map((ms) => ({
   label: questionExpiryLabel(ms),
 }));
 
+interface DecisionsQuestionsSectionProps {
+  policy: UseDecisionsPolicyResult;
+  status: DecisionsStatus;
+  /** The Decisions switch is changing, so nothing behind it is. */
+  locked: boolean;
+  /** A status main answered a change with, or null to read it again. */
+  onChanged: (next: DecisionsStatus | null) => void;
+}
+
 /**
  * Questions: how long one waits when its agent sets no expiry (#16122), as
- * the library applies the saved choice, and the answers that couldn't be
- * typed in on their own (#16020). The description follows what main has
- * saved, not a choice still being saved.
+ * the library applies the saved choice, whether the phone may show the pane
+ * that asked one (#16228), and the answers that couldn't be typed in on
+ * their own (#16020). The description follows what main has saved, not a
+ * choice still being saved. Snapshots ask before every turn on.
  */
-export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisionsPolicyResult }) {
+export function DecisionsQuestionsSection({
+  policy: read,
+  status,
+  locked,
+  onChanged,
+}: DecisionsQuestionsSectionProps) {
   const { policy, loadError, reload, pendingExpiry, expirySaveFailure, setDefaultQuestionExpiry } =
     read;
+  const snapshots = useDecisionsTerminalSnapshots(status, onChanged);
+  const [snapshotsConsentOpen, setSnapshotsConsentOpen] = useState(false);
+  const snapshotsLocked = locked || snapshots.saving;
+  const snapshotsFailure = snapshots.failure;
   const shownExpiry = pendingExpiry ?? (policy ? { ms: policy.defaultQuestionExpiryMs } : null);
   const attention = useDecisionsAttentionCount();
   const openAttention = useDecisionsAttentionStore((state) => state.open);
@@ -80,6 +104,21 @@ export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisio
           }
           onReset={() => void setDefaultQuestionExpiry(DEFAULT_QUESTION_EXPIRY_MS)}
           resetAriaLabel="Reset default expiry"
+        />
+        <SettingsSwitchCard
+          id="decisions-terminal-snapshots"
+          title="Show agent status and recent terminal lines on my phone"
+          subtitle="For the pane that asked, only while its question is open, redacted on a best-effort basis"
+          isEnabled={snapshots.enabled}
+          onChange={() => {
+            if (snapshotsLocked) return;
+            if (snapshots.enabled) snapshots.set({ enabled: false });
+            else setSnapshotsConsentOpen(true);
+          }}
+          disabled={snapshotsLocked}
+          isModified={status.terminalSnapshots === true}
+          onReset={() => snapshots.set({ enabled: false })}
+          resetAriaLabel="Turn off terminal snapshots"
         />
         <SettingsRow
           id="decisions-questions-attention"
@@ -111,6 +150,17 @@ export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisio
           onRetry={() => void reload()}
         />
       )}
+      {snapshotsFailure && (
+        <SettingsLoadErrorBanner
+          title={
+            snapshotsFailure.payload.enabled
+              ? "Couldn't turn on terminal snapshots"
+              : "Couldn't turn off terminal snapshots"
+          }
+          message={snapshotsFailure.message}
+          onRetry={() => snapshots.set(snapshotsFailure.payload)}
+        />
+      )}
       {expirySaveFailure && (
         <SettingsLoadErrorBanner
           title="Couldn't change the default expiry"
@@ -118,6 +168,14 @@ export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisio
           onRetry={() => void setDefaultQuestionExpiry(expirySaveFailure.ms)}
         />
       )}
+      <DecisionsTerminalSnapshotsConsentDialog
+        isOpen={snapshotsConsentOpen}
+        onCancel={() => setSnapshotsConsentOpen(false)}
+        onAccept={() => {
+          setSnapshotsConsentOpen(false);
+          snapshots.set({ enabled: true, consent: true });
+        }}
+      />
     </SettingsSection>
   );
 }
