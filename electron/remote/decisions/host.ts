@@ -15,6 +15,7 @@ import {
   HostRuntimeSchema,
   HostStatusResultSchema,
   OwnerStatePayloadSchema,
+  OwnerStateV2PayloadSchema,
   type EnrollHostPayload,
   type HostRuntimePayload,
   type HostStatusResult,
@@ -99,7 +100,7 @@ export function installDecisionsHostWith(
   /** What each session was last told, so a report it already has isn't sent again. */
   const told = new Map<LinkSession, string>();
   /** What each owner's Shells last said, by owner: an enrollment taken up later starts as it says. */
-  const latestByOwner = new Map<string, boolean>();
+  const latestByOwner = new Map<string, OwnerStateAnnouncement>();
   const ownerKey = (owner: OwnerOf) => `${owner.installationId}\n${owner.ownerDeviceId}`;
   let lifetime: Promise<DecisionsHostLifetime> | null = null;
   let offChanged: (() => void) | null = null;
@@ -145,7 +146,7 @@ export function installDecisionsHostWith(
   ): Promise<{ runtime: DecisionsHostRuntime }> => {
     if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
     owners.set(session, state);
-    latestByOwner.set(ownerKey(state), state.enabled);
+    latestByOwner.set(ownerKey(state), state);
     // An owner that never enrolled this Host loads nothing of Decisions here.
     if (!runtime?.enrolledBy(state)) {
       const none: DecisionsHostRuntime = { state: "not-enrolled" };
@@ -178,14 +179,15 @@ export function installDecisionsHostWith(
     const adoption = made
       .then(async (lifetimeOf) => {
         if (disposed) return;
-        await lifetimeOf.adopt(held, latestByOwner.get(key));
+        await lifetimeOf.adopt(held, latestByOwner.get(key)?.enabled);
         // Once taken up, the owner's latest word follows, even if this installer stopped meanwhile.
-        const enabled = latestByOwner.get(key);
-        if (enabled === undefined) return;
+        const latest = latestByOwner.get(key);
+        if (latest === undefined) return;
         await lifetimeOf.apply({
           installationId: held.installationId,
           ownerDeviceId: held.ownerDeviceId,
-          enabled,
+          enabled: latest.enabled,
+          terminalSnapshots: latest.terminalSnapshots,
         });
       })
       .catch((err: unknown) => {
@@ -241,6 +243,14 @@ export function installDecisionsHostWith(
       ? session.registerCallHandler(
           DecisionsLinkMethod.OWNER_STATE,
           OwnerStatePayloadSchema,
+          // A Shell from before terminal snapshots shares none of this Host's.
+          (payload) => announced(session, { ...payload, terminalSnapshots: false })
+        )
+      : () => {};
+    const offOwnerStateV2 = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.OWNER_STATE_V2,
+          OwnerStateV2PayloadSchema,
           (payload) => announced(session, payload)
         )
       : () => {};
@@ -248,6 +258,7 @@ export function installDecisionsHostWith(
     const unregister = () => {
       offCall();
       offOwnerState();
+      offOwnerStateV2();
       offClose();
       unregisters.delete(unregister);
       owners.delete(session);

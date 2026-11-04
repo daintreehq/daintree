@@ -91,7 +91,11 @@ import {
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
 import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
-import type { DecisionsDeliveryDeps, DecisionsService } from "./DecisionsService.js";
+import type {
+  DecisionsDeliveryDeps,
+  DecisionsService,
+  DecisionsSnapshotDeps,
+} from "./DecisionsService.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import {
@@ -465,6 +469,37 @@ const deliveryDeps: DecisionsDeliveryDeps = {
   },
 };
 
+/** Main's pane events that can change what a pane's terminal snapshot shows (#16230), by pane id. */
+function watchSnapshotPanes(onPane: (terminalId: string) => void): () => void {
+  const offs = [
+    events.on("agent:state-changed", ({ terminalId }) => {
+      if (terminalId) onPane(terminalId);
+    }),
+    events.on("terminal:title-changed", ({ id }) => onPane(id)),
+    events.on("terminal:observed-title-changed", ({ id }) => onPane(id)),
+    events.on("agent:detected", ({ terminalId }) => onPane(terminalId)),
+    events.on("agent:spawned", ({ terminalId }) => onPane(terminalId)),
+    events.on("agent:exited", ({ terminalId }) => onPane(terminalId)),
+    events.on("terminal:trashed", ({ id }) => onPane(id)),
+    events.on("terminal:restored", ({ id }) => onPane(id)),
+  ];
+  return () => {
+    for (const off of offs) off();
+  };
+}
+
+/**
+ * What terminal snapshots reach in the rest of main (#16230). An owner's
+ * lifetime shares them under its own switch; a Host's, as its owner's Shell
+ * last said.
+ */
+const snapshotDeps: DecisionsSnapshotDeps = {
+  allowed: (role) => (role === "host" ? hostSnapshotsAllowed() : terminalSnapshotsAllowed()),
+  principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
+  getPtyClient: () => getPtyClient(),
+  watchPanes: watchSnapshotPanes,
+};
+
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
   transitions = run.catch(() => {});
@@ -490,6 +525,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         openQuestions: (source, previousClosed) =>
           openDecisionsMcpRoute(source, sources, previousClosed),
         delivery: deliveryDeps,
+        snapshots: snapshotDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
@@ -1177,6 +1213,9 @@ export function setDecisionsTerminalSnapshots(
     const current = readDecisionsSettings(store);
     if (current.terminalSnapshots) {
       writeDecisionsSettings(store, { ...current, terminalSnapshots: false });
+      // Out of turn on purpose: publishing stops and what was shared is taken back now.
+      service?.snapshotsChanged();
+      getDecisionsHostsPort()?.announceOwnerState();
     }
   }
   return serialize(async () => {
@@ -1200,6 +1239,8 @@ export function setDecisionsTerminalSnapshots(
         : current.terminalSnapshotsConsentedAt,
     });
     service?.updateSettings(saved);
+    service?.snapshotsChanged();
+    getDecisionsHostsPort()?.announceOwnerState();
     publishStatus();
     return getDecisionsStatus();
   });
@@ -1214,6 +1255,16 @@ export function setDecisionsTerminalSnapshots(
 export function terminalSnapshotsAllowed(): boolean {
   const settings = readDecisionsSettings(store);
   return !shutDown && settings.enabled && settings.terminalSnapshots;
+}
+
+/**
+ * The same for an enrolled Host's own panes (#16230): it serves them, and
+ * its owner's Shell last said snapshots are on. A Host away from its owner
+ * keeps what it was last told, as it keeps running questions.
+ */
+function hostSnapshotsAllowed(): boolean {
+  const record = readHostRecord(store);
+  return !shutDown && hostRecordServes(record) && record?.ownerTerminalSnapshots === true;
 }
 
 /** Makes a one-time invitation for a phone to pair (#16009). */
@@ -1896,6 +1947,8 @@ export function noteHostIdentity(
       ownerOffAt: options.ownerEnabled === false ? Date.now() : null,
       revokedAt: null,
       credentialsRemovedAt: null,
+      // What the owner says of snapshots comes after it is taken up, as its latest announcement.
+      ownerTerminalSnapshots: false,
     });
     await reconcileHostLifetime();
   });
@@ -1908,6 +1961,8 @@ export function noteHostIdentity(
  * Host stays stopped. Answers what it then reports to that owner.
  */
 export function applyOwnerState(input: OwnerStateAnnouncement): Promise<DecisionsHostRuntime> {
+  // Snapshots off goes into the record ahead of the queue, as the owner's own switch does.
+  if (!input.terminalSnapshots) stopHostSnapshots(input);
   return serialize(async () => {
     const record = readHostRecord(store);
     if (
@@ -1918,13 +1973,36 @@ export function applyOwnerState(input: OwnerStateAnnouncement): Promise<Decision
       record.ownerDeviceId === input.ownerDeviceId
     ) {
       const off = record.ownerOffAt !== null;
-      if (off === input.enabled) {
-        writeHostRecord(store, { ...record, ownerOffAt: input.enabled ? null : Date.now() });
+      const ownerOffAt = off !== input.enabled ? record.ownerOffAt : input.enabled ? null : Date.now();
+      if (
+        ownerOffAt !== record.ownerOffAt ||
+        record.ownerTerminalSnapshots !== input.terminalSnapshots
+      ) {
+        writeHostRecord(store, {
+          ...record,
+          ownerOffAt,
+          ownerTerminalSnapshots: input.terminalSnapshots,
+        });
       }
       await reconcileHostLifetime();
+      if (service?.getRole() === "host") service.snapshotsChanged();
     }
     return decisionsHostRuntimeFor(input);
   });
+}
+
+/** The owner's Shell said its terminal snapshots are off: this Host stops sharing its panes' at once. */
+function stopHostSnapshots(owner: Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">) {
+  const record = readHostRecord(store);
+  if (
+    record?.ownerTerminalSnapshots !== true ||
+    record.installationId !== owner.installationId ||
+    record.ownerDeviceId !== owner.ownerDeviceId
+  ) {
+    return;
+  }
+  writeHostRecord(store, { ...record, ownerTerminalSnapshots: false });
+  if (service?.getRole() === "host") service.snapshotsChanged();
 }
 
 /** How long a launch waits for `/mcp/decisions` before going ahead without it. */

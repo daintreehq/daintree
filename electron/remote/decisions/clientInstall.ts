@@ -28,6 +28,7 @@ export function ownerStateOf(setting: unknown): OwnerStateAnnouncement | null {
     installationId: settings.installationId,
     ownerDeviceId: settings.deviceId,
     enabled: settings.enabled,
+    terminalSnapshots: settings.enabled && settings.terminalSnapshots,
   };
 }
 
