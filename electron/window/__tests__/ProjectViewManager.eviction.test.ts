@@ -295,6 +295,11 @@ import {
   settleCachedViewFlush,
 } from "../../services/cachedViewFlush.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  holdReloadNotice,
+  releaseReloadNotice,
+  resetReloadNoticesForTest,
+} from "../rendererReloadNotice.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -423,6 +428,23 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(wcB.reload).toHaveBeenCalledTimes(1);
       expect(wcB.close).not.toHaveBeenCalled();
       expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+
+      // The notice waits for the reloaded page's first-interactive.
+      const toastSends = () =>
+        wcB.send.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(toastSends()).toEqual([]);
+      releaseReloadNotice(wcB as never);
+      expect(toastSends()).toEqual([
+        [
+          CHANNELS.NOTIFICATION_SHOW_TOAST,
+          {
+            type: "warning",
+            message: "A project view was reloaded due to memory pressure.",
+            urgent: true,
+          },
+        ],
+      ]);
+      resetReloadNoticesForTest();
     });
 
     it("a crashed cached view is evicted instead of auto-reloaded", async () => {
@@ -432,6 +454,8 @@ describe("ProjectViewManager — eviction safety", () => {
         .webContents as unknown as ReturnType<typeof createMockWebContents>;
       await manager.switchTo("proj-c", "/path/c");
       await flushImmediates();
+      // Left by an earlier reload that never reported in.
+      holdReloadNotice(wcB as never, "A project view crashed and was automatically reloaded.");
 
       emitProcessGone(wcB, "crashed");
       await flushImmediates();
@@ -439,6 +463,12 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(wcB.reload).not.toHaveBeenCalled();
       expect(wcB.close).toHaveBeenCalled();
       expect(manager.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+      // Evicted, not reloaded: the stale notice goes with it.
+      releaseReloadNotice(wcB as never);
+      expect(
+        wcB.send.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST)
+      ).toEqual([]);
+      resetReloadNoticesForTest();
     });
 
     it("a crashed ACTIVE view still auto-reloads", async () => {
@@ -452,6 +482,22 @@ describe("ProjectViewManager — eviction safety", () => {
 
       expect(wcB.reload).toHaveBeenCalledTimes(1);
       expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+
+      const toastSends = () =>
+        wcB.send.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(toastSends()).toEqual([]);
+      releaseReloadNotice(wcB as never);
+      expect(toastSends()).toEqual([
+        [
+          CHANNELS.NOTIFICATION_SHOW_TOAST,
+          {
+            type: "warning",
+            message: "A project view crashed and was automatically reloaded.",
+            urgent: true,
+          },
+        ],
+      ]);
+      resetReloadNoticesForTest();
     });
 
     it("rebuilds a window whose view died of OOM onto the project it switched to (#15564)", async () => {

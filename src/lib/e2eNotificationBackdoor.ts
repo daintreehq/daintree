@@ -99,6 +99,8 @@ export interface NotificationsE2EApi {
    * real ages can't otherwise put the divider anywhere but the top.
    */
   setCenterLastClosedAt: (timestamp: number) => void;
+  /** Every history entry's message, oldest first: what notify() recorded, toast or not. */
+  historyMessages: () => string[];
   clearHistory: () => void;
   resetNotifyInternals: () => void;
   setBackendStatus: (status: BackendStatus) => void;
@@ -184,6 +186,10 @@ function buildApi(): NotificationsE2EApi {
       useNotificationHistoryStore.getState().snoozeThread(correlationId, snoozedUntil),
     setCenterLastClosedAt: (timestamp) =>
       useUIStore.setState({ lastNotificationCenterClosedAt: timestamp }),
+    historyMessages: () =>
+      [...useNotificationHistoryStore.getState().entries]
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .map((entry) => entry.message),
     clearHistory: () => useNotificationHistoryStore.getState().clearAll(),
     resetNotifyInternals: () => {
       _resetRateLimitBuckets();

@@ -1500,6 +1500,25 @@ export async function restorePanelsPhase(
                 if (!respawnArgs.restoreRecovery) parkIfSavedInBackground(respawnArgs, saved);
                 const restoredTerminalId = await addPanel(respawnArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
+
+                // The host replays the saved id's session file into a plain
+                // shell's mirror as it spawns (agents relaunch instead), but the
+                // pane only shows that mirror once it is fetched. A fresh id has
+                // no file, and a held or exited pane spawns nothing.
+                if (
+                  restoredTerminalId === saved.id &&
+                  !respawnArgs.launchAgentId &&
+                  !respawnArgs.restoreRecovery &&
+                  respawnArgs.restoredExitCode === undefined
+                ) {
+                  restoreTasks.push({
+                    terminalId: restoredTerminalId,
+                    label: saved.id,
+                    worktreeId: respawnArgs.worktreeId,
+                    location,
+                    awaitSpawn: true,
+                  });
+                }
               }
             } else {
               // Unregistered kind. Restore when the panel carries a
