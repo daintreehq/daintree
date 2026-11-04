@@ -166,7 +166,8 @@ function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string
     paneEvent: (id: string, state?: string) => onPane?.(id, state),
     listening: () => onPane !== null,
     /** What the store records as shared. */
-    shared: (): string[] => JSON.parse(meta.get(SNAPSHOTS_SHARED_META_KEY) ?? "[]") as string[],
+    shared: (): string[] =>
+      Object.keys(JSON.parse(meta.get(SNAPSHOTS_SHARED_META_KEY) ?? "{}") as object).sort(),
     /** Holds the store's writes until the returned release is called. */
     holdWrites: (): (() => void) => {
       let release!: () => void;
@@ -587,7 +588,6 @@ describe("PaneSnapshots", () => {
 
       expect(cleared(env.bridge)).toEqual(["q1"]);
       expect(env.listening()).toBe(false);
-      expect(env.shared()).toEqual([]);
 
       env.pane.record.agentState = "working";
       env.paneEvent(PANE, "working");
@@ -604,7 +604,6 @@ describe("PaneSnapshots", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(cleared(env.bridge)).toEqual(["q1"]);
-      expect(env.shared()).toEqual([]);
     });
 
     it("takes nothing back for a question it never shared", async () => {
@@ -632,21 +631,86 @@ describe("PaneSnapshots", () => {
     });
 
     it("takes back what a run before a restart shared, when it starts with snapshots off", async () => {
-      const env = await attached({ allowed: false, meta: JSON.stringify(["q1"]) });
+      const env = await attached({ allowed: false, meta: JSON.stringify({ q1: Date.now() }) });
 
       expect(cleared(env.bridge)).toEqual(["q1"]);
-      expect(env.shared()).toEqual([]);
     });
 
     it("takes back an answered question's snapshot an earlier run shared, when it starts sharing", async () => {
       const env = await attached({
-        meta: JSON.stringify(["q-answered"]),
+        meta: JSON.stringify({ "q-answered": Date.now() }),
         rows: [row("q1"), row("q-answered", { local_status: "human-answered" })],
       });
 
       expect(cleared(env.bridge)).toEqual(["q-answered"]);
       expect(published(env.bridge).map((p) => p.questionId)).toEqual(["q1"]);
+      expect(env.shared()).toEqual(["q-answered", "q1"]);
+    });
+
+    it("keeps a question recorded after its clear settles, since a refused clear settles too", async () => {
+      const env = await attached();
+      env.setAllowed(false);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(env.bridge)).toEqual(["q1"]);
       expect(env.shared()).toEqual(["q1"]);
+
+      // A restart takes it back again.
+      const restarted = await attached({
+        allowed: false,
+        meta: env.meta.get(SNAPSHOTS_SHARED_META_KEY)!,
+      });
+      expect(cleared(restarted.bridge)).toEqual(["q1"]);
+    });
+
+    it("sends a settled clear again only once something was shared since", async () => {
+      const env = await attached();
+      let settle!: () => void;
+      env.bridge.snapshots.clear.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          })
+      );
+      env.setAllowed(false);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Shared again before that clear settled: it settles as superseded.
+      env.setAllowed(true);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(env.bridge.publishSnapshot).toHaveBeenCalledTimes(2);
+      settle();
+      await vi.advanceTimersByTimeAsync(0);
+
+      env.setAllowed(false);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(env.bridge)).toEqual(["q1", "q1"]);
+
+      // That one settled with nothing shared since: a new bridge doesn't send it again.
+      const next = fakeBridge();
+      env.snapshots.detach(env.bridge);
+      await vi.advanceTimersByTimeAsync(0);
+      env.snapshots.attach(next);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(cleared(next)).toEqual([]);
+    });
+
+    it("forgets a question the relay keeps nothing of, without a clear", async () => {
+      const day = 26 * 60 * 60_000;
+      const env = await attached({
+        allowed: false,
+        meta: JSON.stringify({ "q-expired": Date.now(), "q-old": Date.now() - day - 60_000 }),
+        rows: [
+          row("q-expired", { local_status: "expired" }),
+          row("q-old", { local_status: "human-answered" }),
+        ],
+      });
+
+      expect(cleared(env.bridge)).toEqual([]);
+      expect(env.shared()).toEqual([]);
     });
 
     it("records a share before it goes, so a restart knows to take it back", async () => {

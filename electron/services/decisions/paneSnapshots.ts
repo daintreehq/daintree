@@ -8,6 +8,7 @@ import {
   type QuestionRow,
   type SnapshotRefreshRequest,
 } from "@daintreehq/decisions-client";
+import { LIMITS } from "@daintreehq/decisions-protocol";
 import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { composeTitledPanel } from "../../../shared/utils/terminalTitleDisplay.js";
@@ -40,10 +41,17 @@ const READ_RETRY_MS = 5_000;
 const READ_RETRIES = 3;
 /**
  * The questions the relay may hold a snapshot of from this store's device,
- * as a JSON list: each recorded before its first share and dropped once a
- * clear of it has gone through, so a restart takes back what a crash left.
+ * as a JSON object of question id to when it was last shared (epoch ms),
+ * recorded before each first share. A settled clear is no proof the relay
+ * took it (a refusal settles too), so an entry goes only once the relay can
+ * hold nothing of it: the question closed, or its last share is older than
+ * the relay keeps any. A restart takes back what a crash or refusal left.
  */
 export const SNAPSHOTS_SHARED_META_KEY = "daintree:snapshots-shared";
+/** How stale an entry's time may grow while its question keeps sharing. */
+const SHARED_REFRESH_MS = 60 * 60_000;
+/** Past this the relay has deleted the snapshot (its retention), with room for both clocks and the refresh. */
+const SHARED_FORGET_MS = LIMITS.snapshotRetentionMs + 2 * SHARED_REFRESH_MS;
 
 /** The whole screen: no line or byte cut before redaction, which sees it all. */
 const WHOLE_SCREEN = { scrollbackRows: 0, maxBytes: Number.MAX_SAFE_INTEGER };
@@ -137,14 +145,29 @@ function agentName(agentId: string | undefined): string | null {
 }
 
 /** What the store records as shared; anything unreadable is nothing. */
-function sharedIds(raw: string | null): Set<string> {
-  if (raw === null) return new Set();
+function sharedRecord(raw: string | null): Map<string, number> {
+  const record = new Map<string, number>();
+  if (raw === null) return record;
   try {
     const parsed: unknown = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : []);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return record;
+    for (const [id, at] of Object.entries(parsed)) {
+      if (typeof at === "number" && Number.isFinite(at)) record.set(id, at);
+    }
   } catch {
-    return new Set();
+    // An unreadable record shares nothing.
   }
+  return record;
+}
+
+/** A question the relay keeps no snapshot of: closed, never published, or only imported. */
+function keepsNone(row: QuestionRow): boolean {
+  return (
+    row.history_only ||
+    row.local_status === "expired" ||
+    row.local_status === "cancelled" ||
+    row.local_status === "publish-failed"
+  );
 }
 
 /** Whether the pane holds the very run `origin` names, by the checks delivery types an answer under. */
@@ -283,7 +306,11 @@ export class PaneSnapshots {
   private epoch = 0;
   private sharing = false;
   /** The questions the relay may hold a snapshot of from this store, as it records them; null until read. */
-  private shared: Set<string> | null = null;
+  private shared: Map<string, number> | null = null;
+  /** Each question's snapshots queued in this run, so a clear stands only for the shares before it. */
+  private readonly generations = new Map<string, number>();
+  /** The generation each question's clear settled at, through a bridge still attached, in this run. */
+  private readonly settledClears = new Map<string, number>();
   private offPanes: (() => void) | null = null;
   private tick: ReturnType<typeof setInterval> | null = null;
   private steps: Promise<void> = Promise.resolve();
@@ -351,7 +378,7 @@ export class PaneSnapshots {
       this.observe(rows);
       if (this.sharing) {
         // Shared before, by an earlier bridge or run, for a question that no longer asks.
-        for (const id of shared) if (!this.asking.has(id)) this.toClear.add(id);
+        for (const id of shared.keys()) if (!this.asking.has(id)) this.toClear.add(id);
         this.requestAll();
         this.flushClears(bridge);
       } else if (shared.size > 0) {
@@ -564,14 +591,19 @@ export class PaneSnapshots {
     this.enqueue(async () => {
       if (stale()) return;
       const shared = await this.loadShared();
-      if (!shared.has(id)) {
+      const at = this.now();
+      const last = shared.get(id);
+      if (last === undefined || at - last > SHARED_REFRESH_MS) {
         // Recorded before anything goes, so a restart knows to take it back.
-        shared.add(id);
+        shared.set(id, at);
         await this.saveShared();
         if (stale()) return;
       }
       const result = await bridge.publishSnapshot(id, input, paneIdentityOf(asking.row.origin));
-      if (result === "queued") asking.sent = key;
+      if (result === "queued") {
+        asking.sent = key;
+        this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+      }
     });
   }
 
@@ -602,7 +634,7 @@ export class PaneSnapshots {
       if (bridge === null) return;
       const shared = await this.loadShared();
       this.toClear.clear();
-      for (const id of [...shared]) {
+      for (const id of [...shared.keys()]) {
         if (this.bridge !== bridge || this.o.allowed()) return;
         await this.takeBack(bridge, id);
       }
@@ -611,33 +643,34 @@ export class PaneSnapshots {
 
   /**
    * Hands the bridge `id`'s sharing-off record, at once, without waiting on
-   * the relay. Once the record settles through a bridge still attached, the
-   * question is dropped from what the store records as shared, unless it was
-   * shared again since; one left recorded is taken back by the next bridge.
+   * the relay. A question the relay keeps nothing of is forgotten instead.
+   * One whose clear already settled in this run, with nothing queued for it
+   * since, isn't sent again until a restart.
    */
   private async takeBack(bridge: SnapshotBridge, id: string): Promise<void> {
     const row = await this.o.store.getQuestion(id);
-    const shared = this.shared!;
+    const shared = await this.loadShared();
     if (this.bridge !== bridge) {
       this.toClear.add(id);
       return;
     }
-    if (row === null) {
-      // Deleted here: the relay keeps nothing of a question gone from the store.
-      shared.delete(id);
-      await this.saveShared();
+    const last = shared.get(id);
+    if (
+      row === null ||
+      keepsNone(row) ||
+      last === undefined ||
+      this.now() - last > SHARED_FORGET_MS
+    ) {
+      if (shared.delete(id)) await this.saveShared();
       return;
     }
+    const generation = this.generations.get(id) ?? 0;
+    if (this.settledClears.get(id) === generation) return;
     // A row given, the library queues the record before its first await.
-    const settled = bridge.snapshots.clear(row);
-    this.handOver(settled, () =>
-      this.enqueue(async () => {
-        if (this.bridge !== bridge || !shared.has(id)) return;
-        if (this.asking.has(id) && this.o.allowed()) return;
-        shared.delete(id);
-        await this.saveShared();
-      })
-    );
+    this.handOver(bridge.snapshots.clear(row), () => {
+      // Settled, not necessarily taken: the record keeps it for a restart either way.
+      if (this.bridge === bridge) this.settledClears.set(id, generation);
+    });
   }
 
   /** Follows a record handed to the bridge without holding up the next step. */
@@ -648,15 +681,18 @@ export class PaneSnapshots {
     });
   }
 
-  private async loadShared(): Promise<Set<string>> {
+  private async loadShared(): Promise<Map<string, number>> {
     if (this.shared === null) {
-      this.shared = sharedIds(await this.o.store.getMeta(SNAPSHOTS_SHARED_META_KEY));
+      this.shared = sharedRecord(await this.o.store.getMeta(SNAPSHOTS_SHARED_META_KEY));
     }
     return this.shared;
   }
 
   private saveShared(): Promise<void> {
-    return this.o.store.setMeta(SNAPSHOTS_SHARED_META_KEY, JSON.stringify([...this.shared!]));
+    return this.o.store.setMeta(
+      SNAPSHOTS_SHARED_META_KEY,
+      JSON.stringify(Object.fromEntries(this.shared!))
+    );
   }
 
   private enqueue(step: () => Promise<void>): void {
