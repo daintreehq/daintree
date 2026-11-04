@@ -36,6 +36,12 @@ export interface TerminalRestoreTask {
   label: string;
   worktreeId?: string;
   location: "grid" | "dock";
+  /**
+   * The pane's PTY is being spawned, not reconnected, so the host has nothing to
+   * serialize until that spawn lands: the fetch waits for the panel's
+   * `spawnStatus` to reach "ready", and is dropped if the spawn never does.
+   */
+  awaitSpawn?: boolean;
 }
 
 export function delay(ms: number): Promise<void> {

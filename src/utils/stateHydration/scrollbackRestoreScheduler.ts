@@ -64,6 +64,7 @@ const MAX_CONCURRENT_RESTORES = 3;
 interface QueuedRestore {
   terminalId: string;
   run: () => Promise<void>;
+  abandon: () => void;
 }
 
 const restoreQueue: QueuedRestore[] = [];
@@ -94,6 +95,47 @@ function restorePriority(terminalId: string, focusedId: string | null): number {
   if (terminalId === focusedId) return 0;
   if (peekTerminalService()?.get(terminalId)?.isVisible) return 1;
   return 2;
+}
+
+// Restores whose PTY is still spawning. They hold no restore slot while they
+// wait: each joins the queue once its panel reports the spawn ready, and is
+// abandoned if the spawn fails or the panel goes away.
+const awaitingSpawn = new Map<string, QueuedRestore>();
+let unsubSpawn: (() => void) | null = null;
+function syncSpawnSubscription(): void {
+  if (awaitingSpawn.size > 0 && !unsubSpawn) {
+    unsubSpawn = usePanelStore.subscribe(
+      (state) => state.panelsById,
+      () => releaseSpawnedRestores()
+    );
+  } else if (awaitingSpawn.size === 0 && unsubSpawn) {
+    unsubSpawn();
+    unsubSpawn = null;
+  }
+}
+
+function spawnOutcome(terminalId: string): "ready" | "spawning" | "gone" {
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  if (!panel || !("spawnStatus" in panel)) return "gone";
+  if (panel.spawnStatus === "ready") return "ready";
+  return panel.spawnStatus === "spawning" ? "spawning" : "gone";
+}
+
+function releaseSpawnedRestores(): void {
+  let released = false;
+  for (const [terminalId, queued] of awaitingSpawn) {
+    const outcome = spawnOutcome(terminalId);
+    if (outcome === "spawning") continue;
+    awaitingSpawn.delete(terminalId);
+    if (outcome === "ready") {
+      restoreQueue.push(queued);
+      released = true;
+    } else {
+      queued.abandon();
+    }
+  }
+  syncSpawnSubscription();
+  if (released) pumpRestoreQueue();
 }
 
 function pumpRestoreQueue(): void {
@@ -150,22 +192,22 @@ export function scheduleScrollbackRestore(
     managed.scrollbackRestoreState = "pending";
     scheduledAny = true;
 
-    const doRestore = async () => {
-      // On bail paths where state is still queued (we never started), reset to
-      // "none" so a subsequent scheduleScrollbackRestore call — e.g. a retry —
-      // picks the terminal up again. The post-start bail below is left alone:
-      // there, external code (destroy/done) already set a deliberate state.
-      const resetIfStillQueued = () => {
-        if (managed.scrollbackRestoreState === "pending") {
-          managed.scrollbackRestoreState = "none";
-          // Bailed before starting. The restore outcome is no longer relevant
-          // to this terminal, so unblock any fully-settle waiters that gated
-          // on it.
-          peekTerminalService()?.notifyRestoreSettledWaiters(task.terminalId);
-          notifyRestoreListeners();
-        }
-      };
+    // On bail paths where state is still queued (we never started), reset to
+    // "none" so a subsequent scheduleScrollbackRestore call — e.g. a retry —
+    // picks the terminal up again. The post-start bail below is left alone:
+    // there, external code (destroy/done) already set a deliberate state.
+    const resetIfStillQueued = () => {
+      if (managed.scrollbackRestoreState === "pending") {
+        managed.scrollbackRestoreState = "none";
+        // Bailed before starting. The restore outcome is no longer relevant
+        // to this terminal, so unblock any fully-settle waiters that gated
+        // on it.
+        peekTerminalService()?.notifyRestoreSettledWaiters(task.terminalId);
+        notifyRestoreListeners();
+      }
+    };
 
+    const doRestore = async () => {
       if (!isCurrent()) {
         resetIfStillQueued();
         return;
@@ -223,9 +265,17 @@ export function scheduleScrollbackRestore(
       }
     };
 
-    restoreQueue.push({ terminalId: task.terminalId, run: doRestore });
+    const queued = { terminalId: task.terminalId, run: doRestore, abandon: resetIfStillQueued };
+    if (task.awaitSpawn && spawnOutcome(task.terminalId) !== "ready") {
+      awaitingSpawn.set(task.terminalId, queued);
+    } else {
+      restoreQueue.push(queued);
+    }
   }
 
+  // Settles anything that resolved before the subscription existed (a spawn
+  // that already failed) and arms the subscription for the rest.
+  if (awaitingSpawn.size > 0) releaseSpawnedRestores();
   pumpRestoreQueue();
 
   // One notify for the whole batch of initial transitions above — the
@@ -262,7 +312,9 @@ export function resetScrollbackRestoreBatch(): void {
   disposeDestroyedListener?.();
   disposeDestroyedListener = null;
   restoreQueue.length = 0;
+  awaitingSpawn.clear();
   activeRestores = 0;
   queueGeneration++;
   syncFocusSubscription();
+  syncSpawnSubscription();
 }

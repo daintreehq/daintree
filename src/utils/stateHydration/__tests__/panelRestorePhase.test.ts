@@ -149,6 +149,8 @@ vi.mock("../statePatcher", async () => {
       // What the builder was handed to resume and to hold with (#15269).
       savedAgentSessionId: s.agentSessionId,
       savedRestoreRecovery: s.restoreRecovery,
+      // The real builder brings a plain terminal back showing its saved exit.
+      ...(s.exitCode !== undefined && { restoredExitCode: s.exitCode }),
     }),
     // Mirrors the real resolver's title recovery (same agent order) so the
     // election's identity resolution can't silently diverge from production.
@@ -378,6 +380,57 @@ describe("restorePanelsPhase — saved panels", () => {
     await restorePanelsPhase([panel("p1", { kind: "agent", launchAgentId: "claude" })], ctx);
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ requestedId: "p1" });
+  });
+
+  describe("restore task for a cold-respawned terminal", () => {
+    it("queues a spawn-gated restore for a plain terminal respawned under its saved id", async () => {
+      reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+      const ctx = makeContext();
+      const { restoreTasks } = await restorePanelsPhase(
+        [panel("p1", { worktreeId: "w1", location: "dock" })],
+        ctx
+      );
+      expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+      expect(restoreTasks).toEqual([
+        {
+          terminalId: "p1",
+          label: "p1",
+          worktreeId: "w1",
+          location: "dock",
+          awaitSpawn: true,
+        },
+      ]);
+    });
+
+    it("queues none for an agent respawn, which relaunches instead of replaying", async () => {
+      reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+      const ctx = makeContext();
+      const { restoreTasks } = await restorePanelsPhase(
+        [panel("p1", { kind: "agent", launchAgentId: "claude" })],
+        ctx
+      );
+      expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+      expect(restoreTasks).toEqual([]);
+    });
+
+    it("queues none when the respawn takes a fresh id with no session file", async () => {
+      reconnectWithTimeoutMock.mockResolvedValue({ status: "timeout" });
+      const ctx = makeContext();
+      ctx.addPanel.mockImplementation(
+        async (args: { requestedId?: string }) => args.requestedId ?? "fresh-p1"
+      );
+      const { restoreTasks } = await restorePanelsPhase([panel("p1")], ctx);
+      expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+      expect(restoreTasks).toEqual([]);
+    });
+
+    it("queues none for a terminal restored showing its exit, which spawns nothing", async () => {
+      reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+      const ctx = makeContext();
+      const { restoreTasks } = await restorePanelsPhase([panel("p1", { exitCode: 0 })], ctx);
+      expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+      expect(restoreTasks).toEqual([]);
+    });
   });
 
   it("uses reconnected fallback args when reconnect succeeds", async () => {

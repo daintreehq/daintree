@@ -36,11 +36,19 @@ function setStoreFocus(id: string | null): void {
   storeFocusedId = id;
   for (const listener of [...focusListeners]) listener();
 }
+let storePanelsById: Record<string, { kind: string; spawnStatus?: string }> = {};
+function setPanelSpawn(id: string, spawnStatus: string | null): void {
+  storePanelsById = { ...storePanelsById };
+  if (spawnStatus === null) delete storePanelsById[id];
+  else storePanelsById[id] = { kind: "terminal", spawnStatus };
+  for (const listener of [...focusListeners]) listener();
+}
 
 vi.mock("@/store", () => ({
   usePanelStore: {
     getState: () => ({
       focusedId: storeFocusedId,
+      panelsById: storePanelsById,
       setScrollbackRestoreError: setScrollbackRestoreErrorMock,
       clearScrollbackRestoreError: clearScrollbackRestoreErrorMock,
     }),
@@ -103,6 +111,7 @@ beforeEach(() => {
   notifyScrollbackRestoreListenersMock.mockReset();
   resetScrollbackRestoreBatch();
   storeFocusedId = null;
+  storePanelsById = {};
   // The service mock never evaluates the real module, so nothing registers it.
   terminalServiceAccessor.__testing.reset();
   terminalServiceAccessor.register(terminalServiceMock);
@@ -134,6 +143,98 @@ describe("scheduleScrollbackRestore — gating", () => {
     scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
     expect(managed.scrollbackRestoreState).toBe("pending");
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("scheduleScrollbackRestore — waiting for a spawn", () => {
+  const spawned = (terminalId: string) => ({
+    terminalId,
+    label: terminalId,
+    location: "grid" as const,
+    awaitSpawn: true,
+  });
+
+  it("holds the fetch until the panel's spawn is ready, then runs it once", async () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    fetchAndRestoreMock.mockResolvedValue(true);
+    setPanelSpawn("t1", "spawning");
+
+    scheduleScrollbackRestore([spawned("t1")], () => true);
+    expect(managed.scrollbackRestoreState).toBe("pending");
+    expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
+
+    setPanelSpawn("t1", "ready");
+    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
+    await getScheduledDoRestore()();
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1");
+    expect(managed.scrollbackRestoreState).toBe("done");
+
+    setPanelSpawn("t1", "ready");
+    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs at once when the spawn is already ready", () => {
+    getMock.mockReturnValue(fakeManaged("none"));
+    setPanelSpawn("t1", "ready");
+    scheduleScrollbackRestore([spawned("t1")], () => true);
+    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes no restore slot while it waits", () => {
+    const managedById = new Map(["w", "a", "b", "c"].map((id) => [id, fakeManaged("none")]));
+    getMock.mockImplementation((id: string) => managedById.get(id));
+    setPanelSpawn("w", "spawning");
+
+    scheduleScrollbackRestore(
+      [
+        spawned("w"),
+        { terminalId: "a", label: "a", location: "grid" },
+        { terminalId: "b", label: "b", location: "grid" },
+        { terminalId: "c", label: "c", location: "grid" },
+      ],
+      () => true
+    );
+
+    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(3);
+    expect(managedById.get("w")!.scrollbackRestoreState).toBe("pending");
+  });
+
+  it.each([
+    ["the spawn fails", "failed"],
+    ["the CLI is missing", "missing-cli"],
+    ["the panel is removed", null],
+  ])("abandons the restore when %s", (_label, status) => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    setPanelSpawn("t1", "spawning");
+    scheduleScrollbackRestore([spawned("t1")], () => true);
+
+    setPanelSpawn("t1", status);
+
+    expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
+    expect(managed.scrollbackRestoreState).toBe("none");
+    expect(notifyRestoreSettledWaitersMock).toHaveBeenCalledWith("t1");
+  });
+
+  it("abandons at schedule time a spawn that already failed", () => {
+    const managed = fakeManaged("none");
+    getMock.mockReturnValue(managed);
+    setPanelSpawn("t1", "failed");
+    scheduleScrollbackRestore([spawned("t1")], () => true);
+    expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
+    expect(managed.scrollbackRestoreState).toBe("none");
+  });
+
+  it("drops waiting restores on reset", () => {
+    getMock.mockReturnValue(fakeManaged("none"));
+    setPanelSpawn("t1", "spawning");
+    scheduleScrollbackRestore([spawned("t1")], () => true);
+
+    resetScrollbackRestoreBatch();
+    setPanelSpawn("t1", "ready");
+
+    expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
   });
 });
 
