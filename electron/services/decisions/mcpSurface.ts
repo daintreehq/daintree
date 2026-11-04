@@ -72,7 +72,11 @@ function heldResponse(message: unknown): unknown {
     structured.error === "not_supported" &&
     firstText(result) === `not_supported: ${FOLLOW_UPS_NOT_SERVED}`
   ) {
-    return { jsonrpc: "2.0", id: message.id ?? null, error: { code: -32602, message: "Unknown tool" } };
+    return {
+      jsonrpc: "2.0",
+      id: message.id ?? null,
+      error: { code: -32602, message: "Unknown tool" },
+    };
   }
   if ("thread" in structured) {
     const { thread: _thread, ...rest } = structured;

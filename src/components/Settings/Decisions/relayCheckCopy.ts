@@ -162,7 +162,10 @@ export function relayIsBehind(compatibility: DecisionsRelayCompatibility): boole
 function sharedProtocols({
   relay,
   daintree,
-}: DecisionsRelayCompatibility): Pick<DecisionsRelayVersions, "protocolMin" | "protocolMax"> | null {
+}: DecisionsRelayCompatibility): Pick<
+  DecisionsRelayVersions,
+  "protocolMin" | "protocolMax"
+> | null {
   const protocolMin = Math.max(relay.protocolMin, daintree.protocolMin);
   const protocolMax = Math.min(relay.protocolMax, daintree.protocolMax);
   return protocolMin <= protocolMax ? { protocolMin, protocolMax } : null;
