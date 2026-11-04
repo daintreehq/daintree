@@ -406,7 +406,8 @@ describe("HostServer authentication", () => {
               clientId: "c-lanes",
               clientName: "n",
               platform: "linux",
-              ...(offered === undefined ? {} : { assistantSlots: offered }),
+              // Typed or not, the wire carries whatever a peer sends.
+              ...(offered === undefined ? {} : { assistantSlots: offered as number }),
             },
             resumeSessionId: null,
           },
