@@ -1018,7 +1018,9 @@ describe("Decisions entry", () => {
       const wroteOn = vi
         .mocked(store.set)
         .mock.calls.some(
-          ([, value]) => (value as { terminalSnapshots?: boolean }).terminalSnapshots === true
+          (call) =>
+            ((call as unknown[])[1] as { terminalSnapshots?: boolean } | undefined)
+              ?.terminalSnapshots === true
         );
       expect(wroteOn).toBe(false);
       expect(on.terminalSnapshots).toBeUndefined();
