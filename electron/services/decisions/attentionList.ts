@@ -8,8 +8,10 @@ import {
   type LocalStore,
   type OpenAnswerEntry,
   type QuestionRow,
+  type ResolvedPhoneImage,
   type StoredMessage,
 } from "@daintreehq/decisions-client";
+import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
 import type { DecisionsAnswerPreview } from "../../../shared/types/decisionsAttention.js";
 import {
   parseDecisionNotice,
@@ -26,7 +28,7 @@ import {
  */
 export const HANDLED_ANSWERS_META_KEY = "daintree:handled-answers";
 
-type MetaStore = Pick<LocalStore, "getMeta" | "setMeta">;
+export type MetaStore = Pick<LocalStore, "getMeta" | "setMeta">;
 
 export type HandledAnswers = ReadonlyMap<string, number>;
 
@@ -173,6 +175,8 @@ export function answerPreviewOf(opened: readonly OpenAnswerEntry[]): DecisionsAn
 export interface OpenFollowUp {
   message: StoredMessage;
   text: string;
+  /** The photos it references, as the person attached them. */
+  images?: PhoneImageReference[];
 }
 
 const seqOf = (entry: Pick<AnswerEntry, "event_seq">) => entry.event_seq ?? 0;
@@ -181,13 +185,15 @@ const seqOf = (entry: Pick<AnswerEntry, "event_seq">) => entry.event_seq ?? 0;
  * The delimited blocks for `row`'s waiting answers and held follow-ups, in
  * thread order as the delivery engine would type them, for a person to paste
  * in themselves: built by the library's own formatter, checked against its
- * exact shape, and rendered again without an injection marker. Null when
- * there is nothing to copy.
+ * exact shape, and rendered again without an injection marker. `images`
+ * lists each answer's or follow-up's photos (#16233), by entry or message id,
+ * as they were stored for it. Null when there is nothing to copy.
  */
 export function copiedAnswerText(
   row: Pick<QuestionRow, "question_id" | "alias" | "answers_json">,
   opened: readonly OpenAnswerEntry[],
-  followUps: readonly OpenFollowUp[] = []
+  followUps: readonly OpenFollowUp[] = [],
+  images: ReadonlyMap<string, ResolvedPhoneImage[]> = new Map()
 ): string | null {
   if (opened.length === 0 && followUps.length === 0) return null;
   // Never shown: the copy is rendered without it.
@@ -206,6 +212,7 @@ export function copiedAnswerText(
       ...(entry.reason ? { reason: entry.reason } : {}),
       ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
       ...(entry.model_id ? { modelId: entry.model_id } : {}),
+      ...(images.has(entry.entry_id) ? { images: images.get(entry.entry_id) } : {}),
       injectionId: copyId(index),
     }),
   }));
@@ -219,6 +226,7 @@ export function copiedAnswerText(
       text,
       // As the delivery engine tells it: an answer came before it in the thread.
       answered: given.some((entry) => seqOf(entry) < message.event_seq),
+      ...(images.has(message.message_id) ? { images: images.get(message.message_id) } : {}),
       injectionId: copyId(opened.length + index),
     }),
   }));

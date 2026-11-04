@@ -21,6 +21,7 @@ import {
 } from "./decisionModel.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
+import { DecisionsPhoneImages, erasePhoneImages, phoneImageRootsFile } from "./phoneImages.js";
 import { KeyRotations } from "./keyRotation.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
 import {
@@ -240,6 +241,9 @@ export class DecisionsService {
   /** The open store's attachment spool and ask gate (#16014); null while it is closed. */
   private attachments: DecisionsAttachments | null = null;
   private readonly attachmentSpoolDir: (keyFilePath: string) => string;
+  /** Where the open store's delivery puts a person's phone images (#16233); null while it is closed. */
+  private phoneImages: DecisionsPhoneImages | null = null;
+  private offQuestionDeleted: (() => void) | null = null;
   /**
    * The identity a connection saw revoked. Held until the settings name
    * another relay or none, so a start that carries settings read before the
@@ -587,6 +591,7 @@ export class DecisionsService {
         await this.settledConnections();
         // An ask still spooling finishes too; the spool it leaves goes with the rows.
         await this.closeAttachments();
+        await this.closePhoneImages();
         const store = this.detachStore();
         // With no store attached no settings change can make another model,
         // and its history closes before its files are set aside.
@@ -605,6 +610,10 @@ export class DecisionsService {
             await keyStore?.close();
           }
           outcome = await eraseLocalDecisionsData(this.eraseDeps(keyFilePath));
+          // Once the rows are gone. One out of reach is deleted by a later sweep, when it's back.
+          if (outcome.result === "deleted" || (outcome.result === "incomplete" && outcome.erased)) {
+            await erasePhoneImages(phoneImageRootsFile(keyFilePath));
+          }
         } finally {
           this.erasing = false;
         }
@@ -647,6 +656,7 @@ export class DecisionsService {
       }
       const rows = await this.openRows();
       if (rows.exist()) rows.erase();
+      await erasePhoneImages(phoneImageRootsFile(this.keyFilePath()));
     });
   }
 
@@ -705,6 +715,7 @@ export class DecisionsService {
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
     await this.closeAttachments();
+    await this.closePhoneImages();
     const store = this.detachStore();
     // With no store attached no settings change can make another model meanwhile.
     await this.closeModel();
@@ -801,6 +812,7 @@ export class DecisionsService {
           }
         : {}),
       ...(this.attachments ? { attachments: this.attachments } : {}),
+      ...(this.phoneImages ? { phoneImages: this.phoneImages } : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.
@@ -905,7 +917,10 @@ export class DecisionsService {
   /** Makes `opened` the lifetime's store, and shows each pane what it holds before anything new arrives. */
   private async adoptStore(opened: DaintreeLocalStore | null, keyFilePath: string): Promise<void> {
     this.store = opened;
-    if (opened) this.openAttachments(opened, keyFilePath);
+    if (opened) {
+      this.openAttachments(opened, keyFilePath);
+      this.openPhoneImages(opened, keyFilePath);
+    }
     await this.feedFrom(opened);
   }
 
@@ -978,6 +993,28 @@ export class DecisionsService {
         ? { resolver: this.diagnostics.attachmentResolver(createWorktreeAttachmentResolver()) }
         : {}),
     });
+  }
+
+  /**
+   * The phone images `store`'s delivery writes, swept now of what has had its
+   * time or lost its question, and again whenever the relay deletes one.
+   */
+  private openPhoneImages(store: DaintreeLocalStore, keyFilePath: string): void {
+    const images = new DecisionsPhoneImages({
+      rootsFile: phoneImageRootsFile(keyFilePath),
+      facts: store,
+    });
+    this.phoneImages = images;
+    this.offQuestionDeleted = store.onQuestionDeleted(() => void images.sweep());
+  }
+
+  /** Takes no more images, once the one being written (or a sweep) has settled. Files stay. */
+  private async closePhoneImages(): Promise<void> {
+    const images = this.phoneImages;
+    this.phoneImages = null;
+    this.offQuestionDeleted?.();
+    this.offQuestionDeleted = null;
+    await images?.close();
   }
 
   /** Takes no more asks, once the one spooling (and its cleanup) has settled. Files stay. */

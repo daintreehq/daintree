@@ -9,6 +9,7 @@ import {
   type InboundEvent,
   type KeyStore,
   type LocalStore,
+  type PhoneImageStore,
   type PolicyRegistry,
   type ProxyEngine,
   type QuestionRow,
@@ -113,6 +114,11 @@ export interface RelayConnectionOptions {
    * attachments are refused.
    */
   attachments?: QuestionAttachments;
+  /**
+   * Where the lifetime's delivery stores the photos a person attaches on
+   * their phone (#16233). Without it, each one is typed as unavailable.
+   */
+  phoneImages?: PhoneImageStore;
   /**
    * The decision model (#16026), for the owner's lifetime. Every attempt's
    * bridge offers the learner each answer a person gives, and asks the proxy
@@ -467,6 +473,7 @@ export class RelayConnection {
       identity,
       store: this.o.store,
       keys: this.o.keys,
+      ...(this.o.phoneImages ? { phoneImages: this.o.phoneImages } : {}),
       // Reports are retried on every pass while they fail, so each is tried once.
       client: new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
       onKeysUnusable: () => this.halt({ state: "not-connected", problem: "keys" }),

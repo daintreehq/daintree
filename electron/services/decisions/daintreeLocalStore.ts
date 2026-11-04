@@ -318,6 +318,18 @@ function outboxFrom(r: OutboxRecord): OutboxItem {
   };
 }
 
+/** The question a stored `decision.deleted` event names, or null when it names none. */
+function deletedQuestionOf(json: string): string | null {
+  try {
+    const questionId = (JSON.parse(json) as { question_id?: unknown } | null)?.question_id;
+    return typeof questionId === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(questionId)
+      ? questionId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function eventFrom(r: InboundEvent): InboundEvent {
   return {
     seq: Number(r.seq),
@@ -426,6 +438,7 @@ export class DaintreeLocalStore implements LocalStore {
    */
   private readonly deletedCreates = new Set<string>();
   private readonly commitListeners = new Set<() => void>();
+  private readonly deletionListeners = new Set<(questionId: string) => void>();
 
   constructor(private readonly sqlite: Database.Database) {}
 
@@ -439,6 +452,37 @@ export class DaintreeLocalStore implements LocalStore {
     return () => {
       this.commitListeners.delete(listener);
     };
+  }
+
+  /**
+   * Calls `listener` with a question's id once the relay's deletion of it
+   * (`decision.deleted`) has been applied and that commit is on disk (#16233).
+   */
+  onQuestionDeleted(listener: (questionId: string) => void): () => void {
+    this.deletionListeners.add(listener);
+    return () => {
+      this.deletionListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Every question the relay deleted, as applied here: its `decision.deleted`
+   * event processed and its row withdrawn. An event refused or never applied
+   * (no row, history only) names nothing.
+   */
+  deletedQuestionIds(): Promise<ReadonlySet<string>> {
+    return this.enqueue("read", () => {
+      const events = this.st(
+        `SELECT json FROM decisions_inbound_events
+         WHERE event_type = 'decision.deleted' AND processed_at IS NOT NULL`
+      ).all() as Array<{ json: string }>;
+      const ids = new Set<string>();
+      for (const { json } of events) {
+        const questionId = deletedQuestionOf(json);
+        if (questionId !== null && this.isWithdrawn(questionId)) ids.add(questionId);
+      }
+      return ids;
+    });
   }
 
   /** True once a refused write or a storage error has stopped this store writing. */
@@ -653,6 +697,15 @@ export class DaintreeLocalStore implements LocalStore {
   markEventProcessed(seq: number, at: number): Promise<void> {
     return this.enqueue("write", () => {
       this.st("UPDATE decisions_inbound_events SET processed_at = ? WHERE seq = ?").run(at, seq);
+      const event = this.st(
+        "SELECT event_type, json FROM decisions_inbound_events WHERE seq = ?"
+      ).get(seq) as { event_type: string; json: string } | undefined;
+      if (event?.event_type !== "decision.deleted") return null;
+      const questionId = deletedQuestionOf(event.json);
+      return questionId !== null && this.isWithdrawn(questionId) ? questionId : null;
+    }).then((deleted) => {
+      // Resolved only once the transaction holding it has committed.
+      if (deleted !== null) this.notifyDeleted(deleted);
     });
   }
 
@@ -824,6 +877,24 @@ export class DaintreeLocalStore implements LocalStore {
       if (ops.some((op, i) => op.kind === "write" && outcomes[i].ok)) this.notifyCommitted();
     } while (drainAll);
     if (this.queue.length > 0) this.scheduled = setImmediate(() => this.flush(false));
+  }
+
+  /** The inbox applies a deletion by withdrawing the row: cancelled, and not a history row. */
+  private isWithdrawn(questionId: string): boolean {
+    const row = this.st(
+      "SELECT local_status, history_only FROM decisions_questions WHERE question_id = ?"
+    ).get(questionId) as { local_status: string; history_only: number } | undefined;
+    return row !== undefined && row.local_status === "cancelled" && Number(row.history_only) === 0;
+  }
+
+  private notifyDeleted(questionId: string): void {
+    for (const listener of [...this.deletionListeners]) {
+      try {
+        listener(questionId);
+      } catch (error) {
+        console.warn("[Decisions] A store deletion listener threw:", error);
+      }
+    }
   }
 
   private notifyCommitted(): void {
