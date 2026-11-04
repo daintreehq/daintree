@@ -626,8 +626,17 @@ describe("useFindInPage against Electron's find sessions", () => {
     expect(result.current.activeMatch).toBe(1);
     expect(result.current.matchCount).toBe(3);
 
+    act(() => result.current.goNext());
+    flush();
+    expect(result.current.activeMatch).toBe(2);
+
     act(() => result.current.toggleMatchCase());
     flush();
+    expect(webview.findInPage).toHaveBeenLastCalledWith("Find", {
+      findNext: true,
+      matchCase: false,
+    });
+    expect(result.current.activeMatch).toBe(1);
     expect(result.current.matchCount).toBe(4);
   });
 });

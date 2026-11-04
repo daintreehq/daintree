@@ -306,8 +306,8 @@ describe("scheduleScrollbackRestore — waiting for a spawn", () => {
   });
 
   it("drains restores a listener schedules while reset abandons the waiting ones", async () => {
-    const ids = ["w", "a", "b", "c", "d"];
-    const managedById = new Map(ids.map((id) => [id, fakeManaged("none")]));
+    const fresh = ["a", "b", "c", "d", "e"];
+    const managedById = new Map(["w", ...fresh].map((id) => [id, fakeManaged("none")]));
     getMock.mockImplementation((id: string) => managedById.get(id));
     fetchAndRestoreMock.mockResolvedValue(true);
     setPanelSpawn("w", "spawning");
@@ -318,7 +318,7 @@ describe("scheduleScrollbackRestore — waiting for a spawn", () => {
       if (rescheduled || managedById.get("w")!.scrollbackRestoreState !== "none") return;
       rescheduled = true;
       scheduleScrollbackRestore(
-        ["a", "b", "c", "d"].map((id) => ({
+        fresh.map((id) => ({
           terminalId: id,
           label: id,
           location: "grid" as const,
@@ -328,9 +328,12 @@ describe("scheduleScrollbackRestore — waiting for a spawn", () => {
     });
     resetScrollbackRestoreBatch();
 
+    // The fresh batch keeps its own slot count: one finishing frees exactly one.
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(3);
-    for (let i = 0; i < 4; i++) await getScheduledDoRestore(i)();
-    expect(fetchAndRestoreMock.mock.calls.map(([id]) => id)).toEqual(["a", "b", "c", "d"]);
+    await getScheduledDoRestore(0)();
+    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(4);
+    for (let i = 1; i < 5; i++) await getScheduledDoRestore(i)();
+    expect(fetchAndRestoreMock.mock.calls.map(([id]) => id)).toEqual(fresh);
   });
 });
 
