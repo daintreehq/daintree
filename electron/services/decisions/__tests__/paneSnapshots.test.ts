@@ -663,7 +663,7 @@ describe("PaneSnapshots", () => {
       expect(cleared(restarted.bridge)).toEqual(["q1"]);
     });
 
-    it("sends a settled clear again only once something was shared since", async () => {
+    it("sends a clear again on its bridge once its question shared after the last one", async () => {
       const env = await attached();
       let settle!: () => void;
       env.bridge.snapshots.clear.mockImplementationOnce(
@@ -676,7 +676,7 @@ describe("PaneSnapshots", () => {
       env.snapshots.sharingChanged();
       await vi.advanceTimersByTimeAsync(0);
 
-      // Shared again before that clear settled: it settles as superseded.
+      // Shared again before that clear settled; it then settles, superseded.
       env.setAllowed(true);
       env.snapshots.sharingChanged();
       await vi.advanceTimersByTimeAsync(250);
@@ -689,17 +689,60 @@ describe("PaneSnapshots", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(cleared(env.bridge)).toEqual(["q1", "q1"]);
 
-      // That one settled with nothing shared since: a new bridge doesn't send it again.
+      // That one settled with nothing shared since: answering sends nothing more on this bridge.
+      const answered = [row("q1", { local_status: "human-answered" })];
+      env.setRows(answered);
+      env.snapshots.observe(answered);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(env.bridge)).toEqual(["q1", "q1"]);
+    });
+
+    it("sends a settled clear again through a new bridge, since a refusal settles too", async () => {
+      const env = await attached();
+      env.setAllowed(false);
+      env.snapshots.sharingChanged();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared(env.bridge)).toEqual(["q1"]);
+
       const next = fakeBridge();
       env.snapshots.detach(env.bridge);
-      await vi.advanceTimersByTimeAsync(0);
       env.snapshots.attach(next);
       await vi.advanceTimersByTimeAsync(250);
-      expect(cleared(next)).toEqual([]);
+
+      expect(cleared(next)).toEqual(["q1"]);
+    });
+
+    it("clears a share of this run however old, since its snapshot may still wait to send", async () => {
+      const env = await attached();
+
+      await vi.advanceTimersByTimeAsync(49 * 60 * 60_000);
+      const answered = [row("q1", { local_status: "human-answered" })];
+      env.setRows(answered);
+      env.snapshots.observe(answered);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(cleared(env.bridge)).toEqual(["q1"]);
+    });
+
+    it("keeps the record bounded while one bridge lives", async () => {
+      const env = await attached();
+      const answered = [row("q1", { local_status: "human-answered" })];
+      env.setRows(answered);
+      env.snapshots.observe(answered);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(env.shared()).toEqual(["q1"]);
+
+      await vi.advanceTimersByTimeAsync(49 * 60 * 60_000);
+      const asked = [...answered, row("q2")];
+      env.setRows(asked);
+      env.snapshots.observe(asked);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(env.shared()).toEqual(["q2"]);
     });
 
     it("forgets a question the relay keeps nothing of, without a clear", async () => {
-      const day = 26 * 60 * 60_000;
+      const day = 48 * 60 * 60_000;
       const env = await attached({
         allowed: false,
         meta: JSON.stringify({ "q-expired": Date.now(), "q-old": Date.now() - day - 60_000 }),

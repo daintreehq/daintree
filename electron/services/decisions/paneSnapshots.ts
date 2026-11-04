@@ -50,8 +50,12 @@ const READ_RETRIES = 3;
 export const SNAPSHOTS_SHARED_META_KEY = "daintree:snapshots-shared";
 /** How stale an entry's time may grow while its question keeps sharing. */
 const SHARED_REFRESH_MS = 60 * 60_000;
-/** Past this the relay has deleted the snapshot (its retention), with room for both clocks and the refresh. */
-const SHARED_FORGET_MS = LIMITS.snapshotRetentionMs + 2 * SHARED_REFRESH_MS;
+/**
+ * Past this the relay has deleted a snapshot it took (its retention runs from
+ * receipt), with a day's room for a late delivery, both clocks and the
+ * refresh. Only for a share no snapshot can still be waiting to send.
+ */
+const SHARED_FORGET_MS = LIMITS.snapshotRetentionMs + 24 * 60 * 60_000;
 
 /** The whole screen: no line or byte cut before redaction, which sees it all. */
 const WHOLE_SCREEN = { scrollbackRows: 0, maxBytes: Number.MAX_SAFE_INTEGER };
@@ -309,8 +313,14 @@ export class PaneSnapshots {
   private shared: Map<string, number> | null = null;
   /** Each question's snapshots queued in this run, so a clear stands only for the shares before it. */
   private readonly generations = new Map<string, number>();
-  /** The generation each question's clear settled at, through a bridge still attached, in this run. */
-  private readonly settledClears = new Map<string, number>();
+  /**
+   * The generation each question's clear settled at, through a bridge still
+   * attached: on the current bridge, so it isn't sent again there, and in this
+   * run, so its entry may age out. A refusal settles too, so a new bridge
+   * sends it again.
+   */
+  private readonly settledOnBridge = new Map<string, number>();
+  private readonly settledInRun = new Map<string, number>();
   private offPanes: (() => void) | null = null;
   private tick: ReturnType<typeof setInterval> | null = null;
   private steps: Promise<void> = Promise.resolve();
@@ -370,6 +380,7 @@ export class PaneSnapshots {
     this.bridge = bridge;
     this.epoch++;
     this.sharing = this.o.allowed();
+    this.settledOnBridge.clear();
     for (const asking of this.asking.values()) asking.sent = null;
     this.enqueue(async () => {
       const rows = await this.o.store.listQuestions();
@@ -643,9 +654,10 @@ export class PaneSnapshots {
 
   /**
    * Hands the bridge `id`'s sharing-off record, at once, without waiting on
-   * the relay. A question the relay keeps nothing of is forgotten instead.
-   * One whose clear already settled in this run, with nothing queued for it
-   * since, isn't sent again until a restart.
+   * the relay, which also replaces any snapshot of it still waiting to send.
+   * A question the relay keeps nothing of is forgotten instead. One whose
+   * clear already settled on this bridge, with nothing queued since, isn't
+   * sent again there.
    */
   private async takeBack(bridge: SnapshotBridge, id: string): Promise<void> {
     const row = await this.o.store.getQuestion(id);
@@ -655,22 +667,46 @@ export class PaneSnapshots {
       return;
     }
     const last = shared.get(id);
-    if (
-      row === null ||
-      keepsNone(row) ||
-      last === undefined ||
-      this.now() - last > SHARED_FORGET_MS
-    ) {
-      if (shared.delete(id)) await this.saveShared();
+    if (last === undefined) return;
+    // An earlier run's share past the relay's retention: no snapshot of it can still wait to send.
+    const aged = !this.generations.has(id) && this.now() - last > SHARED_FORGET_MS;
+    if (row === null || keepsNone(row) || aged) {
+      this.forget(id);
+      await this.saveShared();
       return;
     }
     const generation = this.generations.get(id) ?? 0;
-    if (this.settledClears.get(id) === generation) return;
+    if (this.settledOnBridge.get(id) === generation) return;
     // A row given, the library queues the record before its first await.
     this.handOver(bridge.snapshots.clear(row), () => {
-      // Settled, not necessarily taken: the record keeps it for a restart either way.
-      if (this.bridge === bridge) this.settledClears.set(id, generation);
+      // Settled, not necessarily taken: the record keeps it for the next bridge either way.
+      if (this.bridge !== bridge) return;
+      this.settledOnBridge.set(id, generation);
+      this.settledInRun.set(id, generation);
     });
+  }
+
+  private forget(id: string): void {
+    this.shared?.delete(id);
+    this.generations.delete(id);
+    this.settledOnBridge.delete(id);
+    this.settledInRun.delete(id);
+  }
+
+  /**
+   * Drops entries the relay can hold nothing of any more, so the record stays
+   * bounded however long one bridge lives: past the relay's retention, and,
+   * for a share of this run, once its clear settled with nothing queued since.
+   */
+  private prune(): void {
+    if (this.shared === null) return;
+    const now = this.now();
+    for (const [id, last] of this.shared) {
+      if (this.asking.has(id) || now - last <= SHARED_FORGET_MS) continue;
+      const generation = this.generations.get(id);
+      if (generation !== undefined && this.settledInRun.get(id) !== generation) continue;
+      this.forget(id);
+    }
   }
 
   /** Follows a record handed to the bridge without holding up the next step. */
@@ -689,6 +725,7 @@ export class PaneSnapshots {
   }
 
   private saveShared(): Promise<void> {
+    this.prune();
     return this.o.store.setMeta(
       SNAPSHOTS_SHARED_META_KEY,
       JSON.stringify(Object.fromEntries(this.shared!))
