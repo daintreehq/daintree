@@ -1,0 +1,3 @@
+-- Decisions follow-ups waiting (#16231): set while a question holds a follow-up from the person waiting to be typed, or a follow-up receipt still owed to the relay. The minute check reads this index alone, as it does for answers, so a thread whose follow-ups are all settled costs it nothing. Every row written before this one held no follow-up.
+ALTER TABLE `decisions_questions` ADD `messages_waiting` integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `decisions_questions_waiting_messages_idx` ON `decisions_questions` (`alias`) WHERE `messages_waiting` = 1 AND `history_only` = 0;

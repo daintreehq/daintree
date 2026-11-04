@@ -553,10 +553,15 @@ describe("openDb (integration)", () => {
       seed.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER`);
     }
     // Likewise an index needs its table, with the columns it reads, unless
-    // the same migration creates it.
+    // the same migration creates it, or adds the column before indexing it.
     for (const { table, columns } of createdIndexes) {
       if (createdTables.includes(table)) continue;
-      seed.exec(`CREATE TABLE IF NOT EXISTS ${table} (${columns.join(", ")})`);
+      const seeded = columns.filter(
+        (column) => !additions.some((added) => added.table === table && added.column === column)
+      );
+      seed.exec(
+        `CREATE TABLE IF NOT EXISTS ${table} (${(seeded.length > 0 ? seeded : ["seeded_id"]).join(", ")})`
+      );
     }
     // And an added column needs its table, which the minimal seed may not have
     // (the Decisions tables, from 0022).

@@ -1,4 +1,10 @@
-import type { AnswerContent, AnswerEntry, QuestionRow } from "@daintreehq/decisions-client";
+import type {
+  AnswerContent,
+  AnswerEntry,
+  MessageDelivery,
+  QuestionRow,
+  StoredMessage,
+} from "@daintreehq/decisions-client";
 
 /** Planted in every text-bearing field, so a test can prove none of it reaches a view. */
 export const SECRET = "SECRET-TEXT-must-never-leave";
@@ -99,6 +105,47 @@ export function row(
 
 export function answers(...entries: EntryOverrides[]): string {
   return JSON.stringify(entries.map((e) => entry(e)));
+}
+
+type MessageOverrides = Partial<Omit<StoredMessage, "delivery">> & {
+  delivery?: Partial<MessageDelivery> | null;
+};
+
+/** A follow-up from the person (#16231), received and not yet typed, its `received` receipt sent. */
+export function message(overrides: MessageOverrides = {}): StoredMessage {
+  const { delivery, ...rest } = overrides;
+  return {
+    message_id: "message-1",
+    message_seq: 1,
+    event_seq: 10,
+    side: "human",
+    expects_reply: false,
+    signer_device_id: "phone-1",
+    attachment_ids: [],
+    created_at: "2026-11-01T10:06:00.000Z",
+    committed_at: "2026-11-01T10:06:01.000Z",
+    envelope_digest: "digest-1",
+    sealed: `{"ciphertext":"${SECRET}"}`,
+    target_host_id: "host_1",
+    ...rest,
+    delivery:
+      delivery === null
+        ? null
+        : {
+            status: "received",
+            deliver: true,
+            received_at: "2026-11-01T10:06:02.000Z",
+            terminal_delivered_at: null,
+            injection_id: null,
+            error_code: null,
+            reported: "received",
+            ...delivery,
+          },
+  };
+}
+
+export function messages(...list: MessageOverrides[]): string {
+  return JSON.stringify(list.map((m) => message(m)));
 }
 
 /** One question of each kind a pane can show: open, an answer waiting, and one needing attention. */

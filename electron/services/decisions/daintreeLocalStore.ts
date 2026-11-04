@@ -1,12 +1,15 @@
 import type Database from "better-sqlite3";
-import type {
-  AuditEntry,
-  InboundEvent,
-  InjectionIntent,
-  LocalStore,
-  OutboxItem,
-  QuestionOrigin,
-  QuestionRow,
+import {
+  isPendingMessage,
+  parseMessages,
+  unreportedStatuses,
+  type AuditEntry,
+  type InboundEvent,
+  type InjectionIntent,
+  type LocalStore,
+  type OutboxItem,
+  type QuestionOrigin,
+  type QuestionRow,
 } from "@daintreehq/decisions-client";
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { withDiskRecovery } from "../persistence/db.js";
@@ -98,6 +101,8 @@ interface QuestionRecord {
   content_sealed: string | null;
   answers_json: string;
   messages_json: string;
+  /** 1 while a follow-up waits to be typed or its receipt to be sent; derived, never read back. */
+  messages_waiting: number;
   history_only: number;
   delivered_revision: number;
   attachment_digests: string;
@@ -133,6 +138,7 @@ const QUESTION_COLUMNS = [
   "content_sealed",
   "answers_json",
   "messages_json",
+  "messages_waiting",
   "history_only",
   "delivered_revision",
   "attachment_digests",
@@ -145,6 +151,20 @@ const UPDATE_QUESTION = `UPDATE decisions_questions
     .map((c) => `${c} = @${c}`)
     .join(", ")}
   WHERE question_id = @question_id`;
+
+/**
+ * Whether delivery still has work in a question's follow-ups (#16231): one
+ * waiting to be typed, or a receipt the relay hasn't taken, by the library's
+ * own tests.
+ */
+function messagesWaiting(json: string): boolean {
+  return parseMessages(json).some(
+    (message) =>
+      isPendingMessage(message) ||
+      // A row holding other than what the library writes is stored as given, never refused.
+      (message.delivery != null && unreportedStatuses(message.delivery).length > 0)
+  );
+}
 
 function toRecord(q: QuestionRow): QuestionRecord {
   return {
@@ -177,6 +197,7 @@ function toRecord(q: QuestionRow): QuestionRecord {
     content_sealed: q.content_sealed,
     answers_json: q.answers_json,
     messages_json: q.messages_json,
+    messages_waiting: messagesWaiting(q.messages_json) ? 1 : 0,
     history_only: q.history_only ? 1 : 0,
     delivered_revision: q.delivered_revision,
     attachment_digests: JSON.stringify(q.attachment_digests),
@@ -478,9 +499,9 @@ export class DaintreeLocalStore implements LocalStore {
   }
 
   /**
-   * Whether any answer waits to be typed, or a typed one to be reported to
-   * the relay. Reads two partial indexes, so it costs next to nothing when
-   * nothing waits.
+   * Whether any answer or follow-up waits to be typed, or a typed one to be
+   * reported to the relay. Reads three partial indexes, so it costs next to
+   * nothing when nothing waits.
    */
   hasPendingDelivery(): Promise<boolean> {
     return this.enqueue("read", () => {
@@ -490,6 +511,10 @@ export class DaintreeLocalStore implements LocalStore {
          LIMIT 1`
       ).get();
       if (waiting !== undefined) return true;
+      const followUps = this.st(
+        `SELECT 1 FROM decisions_questions WHERE messages_waiting = 1 AND history_only = 0 LIMIT 1`
+      ).get();
+      if (followUps !== undefined) return true;
       const unreported = this.st(
         `SELECT 1 FROM decisions_injection_intents WHERE state IN ('intent', 'typed') LIMIT 1`
       ).get();
