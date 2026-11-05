@@ -82,6 +82,18 @@ export function hydrateInRepoRecipeUsage(
 }
 
 /**
+ * The ProjectFileStore recipes that are genuinely machine-local: everything
+ * except the reconciled mirror of an in-repo recipe, which carries the same id.
+ */
+export function projectLocalRecipes(
+  projectRecipes: TerminalRecipe[],
+  inRepoRecipes: TerminalRecipe[]
+): TerminalRecipe[] {
+  const inRepoIds = new Set(inRepoRecipes.map((r) => r.id));
+  return projectRecipes.filter((r) => !(inRepoIds.has(r.id) && isInRepoRecipeId(r)));
+}
+
+/**
  * Flatten the four recipe tiers into the list the UI renders.
  *
  * `pluginRecipes` is REQUIRED and deliberately has no default: a default would
@@ -107,10 +119,7 @@ export function mergeRecipes(
       .filter((r) => inRepoIds.has(r.id) && isInRepoRecipeId(r))
       .map((r) => [r.id, r] as const)
   );
-  const projectLocalRecipes = projectRecipes.filter(
-    (r) => !(inRepoIds.has(r.id) && isInRepoRecipeId(r))
-  );
-  const projectWithMarkers = projectLocalRecipes.map((r) =>
+  const projectWithMarkers = projectLocalRecipes(projectRecipes, inRepoRecipes).map((r) =>
     inRepoNames.has(r.name) ? { ...r, shadowedBy: r.name } : r
   );
   const inRepoWithMirrors = inRepoRecipes.map((r) => {

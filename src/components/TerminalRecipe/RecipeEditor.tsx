@@ -44,7 +44,12 @@ import {
 } from "@/components/Worktree/views";
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
 import { getAgentConfig } from "@/config/agents";
-import { GLOBAL_SCOPE_LABEL, PROJECT_SCOPE_LABEL, newRecipeScopeDetail } from "./recipeScopeCopy";
+import {
+  GLOBAL_SCOPE_LABEL,
+  PROJECT_SCOPE_LABEL,
+  TEAM_SCOPE_DETAIL,
+  newRecipeScopeDetail,
+} from "./recipeScopeCopy";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
@@ -217,7 +222,7 @@ function savedScope(recipe: TerminalRecipe): {
     return {
       icon: GitBranch,
       label,
-      detail: "Saved in .daintree/recipes/ and shared with everyone on the repo",
+      detail: TEAM_SCOPE_DETAIL,
     };
   }
   if (label === "Global") return { icon: Globe, label, detail: "Yours, in every project" };
