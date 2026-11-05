@@ -1210,7 +1210,8 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyEnvironmentSettingsTab.preload,
     LazyComponent: LazyEnvironmentSettingsTab,
-    searchNavDescription: "Per-project environment variables injected into all terminals",
+    searchNavDescription:
+      "Global environment variables injected into every terminal in every project",
     searchNavKeywords: [
       "terminal",
       "environment",
@@ -1224,9 +1225,9 @@ export const SETTINGS_REGISTRY = [
       {
         id: "environment-variables",
         section: "Environment variables",
-        title: "Project environment variables",
+        title: "Global environment variables",
         description:
-          "Add, edit, and delete key/value environment variables for the current project. Injected into new terminals at spawn time.",
+          "Add, edit, and delete key/value environment variables that apply in every project. Injected into new terminals at spawn time.",
         keywords: [
           "env",
           "environment",
