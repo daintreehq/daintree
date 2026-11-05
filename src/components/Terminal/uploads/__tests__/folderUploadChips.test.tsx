@@ -223,20 +223,30 @@ describe("folder send chips", () => {
 
   it("keeps a send from before a reset away from the ones after it", async () => {
     let finishOld!: () => void;
-    const old = trackFolderUpload(
-      SURFACE,
-      "old",
-      () => new Promise<void>((resolve) => (finishOld = resolve))
-    );
+    let reportOld!: (progress: FolderUploadProgress) => void;
+    const old = trackFolderUpload(SURFACE, "old", ({ onFolderProgress }) => {
+      reportOld = onFolderProgress;
+      return new Promise<void>((resolve) => (finishOld = resolve));
+    });
+    // Started later, so the old upload's reveal falls due first: ids restart at
+    // 1 after a reset, and a timer that survived it would reveal this one.
+    advance(100);
     _resetPendingUploadsForTests();
     const fresh = startSend();
-    advance(UPLOAD_PROGRESS_DELAY_MS - 1);
+    advance(UPLOAD_PROGRESS_DELAY_MS - 100);
     expect(getPendingUploads(SURFACE)[0]!.visible).toBe(false);
+
+    const before = getPendingUploads(SURFACE);
+    act(() => reportOld(sending(900)));
+    expect(getPendingUploads(SURFACE)).toBe(before);
+
     finishOld();
     await old;
     expect(getPendingUploads(SURFACE).map((upload) => upload.name)).toEqual([
       "Daintree-Audit-2026-11-05",
     ]);
+    advance(100);
+    expect(getPendingUploads(SURFACE)[0]!.visible).toBe(true);
     fresh.report(sending(10));
     expect(getPendingUploads(SURFACE)[0]!.folder).toEqual({ phase: "sending", percent: 1 });
   });

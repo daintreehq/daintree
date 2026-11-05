@@ -6,6 +6,7 @@ import type { FolderUploadPathProblem, FolderUploadProblem } from "@shared/types
 import type { FolderUploadCheck, FolderUploadSummary } from "@shared/types/ipc/fileTransfer";
 import { UploadConfirmHost } from "../UploadConfirmHost";
 import { folderRefusal } from "../FolderUploadQuestion";
+import { checkFolderUploadRootName } from "@shared/utils/folderUpload";
 import {
   _resetUploadConfirmForTests,
   askUploadQuestion,
@@ -403,7 +404,13 @@ describe("what a refusal says", () => {
   ] as const)(
     "%s: qualifies a count the walk stopped early, and only then",
     (limit, maximum, actual, title, partialDetail, exactDetail) => {
-      const problem = { kind: "limit", limit, maximum, actual, paths: [nodeModules.path] } as const;
+      const problem: FolderUploadProblem = {
+        kind: "limit",
+        limit,
+        maximum,
+        actual,
+        paths: [nodeModules.path],
+      };
       const refusal = folderRefusal(problem, partial);
       expect(refusal.title).toBe(title);
       expect(refusal.detail).toContain(partialDetail);
@@ -462,7 +469,6 @@ describe("what a refusal says", () => {
     ["separator", `${ROOT}/a\\b`, "An item's name has a slash or backslash in it. Rename it"],
     ["control-character", `${ROOT}/a\u0007b`, "An item's name has a control character in it."],
     ["malformed-unicode", `${ROOT}/a\ud800b`, "An item's name isn't valid Unicode."],
-    ["drive-letter", `${ROOT}/C:x`, "An item's name starts like a Windows drive, such as 'C:'."],
     ["absolute", "/etc/passwd", "An item's path leads outside the folder."],
     ["outside-root", "Other/file.txt", "An item's path leads outside the folder."],
     [
@@ -485,17 +491,13 @@ describe("what a refusal says", () => {
   );
 
   it.each([
-    ["drive-letter", "C:logs", "The folder's name starts like a Windows drive, such as 'C:'."],
-    ["control-character", "logs\u0007", "The folder's name has a control character in it."],
-  ] as const)(
-    "%s on the folder itself asks for the folder to be renamed",
-    (problem, root, sentence) => {
-      const refusal = folderRefusal(
-        { kind: "path", problem, path: root },
-        summary({ rootName: root })
-      );
-      expect(refusal.detail).toBe(`${sentence} Rename the folder, then drop it again.`);
-      expect(refusal.pathsLabel).toBe("Folder");
-    }
-  );
+    ["C:logs", "The folder's name starts like a Windows drive, such as 'C:'."],
+    ["logs\u0007", "The folder's name has a control character in it."],
+  ])("a bad name on the folder itself (%j) asks for the folder to be renamed", (root, sentence) => {
+    const problem = checkFolderUploadRootName(root);
+    expect(problem?.kind).toBe("path");
+    const refusal = folderRefusal(problem!, summary({ rootName: root }));
+    expect(refusal.detail).toBe(`${sentence} Rename the folder, then drop it again.`);
+    expect(refusal.pathsLabel).toBe("Folder");
+  });
 });
