@@ -3,9 +3,12 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
+
+// Read at render time only, so the hoisted dropdown mock below can use it.
+const RadioGroupContext = createContext<((value: string) => void) | null>(null);
 
 const {
   getStagingStatusMock,
@@ -216,15 +219,24 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuRadioGroup: ({
     children,
     value,
-    onValueChange: _onValueChange,
+    onValueChange,
   }: {
     children: ReactNode;
     value: string;
     onValueChange: (v: string) => void;
-  }) => <div data-value={value}>{children}</div>,
-  DropdownMenuRadioItem: ({ children, value: _value }: { children: ReactNode; value: string }) => (
-    <div role="menuitemradio">{children}</div>
+  }) => (
+    <RadioGroupContext.Provider value={onValueChange}>
+      <div data-value={value}>{children}</div>
+    </RadioGroupContext.Provider>
   ),
+  DropdownMenuRadioItem: ({ children, value }: { children: ReactNode; value: string }) => {
+    const onValueChange = useContext(RadioGroupContext);
+    return (
+      <div role="menuitemradio" data-radio-value={value} onClick={() => onValueChange?.(value)}>
+        {children}
+      </div>
+    );
+  },
   DropdownMenuCheckboxItem: ({
     children,
     checked,
@@ -1335,6 +1347,248 @@ describe("ReviewHub", () => {
       expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
         /Stage all/i
       );
+    });
+  });
+
+  describe("shift-click range follows the drawn rows", () => {
+    type Entry = {
+      path: string;
+      status: "modified";
+      insertions: number;
+      deletions: number;
+    };
+    const entry = (path: string, insertions = 1, deletions = 0): Entry => ({
+      path,
+      status: "modified",
+      insertions,
+      deletions,
+    });
+
+    const renderWith = async (staged: Entry[], unstaged: Entry[]) => {
+      getStagingStatusMock.mockResolvedValue(makeStatus({ staged, unstaged }));
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("review-hub-file-section-unstaged"));
+      await waitFor(() => screen.getByTestId("review-hub-file-section-staged"));
+    };
+
+    const row = (path: string) => screen.getByTestId(`file-stage-row-${path}`);
+    const rowIfDrawn = (path: string) => screen.queryByTestId(`file-stage-row-${path}`);
+    const section = (name: "staged" | "unstaged") =>
+      screen.getByTestId(`review-hub-file-section-${name}`);
+    const hideGenerated = (name: "staged" | "unstaged") =>
+      fireEvent.click(within(section(name)).getByRole("menuitemcheckbox"));
+    const sortByChurn = (name: "staged" | "unstaged") => {
+      const churn = within(section(name))
+        .getAllByRole("menuitemradio")
+        .find((el) => el.getAttribute("data-radio-value") === "churn");
+      fireEvent.click(churn!);
+    };
+    const filterBy = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+    const stageSelection = async () => {
+      fireEvent.click(screen.getByTestId("review-hub-stage-section-button"));
+      await waitFor(() => expect(stageFilesMock).toHaveBeenCalledTimes(1));
+      return stageFilesMock.mock.calls[0]![1] as string[];
+    };
+    const unstageSelection = async () => {
+      fireEvent.click(screen.getByTestId("review-hub-unstage-section-button"));
+      await waitFor(() => expect(unstageFilesMock).toHaveBeenCalledTimes(1));
+      return unstageFilesMock.mock.calls[0]![1] as string[];
+    };
+
+    it("leaves out a hidden generated file that sits between the anchor and the click (unstaged)", async () => {
+      await renderWith([], [entry("src/a.ts"), entry("package-lock.json"), entry("src/b.ts")]);
+      hideGenerated("unstaged");
+      await waitFor(() => expect(rowIfDrawn("package-lock.json")).toBeNull());
+
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("src/b.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(2\)/i
+        );
+      });
+      expect(await stageSelection()).toEqual(["src/a.ts", "src/b.ts"]);
+    });
+
+    it("leaves out a hidden generated file that sits between the anchor and the click (staged)", async () => {
+      await renderWith([entry("src/a.ts"), entry("yarn.lock"), entry("src/b.ts")], []);
+      hideGenerated("staged");
+      await waitFor(() => expect(rowIfDrawn("yarn.lock")).toBeNull());
+
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("src/b.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
+          /Unstage selection \(2\)/i
+        );
+      });
+      expect(await unstageSelection()).toEqual(["src/a.ts", "src/b.ts"]);
+    });
+
+    it("follows the drawn order when generated files sort last under the default path sort (unstaged)", async () => {
+      await renderWith(
+        [],
+        [entry("src/a.ts"), entry("package-lock.json"), entry("src/b.ts"), entry("src/c.ts")]
+      );
+
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("src/c.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(3\)/i
+        );
+      });
+      expect(row("package-lock.json").getAttribute("aria-selected")).toBe("false");
+      expect((await stageSelection()).sort()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    });
+
+    it("follows the drawn order when generated files sort last under the default path sort (staged)", async () => {
+      await renderWith(
+        [entry("src/a.ts"), entry("yarn.lock"), entry("src/b.ts"), entry("src/c.ts")],
+        []
+      );
+
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("src/c.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
+          /Unstage selection \(3\)/i
+        );
+      });
+      expect(row("yarn.lock").getAttribute("aria-selected")).toBe("false");
+      expect((await unstageSelection()).sort()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    });
+
+    it("excludes paths the filter query hides (unstaged)", async () => {
+      await renderWith(
+        [],
+        [entry("src/a.ts"), entry("docs/mid.md"), entry("src/b.ts"), entry("src/c.ts")]
+      );
+      filterBy("Filter changed files", "src/");
+      await waitFor(() => expect(rowIfDrawn("docs/mid.md")).toBeNull());
+
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("src/c.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(3\)/i
+        );
+      });
+      expect(await stageSelection()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    });
+
+    it("excludes paths the filter query hides (staged)", async () => {
+      await renderWith(
+        [entry("src/a.ts"), entry("docs/mid.md"), entry("src/b.ts"), entry("src/c.ts")],
+        []
+      );
+      filterBy("Filter staged files", "src/");
+      await waitFor(() => expect(rowIfDrawn("docs/mid.md")).toBeNull());
+
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("src/c.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
+          /Unstage selection \(3\)/i
+        );
+      });
+      expect(await unstageSelection()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    });
+
+    it("starts a new selection from the clicked row when the anchor was filtered away", async () => {
+      await renderWith(
+        [],
+        [entry("src/a.ts"), entry("docs/mid.md"), entry("src/b.ts"), entry("src/c.ts")]
+      );
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("docs/mid.md"), { metaKey: true });
+      filterBy("Filter changed files", "src/");
+      await waitFor(() => expect(rowIfDrawn("docs/mid.md")).toBeNull());
+
+      fireEvent.click(row("src/c.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(1\)/i
+        );
+      });
+      expect(row("src/c.ts").getAttribute("aria-selected")).toBe("true");
+      expect(row("src/a.ts").getAttribute("aria-selected")).toBe("false");
+      expect(await stageSelection()).toEqual(["src/c.ts"]);
+    });
+
+    it("selects the rows between the anchor and the click in churn order (unstaged)", async () => {
+      // Churn desc draws: big (50), mid (10), small (2), tiny (1).
+      await renderWith(
+        [],
+        [
+          entry("a-tiny.ts", 1),
+          entry("b-big.ts", 50),
+          entry("c-small.ts", 2),
+          entry("d-mid.ts", 10),
+        ]
+      );
+      sortByChurn("unstaged");
+      await waitFor(() => {
+        const drawn = within(section("unstaged"))
+          .getAllByTestId(/^file-stage-row-.+\.ts$/)
+          .map((el) => el.getAttribute("data-testid"));
+        expect(drawn).toEqual([
+          "file-stage-row-b-big.ts",
+          "file-stage-row-d-mid.ts",
+          "file-stage-row-c-small.ts",
+          "file-stage-row-a-tiny.ts",
+        ]);
+      });
+
+      fireEvent.click(row("b-big.ts"), { metaKey: true });
+      fireEvent.click(row("c-small.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(3\)/i
+        );
+      });
+      expect(row("a-tiny.ts").getAttribute("aria-selected")).toBe("false");
+      expect((await stageSelection()).sort()).toEqual(["b-big.ts", "c-small.ts", "d-mid.ts"]);
+    });
+
+    it("selects the rows between the anchor and the click in churn order (staged)", async () => {
+      await renderWith(
+        [
+          entry("a-tiny.ts", 1),
+          entry("b-big.ts", 50),
+          entry("c-small.ts", 2),
+          entry("d-mid.ts", 10),
+        ],
+        []
+      );
+      sortByChurn("staged");
+      await waitFor(() => {
+        const drawn = within(section("staged"))
+          .getAllByTestId(/^file-stage-row-.+\.ts$/)
+          .map((el) => el.getAttribute("data-testid"));
+        expect(drawn[0]).toBe("file-stage-row-b-big.ts");
+      });
+
+      fireEvent.click(row("b-big.ts"), { metaKey: true });
+      fireEvent.click(row("c-small.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
+          /Unstage selection \(3\)/i
+        );
+      });
+      expect(row("a-tiny.ts").getAttribute("aria-selected")).toBe("false");
+      expect((await unstageSelection()).sort()).toEqual(["b-big.ts", "c-small.ts", "d-mid.ts"]);
     });
   });
 

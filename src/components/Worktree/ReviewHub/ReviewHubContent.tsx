@@ -1307,8 +1307,10 @@ export function ReviewHubContent({
       fileStatus: GitStatus,
       e: React.MouseEvent
     ) => {
-      const files = section === "staged" ? status?.staged : status?.unstaged;
-      if (e.shiftKey && files && selectionSection === section && selectionAnchorRef.current) {
+      // The drawn rows, not the raw status: a range must cover exactly what sits
+      // between the anchor and the click on screen, never filtered-out or hidden files.
+      const files = section === "staged" ? derivedStaged : derivedUnstaged;
+      if (e.shiftKey && selectionSection === section && selectionAnchorRef.current) {
         const anchorIdx = files.findIndex((f) => f.path === selectionAnchorRef.current);
         const clickIdx = files.findIndex((f) => f.path === filePath);
         if (anchorIdx !== -1 && clickIdx !== -1) {
@@ -1321,6 +1323,15 @@ export function ReviewHubContent({
           }
           setSelectedPaths(range);
           setSelectionSection(section);
+          return;
+        }
+        if (anchorIdx === -1 && clickIdx !== -1) {
+          // The anchor was hidden by a later filter or view change, so there is no drawn
+          // range to extend. Start over from the clicked row rather than falling through to
+          // a plain click, which would drop the selection and open a diff.
+          setSelectedPaths(new Set([filePath]));
+          setSelectionSection(section);
+          selectionAnchorRef.current = filePath;
           return;
         }
       }
@@ -1354,7 +1365,8 @@ export function ReviewHubContent({
       );
     },
     [
-      status,
+      derivedStaged,
+      derivedUnstaged,
       selectionSection,
       openFileDiff,
       setSelectedPaths,
