@@ -156,21 +156,16 @@ export function resolveCommittedScheme(state: CommittedSchemeSources): AppColorS
 }
 
 /**
- * What a view paints for `state` — the root's variables and attributes — so a
- * change that leaves it alone, such as renaming the shown theme, neither
- * repaints nor fades.
+ * The root's variables and attributes the committed scheme paints for
+ * `state`, before any colour vision mode, so a change that leaves them alone,
+ * such as renaming the shown theme, neither repaints nor fades.
  */
 function paintSignature(state: AppThemeState): string {
   const effective = applyAccentOverrideToScheme(
     resolveCommittedScheme(state),
     state.accentColorOverride
   );
-  return JSON.stringify([
-    effective.id,
-    effective.type,
-    getAppThemeCssVariables(effective),
-    state.colorVisionMode,
-  ]);
+  return JSON.stringify([effective.id, effective.type, getAppThemeCssVariables(effective)]);
 }
 
 function trimmedIdOr(value: unknown, fallback: string): string {
@@ -451,7 +446,6 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
         : [],
       pluginSnapshotScheme: readPluginThemeSnapshot(config),
       accentColorOverride: normalizeAccentHex(config.accentColorOverride),
-      colorVisionMode: colorVisionMode ?? "default",
       followSystem: config.followSystem === true,
       preferredDarkSchemeId: trimmedIdOr(
         config.preferredDarkSchemeId,
@@ -474,6 +468,11 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
       set({ selectedSchemeId: selected.id, pluginSnapshotScheme: retainedPluginScheme(selected) });
     }
 
+    // Through the picker's own setter, which paints the mode's CSS onto what is
+    // on screen before publishing the mode the terminals recolour from.
+    const modeChanged = (colorVisionMode ?? "default") !== before.colorVisionMode;
+    if (modeChanged) useAppThemeStore.getState().setColorVisionMode(colorVisionMode ?? "default");
+
     const next = useAppThemeStore.getState();
     let previewEnded = false;
     if (next.previewSchemeId !== null) {
@@ -488,7 +487,9 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     // Resolved when it paints, so a project theme pushed meanwhile wins.
     const paint = () =>
       injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
-    if (opts?.crossfade) {
+    // The mode is already on screen over the outgoing scheme, which a fade
+    // would show half-applied, so a change that carries one cuts instead.
+    if (opts?.crossfade && !modeChanged) {
       const intent = claimThemeIntent();
       runThemeCrossfade(() => {
         if (intent !== themeIntentSeq) return;

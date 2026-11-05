@@ -103,6 +103,20 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
     expect(painted("status-success")).toBe(dark.tokens["status-success"].trim());
   });
 
+  it("paints a colour vision mode's CSS before publishing the mode the terminals read", () => {
+    const seen: Array<string | undefined> = [];
+    const unsubscribe = useAppThemeStore.subscribe((state, prev) => {
+      if (state.colorVisionMode !== prev.colorVisionMode) seen.push(root.dataset.colorblind);
+    });
+    try {
+      reconcile({ colorSchemeId: dark.id, colorVisionMode: "blue-yellow" }, { crossfade: true });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(seen).toEqual(["blue-yellow"]);
+  });
+
   it("doesn't repaint for a change that leaves this view looking the same", () => {
     desyncDom();
 
