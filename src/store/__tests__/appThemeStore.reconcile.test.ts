@@ -103,18 +103,32 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
     expect(painted("status-success")).toBe(dark.tokens["status-success"].trim());
   });
 
-  it("paints a colour vision mode's CSS before publishing the mode the terminals read", () => {
-    const seen: Array<string | undefined> = [];
+  it("paints the whole new theme and its colour vision CSS before publishing the mode", () => {
+    const seen: Array<[string | undefined, string]> = [];
     const unsubscribe = useAppThemeStore.subscribe((state, prev) => {
-      if (state.colorVisionMode !== prev.colorVisionMode) seen.push(root.dataset.colorblind);
+      if (state.colorVisionMode === prev.colorVisionMode) return;
+      // What a terminal recolouring from the mode reads off the root.
+      seen.push([root.dataset.colorblind, painted("surface-canvas")]);
     });
     try {
-      reconcile({ colorSchemeId: dark.id, colorVisionMode: "blue-yellow" }, { crossfade: true });
+      reconcile({ colorSchemeId: light.id, colorVisionMode: "blue-yellow" }, { crossfade: true });
     } finally {
       unsubscribe();
     }
 
-    expect(seen).toEqual(["blue-yellow"]);
+    expect(seen).toEqual([["blue-yellow", canvasOf(light)]]);
+  });
+
+  it("puts a pushed colour vision mode on an open preview, which keeps the DOM", () => {
+    useAppThemeStore.setState({ previewSchemeId: otherDark.id });
+    useAppThemeStore.getState().injectTheme(otherDark);
+    flushPendingTheme();
+
+    reconcile({ colorSchemeId: light.id, colorVisionMode: "red-green" });
+
+    expect(root.dataset.colorblind).toBe("red-green");
+    expect(painted("surface-canvas")).toBe(canvasOf(otherDark));
+    expect(useAppThemeStore.getState().colorVisionMode).toBe("red-green");
   });
 
   it("doesn't repaint for a change that leaves this view looking the same", () => {

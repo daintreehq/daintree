@@ -468,28 +468,38 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
       set({ selectedSchemeId: selected.id, pluginSnapshotScheme: retainedPluginScheme(selected) });
     }
 
+    const mode = colorVisionMode ?? "default";
+    const modeChanged = mode !== before.colorVisionMode;
     // Through the picker's own setter, which paints the mode's CSS onto what is
     // on screen before publishing the mode the terminals recolour from.
-    const modeChanged = (colorVisionMode ?? "default") !== before.colorVisionMode;
-    if (modeChanged) useAppThemeStore.getState().setColorVisionMode(colorVisionMode ?? "default");
+    const publishMode = () => useAppThemeStore.getState().setColorVisionMode(mode);
 
     const next = useAppThemeStore.getState();
     let previewEnded = false;
     if (next.previewSchemeId !== null) {
       // A preview owns the DOM and paints the committed theme when it ends,
-      // unless the theme it shows has just gone.
-      if (getAppThemeById(next.previewSchemeId, selectSelectableSchemes(next))) return;
+      // unless the theme it shows has just gone. The mode lands on it either way.
+      if (getAppThemeById(next.previewSchemeId, selectSelectableSchemes(next))) {
+        if (modeChanged) publishMode();
+        return;
+      }
       set({ previewSchemeId: null });
       previewEnded = true;
     }
-    if (!previewEnded && paintSignature(next) === painted) return;
+    const schemeChanged = previewEnded || paintSignature(next) !== painted;
 
     // Resolved when it paints, so a project theme pushed meanwhile wins.
     const paint = () =>
       injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
-    // The mode is already on screen over the outgoing scheme, which a fade
-    // would show half-applied, so a change that carries one cuts instead.
-    if (opts?.crossfade && !modeChanged) {
+    if (modeChanged) {
+      // The whole scheme first, so nothing that recolours from the mode reads
+      // the outgoing one, and no fade: it would show the mode half-applied.
+      if (schemeChanged) paint();
+      publishMode();
+      return;
+    }
+    if (!schemeChanged) return;
+    if (opts?.crossfade) {
       const intent = claimThemeIntent();
       runThemeCrossfade(() => {
         if (intent !== themeIntentSeq) return;
