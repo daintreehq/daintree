@@ -138,10 +138,44 @@ export interface FolderUploadSummary {
   notCopied: { count: number; items: Array<{ path: string; reason: FolderNotCopiedReason }> };
 }
 
+/**
+ * The walk itself gave up: it looked at more items than this, copied or not,
+ * before the folder's own limits were reached (a folder of links or sockets).
+ * Only the Shell's summary carries it; it never crosses the link.
+ */
+export interface FolderWalkLimitProblem {
+  kind: "walk-limit";
+  maximum: number;
+  actual: number;
+  /** The items directly inside the folder holding the most of them. */
+  paths: string[];
+}
+
 /** A summarized folder: ready to ask about, or refused with the limit or clash responsible. */
 export type FolderUploadCheck =
   | { status: "ready"; summary: FolderUploadSummary }
-  | { status: "refused"; summary: FolderUploadSummary; problem: FolderUploadProblem };
+  | {
+      status: "refused";
+      summary: FolderUploadSummary;
+      problem: FolderUploadProblem | FolderWalkLimitProblem;
+    };
+
+export interface SummarizeLocalFolderPayload {
+  /** The dropped or pasted folder, exactly as this view was granted it. */
+  localPath: string;
+  /** The walk runs under this id, so `cancel` stops it. */
+  opId: OperationId;
+}
+
+/**
+ * A folder dropped or pasted in this view, summarized on this machine. A
+ * ready one carries the handle a send names it by: bound to this view and to
+ * exactly what was summarized, for as long as the view's grant of the folder
+ * lasts. A refused one has nothing to send.
+ */
+export type LocalFolderSummaryResult =
+  | (Extract<FolderUploadCheck, { status: "ready" }> & { handle: string })
+  | Extract<FolderUploadCheck, { status: "refused" }>;
 
 export type FolderUploadPhase = "packing" | "sending" | "unpacking";
 
