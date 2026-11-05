@@ -224,7 +224,8 @@ export class FolderUploadTally {
       return null;
     }
     let prefix = components[0]!;
-    // Every level is checked before anything is added, so a clash changes nothing.
+    // A clash can only be met along names already there: once a name is added,
+    // everything below it is new, so a clash never leaves part of an entry behind.
     for (let i = 1; i < components.length; i++) {
       const name = components[i]!;
       prefix = `${prefix}/${name}`;

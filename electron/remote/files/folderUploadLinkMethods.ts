@@ -22,10 +22,15 @@ import { checkFolderUploadRootName } from "../../../shared/utils/folderUpload.js
  * stop, so the transfer's own success says the archive arrived, never that
  * the folder is in place: only a `done` status carries the folder's host path.
  *
- * A host from before folder uploads answers each method UNSUPPORTED, and these
- * handlers never answer it themselves, so the Shell reads it as "update this
- * host" ({@link classifyFolderUploadCallError}). A refusal is a result, never
- * an error.
+ * A host from before folder uploads answers each method UNSUPPORTED. The host
+ * registers these methods wherever it registers `files.upload-prepare`, and
+ * its handlers never answer UNSUPPORTED themselves, so the Shell reads it as
+ * "update this host" ({@link classifyFolderUploadCallError}). A refusal is a
+ * result, never an error.
+ *
+ * The status and reason enums are strict, so a status or reason added later
+ * is one an older Shell can't parse: it arrives with a method or capability
+ * of its own, never as a new value under these.
  */
 export const FolderUploadLinkMethod = {
   /** Shell → Host: admit a folder upload, or report what this operation already did. */
@@ -56,7 +61,6 @@ export const FOLDER_ARCHIVE_FILE_MODE = 0o600;
 export const FOLDER_ARCHIVE_EXECUTABLE_MODE = 0o700;
 export const FOLDER_ARCHIVE_FOLDER_MODE = 0o700;
 
-const S_IFMT = 0o170000;
 const S_IFREG = 0o100000;
 const S_IFDIR = 0o040000;
 
@@ -161,7 +165,7 @@ export const FOLDER_UPLOAD_FAILURE_REASONS = [
 ] as const;
 export type FolderUploadFailureReason = (typeof FOLDER_UPLOAD_FAILURE_REASONS)[number];
 
-/** Admitted; the archive is on its way or being verified. */
+/** The archive has started arriving, or has arrived and is being verified. */
 const receiving = z.object({ status: z.literal("receiving") });
 const unpacking = z
   .object({ status: z.literal("unpacking"), filesDone: count, filesTotal: count })
@@ -193,9 +197,14 @@ export type FolderUploadStatus = z.infer<typeof FolderUploadStatusSchema>;
 /**
  * A prepare either admits the upload with a token for its archive, refuses
  * it, or (asked again under an opId the host already holds) reports where
- * that operation is, so a Shell that lost an answer never sends twice.
+ * that operation is, so a Shell that lost an answer never sends twice. Asked
+ * again before any of the archive has arrived, it is `ready` again with a
+ * token the archive can still go to. An admission whose archive never comes
+ * ends `failed` as `transfer-failed`, and the same opId with a different root,
+ * archive or counts is VALIDATION, as a file upload's is.
  */
 export const FolderUploadPrepareResultSchema = z.discriminatedUnion("status", [
+  /** Send the archive to `FOLDER_UPLOAD_SINK_PREFIX` + `token`. */
   z.object({ status: z.literal("ready"), token: hexId }),
   z.object({
     status: z.literal("refused"),
@@ -227,8 +236,9 @@ export type FolderUploadCancelResult = z.infer<typeof FolderUploadCancelResultSc
  * What a failed folder-upload CALL says about the host, read from the error's
  * code alone (a host's errors arrive rebuilt from the envelope, not as this
  * process's AppError):
- * - `unsupported`: the host predates folder uploads, so the person is told
- *   to update it ("Update Daintree on studio-02 to send folders");
+ * - `unsupported`: the host doesn't know the method, as one from before folder
+ *   uploads answers, so the person is told to update it ("Update Daintree on
+ *   studio-02 to send folders");
  * - `validation`: the host knows the method and refused the request itself,
  *   a send that failed rather than an outdated host;
  * - `other`: anything else, the link's own failures and replies that don't

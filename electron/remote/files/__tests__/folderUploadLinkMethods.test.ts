@@ -50,23 +50,28 @@ describe("FolderUploadPreparePayloadSchema", () => {
   });
 
   it.each([
-    ["a negative count", { fileCount: -1 }],
-    ["a fractional count", { folderCount: 1.5 }],
-    ["an unsafe count", { totalBytes: Number.MAX_SAFE_INTEGER + 2 }],
-    ["a count that isn't a number", { fileCount: "3" }],
-    ["an archive no bigger than its content", { archiveBytes: 1_000 }],
-    ["content bytes with no files", { fileCount: 0, totalBytes: 1 }],
-    ["an uppercase digest", { sha256: SHA.toUpperCase() }],
-    ["a short digest", { sha256: "ab" }],
-    ["an empty endpoint", { endpointId: "" }],
-    ["an operation id past 128 characters", { opId: "o".repeat(129) }],
-    ["a traversing root name", { rootName: ".." }],
-    ["a root name with a separator", { rootName: "a/b" }],
-    ["a drive-letter root name", { rootName: "C:" }],
-    ["a destination, which folders don't take", { destination: { kind: "worktree" } }],
-    ["a replace token", { replaceToken: TOKEN }],
-  ])("refuses %s", (_label, extra) => {
-    expect(FolderUploadPreparePayloadSchema.safeParse(prepare(extra)).success).toBe(false);
+    ["a negative count", { fileCount: -1, totalBytes: 0 }, ["fileCount"]],
+    ["a fractional count", { folderCount: 1.5 }, ["folderCount"]],
+    ["an unsafe count", { folderCount: Number.MAX_SAFE_INTEGER + 2 }, ["folderCount"]],
+    ["a count that isn't a number", { fileCount: "3" }, ["fileCount"]],
+    ["an archive no bigger than its content", { archiveBytes: 1_000 }, []],
+    ["content bytes with no files", { fileCount: 0, totalBytes: 1 }, []],
+    ["an uppercase digest", { sha256: SHA.toUpperCase() }, ["sha256"]],
+    ["a short digest", { sha256: "ab" }, ["sha256"]],
+    ["an empty endpoint", { endpointId: "" }, ["endpointId"]],
+    ["an operation id past 128 characters", { opId: "o".repeat(129) }, ["opId"]],
+    ["a traversing root name", { rootName: ".." }, ["rootName"]],
+    ["a root name with a separator", { rootName: "a/b" }, ["rootName"]],
+    ["a drive-letter root name", { rootName: "C:" }, ["rootName"]],
+    ["a destination, which folders don't take", { destination: { kind: "worktree" } }, []],
+    ["a replace token", { replaceToken: TOKEN }, []],
+  ])("refuses %s", (_label, extra, path) => {
+    const parsed = FolderUploadPreparePayloadSchema.safeParse(prepare(extra));
+    expect(parsed.success).toBe(false);
+    // Only the field named, or the payload as a whole, is at fault.
+    expect(new Set(parsed.error?.issues.map((issue) => issue.path.join(".")))).toEqual(
+      new Set([path.join(".")])
+    );
   });
 
   it("leaves a root name over the length limit for the host to refuse by name", () => {
@@ -182,6 +187,25 @@ describe("FolderUploadPrepareResultSchema", () => {
   });
 });
 
+describe("results from a newer host", () => {
+  it("drops fields this Shell doesn't know rather than refusing the answer", () => {
+    expect(
+      FolderUploadStatusSchema.parse({
+        status: "failed",
+        reason: "over-limits",
+        retryAfterMs: 5,
+        problem: { ...limitProblem, hint: "x" },
+      })
+    ).toEqual({ status: "failed", reason: "over-limits", problem: limitProblem });
+    expect(
+      FolderUploadPrepareResultSchema.parse({ status: "ready", token: TOKEN, expiresAt: 1 })
+    ).toEqual({ status: "ready", token: TOKEN });
+    expect(FolderUploadCancelResultSchema.parse({ status: "unknown", why: "restart" })).toEqual({
+      status: "unknown",
+    });
+  });
+});
+
 describe("FolderUploadCancelResultSchema", () => {
   it.each([
     [{ status: "cancelled" }],
@@ -232,22 +256,38 @@ describe("classifyFolderUploadCallError", () => {
 });
 
 describe("folder archive modes", () => {
-  it("packs the executable bit and nothing else, and reads back what it packed", () => {
-    for (const [kind, executable] of [
-      ["file", false],
-      ["file", true],
-      ["folder", false],
-    ] as const) {
-      expect(readFolderArchiveMode(kind, folderArchiveMode(kind, executable))).toEqual({
-        executable,
-      });
+  const TYPE_BITS = 0o170000;
+
+  it("packs a file as an owner-only regular file whose one optional bit is executable", () => {
+    for (const executable of [false, true]) {
+      const mode = folderArchiveMode("file", executable);
+      expect(mode & TYPE_BITS).toBe(0o100000);
+      expect(mode & 0o600).toBe(0o600);
+      expect((mode & 0o100) !== 0).toBe(executable);
+      // No group or other bits, and no setuid, setgid or sticky bit.
+      expect(mode & 0o7077).toBe(0);
     }
-    expect(folderArchiveMode("file", true)).not.toBe(folderArchiveMode("file", false));
-    expect(folderArchiveMode("folder", true)).toBe(folderArchiveMode("folder", false));
+  });
+
+  it("packs every folder as an owner-only folder", () => {
+    for (const executable of [false, true]) {
+      const mode = folderArchiveMode("folder", executable);
+      expect(mode & TYPE_BITS).toBe(0o040000);
+      expect(mode & 0o7777).toBe(0o700);
+    }
   });
 
   it.each([
-    ["a symlink", "file", 0o120777],
+    ["a file", "file", 0o100600, false],
+    ["an executable file", "file", 0o100700, true],
+    ["a folder", "folder", 0o040700, false],
+  ] as const)("reads %s from the mode the archive carries", (_label, kind, mode, executable) => {
+    expect(readFolderArchiveMode(kind, mode)).toEqual({ executable });
+  });
+
+  it.each([
+    ["a symlink", "file", 0o120600],
+    ["an executable symlink", "file", 0o120700],
     ["a FIFO", "file", 0o010600],
     ["a device", "file", 0o060600],
     ["a folder's mode on a file", "file", 0o040700],

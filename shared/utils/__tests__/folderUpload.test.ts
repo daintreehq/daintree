@@ -178,6 +178,23 @@ describe("checkFolderUploadEntryPath", () => {
       paths: [`${longest}b`],
     });
   });
+
+  it("measures the path budget in UTF-8 bytes, not characters", () => {
+    // Four two-byte names of 200, 200, 200 and 160 bytes, joined under "Root/": 768 bytes.
+    const names = [...Array.from({ length: 3 }, () => "é".repeat(100)), "é".repeat(80)];
+    const longest = ["Root", ...names].join("/");
+    expect(longest.length).toBeLessThan(FOLDER_UPLOAD_MAX_PATH_BYTES);
+    expect(checkFolderUploadEntryPath("Root", file(longest))).toBeNull();
+    expect(checkFolderUploadEntryPath("Root", folder(`${longest}/`))).toBeNull();
+    expect(checkFolderUploadEntryPath("Root", file(`${longest}a`))).toMatchObject({
+      limit: "path-bytes",
+      actual: FOLDER_UPLOAD_MAX_PATH_BYTES + 1,
+    });
+    expect(checkFolderUploadEntryPath("Root", folder(`${longest}a/`))).toMatchObject({
+      limit: "path-bytes",
+      actual: FOLDER_UPLOAD_MAX_PATH_BYTES + 1,
+    });
+  });
 });
 
 describe("checkFolderUploadTotals", () => {
@@ -234,6 +251,24 @@ describe("FolderUploadTally", () => {
     expect(t.totals).toEqual({ fileCount: 1, folderCount: 2, totalBytes: 0 });
   });
 
+  it("takes one entry for a folder met first as a parent, and refuses a second", () => {
+    const t = tally([file("Root/a/x"), folder("Root/a/")]);
+    expect(t.add(folder("Root/a/"))).toEqual({ kind: "clash", paths: ["Root/a/", "Root/a/"] });
+  });
+
+  it("refuses a file under the spelling of a folder met first as a parent", () => {
+    const t = tally([file("Root/a/x")]);
+    expect(t.add(file("Root/a"))).toEqual({ kind: "clash", paths: ["Root/a/", "Root/a"] });
+  });
+
+  it("leaves a parent as it was when an entry under it clashes", () => {
+    const t = tally([file("Root/p/x")]);
+    expect(t.add(file("Root/p/X"))).toMatchObject({ kind: "clash" });
+    expect(t.add(folder("Root/p/"))).toBeNull();
+    expect(t.add(file("Root/p/y"))).toBeNull();
+    expect(t.totals).toEqual({ fileCount: 2, folderCount: 1, totalBytes: 0 });
+  });
+
   it.each([
     [
       "case",
@@ -280,9 +315,14 @@ describe("FolderUploadTally", () => {
     tally([file("Root/a"), file("Root/b"), file("Root/x/a"), folder("Root/a.d/")]);
   });
 
-  it("refuses a bad path before it reaches the names", () => {
+  it("refuses a bad path before it reaches the names, adding nothing", () => {
     const t = new FolderUploadTally("Root");
-    expect(t.add(file("Root/../a"))).toMatchObject({ kind: "path", problem: "dot-name" });
+    expect(t.add({ ...file("Root/a/../bad"), bytes: 7 })).toMatchObject({
+      kind: "path",
+      problem: "dot-name",
+    });
+    expect(t.totals).toEqual({ fileCount: 0, folderCount: 0, totalBytes: 0 });
+    // Had the bad path placed its parent, this file would clash with that folder.
     expect(t.add(file("Root/a"))).toBeNull();
   });
 

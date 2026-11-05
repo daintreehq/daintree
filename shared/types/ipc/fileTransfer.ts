@@ -105,6 +105,8 @@ export interface FolderSummaryItem {
   kind: "file" | "folder";
   /** Files at or under it, so 1 for a file. */
   fileCount: number;
+  /** Folders at or under it, itself included, so 0 for a file. */
+  folderCount: number;
   totalBytes: number;
 }
 
@@ -116,14 +118,21 @@ export interface FolderSummaryItem {
 export interface FolderUploadSummary {
   rootName: string;
   totals: FolderUploadTotals;
-  /** The walk stopped early, at a limit: every count and size is at least this. */
+  /**
+   * The walk stopped early (at a limit, a clash or a path it can't carry):
+   * every count and size here and in the lists is at least what it shows.
+   */
   lowerBound: boolean;
   /**
    * Hidden files and folders (`.git`, `.env`), copied and counted like any
    * other, and the outermost of them by path.
    */
   hidden: FolderUploadTotals & { paths: string[] };
-  /** The items directly inside the folder that hold the most, largest first. */
+  /**
+   * The items directly inside the folder that hold the most bytes, largest
+   * first. A count or size limit's problem names its own largest
+   * contributors, ranked by what that limit counts.
+   */
   largest: FolderSummaryItem[];
   /** What is left out and why: never followed, never sent. */
   notCopied: { count: number; items: Array<{ path: string; reason: FolderNotCopiedReason }> };

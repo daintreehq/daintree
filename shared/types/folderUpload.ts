@@ -53,9 +53,9 @@ export const FOLDER_UPLOAD_LIMITS = [
 export type FolderUploadLimit = (typeof FOLDER_UPLOAD_LIMITS)[number];
 
 /**
- * Why a path can't be carried. Hosts are macOS or Linux, so names only those
- * would refuse are kept: a backslash is refused because Windows reads it as a
- * separator, but `:` and Windows device names such as `aux.c` are not.
+ * Why a path can't be carried. Hosts are macOS or Linux, so names only
+ * Windows refuses are kept: a backslash is refused because Windows reads it
+ * as a separator, but `:` and Windows device names such as `aux.c` are not.
  */
 export const FOLDER_UPLOAD_PATH_PROBLEMS = [
   /** The path or one of its components is empty (`a//b`). */
