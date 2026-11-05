@@ -23,8 +23,12 @@ import {
   cancelAllWorkspaceRootContext,
   generateWorkspaceRootContext,
 } from "../workspaceRootCopyTree.js";
+import type { CopyTreeOperationOwner } from "../copyTreeOperationOwner.js";
 
 const RESULT = { content: "", fileCount: 1, filePath: "/tmp/out.xml", outputBytes: 4 };
+const OWNER_A: CopyTreeOperationOwner = { workspaceId: "ws-a", endpointId: "local:1" };
+const OWNER_B: CopyTreeOperationOwner = { workspaceId: "ws-b", endpointId: "local:2" };
+const ownedByA = (owner: CopyTreeOperationOwner) => owner.workspaceId === "ws-a";
 
 /** Let the lazy client's dynamic import and any queued cancels settle. */
 async function settle(): Promise<void> {
@@ -68,8 +72,8 @@ describe("workspaceRootCopyTree", () => {
     await generateWorkspaceRootContext("/warm", {}, vi.fn(), "/tmp/0.xml");
     workerClientMock.generate.mockClear();
 
-    const pending = generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml");
-    cancelAllWorkspaceRootContext();
+    const pending = generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml", OWNER_A);
+    cancelAllWorkspaceRootContext(ownedByA);
 
     await expect(pending).resolves.toEqual(expect.objectContaining({ fileCount: 0 }));
     expect((await pending).error).toBeTruthy();
@@ -77,7 +81,7 @@ describe("workspaceRootCopyTree", () => {
   });
 
   it("never spawns a worker just to cancel nothing", async () => {
-    cancelAllWorkspaceRootContext();
+    cancelAllWorkspaceRootContext(() => true);
     await settle();
     expect(workerClientMock.constructed).not.toHaveBeenCalled();
   });
@@ -90,29 +94,63 @@ describe("workspaceRootCopyTree", () => {
           finish = resolve;
         })
     );
-    const pending = generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml");
+    const pending = generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml", OWNER_A);
     await vi.waitFor(() => expect(workerClientMock.generate).toHaveBeenCalledTimes(1));
     const operationId = workerClientMock.generate.mock.calls[0]![3];
 
-    cancelAllWorkspaceRootContext();
+    cancelAllWorkspaceRootContext(ownedByA);
     await vi.waitFor(() => expect(workerClientMock.cancel).toHaveBeenCalledWith(operationId));
 
     finish(RESULT);
     await pending;
     workerClientMock.cancel.mockClear();
-    cancelAllWorkspaceRootContext();
+    cancelAllWorkspaceRootContext(ownedByA);
     await settle();
     expect(workerClientMock.cancel).not.toHaveBeenCalled();
   });
 
   it("forgets an operation whose generation rejected", async () => {
     workerClientMock.generate.mockRejectedValueOnce(new Error("worker down"));
-    await expect(generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml")).rejects.toThrow(
-      "worker down"
-    );
+    await expect(
+      generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml", OWNER_A)
+    ).rejects.toThrow("worker down");
 
-    cancelAllWorkspaceRootContext();
+    cancelAllWorkspaceRootContext(() => true);
     await settle();
     expect(workerClientMock.cancel).not.toHaveBeenCalled();
+  });
+
+  it("cancels only the copies whose owner matches", async () => {
+    const finishes: Array<(value: typeof RESULT) => void> = [];
+    workerClientMock.generate.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishes.push(resolve);
+        })
+    );
+    const a = generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml", OWNER_A);
+    const b = generateWorkspaceRootContext("/b", {}, vi.fn(), "/tmp/2.xml", OWNER_B);
+    const unowned = generateWorkspaceRootContext("/c", {}, vi.fn(), "/tmp/3.xml");
+    await vi.waitFor(() => expect(workerClientMock.generate).toHaveBeenCalledTimes(3));
+    const idOf = (root: string) =>
+      workerClientMock.generate.mock.calls.find(([path]) => path === root)![3];
+
+    cancelAllWorkspaceRootContext(ownedByA);
+    await settle();
+
+    expect(workerClientMock.cancel.mock.calls).toEqual([[idOf("/a")]]);
+    for (const finish of finishes) finish(RESULT);
+    await Promise.all([a, b, unowned]);
+  });
+
+  it("starts a copy another workspace's cancel reached while the client was loading", async () => {
+    await generateWorkspaceRootContext("/warm", {}, vi.fn(), "/tmp/0.xml");
+    workerClientMock.generate.mockClear();
+
+    const pending = generateWorkspaceRootContext("/b", {}, vi.fn(), "/tmp/1.xml", OWNER_B);
+    cancelAllWorkspaceRootContext(ownedByA);
+
+    await expect(pending).resolves.toEqual(RESULT);
+    expect(workerClientMock.generate).toHaveBeenCalledTimes(1);
   });
 });

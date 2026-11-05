@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceCopyTreeClient } from "../WorkspaceCopyTreeClient.js";
 import type { WorkspaceHostProcess } from "../../WorkspaceHostProcess.js";
 import type { ProcessEntry } from "../types.js";
+import type { CopyTreeOperationOwner } from "../../copyTreeOperationOwner.js";
 
 function makeHost(overrides: Partial<WorkspaceHostProcess> = {}): WorkspaceHostProcess {
   return {
@@ -118,27 +119,63 @@ describe("WorkspaceCopyTreeClient", () => {
   });
 
   describe("cancelAllContext", () => {
-    it("broadcasts cancel to all hosts for every active operation", () => {
-      client.activeCopyTreeOperations.set("op-1", "/project/a");
-      client.activeCopyTreeOperations.set("op-2", "/project/b");
+    const OWNER_A: CopyTreeOperationOwner = { workspaceId: "ws-a", endpointId: "local:1" };
+    const OWNER_B: CopyTreeOperationOwner = { workspaceId: "ws-b", endpointId: "local:2" };
+    const ownedByA = (owner: CopyTreeOperationOwner) => owner.workspaceId === "ws-a";
 
-      client.cancelAllContext();
+    /** Operations that stay in flight: A's generation and listing, B's generation, one with no owner. */
+    function startInFlight() {
+      const never = () => new Promise<never>(() => {});
+      hostA = makeHost({ sendWithResponse: vi.fn(never) });
+      hostB = makeHost({ sendWithResponse: vi.fn(never) });
+      entries = [makeEntry(hostA, "/project/a"), makeEntry(hostB, "/project/b")];
+      void client.generateContext("/project/a", {}, vi.fn(), undefined, OWNER_A);
+      void client.generateContext("/project/b", {}, vi.fn(), undefined, OWNER_B);
+      void client.getContextFileTree("/project/a", undefined, undefined, undefined, OWNER_A);
+      void client.generateContext("/project/a", {}, vi.fn());
+      const [aGenerate, bGenerate, aListing, unowned] = [
+        ...client.activeCopyTreeOperations.keys(),
+      ];
+      return { aGenerate, bGenerate, aListing, unowned };
+    }
 
-      expect(hostA.send).toHaveBeenCalledWith({ type: "copytree:cancel", operationId: "op-1" });
-      expect(hostA.send).toHaveBeenCalledWith({ type: "copytree:cancel", operationId: "op-2" });
-      expect(hostB.send).toHaveBeenCalledWith({ type: "copytree:cancel", operationId: "op-1" });
-      expect(hostB.send).toHaveBeenCalledWith({ type: "copytree:cancel", operationId: "op-2" });
+    function cancelsSent(host: WorkspaceHostProcess): string[] {
+      return (host.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([message]) => (message as { operationId: string }).operationId
+      );
+    }
+
+    it("cancels the matching owner's operations on every host, and nothing else", () => {
+      const ops = startInFlight();
+
+      client.cancelAllContext(ownedByA);
+
+      expect(cancelsSent(hostA)).toEqual([ops.aGenerate, ops.aListing]);
+      expect(cancelsSent(hostB)).toEqual([ops.aGenerate, ops.aListing]);
+      expect([...client.activeCopyTreeOperations.keys()]).toEqual([ops.bGenerate, ops.unowned]);
+      expect([...client.copyTreeProgressCallbacks.keys()]).toEqual([ops.bGenerate, ops.unowned]);
     });
 
-    it("clears both maps", () => {
-      const cb = vi.fn();
-      client.copyTreeProgressCallbacks.set("op-1", cb);
-      client.activeCopyTreeOperations.set("op-1", "/project/a");
+    it("never sweeps an operation started with no owner", () => {
+      const ops = startInFlight();
 
-      client.cancelAllContext();
+      client.cancelAllContext(() => true);
 
-      expect(client.activeCopyTreeOperations.size).toBe(0);
-      expect(client.copyTreeProgressCallbacks.size).toBe(0);
+      expect(cancelsSent(hostA)).not.toContain(ops.unowned);
+      expect([...client.activeCopyTreeOperations.keys()]).toEqual([ops.unowned]);
+    });
+
+    it("forgets an operation's owner once it settles", async () => {
+      const sendWithResponse = vi.fn().mockResolvedValue({ result: { content: "", fileCount: 1 } });
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+      await client.generateContext("/project/a", {}, undefined, undefined, OWNER_A);
+      await client.testConfig("/project/a", {}, OWNER_A);
+
+      client.cancelAllContext(() => true);
+
+      expect(hostA.send).not.toHaveBeenCalled();
+      expect(hostB.send).not.toHaveBeenCalled();
     });
   });
 

@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ContextInjectionTracker } from "../ContextInjectionTracker.js";
+import type { CopyTreeOperationOwner } from "../copyTreeOperationOwner.js";
+
+const OWNER_A: CopyTreeOperationOwner = { workspaceId: "ws-a", endpointId: "local:1" };
+const OWNER_B: CopyTreeOperationOwner = { workspaceId: "ws-b", endpointId: "local:2" };
+const ownedByA = (owner: CopyTreeOperationOwner) => owner.workspaceId === "ws-a";
 
 describe("ContextInjectionTracker", () => {
   let tracker: ContextInjectionTracker;
@@ -50,14 +55,37 @@ describe("ContextInjectionTracker", () => {
       expect(tracker.isCancelled("inj1")).toBe(false);
     });
 
-    it("markAllCancelled cancels all active injections", () => {
-      tracker.beginInjection("t1", "inj1");
-      tracker.beginInjection("t2", "inj2");
+    it("markAllCancelled cancels only the injections whose owner matches", () => {
+      tracker.beginInjection("t1", "inj1", OWNER_A);
+      tracker.beginInjection("t2", "inj2", OWNER_A);
+      tracker.beginInjection("t3", "inj3", OWNER_B);
+      tracker.beginInjection("t4", "inj4");
 
-      const count = tracker.markAllCancelled();
+      const count = tracker.markAllCancelled(ownedByA);
       expect(count).toBe(2);
       expect(tracker.isCancelled("inj1")).toBe(true);
       expect(tracker.isCancelled("inj2")).toBe(true);
+      expect(tracker.isCancelled("inj3")).toBe(false);
+      expect(tracker.isCancelled("inj4")).toBe(false);
+    });
+
+    it("never sweeps an injection begun with no owner", () => {
+      tracker.beginInjection("t1", "inj1");
+
+      expect(tracker.markAllCancelled(() => true)).toBe(0);
+      expect(tracker.isCancelled("inj1")).toBe(false);
+    });
+
+    it("keeps a run's owner across a project switch, until the run finishes", () => {
+      tracker.beginInjection("t1", "inj1", OWNER_A);
+      tracker.onProjectSwitch();
+
+      expect(tracker.markAllCancelled(ownedByA)).toBe(1);
+      expect(tracker.isCancelled("inj1")).toBe(true);
+
+      tracker.finishInjection("t1", "inj1");
+      tracker.beginInjection("t1", "inj1");
+      expect(tracker.markAllCancelled(ownedByA)).toBe(0);
     });
   });
 
@@ -74,10 +102,10 @@ describe("ContextInjectionTracker", () => {
     });
 
     it("keeps the first reason when a later cancel lands on the same run", () => {
-      tracker.beginInjection("t1", "inj1");
+      tracker.beginInjection("t1", "inj1", OWNER_A);
       tracker.markCancelled("inj1", "input-locked");
 
-      tracker.markAllCancelled();
+      tracker.markAllCancelled(ownedByA);
       tracker.markCancelled("inj1");
 
       expect(tracker.getStop("inj1")).toBe("input-locked");

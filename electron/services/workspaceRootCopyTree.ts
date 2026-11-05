@@ -1,5 +1,6 @@
 import type { CopyTreeOptions, CopyTreeProgress, CopyTreeResult } from "../types/index.js";
 import type { CopytreeWorkerClient } from "../workspace-host/CopytreeWorkerClient.js";
+import type { CopyTreeOperationOwner, CopyTreeOwnerPredicate } from "./copyTreeOperationOwner.js";
 
 /**
  * CopyTree for a workspace root — the folder of a scratch or a worktree-less
@@ -13,7 +14,8 @@ import type { CopytreeWorkerClient } from "../workspace-host/CopytreeWorkerClien
  * is persistent — one per process, never one per copy.
  */
 let clientPromise: Promise<CopytreeWorkerClient> | null = null;
-const activeOperations = new Set<string>();
+/** Each running copy and who started it; one started with no owner is never swept. */
+const activeOperations = new Map<string, CopyTreeOperationOwner | undefined>();
 /** Cancelled before the client loaded — dispatch must not start them at all. */
 const cancelledOperations = new Set<string>();
 
@@ -35,10 +37,11 @@ export async function generateWorkspaceRootContext(
   rootPath: string,
   options: CopyTreeOptions,
   onProgress: (progress: CopyTreeProgress) => void,
-  outputPath: string
+  outputPath: string,
+  owner?: CopyTreeOperationOwner
 ): Promise<CopyTreeResult> {
   const operationId = crypto.randomUUID();
-  activeOperations.add(operationId);
+  activeOperations.set(operationId, owner);
   try {
     const client = await getClient();
     if (cancelledOperations.has(operationId)) {
@@ -51,9 +54,14 @@ export async function generateWorkspaceRootContext(
   }
 }
 
-export function cancelAllWorkspaceRootContext(): void {
+/** Cancel every running root copy whose owner `matches`. */
+export function cancelAllWorkspaceRootContext(matches: CopyTreeOwnerPredicate): void {
   if (!clientPromise || activeOperations.size === 0) return;
-  const ids = [...activeOperations];
+  const ids: string[] = [];
+  for (const [id, owner] of activeOperations) {
+    if (owner && matches(owner)) ids.push(id);
+  }
+  if (ids.length === 0) return;
   for (const id of ids) cancelledOperations.add(id);
   void clientPromise.then(
     (client) => {
