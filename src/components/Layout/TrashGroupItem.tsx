@@ -252,7 +252,7 @@ export function TrashGroupItem({
                   <TerminalIcon
                     kind={terminal.kind}
                     chrome={deriveTerminalChrome(terminal)}
-                    className="w-2.5 h-2.5 text-text-muted"
+                    className="w-2.5 h-2.5 text-text-secondary"
                   />
                   <span
                     className={`truncate flex-1 ${isActiveTab ? "text-text-primary font-medium" : "text-text-secondary"}`}

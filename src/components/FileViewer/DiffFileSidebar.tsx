@@ -434,7 +434,7 @@ export function DiffFileSidebar({
           />
         </div>
         <div className="mt-1" data-testid="diff-sidebar-progress">
-          <span className="text-2xs text-text-muted">
+          <span className="text-2xs text-text-secondary">
             {viewedCount} of {files.length} viewed
           </span>
           {/* The track only appears once review has started — an empty
