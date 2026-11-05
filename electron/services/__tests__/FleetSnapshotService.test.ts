@@ -757,7 +757,12 @@ describe("FleetSnapshotService", () => {
   });
 
   it("bands each run as the project counts do, from the same terminal records", async () => {
-    const records = [
+    const records: Array<{
+      id: string;
+      agentState: string;
+      waitingReason?: string;
+      report?: "done" | "needs-you";
+    }> = [
       { id: "needs-prompt", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
       { id: "needs-done", agentState: "completed", report: "needs-you" },
       {
@@ -773,7 +778,7 @@ describe("FleetSnapshotService", () => {
       { id: "bare-prompt", agentState: "waiting", waitingReason: "prompt" },
       { id: "needs-parked", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
       { id: "needs-seen", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
-    ] as const;
+    ];
     const terminals = records.map(({ report, ...rest }) =>
       terminal({
         ...rest,

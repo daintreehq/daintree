@@ -389,6 +389,43 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("drops the last handback once a typed Enter submits at the agent's prompt, and not for keys that don't (#16190)", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: "Approve the deploy",
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+
+    info.lastHandback = handback;
+    info.lastHandbackUnpublished = true;
+    // Typing the reply, a soft newline inside it, and a paste submit nothing.
+    terminal.write("approved");
+    terminal.write("\x1b\r");
+    terminal.write("\x1b[200~line one\rline two\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+
+    // Keys on an approval dialog pick an option; they never reach the prompt.
+    info.waitingReason = "approval";
+    terminal.write("\r");
+    expect(info.lastHandback).toBe(handback);
+
+    info.waitingReason = "prompt";
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+    expect(info.lastHandbackUnpublished).toBe(false);
+
+    // A broadcast keystroke takes the same path to the agent.
+    info.lastHandback = handback;
+    terminal.tryWrite("go on\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
   it("reports a done marker the moment it is complete on screen, without waiting for a settle", async () => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;

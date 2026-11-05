@@ -44,6 +44,14 @@ import {
 
 const IMAGE_STAT_TIMEOUT_MS = 1000;
 
+/** A carriage return that isn't the second half of an ESC-prefixed soft newline. */
+function hasBareEnter(data: string): boolean {
+  for (let i = data.indexOf("\r"); i !== -1; i = data.indexOf("\r", i + 1)) {
+    if (i === 0 || data[i - 1] !== "\x1b") return true;
+  }
+  return false;
+}
+
 /**
  * Whether `filePath` is a regular file, answered `false` rather than awaited
  * forever: a stat on a dead network mount can hang, and this runs inside the
@@ -211,6 +219,7 @@ export class TerminalInputController {
 
     try {
       terminal.ptyProcess.write(data);
+      this.noteTypedSubmit(data);
       return { ok: true };
     } catch (error) {
       this.host.logWriteError(error, { operation: "tryWrite", traceId });
@@ -367,7 +376,26 @@ export class TerminalInputController {
       this.host.logWriteError(error, { operation: "write(direct)", traceId });
       return false;
     }
+    // The submit lane drops the handback once its own Enter lands; typed keys
+    // are the other way a prompt reaches the agent.
+    if (!rethrow) this.noteTypedSubmit(data);
     return true;
+  }
+
+  /**
+   * Typed keys that submit the agent's next prompt drop the last handback, as
+   * a submission through the lane does (#16190): the marker answered the turn
+   * before, and a needs-you report left standing would place the next stop in
+   * Needs you though that turn never said so. Only a bare Enter submits: a
+   * soft newline is ESC followed by CR, and keys on an approval dialog pick an
+   * option rather than reach the prompt.
+   */
+  private noteTypedSubmit(data: string): void {
+    const terminal = this.host.terminalInfo;
+    if (terminal.lastHandback === undefined || !keysReachPrompt(terminal)) return;
+    if (!hasBareEnter(data)) return;
+    terminal.lastHandback = undefined;
+    terminal.lastHandbackUnpublished = false;
   }
 
   submit(
