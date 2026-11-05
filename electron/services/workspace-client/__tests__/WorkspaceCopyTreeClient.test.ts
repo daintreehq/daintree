@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import crypto from "crypto";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { WorkspaceCopyTreeClient } from "../WorkspaceCopyTreeClient.js";
 import type { WorkspaceHostProcess } from "../../WorkspaceHostProcess.js";
 import type { ProcessEntry } from "../types.js";
@@ -132,9 +133,13 @@ describe("WorkspaceCopyTreeClient", () => {
       void client.generateContext("/project/a", {}, vi.fn(), undefined, OWNER_A);
       void client.generateContext("/project/b", {}, vi.fn(), undefined, OWNER_B);
       void client.getContextFileTree("/project/a", undefined, undefined, undefined, OWNER_A);
+      void client.testConfig("/project/a", {}, OWNER_A);
+      void client.testConfig("/project/b", {}, OWNER_B);
       void client.generateContext("/project/a", {}, vi.fn());
-      const [aGenerate, bGenerate, aListing, unowned] = [...client.activeCopyTreeOperations.keys()];
-      return { aGenerate, bGenerate, aListing, unowned };
+      const [aGenerate, bGenerate, aListing, aConfig, bConfig, unowned] = [
+        ...client.activeCopyTreeOperations.keys(),
+      ];
+      return { aGenerate, bGenerate, aListing, aConfig, bConfig, unowned };
     }
 
     function cancelsSent(host: WorkspaceHostProcess): string[] {
@@ -148,9 +153,14 @@ describe("WorkspaceCopyTreeClient", () => {
 
       client.cancelAllContext(ownedByA);
 
-      expect(cancelsSent(hostA)).toEqual([ops.aGenerate, ops.aListing]);
-      expect(cancelsSent(hostB)).toEqual([ops.aGenerate, ops.aListing]);
-      expect([...client.activeCopyTreeOperations.keys()]).toEqual([ops.bGenerate, ops.unowned]);
+      const swept = [ops.aGenerate, ops.aListing, ops.aConfig];
+      expect(cancelsSent(hostA)).toEqual(swept);
+      expect(cancelsSent(hostB)).toEqual(swept);
+      expect([...client.activeCopyTreeOperations.keys()]).toEqual([
+        ops.bGenerate,
+        ops.bConfig,
+        ops.unowned,
+      ]);
       expect([...client.copyTreeProgressCallbacks.keys()]).toEqual([ops.bGenerate, ops.unowned]);
     });
 
@@ -163,17 +173,78 @@ describe("WorkspaceCopyTreeClient", () => {
       expect([...client.activeCopyTreeOperations.keys()]).toEqual([ops.unowned]);
     });
 
-    it("forgets an operation's owner once it settles", async () => {
-      const sendWithResponse = vi.fn().mockResolvedValue({ result: { content: "", fileCount: 1 } });
-      hostA = makeHost({ sendWithResponse });
-      entries[0] = makeEntry(hostA, "/project/a");
-      await client.generateContext("/project/a", {}, undefined, undefined, OWNER_A);
-      await client.testConfig("/project/a", {}, OWNER_A);
+    describe("forgets an operation's owner once it is done", () => {
+      const REUSED_ID = "00000000-0000-4000-8000-000000000000" as const;
+      const pending = () => new Promise<never>(() => {});
 
-      client.cancelAllContext(() => true);
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
 
-      expect(hostA.send).not.toHaveBeenCalled();
-      expect(hostB.send).not.toHaveBeenCalled();
+      it.each<[string, (respond: Mock) => Promise<void>]>([
+        [
+          "its generation completes",
+          async (respond) => {
+            respond.mockResolvedValueOnce({ result: { content: "", fileCount: 1 } });
+            await client.generateContext("/project/a", {}, undefined, undefined, OWNER_A);
+          },
+        ],
+        [
+          "its generation fails",
+          async (respond) => {
+            respond.mockRejectedValueOnce(new Error("host died"));
+            await expect(
+              client.generateContext("/project/a", {}, undefined, undefined, OWNER_A)
+            ).rejects.toThrow("host died");
+          },
+        ],
+        [
+          "its config test completes",
+          async (respond) => {
+            respond.mockResolvedValueOnce({ result: { includedFiles: 0, includedSize: 0 } });
+            await client.testConfig("/project/a", {}, OWNER_A);
+          },
+        ],
+        [
+          "its listing completes",
+          async (respond) => {
+            respond.mockResolvedValueOnce({ nodes: [] });
+            await client.getContextFileTree("/project/a", undefined, undefined, undefined, OWNER_A);
+          },
+        ],
+        [
+          "it is cancelled by id",
+          async (respond) => {
+            respond.mockImplementationOnce(pending);
+            void client.generateContext("/project/a", {}, undefined, undefined, OWNER_A);
+            client.cancelContext(REUSED_ID);
+          },
+        ],
+        [
+          "it is swept",
+          async (respond) => {
+            respond.mockImplementationOnce(pending);
+            void client.generateContext("/project/a", {}, undefined, undefined, OWNER_A);
+            client.cancelAllContext(ownedByA);
+          },
+        ],
+      ])("once %s", async (_label, finish) => {
+        vi.spyOn(crypto, "randomUUID").mockReturnValue(REUSED_ID);
+        const respond = vi.fn();
+        hostA = makeHost({ sendWithResponse: respond });
+        entries[0] = makeEntry(hostA, "/project/a");
+        await finish(respond);
+        (hostA.send as Mock).mockClear();
+        (hostB.send as Mock).mockClear();
+
+        // The id comes round again for a run with no owner, which no sweep may reach.
+        respond.mockImplementationOnce(pending);
+        void client.generateContext("/project/a", {}, vi.fn());
+        client.cancelAllContext(() => true);
+
+        expect(hostA.send).not.toHaveBeenCalled();
+        expect(hostB.send).not.toHaveBeenCalled();
+      });
     });
   });
 

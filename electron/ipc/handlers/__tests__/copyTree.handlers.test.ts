@@ -2064,7 +2064,7 @@ describe("copyTree generate-and-copy-file — workspace root (#13210)", () => {
     );
   }
 
-  it("cancels the view's own in-flight root copies, alongside the hosts', on a cancel-all", async () => {
+  it("scopes a cancel-all's root-copy sweep to the view's own workspace, alongside the hosts'", async () => {
     bindView(SCRATCH.id);
     await handler()(sender, {});
     bindView(PROJECT.id);
@@ -2080,6 +2080,18 @@ describe("copyTree generate-and-copy-file — workspace root (#13210)", () => {
     expect(matches(projectCopy!)).toBe(true);
     expect(matches(scratchCopy!)).toBe(false);
     expect(worktreeService.cancelAllContext.mock.calls[0]![0]).toBe(matches);
+  });
+
+  it("matches a scratch's root copies to a cancel-all from the scratch's own view", async () => {
+    bindView(SCRATCH.id);
+    await handler()(sender, {});
+    const [scratchCopy] = rootCopyOwners();
+
+    await cancelAll();
+
+    const matches = rootCopyMock.cancelAllWorkspaceRootContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(scratchCopy!)).toBe(true);
   });
 
   it("cancels nothing for a view bound to no workspace, whatever the current project", async () => {
@@ -2886,12 +2898,16 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
   const PROJECT_B = { id: "proj-b", path: nodePath.resolve("/repos/b"), status: "active" };
   const senderA = { sender: { id: 11 } } as never;
   const senderB = { sender: { id: 12 } } as never;
+  /** A second window on project A. */
+  const senderA2 = { sender: { id: 13 } } as never;
   const bindings = new Map<number, string>([
     [11, PROJECT_A.id],
     [12, PROJECT_B.id],
+    [13, PROJECT_A.id],
   ]);
 
   let releases: Array<() => void>;
+  let inFlight: Array<Promise<unknown>>;
   let worktreeService: {
     getAllStatesForProjectAsync: Mock;
     generateContext: Mock;
@@ -2950,7 +2966,12 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
       worktreeId: worktreeOf(project).id,
       injectionId: id,
     }) as Promise<{ fileCount: number; error?: string }>;
-    return { result, generating };
+    inFlight.push(result);
+    // A run that ends before generating would otherwise leave the test waiting.
+    const endedEarly = result.then((settled) => {
+      throw new Error(`inject ended before generating: ${settled.error}`);
+    });
+    return { result, generating: Promise.race([generating, endedEarly]) };
   }
 
   const originalPlatform = process.platform;
@@ -2960,6 +2981,7 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
     vi.clearAllMocks();
     _resetRateLimitQueuesForTest();
     releases = [];
+    inFlight = [];
     browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
     windowRefMock.getProjectViewManager.mockReturnValue(null);
     copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
@@ -2994,8 +3016,10 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Settled before the shared tracker and ledger move on, even after a failed assertion.
     for (const release of releases) release();
+    await Promise.allSettled(inFlight);
     getIpcDispatcher().setInvokeEnveloper(null);
     disposeLifecycleLedger();
     Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
@@ -3054,7 +3078,39 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
     expect(worktreeService.cancelAllContext).not.toHaveBeenCalled();
   });
 
-  it("scopes the hosts' generations to the caller's project too", async () => {
+  it("lets any view of the project stop its runs when no lease service runs", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA2, {});
+    releases.shift()!();
+
+    expect((await a.result).error).toBe("Injection cancelled");
+  });
+
+  it("never claims a run for the global current project", async () => {
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, {});
+    const projectACancel = worktreeService.cancelAllContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    // Re-registered with no view binding at all: the run resolves its
+    // worktree through the current project, A, but must not belong to it.
+    ipcMainMock.handle.mockClear();
+    registerCopyTreeHandlers({
+      mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      worktreeService,
+    } as never);
+    worktreeService.generateContext.mockResolvedValue({ content: "", fileCount: 0, error: "x" });
+
+    await getInvokeHandler(CHANNELS.COPYTREE_GENERATE)(senderA, {
+      worktreeId: worktreeOf(PROJECT_A).id,
+    });
+
+    expect(worktreeService.generateContext).toHaveBeenCalledTimes(1);
+    const unscoped = worktreeService.generateContext.mock.calls[0]![4] as CopyTreeOperationOwner;
+    expect(projectACancel(unscoped)).toBe(false);
+  });
+
+  it("stamps generations with their caller, so only that project's cancel-all matches them", async () => {
     worktreeService.generateContext.mockResolvedValue({ content: "", fileCount: 0, error: "x" });
     const generate = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
     await generate(senderA, { worktreeId: worktreeOf(PROJECT_A).id });
@@ -3090,13 +3146,14 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
   });
 
   describe("while a drive lease service runs", () => {
+    /** `${projectId} ${endpointId}` for each endpoint that drives a project. */
     let driving: Set<string>;
 
     beforeEach(() => {
       driving = new Set();
       _resetDriveLeaseServiceForTesting({
-        isDriving: (_projectId: string, endpoint: { endpointId: string }) =>
-          driving.has(endpoint.endpointId),
+        isDriving: (projectId: string, endpoint: { endpointId: string }) =>
+          driving.has(`${projectId} ${endpoint.endpointId}`),
         dispose: () => undefined,
       } as never);
     });
@@ -3105,8 +3162,9 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
       _resetDriveLeaseServiceForTesting(null);
     });
 
-    it("lets a view watching the project stop only its own runs", async () => {
+    it("lets a view watching the project stop only its own runs, whatever else it drives", async () => {
       const watcher = remoteEndpoint(PROJECT_A.id);
+      driving.add(`${PROJECT_B.id} ${watcher.endpointId}`);
       const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
       await a.generating;
       worktreeService.generateContext.mockResolvedValueOnce({ content: "", fileCount: 0 });
@@ -3138,7 +3196,7 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
 
     it("lets the project's driver stop every run in it, and none elsewhere", async () => {
       const driver = remoteEndpoint(PROJECT_A.id);
-      driving.add(driver.endpointId);
+      driving.add(`${PROJECT_A.id} ${driver.endpointId}`);
       const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
       const b = heldInject(senderB, PROJECT_B, "t-b", "inj-b");
       await Promise.all([a.generating, b.generating]);

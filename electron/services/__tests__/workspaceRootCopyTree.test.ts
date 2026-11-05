@@ -143,7 +143,7 @@ describe("workspaceRootCopyTree", () => {
     await Promise.all([a, b, unowned]);
   });
 
-  it("starts a copy another workspace's cancel reached while the client was loading", async () => {
+  it("still starts a copy when another workspace's cancel lands before its dispatch", async () => {
     await generateWorkspaceRootContext("/warm", {}, vi.fn(), "/tmp/0.xml");
     workerClientMock.generate.mockClear();
 
