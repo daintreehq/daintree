@@ -6,6 +6,7 @@ import { createActionRegistry, createActionRegistryWithRemoteHosts } from "./hel
 import { renderPluginActionsDoc } from "../../../../scripts/codegen/pluginActionsDoc";
 import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
+import type { ActionId } from "@shared/types/actions";
 
 const DOC_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -75,6 +76,16 @@ describe("docs/plugins/actions.md", () => {
     expect(
       visible.filter((id) => KEY_ACTION_VALUES.has(id) && !runtimeIds.has(id)).length
     ).toBeGreaterThan(0);
+  });
+
+  it("leaves out an id that is not a built-in", async () => {
+    const registry = await createActionRegistry();
+    const [, factory] = [...registry].find(([, f]) => f().danger === "safe")!;
+    // A plugin's own action is not a built-in whatever its definition says, and
+    // a registry handed to the renderer is not guaranteed to hold built-ins only.
+    registry.set("acme.plugin.hello" as ActionId, factory);
+
+    expect(renderPluginActionsDoc(registry)).not.toContain("`acme.plugin.hello`");
   });
 
   it("marks optional arguments and lists required ones first", async () => {

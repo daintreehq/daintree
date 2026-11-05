@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { ActionDefinition } from "../../shared/types/actions.js";
 import type { ActionRegistry } from "../../src/services/actions/actionTypes.js";
 import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "../../shared/config/actionIds.js";
+import { isBuiltInActionId } from "../../shared/utils/builtInActionIds.js";
 
 /** Top-level argument names, marking the required ones. Empty when the action takes none. */
 function argSummary(def: ActionDefinition): string {
@@ -50,10 +51,10 @@ export function renderPluginActionsDoc(registry: ActionRegistry): string {
     [];
   // Walks the registry, not an id table: built-in ids are split between
   // `BUILT_IN_ACTION_IDS` and the keybinding-driven `KEY_ACTION_VALUES`, and a
-  // plugin sees and dispatches both. The registry holds only built-ins, and the
-  // quality suite's registry-vs-union test keeps every key in one of the tables.
+  // plugin sees and dispatches both. `isBuiltInActionId` spans both tables, so
+  // an id registered by a plugin can never land on a page about built-ins.
   for (const [id, factory] of registry) {
-    if (denied.has(id)) continue;
+    if (!isBuiltInActionId(id) || denied.has(id)) continue;
     const def = factory();
     // A plugin's dispatch is refused for `restricted` whatever its tier, so
     // listing one would be listing something that cannot be called.
