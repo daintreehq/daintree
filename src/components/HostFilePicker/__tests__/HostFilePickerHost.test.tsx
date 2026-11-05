@@ -312,14 +312,29 @@ describe("HostFilePickerHost", () => {
 });
 
 // A real click: the press moves focus onto the target, blurring the path field,
-// before the click itself lands. `fireEvent.click` alone skips that blur.
+// before the click itself lands, unless the press is prevented. `fireEvent.click`
+// alone skips that blur.
 function press(target: HTMLElement) {
   fireEvent.pointerDown(target);
-  fireEvent.mouseDown(target);
-  act(() => target.focus());
+  if (fireEvent.mouseDown(target)) act(() => target.focus());
   fireEvent.pointerUp(target);
   fireEvent.mouseUp(target);
   fireEvent.click(target);
+}
+
+function holdListing(): () => Promise<void> {
+  let finish!: () => void;
+  listDirectory.mockImplementationOnce(
+    ({ path }) =>
+      new Promise((resolve, reject) => {
+        finish = () => {
+          const listing = listings[path];
+          if (listing) resolve(listing);
+          else reject(new Error("That folder doesn't exist."));
+        };
+      })
+  );
+  return () => act(async () => finish());
 }
 
 async function openFolderPick(): Promise<{
@@ -341,11 +356,55 @@ async function openFolderPick(): Promise<{
 
 describe("HostFilePickerHost typed path", () => {
   it("opens the folder typed into the path field when the primary is clicked", async () => {
-    const { picked, field } = await openFolderPick();
+    const { picked, settled, field } = await openFolderPick();
     fireEvent.change(field, { target: { value: "/home/greg/work" } });
+    expect(screen.getByTestId("app-dialog-hint").textContent).toContain("/home/greg/work");
+    const finish = holdListing();
     press(confirmButton("Open"));
-    await expect(picked).resolves.toEqual(["/home/greg/work"]);
+    expect(document.activeElement).toBe(field);
     expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg/work", showHidden: false });
+    await act(async () => {});
+    expect(settled()).toBe(false);
+    await finish();
+    await expect(picked).resolves.toEqual(["/home/greg/work"]);
+  });
+
+  it("chooses the typed folder over a row selected in the folder before", async () => {
+    const { picked, field } = await openFolderPick();
+    fireEvent.click(getRow("work"));
+    // The host answers for the folder by its own spelling of the path.
+    listDirectory.mockImplementationOnce(async () => listings["/home/greg"]!);
+    fireEvent.change(field, { target: { value: "/home/greg/" } });
+    press(confirmButton("Open"));
+    await expect(picked).resolves.toEqual(["/home/greg"]);
+    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg/", showHidden: false });
+  });
+
+  it("forgets the press when another folder is opened while the typed one loads", async () => {
+    const { picked, settled, field } = await openFolderPick();
+    fireEvent.change(field, { target: { value: "/home/greg/work" } });
+    const finish = holdListing();
+    press(confirmButton("Open"));
+    fireEvent.click(screen.getByRole("button", { name: "Home" }));
+    await finish();
+    await findRow("work");
+    expect(settled()).toBe(false);
+    fireEvent.click(confirmButton("Open"));
+    await expect(picked).resolves.toEqual(["/home/greg"]);
+  });
+
+  it("does nothing when the press on the primary is released elsewhere", async () => {
+    const { settled, field } = await openFolderPick();
+    fireEvent.change(field, { target: { value: "/home/greg/work" } });
+    const primary = confirmButton("Open");
+    fireEvent.pointerDown(primary);
+    expect(fireEvent.mouseDown(primary)).toBe(false);
+    fireEvent.mouseUp(screen.getByRole("listbox"));
+    await act(async () => {});
+    expect(settled()).toBe(false);
+    expect(listDirectory).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe("/home/greg/work");
   });
 
   it("holds the confirm on a path that isn't absolute", async () => {
