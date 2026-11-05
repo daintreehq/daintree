@@ -3,7 +3,9 @@
  * A view reports its whole set of draft keys (`{projectId}:{terminalId}` or a
  * bare terminal id, as the renderer's draft store keys them) whenever a draft
  * appears or empties, and a view that closes takes its drafts with it. A
- * terminal has a draft while any view says so.
+ * terminal has a draft while any view says so. It lives outside Decisions'
+ * own modules because the IPC handler that records it loads at startup, and
+ * Decisions loads only once it is on.
  */
 export class ComposerDrafts {
   private readonly byView = new Map<string, ReadonlySet<string>>();

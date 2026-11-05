@@ -14,7 +14,7 @@ import { DEVICE_ANSWER_METHOD_CHANNELS } from "./deviceAnswer.preload.js";
 import { sshLoginTarget } from "../../utils/machineName.js";
 import { isRemoteView } from "../../window/webviewSrcGate.js";
 import { getVoiceSettings } from "./voiceInput.js";
-import { composerDrafts } from "../../services/decisions/composerDrafts.js";
+import { composerDrafts } from "../../services/composerDrafts.js";
 import type {
   DeviceAnswerStatus,
   SetDeviceAnswerPayload,

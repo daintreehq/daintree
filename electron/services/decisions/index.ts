@@ -134,7 +134,7 @@ import { RelayRemovals, type RemovedRelayRecord } from "./relayRemoval.js";
 import { takeRelayRemovalLaunch } from "../pty/relayRemovalLaunches.js";
 import { SetupCheck } from "./setupCheck.js";
 import { SetupDiagnostics } from "./setupDiagnostic.js";
-import { composerDrafts } from "./composerDrafts.js";
+import { composerDrafts } from "../composerDrafts.js";
 import { decisionsPolicyOf, type PolicySettings } from "./workflowGates.js";
 import {
   checkRecoveryKit,
