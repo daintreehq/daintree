@@ -21,6 +21,24 @@ const quickCreateContext = vi.hoisted(() => ({
   },
 }));
 const openCreateDialogMock = vi.hoisted(() => vi.fn());
+const notifyMock = vi.hoisted(() => vi.fn((_payload: Record<string, unknown>) => "n-1"));
+
+const getFreshChangesMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notify", () => ({
+  notify: (payload: Record<string, unknown>) => notifyMock(payload),
+}));
+
+vi.mock("@/clients", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/clients")>();
+  return {
+    ...actual,
+    worktreeClient: {
+      ...actual.worktreeClient,
+      getFreshChanges: (id: string) => getFreshChangesMock(id),
+    },
+  };
+});
 
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -107,6 +125,8 @@ function listedRow(id: string): QuickCreateItem {
 beforeEach(() => {
   dispatchMock.mockReset();
   openCreateDialogMock.mockReset();
+  notifyMock.mockClear();
+  getFreshChangesMock.mockReset();
   quickCreateContext.value = { issue: { number: 7, title: "Fix the thing" }, pr: null };
   dispatchMock.mockResolvedValue({ ok: false, error: new Error("stop here") });
   paletteCapture.items = [];
@@ -338,5 +358,165 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
     });
 
     expect(openCreateDialogMock).toHaveBeenCalledWith(null, { initialRecipeId: "project-loser" });
+  });
+});
+
+describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
+  const created = {
+    worktreeId: "wt-new",
+    worktreePath: "/repo/.worktrees/fix",
+    branch: "bugfix/issue-7-fix-thing",
+    recipeLaunched: true,
+    assignedToSelf: true,
+    assignedUsername: "octo",
+    assignmentError: null,
+  };
+
+  const clean = { worktreeId: "wt-new", rootPath: "/repo/.worktrees/fix", changes: [], changedFileCount: 0 };
+
+  function routeDispatch(deleteResult: { ok: boolean; error?: unknown } = { ok: true }): void {
+    dispatchMock.mockImplementation(async (actionId: string) => {
+      if (actionId === "worktree.createWithRecipe") return { ok: true, result: created };
+      if (actionId === "worktree.delete") return deleteResult;
+      if (actionId === "forge.unassignIssue") return { ok: true, result: undefined };
+      return { ok: false, error: { code: "NOT_FOUND", message: actionId } };
+    });
+  }
+
+  async function createAndGetNotification(): Promise<{
+    action: { label: string; onClick: () => void; actionId?: string; actionArgs?: unknown };
+    duration?: number;
+    transient?: boolean;
+  }> {
+    mockRecipes.value = [makeRecipe({ id: "project", name: "Project", projectId: "p" })];
+    const { result } = renderHook(() => useQuickCreatePalette());
+    await act(async () => {
+      result.current.confirmItem(listedRow("project"));
+    });
+    const call = notifyMock.mock.calls.find(([p]) => p.title === "Worktree created");
+    if (!call) throw new Error("No success notification");
+    notifyMock.mockClear();
+    return call[0] as never;
+  }
+
+  async function clickUndo(onClick: () => void): Promise<void> {
+    await act(async () => {
+      onClick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  function dispatchedIds(): string[] {
+    return dispatchMock.mock.calls.map(([id]) => id as string);
+  }
+
+  function expectKeptAndStillAssigned(): void {
+    expect(dispatchedIds()).not.toContain("worktree.delete");
+    expect(dispatchedIds()).not.toContain("forge.unassignIssue");
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock.mock.calls[0]![0]).toMatchObject({
+      type: "warning",
+      context: { worktreeId: "wt-new" },
+    });
+  }
+
+  it.each([
+    [
+      "a modified tracked file",
+      { ...clean, changes: [{ path: "src/a.ts", status: "modified" }], changedFileCount: 1 },
+    ],
+    // Untracked files past the listing cap are counted but not listed.
+    ["untracked files left out of the listing", { ...clean, changedFileCount: 3 }],
+  ])(
+    "keeps a worktree that gained %s since creation, and its assignment",
+    async (_label, changes) => {
+      routeDispatch();
+      getFreshChangesMock.mockResolvedValue(changes);
+      const notification = await createAndGetNotification();
+
+      await clickUndo(notification.action.onClick);
+
+      expect(getFreshChangesMock).toHaveBeenCalledWith("wt-new");
+      expectKeptAndStillAssigned();
+      expect(String(notifyMock.mock.calls[0]![0].message)).toContain(created.branch);
+    }
+  );
+
+  it.each([
+    ["the status read fails", () => getFreshChangesMock.mockRejectedValue(new Error("port closed"))],
+    ["the worktree has no monitor", () => getFreshChangesMock.mockResolvedValue(null)],
+  ])("keeps the worktree when %s, since its changes can't be checked", async (_label, arrange) => {
+    routeDispatch();
+    arrange();
+    const notification = await createAndGetNotification();
+
+    await clickUndo(notification.action.onClick);
+
+    expectKeptAndStillAssigned();
+  });
+
+  it("asks for a plain delete, and keeps the assignment when the host refuses it", async () => {
+    // Something can land between the status read and the delete; the plain
+    // delete is what lets the host and git refuse it then.
+    routeDispatch({
+      ok: false,
+      error: {
+        code: "EXECUTION_ERROR",
+        message: "Worktree has untracked files. Use force delete to proceed.",
+      },
+    });
+    getFreshChangesMock.mockResolvedValue(clean);
+    const notification = await createAndGetNotification();
+
+    await clickUndo(notification.action.onClick);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.delete",
+      { worktreeId: "wt-new" },
+      { source: "user" }
+    );
+    expect(dispatchedIds()).not.toContain("forge.unassignIssue");
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock.mock.calls[0]![0]).toMatchObject({ type: "warning" });
+  });
+
+  it("deletes an untouched worktree and takes the assignment back", async () => {
+    routeDispatch();
+    getFreshChangesMock.mockResolvedValue(clean);
+    const notification = await createAndGetNotification();
+
+    await clickUndo(notification.action.onClick);
+
+    expect(dispatchedIds().slice(-2)).toEqual(["worktree.delete", "forge.unassignIssue"]);
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "forge.unassignIssue",
+      { cwd: "/repo", issueNumber: 7, username: "octo" },
+      { source: "user" }
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("acts once however many times Undo is clicked", async () => {
+    routeDispatch();
+    getFreshChangesMock.mockResolvedValue(clean);
+    const notification = await createAndGetNotification();
+
+    notification.action.onClick();
+    await clickUndo(notification.action.onClick);
+
+    expect(getFreshChangesMock).toHaveBeenCalledTimes(1);
+    expect(dispatchedIds().filter((id) => id === "worktree.delete")).toHaveLength(1);
+  });
+
+  it("leaves the inbox entry no Undo to replay later, and lets the toast expire", async () => {
+    routeDispatch();
+    const notification = await createAndGetNotification();
+
+    // The inbox row can only replay a stored actionId, at any later time and
+    // without the change check or the un-assign.
+    expect(notification.action.actionId).toBeUndefined();
+    expect(notification.action.actionArgs).toBeUndefined();
+    expect(notification.transient).not.toBe(true);
+    expect(notification.duration).toBeGreaterThan(0);
   });
 });

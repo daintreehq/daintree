@@ -1103,6 +1103,38 @@ describe("notificationHistorySlice", () => {
       expect(result!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
       expect(result!.actions![0]!.variant).toBe("secondary");
     });
+
+    it("strips a stored force delete from an old quick-create entry but keeps the entry (#16264)", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        title: "Worktree created",
+        message: "bugfix/issue-7-fix-thing",
+        correlationId: "wt-1",
+        context: { worktreeId: "wt-1" },
+        actions: [
+          { label: "Undo", actionId: "worktree.delete", actionArgs: { worktreeId: "wt-1", force: true } },
+          { label: "Open", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+        ],
+      });
+      expect(result).not.toBeNull();
+      expect(result!.correlationId).toBe("wt-1");
+      expect(result!.actions!.map((a) => a.actionId)).toEqual(["panel.focus"]);
+    });
+
+    it("drops the actions field when a stored force delete was the only action", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        message: "x",
+        actions: [
+          { label: "Undo", actionId: "worktree.delete", actionArgs: { worktreeId: "wt-1", force: true } },
+        ],
+      });
+      expect(result!.actions).toBeUndefined();
+    });
   });
 
   describe("snoozedThreads", () => {
