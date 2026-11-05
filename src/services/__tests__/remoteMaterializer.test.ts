@@ -880,6 +880,38 @@ describe("remote materialize", () => {
       expect(deps.reportFailure).not.toHaveBeenCalled();
     });
 
+    it("answers with no path once cancelled, however late the cancel lands", async () => {
+      const { materialize, fileTransfer } = folderSetup();
+      const step = held<UploadLocalFolderResult>();
+      fileTransfer.uploadLocalFolder.mockImplementationOnce(() => step.promise);
+      const controller = new AbortController();
+      const pending = materialize(FOLDER, { signal: controller.signal });
+      await vi.waitFor(() => expect(fileTransfer.uploadLocalFolder).toHaveBeenCalled());
+      // Lands after the send's own check has passed, before the answer is handed back.
+      step.resolve({
+        status: "sent",
+        hostPath: "/tmp/daintree-inbox/files/x/designs",
+        totals: { fileCount: 2, folderCount: 1, totalBytes: 32 },
+      });
+      queueMicrotask(() => controller.abort());
+      await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    });
+
+    it("asks no size question for a large file whose chip was cancelled during the stat", async () => {
+      const { materialize, fileTransfer, deps } = setup();
+      const stat = held<LocalFileStat | null>();
+      fileTransfer.statLocalFile.mockImplementationOnce(() => stat.promise);
+      const controller = new AbortController();
+      const pending = materialize(
+        { kind: "local-file", path: "/Users/me/big.mov" },
+        { signal: controller.signal }
+      );
+      controller.abort();
+      stat.resolve({ size: UPLOAD_CONFIRM_BYTES + 1, isDirectory: false });
+      await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.confirmLargeUpload).not.toHaveBeenCalled();
+    });
+
     it("stays silent for a stat that fails after its chip was cancelled", async () => {
       const { materialize, fileTransfer, deps } = folderSetup();
       const stat = held<LocalFileStat | null>();

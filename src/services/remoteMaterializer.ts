@@ -519,7 +519,9 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
 
   return async (source, options) => {
     try {
-      return await resolve(source, options);
+      const result = await resolve(source, options);
+      if (options?.signal?.aborted) throw cancelled();
+      return result;
     } catch (error) {
       // Once cancelled from its chip, whatever a step answered late is not news.
       if (options?.signal?.aborted) throw cancelled();
