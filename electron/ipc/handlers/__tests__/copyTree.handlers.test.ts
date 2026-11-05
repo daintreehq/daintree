@@ -112,6 +112,11 @@ import {
 } from "../../../services/pty/lifecycleLedger.js";
 import { events } from "../../../services/events.js";
 import { contextInjectionTracker } from "../../../services/ContextInjectionTracker.js";
+import { _resetDriveLeaseServiceForTesting } from "../../../services/DriveLeaseService.js";
+import type {
+  CopyTreeOperationOwner,
+  CopyTreeOwnerPredicate,
+} from "../../../services/copyTreeOperationOwner.js";
 import {
   registerCopyTreeHandlers,
   mergeCopyTreeOptions,
@@ -2045,12 +2050,58 @@ describe("copyTree generate-and-copy-file — workspace root (#13210)", () => {
     expect(rootCopyMock.generateWorkspaceRootContext.mock.calls[0]?.[0]).toBe(PROJECT.path);
   });
 
-  it("cancels in-flight root copies alongside the hosts' on a cancel-all", async () => {
+  function cancelAll(): Promise<void> {
     const call = (ipcMainMock.handle as Mock).mock.calls.find(
       ([channel]) => channel === CHANNELS.COPYTREE_CANCEL
     );
-    await (call![1] as (...args: unknown[]) => Promise<void>)(sender, {});
+    return (call![1] as (...args: unknown[]) => Promise<void>)(sender, {});
+  }
+
+  /** The owner each root copy was started under, in call order. */
+  function rootCopyOwners(): CopyTreeOperationOwner[] {
+    return rootCopyMock.generateWorkspaceRootContext.mock.calls.map(
+      (args) => args[4] as CopyTreeOperationOwner
+    );
+  }
+
+  it("scopes a cancel-all's root-copy sweep to the view's own workspace, alongside the hosts'", async () => {
+    bindView(SCRATCH.id);
+    await handler()(sender, {});
+    bindView(PROJECT.id);
+    await handler()(sender, {});
+    const [scratchCopy, projectCopy] = rootCopyOwners();
+
+    await cancelAll();
+
     expect(rootCopyMock.cancelAllWorkspaceRootContext).toHaveBeenCalledTimes(1);
+    expect(worktreeService.cancelAllContext).toHaveBeenCalledTimes(1);
+    const matches = rootCopyMock.cancelAllWorkspaceRootContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(projectCopy!)).toBe(true);
+    expect(matches(scratchCopy!)).toBe(false);
+    expect(worktreeService.cancelAllContext.mock.calls[0]![0]).toBe(matches);
+  });
+
+  it("matches a scratch's root copies to a cancel-all from the scratch's own view", async () => {
+    bindView(SCRATCH.id);
+    await handler()(sender, {});
+    const [scratchCopy] = rootCopyOwners();
+
+    await cancelAll();
+
+    const matches = rootCopyMock.cancelAllWorkspaceRootContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(scratchCopy!)).toBe(true);
+  });
+
+  it("cancels nothing for a view bound to no workspace, whatever the current project", async () => {
+    bindView(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT.id);
+
+    await cancelAll();
+
+    expect(rootCopyMock.cancelAllWorkspaceRootContext).not.toHaveBeenCalled();
+    expect(worktreeService.cancelAllContext).not.toHaveBeenCalled();
   });
 });
 
@@ -2095,6 +2146,8 @@ describe("context injection paste boundary (#15629)", () => {
         getContextFileTree: vi.fn(),
         cancelAllContext: vi.fn(),
       },
+      // A cancel-all reaches only its caller's own runs, so the view is bound.
+      projectViewManager: { getProjectIdForWebContents: () => PROJECT_ID },
     } as never);
     return generateContext;
   }
@@ -2500,6 +2553,8 @@ describe("context injection into a locked pane or a changed target (#15644)", ()
         getContextFileTree: vi.fn(),
         cancelAllContext: vi.fn(),
       },
+      // A cancel-all reaches only its caller's own runs, so the view is bound.
+      projectViewManager: { getProjectIdForWebContents: () => PROJECT_ID },
     } as never);
   }
 
@@ -2835,5 +2890,322 @@ describe("context injection into a locked pane or a changed target (#15644)", ()
 
     expect(result).not.toHaveProperty("error");
     expect(writes.join("")).toBe(`${PASTE_START}${BUNDLE}${PASTE_END}`);
+  });
+});
+
+describe("an id-less cancel stays within the caller's project (#16275)", () => {
+  const PROJECT_A = { id: "proj-a", path: nodePath.resolve("/repos/a"), status: "active" };
+  const PROJECT_B = { id: "proj-b", path: nodePath.resolve("/repos/b"), status: "active" };
+  const senderA = { sender: { id: 11 } } as never;
+  const senderB = { sender: { id: 12 } } as never;
+  /** A second window on project A. */
+  const senderA2 = { sender: { id: 13 } } as never;
+  const bindings = new Map<number, string>([
+    [11, PROJECT_A.id],
+    [12, PROJECT_B.id],
+    [13, PROJECT_A.id],
+  ]);
+
+  let releases: Array<() => void>;
+  let inFlight: Array<Promise<unknown>>;
+  let worktreeService: {
+    getAllStatesForProjectAsync: Mock;
+    generateContext: Mock;
+    testConfig: Mock;
+    getContextFileTree: Mock;
+    cancelAllContext: Mock;
+  };
+
+  function worktreeOf(project: { path: string }) {
+    return { id: nodePath.join(project.path, "wt"), path: project.path, branch: "main" };
+  }
+
+  function remoteEndpoint(projectId: string): ClientEndpoint {
+    return {
+      endpointId: `remote:s1:${projectId}`,
+      clientId: "client-remote",
+      projectId,
+      kind: "remote-view",
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    } as unknown as ClientEndpoint;
+  }
+
+  function cancelFromRemote(endpoint: ClientEndpoint, payload: Record<string, unknown>) {
+    return getIpcDispatcher().invokeForEndpoint(
+      {
+        endpoint,
+        client: {
+          clientId: endpoint.clientId,
+          clientName: "b",
+          platform: "darwin",
+          kind: "remote",
+        },
+      },
+      CHANNELS.COPYTREE_CANCEL,
+      [payload]
+    );
+  }
+
+  /** Inject from `sender` into its project's worktree, with generation held until released. */
+  function heldInject(sender: never, project: { path: string }, terminalId: string, id: string) {
+    let started!: () => void;
+    const generating = new Promise<void>((resolve) => (started = resolve));
+    worktreeService.generateContext.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ content: "<files/>\n", fileCount: 1 }));
+          started();
+        })
+    );
+    const result = getInvokeHandler(CHANNELS.COPYTREE_INJECT)(sender, {
+      terminalId,
+      worktreeId: worktreeOf(project).id,
+      injectionId: id,
+    }) as Promise<{ fileCount: number; error?: string }>;
+    inFlight.push(result);
+    // A run that ends before generating would otherwise leave the test waiting.
+    const endedEarly = result.then((settled) => {
+      throw new Error(`inject ended before generating: ${settled.error}`);
+    });
+    return { result, generating: Promise.race([generating, endedEarly]) };
+  }
+
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    releases = [];
+    inFlight = [];
+    browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+    copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_A.id);
+    projectStoreMock.getProjectById.mockImplementation(
+      (id) => [PROJECT_A, PROJECT_B].find((project) => project.id === id) ?? null
+    );
+    projectStoreMock.getProjectSettings.mockResolvedValue({ excludedPaths: [] });
+    ipcMainMock.handle.mockClear();
+    worktreeService = {
+      getAllStatesForProjectAsync: vi.fn(async (projectPath: string) => [
+        worktreeOf({ path: projectPath }),
+      ]),
+      generateContext: vi.fn(),
+      testConfig: vi.fn(),
+      getContextFileTree: vi.fn(),
+      cancelAllContext: vi.fn(),
+    };
+    registerCopyTreeHandlers({
+      mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      ptyClient: {
+        hasTerminal: vi.fn(() => true),
+        isAssistantTerminal: vi.fn(() => false),
+        getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
+        write: vi.fn(),
+      },
+      worktreeService,
+      projectViewManager: { getProjectIdForWebContents: (id: number) => bindings.get(id) ?? null },
+    } as never);
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) =>
+      wrapSuccess(await call())
+    );
+  });
+
+  afterEach(async () => {
+    // Settled before the shared tracker and ledger move on, even after a failed assertion.
+    for (const release of releases) release();
+    await Promise.allSettled(inFlight);
+    getIpcDispatcher().setInvokeEnveloper(null);
+    disposeLifecycleLedger();
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+  });
+
+  it("leaves another project's injection running", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderB, {});
+    releases.shift()!();
+
+    expect(await a.result).not.toHaveProperty("error");
+  });
+
+  it("still stops the caller's own project's injection", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    const b = heldInject(senderB, PROJECT_B, "t-b", "inj-b");
+    await Promise.all([a.generating, b.generating]);
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, {});
+    for (const release of releases.splice(0)) release();
+
+    expect((await a.result).error).toBe("Injection cancelled");
+    expect(await b.result).not.toHaveProperty("error");
+  });
+
+  it("keeps a remote view's sweep out of a project it isn't viewing", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await cancelFromRemote(remoteEndpoint(PROJECT_B.id), {});
+    releases.shift()!();
+
+    expect(await a.result).not.toHaveProperty("error");
+  });
+
+  it("still cancels by injection id", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, { injectionId: "inj-a" });
+    releases.shift()!();
+
+    expect((await a.result).error).toBe("Injection cancelled");
+  });
+
+  it("cancels nothing for a view bound to no workspace, whatever the current project", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)({ sender: { id: 99 } }, {});
+    releases.shift()!();
+
+    expect(await a.result).not.toHaveProperty("error");
+    expect(worktreeService.cancelAllContext).not.toHaveBeenCalled();
+  });
+
+  it("lets any view of the project stop its runs when no lease service runs", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA2, {});
+    releases.shift()!();
+
+    expect((await a.result).error).toBe("Injection cancelled");
+  });
+
+  it("never claims a run for the global current project", async () => {
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, {});
+    const projectACancel = worktreeService.cancelAllContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    // Re-registered with no view binding at all: the run resolves its
+    // worktree through the current project, A, but must not belong to it.
+    ipcMainMock.handle.mockClear();
+    registerCopyTreeHandlers({
+      mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      worktreeService,
+    } as never);
+    worktreeService.generateContext.mockResolvedValue({ content: "", fileCount: 0, error: "x" });
+
+    await getInvokeHandler(CHANNELS.COPYTREE_GENERATE)(senderA, {
+      worktreeId: worktreeOf(PROJECT_A).id,
+    });
+
+    expect(worktreeService.generateContext).toHaveBeenCalledTimes(1);
+    const unscoped = worktreeService.generateContext.mock.calls[0]![4] as CopyTreeOperationOwner;
+    expect(projectACancel(unscoped)).toBe(false);
+  });
+
+  it("stamps generations with their caller, so only that project's cancel-all matches them", async () => {
+    worktreeService.generateContext.mockResolvedValue({ content: "", fileCount: 0, error: "x" });
+    const generate = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+    await generate(senderA, { worktreeId: worktreeOf(PROJECT_A).id });
+    await generate(senderB, { worktreeId: worktreeOf(PROJECT_B).id });
+    const [ownerA, ownerB] = worktreeService.generateContext.mock.calls.map(
+      (args) => args[4] as CopyTreeOperationOwner
+    );
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderB, {});
+
+    const matches = worktreeService.cancelAllContext.mock.calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(ownerB!)).toBe(true);
+    expect(matches(ownerA!)).toBe(false);
+  });
+
+  it("stamps the caller on listings and config tests, so a cancel-all reaches them", async () => {
+    worktreeService.getContextFileTree.mockResolvedValue([]);
+    worktreeService.testConfig.mockResolvedValue({ includedFiles: 0, includedSize: 0 });
+    await getInvokeHandler(CHANNELS.COPYTREE_GET_FILE_TREE)(senderA, {
+      worktreeId: worktreeOf(PROJECT_A).id,
+    });
+    await getInvokeHandler(CHANNELS.COPYTREE_TEST_CONFIG)(senderA, {
+      worktreeId: worktreeOf(PROJECT_A).id,
+    });
+    const listing = worktreeService.getContextFileTree.mock.calls[0]![4] as CopyTreeOperationOwner;
+    const config = worktreeService.testConfig.mock.calls[0]![2] as CopyTreeOperationOwner;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, {});
+
+    const matches = worktreeService.cancelAllContext.mock.calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(listing)).toBe(true);
+    expect(matches(config)).toBe(true);
+  });
+
+  describe("while a drive lease service runs", () => {
+    /** `${projectId} ${endpointId}` for each endpoint that drives a project. */
+    let driving: Set<string>;
+
+    beforeEach(() => {
+      driving = new Set();
+      _resetDriveLeaseServiceForTesting({
+        isDriving: (projectId: string, endpoint: { endpointId: string }) =>
+          driving.has(`${projectId} ${endpoint.endpointId}`),
+        dispose: () => undefined,
+      } as never);
+    });
+
+    afterEach(() => {
+      _resetDriveLeaseServiceForTesting(null);
+    });
+
+    it("lets a view watching the project stop only its own runs, whatever else it drives", async () => {
+      const watcher = remoteEndpoint(PROJECT_A.id);
+      driving.add(`${PROJECT_B.id} ${watcher.endpointId}`);
+      const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+      await a.generating;
+      worktreeService.generateContext.mockResolvedValueOnce({ content: "", fileCount: 0 });
+      await getIpcDispatcher().invokeForEndpoint(
+        {
+          endpoint: watcher,
+          client: {
+            clientId: watcher.clientId,
+            clientName: "b",
+            platform: "darwin",
+            kind: "remote",
+          },
+        },
+        CHANNELS.COPYTREE_GENERATE,
+        [{ worktreeId: worktreeOf(PROJECT_A).id }]
+      );
+      const [localOwner, watcherOwner] = worktreeService.generateContext.mock.calls.map(
+        (args) => args[4] as CopyTreeOperationOwner
+      );
+
+      await cancelFromRemote(watcher, {});
+      releases.shift()!();
+
+      expect(await a.result).not.toHaveProperty("error");
+      const matches = worktreeService.cancelAllContext.mock.calls[0]![0] as CopyTreeOwnerPredicate;
+      expect(matches(watcherOwner!)).toBe(true);
+      expect(matches(localOwner!)).toBe(false);
+    });
+
+    it("lets the project's driver stop every run in it, and none elsewhere", async () => {
+      const driver = remoteEndpoint(PROJECT_A.id);
+      driving.add(`${PROJECT_A.id} ${driver.endpointId}`);
+      const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+      const b = heldInject(senderB, PROJECT_B, "t-b", "inj-b");
+      await Promise.all([a.generating, b.generating]);
+
+      await cancelFromRemote(driver, {});
+      for (const release of releases.splice(0)) release();
+
+      expect((await a.result).error).toBe("Injection cancelled");
+      expect(await b.result).not.toHaveProperty("error");
+    });
   });
 });

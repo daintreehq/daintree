@@ -423,9 +423,11 @@ export const systemActionRuns: {
 
   "copyTree.cancel": async () => {
     // Clears renderer injection state and cancels the active injection by
-    // UUID, then sweeps any other in-flight CopyTree operations
-    // (generate/copy-file). An injection started between these two calls
-    // would be swept too — accepted: both are user-initiated cancels and
+    // UUID, then sweeps this view's other in-flight CopyTree operations
+    // (generate/copy-file). Main scopes the sweep to the view's own project,
+    // and to its own runs unless it drives that project, so another project's
+    // runs are never touched (#16275). An injection started between these two
+    // calls would be swept too — accepted: both are user-initiated cancels and
     // the window is a single microtask turn.
     cancelContextInjection();
     await copyTreeClient.cancel();

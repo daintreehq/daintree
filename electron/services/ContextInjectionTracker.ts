@@ -1,4 +1,5 @@
 import type { CopyTreeStopReason } from "../../shared/types/ipc/copyTree.js";
+import type { CopyTreeOperationOwner, CopyTreeOwnerPredicate } from "./copyTreeOperationOwner.js";
 
 /** Why a run stopped: the user cancelled it, or its caller reported a reason. */
 export type InjectionStop = "cancelled" | CopyTreeStopReason;
@@ -17,16 +18,18 @@ export class ContextInjectionTracker {
   // reservation, which a project switch releases while the handler still runs:
   // a stop must keep reaching it until it is done.
   private running = new Set<string>();
+  private owners = new Map<string, CopyTreeOperationOwner>();
   private earlyStops = new Map<string, { stop: InjectionStop; at: number }>();
 
   isTerminalInjecting(terminalId: string): boolean {
     return this.injectionsInProgress.has(terminalId);
   }
 
-  beginInjection(terminalId: string, injectionId: string): void {
+  beginInjection(terminalId: string, injectionId: string, owner?: CopyTreeOperationOwner): void {
     this.injectionsInProgress.add(terminalId);
     this.activeInjectionIds.set(terminalId, injectionId);
     this.running.add(injectionId);
+    if (owner) this.owners.set(injectionId, owner);
     this.pruneEarlyStops();
     const early = this.earlyStops.get(injectionId);
     if (early) {
@@ -37,6 +40,7 @@ export class ContextInjectionTracker {
 
   finishInjection(terminalId: string, injectionId: string): void {
     this.running.delete(injectionId);
+    this.owners.delete(injectionId);
     this.stops.delete(injectionId);
     // A switch can have released this terminal to a newer run since.
     if (this.activeInjectionIds.get(terminalId) === injectionId) {
@@ -75,11 +79,16 @@ export class ContextInjectionTracker {
     return false;
   }
 
-  markAllCancelled(): number {
+  /** Stop every running injection whose owner `matches`; one started with no owner never does. */
+  markAllCancelled(matches: CopyTreeOwnerPredicate): number {
+    let count = 0;
     for (const id of this.running) {
+      const owner = this.owners.get(id);
+      if (!owner || !matches(owner)) continue;
+      count++;
       if (!this.stops.has(id)) this.stops.set(id, "cancelled");
     }
-    return this.running.size;
+    return count;
   }
 
   getActiveCount(): number {

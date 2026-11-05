@@ -45,6 +45,7 @@ import type { GitDiffSide } from "../../shared/types/git.js";
 import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
 import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
 import type { HostLoadKind } from "./ProjectSwitchStatusTiming.js";
+import type { CopyTreeOperationOwner, CopyTreeOwnerPredicate } from "./copyTreeOperationOwner.js";
 
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
@@ -1349,9 +1350,10 @@ export class WorkspaceClient extends EventEmitter {
     rootPath: string,
     options?: CopyTreeOptions,
     onProgress?: CopyTreeProgressCallback,
-    outputPath?: string
+    outputPath?: string,
+    owner?: CopyTreeOperationOwner
   ): Promise<CopyTreeResult> {
-    return this.copyTree.generateContext(rootPath, options, onProgress, outputPath);
+    return this.copyTree.generateContext(rootPath, options, onProgress, outputPath, owner);
   }
 
   cancelContext(operationId: string): void {
@@ -1360,13 +1362,14 @@ export class WorkspaceClient extends EventEmitter {
 
   async testConfig(
     rootPath: string,
-    options?: CopyTreeOptions
+    options?: CopyTreeOptions,
+    owner?: CopyTreeOperationOwner
   ): Promise<import("../../shared/types/index.js").CopyTreeTestConfigResult> {
-    return this.copyTree.testConfig(rootPath, options);
+    return this.copyTree.testConfig(rootPath, options, owner);
   }
 
-  cancelAllContext(): void {
-    this.copyTree.cancelAllContext();
+  cancelAllContext(matches: CopyTreeOwnerPredicate): void {
+    this.copyTree.cancelAllContext(matches);
   }
 
   // ── Project Pulse ──
@@ -1445,9 +1448,10 @@ export class WorkspaceClient extends EventEmitter {
     worktreePath: string,
     dirPath?: string,
     options?: CopyTreeOptions,
-    includeExcluded?: boolean
+    includeExcluded?: boolean,
+    owner?: CopyTreeOperationOwner
   ): Promise<FileTreeNode[]> {
-    return this.copyTree.getContextFileTree(worktreePath, dirPath, options, includeExcluded);
+    return this.copyTree.getContextFileTree(worktreePath, dirPath, options, includeExcluded, owner);
   }
 
   // ── Disposal ──

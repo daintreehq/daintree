@@ -145,6 +145,11 @@ import {
   cancelAllWorkspaceRootContext,
   generateWorkspaceRootContext,
 } from "../../services/workspaceRootCopyTree.js";
+import type {
+  CopyTreeOperationOwner,
+  CopyTreeOwnerPredicate,
+} from "../../services/copyTreeOperationOwner.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { isFullyQualifiedRoot } from "../../utils/fullyQualifiedRoot.js";
 
 function getStringField(payload: unknown, key: string): string | undefined {
@@ -288,6 +293,21 @@ interface CopyTreeSender {
    * folders, so it must only ever reach the view's own (#13210).
    */
   workspaceRoot: string | null;
+  /**
+   * Stamped on every run this sender starts, so an id-less cancel can tell
+   * whose it is (#16275). Its workspace is the view's own binding only: the
+   * global fallback `projectId` takes would claim the run for whichever
+   * project happens to be current.
+   */
+  owner: CopyTreeOperationOwner;
+}
+
+/**
+ * The caller's endpoint id. A local view's endpoint is built on first read and
+ * kept for the life of its WebContents, so reading it costs one lookup.
+ */
+function readEndpointId(ctx: IpcContext): string | null {
+  return (ctx.endpoint as ClientEndpoint | undefined)?.endpointId ?? null;
 }
 
 /**
@@ -308,7 +328,29 @@ function resolveCopyTreeSender(ctx: IpcContext, deps: HandlerDependencies): Copy
   } else if (scoped?.workspaceId) {
     workspaceRoot = scratchStore.getScratchById(scoped.workspaceId)?.path ?? null;
   }
-  return { projectId, project, workspaceRoot };
+  const owner = { workspaceId: scoped?.workspaceId ?? null, endpointId: readEndpointId(ctx) };
+  return { projectId, project, workspaceRoot, owner };
+}
+
+/**
+ * Which runs an id-less cancel from `ctx` may stop (#16275): only those of the
+ * caller's own workspace, and of those only its own unless it drives that
+ * workspace. A caller bound to no workspace stops nothing. Resolved once, so
+ * the drive standing is a snapshot of the moment the cancel arrived.
+ */
+function resolveCancelScope(
+  ctx: IpcContext,
+  deps: HandlerDependencies
+): CopyTreeOwnerPredicate | null {
+  const workspaceId = resolveScopedProjectForIpcContext(ctx, deps)?.workspaceId ?? null;
+  if (workspaceId === null) return null;
+  const endpoint = ctx.endpoint as ClientEndpoint | undefined;
+  const endpointId = endpoint?.endpointId ?? null;
+  const lease = peekDriveLeaseService();
+  const drives = !lease || (endpoint !== undefined && lease.isDriving(workspaceId, endpoint));
+  return (owner) =>
+    owner.workspaceId === workspaceId &&
+    (drives || (endpointId !== null && owner.endpointId === endpointId));
 }
 
 /**
@@ -618,7 +660,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   const generateToFile = async (
     target: { path: string; branch?: string; isWorkspaceRoot?: boolean },
     options: CopyTreeOptions,
-    onProgress: (progress: CopyTreeProgress) => void
+    onProgress: (progress: CopyTreeProgress) => void,
+    owner: CopyTreeOperationOwner
   ): Promise<CopyTreeResult> => {
     let filePath: string;
     try {
@@ -640,8 +683,14 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       // A workspace root has no workspace host to route to — a scratch never
       // gets one — so it runs on main's own CopyTree worker (#13210).
       const result = target.isWorkspaceRoot
-        ? await generateWorkspaceRootContext(target.path, options, onProgress, filePath)
-        : await deps.worktreeService!.generateContext(target.path, options, onProgress, filePath);
+        ? await generateWorkspaceRootContext(target.path, options, onProgress, filePath, owner)
+        : await deps.worktreeService!.generateContext(
+            target.path,
+            options,
+            onProgress,
+            filePath,
+            owner
+          );
       if (result.error) return result;
       // A successful generation names the file we reserved and reports its
       // size. Anything else is a result that outlived its operation: publishing
@@ -711,7 +760,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    const result = await generateToFile(worktree, mergedOptions, onProgress);
+    const result = await generateToFile(worktree, mergedOptions, onProgress, sender.owner);
     if (result.error) {
       return result;
     }
@@ -831,7 +880,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     // Written by the workspace host straight to disk. This handler used to pull
     // the whole bundle across two process boundaries only to write it out here
     // (#11528); the file it needs is now already on disk when the call returns.
-    const result = await generateToFile(target, mergedOptions, onProgress);
+    const result = await generateToFile(target, mergedOptions, onProgress, sender.owner);
 
     if (result.error || !result.filePath) {
       return result;
@@ -1128,7 +1177,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     // while the workspace call is in flight, taking its binding with it.
     const sender = resolveCopyTreeSender(ctx, deps);
 
-    contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
+    contextInjectionTracker.beginInjection(validated.terminalId, injectionId, sender.owner);
     op.onCancel(() => contextInjectionTracker.markCancelled(injectionId));
     let target: InjectionTarget | undefined;
 
@@ -1197,7 +1246,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       const result = await deps.worktreeService.generateContext(
         worktree.path,
         mergedOptions,
-        onProgress
+        onProgress,
+        undefined,
+        sender.owner
       );
 
       if (result.error) {
@@ -1261,7 +1312,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
   handlers.push(typedHandle(CHANNELS.COPYTREE_AVAILABLE, handleCopyTreeAvailable));
 
-  const handleCopyTreeCancel = async (payload?: CopyTreeCancelPayload): Promise<void> => {
+  const handleCopyTreeCancel = async (
+    ctx: IpcContext,
+    payload?: CopyTreeCancelPayload
+  ): Promise<void> => {
     const parseResult = CopyTreeCancelPayloadSchema.safeParse(payload ?? {});
     if (!parseResult.success) {
       console.warn("Invalid cancel payload, ignoring");
@@ -1283,15 +1337,18 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         );
       }
     } else {
-      const count = contextInjectionTracker.markAllCancelled();
-      if (deps.worktreeService) {
-        deps.worktreeService.cancelAllContext();
+      const matches = resolveCancelScope(ctx, deps);
+      if (!matches) {
+        console.log("[cancel] Cancel-all from a view bound to no workspace; nothing to cancel");
+        return;
       }
-      cancelAllWorkspaceRootContext();
-      console.log(`[cancel] Marked all ${count} active injections for cancellation`);
+      const count = contextInjectionTracker.markAllCancelled(matches);
+      deps.worktreeService?.cancelAllContext(matches);
+      cancelAllWorkspaceRootContext(matches);
+      console.log(`[cancel] Marked ${count} of the caller's injections for cancellation`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel));
+  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel));
 
   const handleCopyTreeGetFileTree = async (
     ctx: import("../types.js").IpcContext,
@@ -1345,7 +1402,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       worktree.path,
       validated.dirPath,
       mergedOptions,
-      validated.includeExcluded
+      validated.includeExcluded,
+      sender.owner
     );
   };
   handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree));
@@ -1400,7 +1458,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    return deps.worktreeService.testConfig(worktree.path, mergedOptions);
+    return deps.worktreeService.testConfig(worktree.path, mergedOptions, sender.owner);
   };
   handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_TEST_CONFIG, handleCopyTreeTestConfig));
 
