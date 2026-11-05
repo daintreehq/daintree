@@ -315,3 +315,47 @@ describe("useBranchValidation — a Retry's path", () => {
     expect(result.current.worktreePath).toBe("/custom/terrain");
   });
 });
+
+describe("useBranchValidation — suggested path separators", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockResolvedValue("C:/dev/app-worktrees/feature-x");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  const render = (rootPath: string, skipAvailabilityCheck = false) =>
+    renderHook(() =>
+      useBranchValidation({
+        branchInput: "feature/x",
+        rootPath,
+        isOpen: true,
+        skipAvailabilityCheck,
+      })
+    );
+
+  it("offers a Windows project its worktree path with backslashes", async () => {
+    const { result } = render("C:\\dev\\app");
+    await settle();
+    expect(result.current.worktreePath).toBe("C:\\dev\\app-worktrees\\feature-x");
+  });
+
+  it("does the same when only the path is generated", async () => {
+    const { result } = render("C:\\dev\\app", true);
+    await settle();
+    expect(result.current.worktreePath).toBe("C:\\dev\\app-worktrees\\feature-x");
+  });
+
+  it("leaves a POSIX project's suggestion as main returned it", async () => {
+    mockGetDefaultPath.mockResolvedValue("/home/me/app-worktrees/feature-x");
+    const { result } = render("/home/me/app");
+    await settle();
+    expect(result.current.worktreePath).toBe("/home/me/app-worktrees/feature-x");
+  });
+});

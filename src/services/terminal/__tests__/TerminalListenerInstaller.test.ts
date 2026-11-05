@@ -460,6 +460,49 @@ describe("installTerminalBoundListeners", () => {
     expect(deps.onEnterPressed).not.toHaveBeenCalled();
   });
 
+  it("forwards an emoji xterm split across two onData events as one write", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    const emoji = "\u{1F642}";
+    captured.onData!(emoji[0]!);
+    expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+    captured.onData!(emoji[1]!);
+    expect(writeTerminalInputOrFleetMock.mock.calls).toEqual([["t1", emoji]]);
+    expect(deps.onUserInput).toHaveBeenCalledWith("t1", emoji);
+  });
+
+  it("never releases half an emoji typed while input was locked", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged({ isInputLocked: true });
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    captured.onData!("\u{1F642}"[0]!);
+    managed.isInputLocked = false;
+    captured.onData!("x");
+
+    expect(writeTerminalInputOrFleetMock.mock.calls).toEqual([["t1", "x"]]);
+  });
+
   it("fully suppresses onData when input is locked (no fleet write, no user-input notify, no escape clear)", () => {
     const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
     const terminal = makeMockTerminal(captured);

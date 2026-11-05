@@ -85,3 +85,48 @@ export function isNonKeyboardInput(data: string): boolean {
 
   return false;
 }
+
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
+export interface SurrogatePairJoiner {
+  /** The chunks to forward for `data`, in order; empty while a half is held. */
+  join(data: string): string[];
+  /** Forget a held half, for input that is being dropped rather than forwarded. */
+  reset(): void;
+}
+
+/**
+ * Rejoins a surrogate pair split across two `onData` events. xterm's keypress
+ * path emits one event per UTF-16 unit, so an emoji arriving as two Windows
+ * WM_CHARs (SendInput, AutoHotkey, remote-desktop and some keyboard layouts)
+ * reached the PTY as two lone halves, each UTF-8 encoded as U+FFFD. A trailing
+ * high surrogate is held for the next event; a half that never finds its
+ * partner is passed on as it would have been before.
+ */
+export function createSurrogatePairJoiner(): SurrogatePairJoiner {
+  let pendingHigh = "";
+  return {
+    join(data) {
+      const out: string[] = [];
+      let chunk = data;
+      if (pendingHigh) {
+        if (chunk.length > 0 && isLowSurrogate(chunk.charCodeAt(0))) {
+          chunk = pendingHigh + chunk;
+        } else {
+          out.push(pendingHigh);
+        }
+        pendingHigh = "";
+      }
+      if (chunk.length > 0 && isHighSurrogate(chunk.charCodeAt(chunk.length - 1))) {
+        pendingHigh = chunk.slice(-1);
+        chunk = chunk.slice(0, -1);
+      }
+      if (chunk.length > 0) out.push(chunk);
+      return out;
+    },
+    reset() {
+      pendingHigh = "";
+    },
+  };
+}
