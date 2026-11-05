@@ -2,7 +2,7 @@ import { memo, useCallback, useMemo } from "react";
 import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { comboToAriaKeyshortcuts, parseChord } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { paletteSummary } from "@/lib/paletteSummary";
@@ -45,9 +45,8 @@ interface ActionPaletteItemProps {
   onHide?: (item: ActionPaletteItemType) => void;
   /**
    * Stable id of the footer-hint node. When provided it is announced via
-   * aria-describedby alongside the optional rationale id, so screen readers
-   * hear what Enter does for each option. Mirrors the QuickSwitcherItem
-   * pattern.
+   * aria-describedby, so screen readers hear what Enter does for each option.
+   * Mirrors the QuickSwitcherItem pattern.
    */
   footerHintId?: string;
   /** 1-based position among the navigable rows. See the ARIA note on the row. */
@@ -121,16 +120,15 @@ function ActionPaletteItemInner({
 
   const summary = useMemo(() => paletteSummary(item.description), [item.description]);
 
-  // The option is named by its title alone and described by the rest, so a
-  // screen reader hears "Kill terminal…" first and the category, summary and
-  // consequence after it — not one run-on name built from every line of the
-  // row. What stops the row is said before what the row is for.
+  // Include the visible row text in its name so speech input can address the
+  // same label a sighted user reads. The footer remains a separate description.
   const idBase = `action-option-${item.id}`;
   const titleId = `${idBase}-title`;
   const categoryId = `${idBase}-category`;
   const summaryId = `${idBase}-summary`;
   const reasonId = `${idBase}-reason`;
   const rationaleId = `${idBase}-danger-rationale`;
+  const shortcutId = `${idBase}-shortcut`;
   // HIG ellipsis (U+2026) signals "activation requires further input or
   // confirmation". Set tight against the title, as the app's own "Pick theme…"
   // titles are, and never doubled onto a title that already carries one.
@@ -158,12 +156,13 @@ function ActionPaletteItemInner({
   const categoryInTitle = item.titleLower.includes(item.categoryLower);
   const showCategoryChip = showCategory && !categoryInTitle;
 
-  const describedBy = [
-    hasReason ? reasonId : undefined,
-    hasRationale ? rationaleId : undefined,
+  const labelledBy = [
+    titleId,
     showCategoryChip ? categoryId : undefined,
     summary ? summaryId : undefined,
-    footerHintId,
+    hasReason ? reasonId : undefined,
+    hasRationale ? rationaleId : undefined,
+    item.shortcut ? shortcutId : undefined,
   ]
     .filter(Boolean)
     .join(" ");
@@ -197,10 +196,9 @@ function ActionPaletteItemInner({
       // interactive descendants inside `role="option"`, so there is no inner
       // button left to hold them.
       aria-haspopup={isConfirmTier ? "dialog" : undefined}
-      aria-labelledby={titleId}
-      aria-describedby={describedBy || undefined}
-      // The visible chord sits in the presentational trailing cluster, so the
-      // binding is exposed here instead of through the option's name.
+      aria-labelledby={labelledBy}
+      aria-describedby={footerHintId}
+      // Expose the binding as a shortcut as well as part of the visible label.
       aria-keyshortcuts={ariaKeyshortcuts}
       onPointerDown={(e) => e.preventDefault()}
       onPointerMove={handleHover}
@@ -236,7 +234,7 @@ function ActionPaletteItemInner({
               text={displayTitle}
               indices={match?.field === "title" ? match.ranges : undefined}
             />
-          </span>
+          </span>{" "}
           {showCategoryChip && (
             <span
               id={categoryId}
@@ -248,17 +246,17 @@ function ActionPaletteItemInner({
               {item.category}
             </span>
           )}
-        </div>
+        </div>{" "}
         {summary && (
           <div id={summaryId} className="text-xs leading-snug text-text-secondary truncate">
             <HighlightedText text={descriptionLine.text} indices={descriptionLine.ranges} />
           </div>
-        )}
+        )}{" "}
         {hasReason && (
           <div id={reasonId} className="text-xs leading-snug text-text-secondary italic truncate">
             {item.disabledReason}
           </div>
-        )}
+        )}{" "}
         {hasRationale && (
           <div
             id={rationaleId}
@@ -272,8 +270,7 @@ function ActionPaletteItemInner({
             {item.dangerRationale}
           </div>
         )}
-      </div>
-
+      </div>{" "}
       {/* Presentational, for the same reason as the row body above: these sit
           inside `role="option"`, where ARIA treats children as presentational
           and a real <button> trips `nested-interactive`. The palette's focus
@@ -336,7 +333,22 @@ function ActionPaletteItemInner({
           </RowControlTooltip>
         )}
 
-        {item.shortcut && <KbdChord shortcut={item.shortcut} density="compact" />}
+        {item.shortcut && (
+          <KbdChord
+            // The option's name matches the visible glyphs; aria-keyshortcuts
+            // above separately exposes the full modifier names. Name the root
+            // so a reference into this hidden cluster can't join KbdChord's
+            // spoken text and its presentational keys into a doubled binding.
+            rootAttributes={{
+              id: shortcutId,
+              "aria-label": parseChord(item.shortcut, isMac())
+                .map((tokens) => tokens.join(isMac() ? "" : "+"))
+                .join(", "),
+            }}
+            shortcut={item.shortcut}
+            density="compact"
+          />
+        )}
 
         {isConfirmTier && (
           <TriangleAlert
