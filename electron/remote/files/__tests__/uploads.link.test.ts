@@ -88,7 +88,8 @@ async function setup(
   );
   sessions.push(host, client);
   const endpoint = new FakeEndpoint();
-  const inbox = new HostInbox({ root: inboxRoot });
+  const freeBytes = async () => (options.freeBytes === undefined ? null : options.freeBytes);
+  const inbox = new HostInbox({ root: inboxRoot, freeBytes });
   const service = new HostUploadService({
     rootsFor: options.rootsFor ?? (async (projectId) => (projectId === "p1" ? [project] : [])),
     isDriving: () => options.driving?.() ?? true,
@@ -97,7 +98,7 @@ async function setup(
     leaseIdFor: () => (options.leaseId ? options.leaseId() : 1),
     inbox,
     onInboxFile: options.onInboxFile,
-    freeBytes: async () => (options.freeBytes === undefined ? null : options.freeBytes),
+    freeBytes,
   });
   service.attach(host, endpoint);
   const transport = new ClientUploadTransport();

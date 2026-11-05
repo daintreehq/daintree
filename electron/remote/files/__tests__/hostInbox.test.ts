@@ -584,6 +584,47 @@ describe("staging and publishing a tree", () => {
     expect(await fs.readFile(path.join(two, "a.txt"), "utf8")).toBe("2");
   });
 
+  it("stops a publication aborted while it waits its turn, at once, keeping the staging to discard", async () => {
+    const inbox = new HostInbox({ root });
+    const ahead = await inbox.createStaging();
+    const staging = await inbox.createStaging();
+    await buildTree(ahead.treePath, { "first.txt": "1" });
+    await buildTree(staging.treePath, { "a.txt": "a" });
+    // Another publication holds the queue mid-rename, so this one waits its turn.
+    const { rename, release } = gateRename();
+    const first = inbox.publishTree(ahead, "first");
+    await vi.waitFor(() => expect(rename).toHaveBeenCalledTimes(1));
+    const ensure = inbox.ensure.bind(inbox);
+    let ensured!: () => void;
+    const pastSetup = new Promise<void>((resolve) => {
+      ensured = resolve;
+    });
+    vi.spyOn(inbox, "ensure").mockImplementation(async () => {
+      await ensure();
+      ensured();
+    });
+    const abort = new AbortController();
+    const outcome = inbox.publishTree(staging, "project", abort.signal).then(
+      () => "published",
+      () => "stopped"
+    );
+    await pastSetup;
+    // Let it hand its task to the queue.
+    await new Promise((resolve) => setImmediate(resolve));
+    abort.abort();
+    // Answered without waiting for the publication ahead of it.
+    expect(await outcome).toBe("stopped");
+    release();
+    await first;
+    // Queued behind its task, so that task has run (and not renamed) by now.
+    await inbox.cleanup();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(path.join(root, "files"))).toHaveLength(1);
+    expect(await fs.readFile(path.join(staging.treePath, "a.txt"), "utf8")).toBe("a");
+    await inbox.discardStaging(staging);
+    expect(await exists(path.dirname(staging.treePath))).toBe(false);
+  });
+
   it("keeps a staging whose publication failed, to publish again or discard", async () => {
     const inbox = new HostInbox({ root });
     const staging = await inbox.createStaging();

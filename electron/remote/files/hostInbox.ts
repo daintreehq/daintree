@@ -260,6 +260,25 @@ interface InboxEntry {
   complete: boolean;
 }
 
+/**
+ * `task`'s result, or a rejection with the signal's reason as soon as it is
+ * aborted while `undecided()` still holds. The task runs on either way.
+ */
+function rejectOnAbort<T>(
+  task: Promise<T>,
+  signal: AbortSignal,
+  undecided: () => boolean
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      if (undecided()) reject(signal.reason);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    void task.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 /** Runs tasks one at a time; a failed task never holds up the ones after it. */
 class SerialQueue {
   private tail: Promise<unknown> = Promise.resolve();
@@ -498,18 +517,22 @@ export class HostInbox {
    * rename and return that host path. The entry folder is made first and the
    * tree renamed into it, never the staging folder renamed onto the entry: a
    * rename onto an empty folder replaces it on macOS and Linux. On failure the
-   * staging is kept, to publish again or discard.
+   * staging is kept, to publish again or discard. An abort of `signal` before
+   * the rename begins stops it, and rejects at once rather than after this
+   * waits its turn behind a cleanup pass; once the rename has begun, it wins.
    */
-  async publishTree(staging: InboxStaging, name: string): Promise<string> {
+  async publishTree(staging: InboxStaging, name: string, signal?: AbortSignal): Promise<string> {
     const stagePath = this.stagings.get(staging);
     if (stagePath === undefined) throw new Error("Not a live staging folder of this inbox");
     const safeName = sanitizeInboxName(name);
     await this.ensure();
-    const target = await this.mutations.run(async () => {
+    let renaming = false;
+    const publishing = this.mutations.run(async () => {
       // Discarded while this waited its turn.
       if (this.stagings.get(staging) !== stagePath) {
         throw new Error("Not a live staging folder of this inbox");
       }
+      signal?.throwIfAborted();
       const tree = await fs.lstat(staging.treePath);
       if (!tree.isDirectory()) throw new Error("The staged tree is not a folder");
       const stamp = inboxTimestamp(this.now());
@@ -519,6 +542,9 @@ export class HostInbox {
         if (dir === null) continue;
         const published = path.join(dir, safeName);
         try {
+          // Checked in the same turn as the rename starts, so an abort either stops it or lands after.
+          signal?.throwIfAborted();
+          renaming = true;
           await fs.rename(staging.treePath, published);
         } catch (error) {
           await fs.rmdir(dir).catch(() => {});
@@ -530,6 +556,7 @@ export class HostInbox {
       }
       throw new Error("No free folder in the inbox");
     });
+    const target = await (signal ? rejectOnAbort(publishing, signal, () => !renaming) : publishing);
     await fs.rm(stagePath, { recursive: true, force: true }).catch(() => {});
     return target;
   }
