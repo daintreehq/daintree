@@ -277,3 +277,16 @@ describe("selectSearchablePlugins", () => {
     expect(result).toEqual([]);
   });
 });
+
+describe("global environment search entries", () => {
+  it("describe the variables as global, not per-project", () => {
+    const entries = SETTINGS_SEARCH_INDEX.filter(
+      (e) => e.tab === "environment" && e.scope === "global"
+    );
+    expect(entries.length).toBeGreaterThan(0);
+    for (const e of entries) {
+      expect(`${e.title} ${e.description}`).not.toMatch(/per-project|current project|^project /i);
+    }
+    expect(entries.map((e) => e.description).join(" ")).toMatch(/every project/i);
+  });
+});
