@@ -5,6 +5,12 @@ import { flushPendingTheme, injectSchemeToDOM, useAppThemeStore } from "../appTh
 import type { AppColorScheme } from "@shared/theme";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { resolveAppTheme } from "@shared/theme";
+import { RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
+import {
+  clearThemeCache,
+  selectEffectiveTheme,
+  useTerminalColorSchemeStore,
+} from "../terminalColorSchemeStore";
 
 describe("appThemeStore.recentSchemeIds LRU", () => {
   beforeEach(() => {
@@ -577,5 +583,48 @@ describe("plugin themes (#13832)", () => {
     expect(state.pluginSnapshotScheme).toBeNull();
     expect(state.recentSchemeIds).toEqual(["svalbard"]);
     expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+});
+
+describe("appThemeStore.setColorVisionMode", () => {
+  beforeEach(() => {
+    clearThemeCache();
+    useAppThemeStore.setState({
+      selectedSchemeId: DEFAULT_APP_SCHEME_ID,
+      customSchemes: [],
+      colorVisionMode: "default",
+      previewSchemeId: null,
+      accentColorOverride: null,
+    });
+    useTerminalColorSchemeStore.setState({
+      selectedSchemeId: "no-such-scheme",
+      customSchemes: [],
+      previewSchemeId: null,
+    });
+  });
+
+  afterEach(() => {
+    useAppThemeStore.getState().setColorVisionMode("default");
+    useTerminalColorSchemeStore.setState({ selectedSchemeId: "daintree" });
+  });
+
+  it("paints the mode's CSS before terminal subscribers read it", () => {
+    // Publishing the mode re-runs terminal selectors synchronously; the
+    // unknown-scheme fallback reads the CSS variables, so they must already hold
+    // the mode's values or the stale palette is cached under the new mode.
+    const seen: Array<string | undefined> = [];
+    const unsubscribe = useTerminalColorSchemeStore.subscribe((state) => {
+      seen.push(selectEffectiveTheme(state).red);
+    });
+
+    useAppThemeStore.getState().setColorVisionMode("red-green");
+    unsubscribe();
+
+    const painted = getComputedStyle(document.documentElement)
+      .getPropertyValue("--theme-terminal-red")
+      .trim();
+    expect(painted).toBe(RED_GREEN_OVERRIDES["--theme-terminal-red"]);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((red) => red === painted)).toBe(true);
   });
 });

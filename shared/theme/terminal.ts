@@ -1,5 +1,11 @@
 import type { ITheme } from "@xterm/xterm";
-import type { AppColorScheme, AppColorSchemeTokens } from "./types.js";
+import { getColorVisionTerminalWrites } from "./colorVisionOverrides.js";
+import type {
+  AppColorScheme,
+  AppColorSchemeTokens,
+  AppThemeTokenKey,
+  ColorVisionMode,
+} from "./types.js";
 import { hexToRgbTriplet } from "./themes.js";
 
 export function getTerminalScrollbarDefaults(type: "dark" | "light") {
@@ -48,14 +54,31 @@ export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITh
   };
 }
 
-export function getTerminalThemeFromAppScheme(scheme: AppColorScheme): ITheme {
+/**
+ * The terminal palette `scheme` paints. Under a colour-vision mode the mode's ANSI
+ * inks stand in for the scheme's own, fitted to its terminal background exactly as
+ * the mode's CSS variables are, since xterm reads this object and never the CSS.
+ */
+export function getTerminalThemeFromAppScheme(
+  scheme: AppColorScheme,
+  colorVisionMode: ColorVisionMode = "default"
+): ITheme {
   const idle = scheme.tokens["activity-idle"];
   const scrollbar = idle.startsWith("#")
     ? getTerminalScrollbarFromHex(idle)
     : getTerminalScrollbarDefaults(scheme.type);
 
+  const writes = Object.entries(getColorVisionTerminalWrites(colorVisionMode, scheme));
+  let tokens = scheme.tokens;
+  if (writes.length > 0) {
+    tokens = { ...scheme.tokens };
+    for (const [name, value] of writes) {
+      tokens[name.slice("--theme-".length) as AppThemeTokenKey] = value;
+    }
+  }
+
   return {
-    ...getTerminalThemeFromAppTokens(scheme.tokens),
+    ...getTerminalThemeFromAppTokens(tokens),
     ...scrollbar,
   };
 }

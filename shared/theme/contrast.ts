@@ -383,6 +383,9 @@ const LEGIBILITY_SKIP_TOKENS: ReadonlySet<AppThemeTokenKey> = new Set(["terminal
 
 const PRIMARY_LEGIBILITY_FLOOR = 0.55;
 const STANDARD_LEGIBILITY_FLOOR = 0.18;
+// The OKLab lightness gap every ANSI ink keeps from terminal-background. Exported
+// because the colour-vision modes fit the ANSI inks they swap in to it.
+export const TERMINAL_ANSI_LIGHTNESS_FLOOR = STANDARD_LEGIBILITY_FLOOR;
 // De-emphasized roles (comment, quote) get the same floor at current calibration
 // but use a separate constant so the floor can be relaxed independently later.
 const SOFT_LEGIBILITY_FLOOR = 0.18;

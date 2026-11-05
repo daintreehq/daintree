@@ -363,7 +363,6 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   },
 
   setColorVisionMode: (mode) => {
-    set({ colorVisionMode: mode });
     // Pass the active scheme so base --theme-* values are restored for tokens
     // the mode doesn't override, rather than stripped to undefined.
     const state = useAppThemeStore.getState();
@@ -371,7 +370,10 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
       resolveCommittedScheme(state),
       state.accentColorOverride
     );
+    // The CSS goes first: publishing the mode re-runs terminal selectors
+    // synchronously, and the unknown-scheme fallback reads these variables.
     applyColorVisionMode(document.documentElement, mode, effective);
+    set({ colorVisionMode: mode });
   },
 
   setFollowSystem: (enabled) => set({ followSystem: enabled }),

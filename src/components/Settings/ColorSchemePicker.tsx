@@ -12,6 +12,7 @@ import {
   relativeLuminance,
   resolveAppTheme,
   type AppColorScheme,
+  type ColorVisionMode,
 } from "@shared/theme";
 import { logError } from "@/utils/logger";
 import { Button } from "@/components/ui/button";
@@ -187,18 +188,19 @@ export function ImportColorSchemeButton({
 
 /**
  * "Match app theme" draws the current app theme's own terminal palette — the same
- * derivation the terminals use at runtime — so its card shows what selecting it will do
- * on this theme rather than the default theme's colors.
+ * derivation the terminals use at runtime, colour-vision mode included — so its card
+ * shows what selecting it will do on this theme rather than the default theme's colors.
  */
 export function resolveSchemeForPreview(
   scheme: TerminalColorScheme,
   appTheme: string | AppColorScheme,
+  colorVisionMode: ColorVisionMode = "default",
   appCustomSchemes: Parameters<typeof resolveAppTheme>[1] = []
 ): TerminalColorScheme {
   if (scheme.id !== DEFAULT_SCHEME_ID) return scheme;
   const appScheme =
     typeof appTheme === "string" ? resolveAppTheme(appTheme, appCustomSchemes) : appTheme;
-  return { ...scheme, colors: getTerminalThemeFromAppScheme(appScheme) };
+  return { ...scheme, colors: getTerminalThemeFromAppScheme(appScheme, colorVisionMode) };
 }
 
 /**
@@ -224,12 +226,16 @@ export function ColorSchemePicker({
   // The app theme on screen, which is the project's own when it has one —
   // including a plugin theme painted from its snapshot.
   const appScheme = useAppThemeStore(resolveCommittedScheme);
+  const colorVisionMode = useAppThemeStore((s) => s.colorVisionMode);
 
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
 
   const resolvedSchemes = useMemo(
-    () => [...BUILT_IN_SCHEMES, ...customSchemes].map((s) => resolveSchemeForPreview(s, appScheme)),
-    [customSchemes, appScheme]
+    () =>
+      [...BUILT_IN_SCHEMES, ...customSchemes].map((s) =>
+        resolveSchemeForPreview(s, appScheme, colorVisionMode)
+      ),
+    [customSchemes, appScheme, colorVisionMode]
   );
   const selectedScheme =
     resolvedSchemes.find((s) => s.id === selectedSchemeId) ?? resolvedSchemes[0]!;

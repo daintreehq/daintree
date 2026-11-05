@@ -8,6 +8,7 @@ import {
   SYNTAX_CANVAS_SURFACE,
   contrastRatio,
   getAppThemeCssVariables,
+  getTerminalThemeFromAppScheme,
   hexToOklch,
   isHexColor,
   normalizeAppColorScheme,
@@ -139,6 +140,37 @@ describe("colour-vision modes hold the theme's contrast floors (#15580)", () => 
       }
       for (const token of DESTRUCTIVE_TOKENS) {
         expect(root.style.getPropertyValue(token), `${mode} ${token}`).toBe("");
+      }
+    }
+  });
+
+  it.each([
+    ...BUILT_IN_APP_SCHEMES,
+    normalizeAppColorScheme({
+      id: "light-terminal",
+      name: "Light terminal",
+      type: "light",
+      tokens: { "terminal-background": "#e0e0e0" },
+    }),
+  ])("terminals on $id paint the colours the CSS variables hold (#16272)", (scheme) => {
+    const slots = [
+      ["selectionBackground", "terminal-selection"],
+      ["red", "terminal-red"],
+      ["green", "terminal-green"],
+      ["yellow", "terminal-yellow"],
+      ["blue", "terminal-blue"],
+      ["magenta", "terminal-magenta"],
+      ["brightRed", "terminal-bright-red"],
+      ["brightGreen", "terminal-bright-green"],
+      ["brightYellow", "terminal-bright-yellow"],
+      ["brightBlue", "terminal-bright-blue"],
+      ["brightMagenta", "terminal-bright-magenta"],
+    ] as const;
+    for (const [mode] of MODES) {
+      const root = paint(scheme, mode);
+      const theme = getTerminalThemeFromAppScheme(scheme, mode);
+      for (const [slot, token] of slots) {
+        expect(theme[slot], `${mode} ${slot}`).toBe(root.style.getPropertyValue(`--theme-${token}`));
       }
     }
   });
