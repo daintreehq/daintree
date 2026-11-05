@@ -241,6 +241,20 @@ export type FileTransferEvent =
    */
   | { type: "host-pick-request"; requestId: string; request: HostPickRequest };
 
+/** A folder send's report, as the `folder-progress` event carries it. */
+export type FolderUploadProgress = Omit<
+  Extract<FileTransferEvent, { type: "folder-progress" }>,
+  "type" | "opId"
+>;
+
+/**
+ * A dropped folder on its way to a host, as `materialize` follows it: waiting
+ * its turn or the person's answer, read on this machine, then the send's own
+ * phases.
+ */
+export type FolderMaterializeProgress =
+  { phase: "waiting" } | { phase: "reading" } | FolderUploadProgress;
+
 export interface AnswerHostPickPayload {
   requestId: string;
   /** The chosen host paths, or null when the picker was dismissed. */

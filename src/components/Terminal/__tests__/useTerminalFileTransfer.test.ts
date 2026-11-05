@@ -115,6 +115,17 @@ import {
   terminalUploadSurface,
 } from "../uploads/pendingUploads";
 import { _resetCtrlVImagePasteForTests, getClipboardImagePaster } from "../uploads/ctrlVImagePaste";
+import {
+  _resetUploadConfirmForTests,
+  askUploadQuestion,
+  currentUploadQuestion,
+  registerUploadConfirmHost,
+} from "../uploads/uploadConfirm";
+import { createRemoteMaterializer } from "@/services/remoteMaterializer";
+import type {
+  LocalFolderSummaryResult,
+  UploadLocalFolderResult,
+} from "@shared/types/ipc/fileTransfer";
 import type { MaterializeResult, MaterializeSource } from "@shared/types/remoteHosts";
 import type { TransferSource } from "@/lib/transferSources";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -2589,6 +2600,130 @@ describe("useTerminalFileTransfer hook", () => {
       });
       expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
       expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    describe("a folder dropped from this machine", () => {
+      // A name a shell would split, so a plain shell's spelling has to quote it.
+      const FOLDER_HOST_PATH = "/tmp/daintree-inbox/files/20261105-a1/Q3 designs";
+
+      beforeEach(() => {
+        _resetUploadConfirmForTests();
+        registerUploadConfirmHost(Symbol("host"));
+      });
+
+      /** The view's real remote materializer over a fake bridge where every path is a folder. */
+      function installFolderSends() {
+        const fileTransfer = {
+          statLocalFile: vi.fn(async () => ({ size: 96, isDirectory: true })),
+          uploadLocalFile: vi.fn(),
+          uploadBytes: vi.fn(),
+          summarizeLocalFolder: vi.fn(async (): Promise<LocalFolderSummaryResult> => ({
+            status: "ready",
+            summary: {
+              rootName: "Q3 designs",
+              totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
+              lowerBound: false,
+              hidden: { fileCount: 0, folderCount: 0, totalBytes: 0, paths: [] },
+              largest: [],
+              notCopied: { count: 0, items: [] },
+            },
+            handle: "fedcba9876543210fedcba9876543210",
+          })),
+          uploadLocalFolder: vi.fn(async (): Promise<UploadLocalFolderResult> => ({
+            status: "sent",
+            hostPath: FOLDER_HOST_PATH,
+            totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
+          })),
+          cancel: vi.fn(async () => {}),
+          onEvent: () => () => {},
+        };
+        let opIds = 0;
+        setRemoteMaterializer(
+          createRemoteMaterializer({
+            hostId: "studio-01",
+            hostLabel: () => "studio-01",
+            localLabel: "This Mac",
+            fileTransfer,
+            saveClipboardImage: vi.fn(),
+            confirmLargeUpload: vi.fn(async () => true),
+            confirmReplace: vi.fn(async () => true),
+            confirmFolder: (request, signal) =>
+              askUploadQuestion({ kind: "folder", ...request }, signal ? { signal } : {}),
+            addToProjectKey: "Option",
+            reportFailure: vi.fn(),
+            mintOperationId: () => `op-${++opIds}`,
+          })
+        );
+        return fileTransfer;
+      }
+
+      /** Answers the folder question; a yes waits for the path to be typed. */
+      async function answerFolderQuestion(yes: boolean) {
+        await vi.waitFor(() => expect(currentUploadQuestion()?.question.kind).toBe("folder"));
+        await act(async () => {
+          currentUploadQuestion()!.answer(yes);
+          await vi.waitFor(() =>
+            yes
+              ? expect(terminalClient.write).toHaveBeenCalled()
+              : expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false)
+          );
+          await settle();
+        });
+      }
+
+      it("types an agent the folder's host path as an @ token once it is sent", async () => {
+        installFolderSends();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/srv/proj" });
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        expect(terminalClient.write).not.toHaveBeenCalled();
+
+        await answerFolderQuestion(true);
+        expect(lastWrittenPayload().trimEnd()).toBe(formatAtFileToken(FOLDER_HOST_PATH));
+      });
+
+      it("types a plain shell the folder's shell-quoted host path", async () => {
+        installFolderSends();
+        renderFileTransferHook({});
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        await answerFolderQuestion(true);
+        expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(FOLDER_HOST_PATH)} `);
+        expect(lastWrittenPayload()).not.toBe(`${FOLDER_HOST_PATH} `);
+      });
+
+      it("types nothing when the question is closed", async () => {
+        const fileTransfer = installFolderSends();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/srv/proj" });
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        await answerFolderQuestion(false);
+        expect(fileTransfer.uploadLocalFolder).not.toHaveBeenCalled();
+        expect(terminalClient.write).not.toHaveBeenCalled();
+      });
+
+      it("types nothing when its chip is cancelled while the question is open", async () => {
+        const fileTransfer = installFolderSends();
+        renderFileTransferHook({});
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        await vi.waitFor(() => expect(currentUploadQuestion()?.question.kind).toBe("folder"));
+        await act(async () => {
+          getPendingUploads(terminalUploadSurface("term-1"))[0]!.cancel();
+          await settle();
+        });
+        expect(currentUploadQuestion()).toBeNull();
+        expect(fileTransfer.uploadLocalFolder).not.toHaveBeenCalled();
+        expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+        expect(terminalClient.write).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("a folder dropped in a window on this machine", () => {
+    it("types the local folder in as it always has, without asking", async () => {
+      _resetUploadConfirmForTests();
+      registerUploadConfirmHost(Symbol("host"));
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("designs", `${CWD}/designs`)]);
+      expect(currentUploadQuestion()).toBeNull();
+      expect(lastWrittenPayload().trimEnd()).toBe("@designs");
     });
   });
 

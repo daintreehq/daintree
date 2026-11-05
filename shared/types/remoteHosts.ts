@@ -1,5 +1,6 @@
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
 import type { HostWakeSetup } from "./hostWake.js";
+import type { FolderMaterializeProgress } from "./ipc/fileTransfer.js";
 
 /**
  * Remote Hosts: shared vocabulary for the Shell (the machine you sit at) and
@@ -638,6 +639,8 @@ export interface MaterializeResult {
 export interface MaterializeOptions {
   /** Called with 0..1 while an upload is in flight (not called for local identity). */
   onProgress?: (fraction: number) => void;
+  /** A local folder's progress, in place of `onProgress`: only a remote window sends folders. */
+  onFolderProgress?: (progress: FolderMaterializeProgress) => void;
   signal?: AbortSignal;
   /** "inbox" (default) keeps uploads outside the worktree; "worktree" is the explicit Add to project drop. */
   destination?: { kind: "inbox" } | { kind: "worktree"; directory: string };

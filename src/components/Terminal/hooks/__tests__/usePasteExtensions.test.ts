@@ -326,6 +326,36 @@ describe("usePasteExtensions: an image pasted in a remote window's composer", ()
     expect(dispatch).not.toHaveBeenCalled();
     expect(getPendingUploads("composer:t1")).toHaveLength(0);
   });
+
+  it("follows a pasted folder on its chip and inserts its host path once it is sent", async () => {
+    let report!: (progress: { phase: "reading" }) => void;
+    let finish!: () => void;
+    setRemoteMaterializer(
+      (_source, options) =>
+        new Promise((resolve) => {
+          report = options!.onFolderProgress!;
+          finish = () =>
+            resolve({
+              hostPath: "/tmp/daintree-inbox/files/20261105-a1/designs",
+              displayName: "designs",
+              bytes: 30,
+            });
+        })
+    );
+    renderHook(() => usePasteExtensions(CWD, "composer:t1"));
+    const { view, dispatch } = fakeView();
+
+    const pending = captured.filePaste?.(view, [pasted("designs", "/Users/me/designs")]);
+    await vi.waitFor(() => expect(report).toBeTypeOf("function"));
+    report({ phase: "reading" });
+    expect(getPendingUploads("composer:t1")[0]?.folder).toEqual({ phase: "reading" });
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+
+    finish();
+    await pending;
+    expect(insertedToken(dispatch)).toBe("@/tmp/daintree-inbox/files/20261105-a1/designs");
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
 });
 
 describe("usePasteExtensions: a paste still on its way (#15599)", () => {

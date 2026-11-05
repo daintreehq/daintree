@@ -8,6 +8,10 @@ export function uploadChipLabel(fraction: number | null): string {
 
 export function folderUploadChipLabel(stage: FolderUploadStage): string {
   switch (stage.phase) {
+    case "waiting":
+      return "waiting";
+    case "reading":
+      return "reading";
     case "packing":
       return "packing";
     case "sending":
