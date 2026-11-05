@@ -1407,6 +1407,52 @@ describe("CrashRecoveryService renderer deaths and per-project layouts (#12884)"
     });
   });
 
+  describe("workspaces a fresh start clears (#16257)", () => {
+    const PROJECT_C = "c".repeat(64);
+
+    function crashWith(liveIds: string[]): CrashRecoveryService {
+      appMock.isPackaged = true;
+      const crashed = makeService();
+      crashed.setLiveWorkspaceIdsProvider(() => liveIds);
+      crashed.initialize();
+      crashed.takeBackup();
+      const next = makeService();
+      next.initialize();
+      return next;
+    }
+
+    it("names every captured workspace, one with no panels included", () => {
+      writeProjectState(PROJECT_A, [{ id: "t1", kind: "terminal" }]);
+      writeProjectState(PROJECT_B, []);
+      writeProjectState(PROJECT_C, [{ id: "c1", kind: "terminal" }]);
+      const svc = crashWith([PROJECT_A, PROJECT_B]);
+
+      expect(svc.getSnapshotWorkspaceIds().sort()).toEqual([PROJECT_A, PROJECT_B].sort());
+    });
+
+    it("names none for a legacy snapshot with only the global panel list", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "appState" ? { terminals: [{ id: "g1", kind: "terminal" }] } : undefined
+      );
+      const svc = crashWith([]);
+
+      expect(svc.getBackupPanelCount()).toBe(1);
+      expect(svc.getSnapshotWorkspaceIds()).toEqual([]);
+    });
+
+    it("skips entries that are not a workspace's layout", () => {
+      writeProjectState(PROJECT_A, [{ id: "t1", kind: "terminal" }]);
+      const svc = crashWith([PROJECT_A]);
+      const internals = svc as unknown as {
+        cachedBackupSnapshot: { projectLayouts: Record<string, unknown> };
+      };
+      internals.cachedBackupSnapshot.projectLayouts["../outside"] = [];
+      internals.cachedBackupSnapshot.projectLayouts[PROJECT_B] = { terminals: [] };
+
+      expect(svc.getSnapshotWorkspaceIds()).toEqual([PROJECT_A]);
+    });
+  });
+
   describe("restoring after a watchdog kill (#14382)", () => {
     const agentPane = {
       id: "g1",

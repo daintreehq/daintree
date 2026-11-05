@@ -1095,6 +1095,36 @@ describe("app:boot handler", () => {
       expect((result.appState as Record<string, unknown>).mruList).toEqual([]);
     });
 
+    it("hydrates a workspace a crash fresh start cleared with no panels (#16257)", async () => {
+      // Even the heir, holding a global list, must not get panels back: the
+      // emptied per-project record is what the user chose.
+      legacyOwnerRef.current = REAL_PROJECT.id;
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        terminals: [{ id: "crashed-agent", kind: "agent", location: "grid" }],
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: {
+          projectId: REAL_PROJECT.id,
+          sidebarWidth: 350,
+          activeWorktreeId: "wt-kept",
+          terminals: [],
+          tabGroups: [],
+          terminalSizes: {},
+          draftInputs: {},
+        },
+        quarantinedPath: undefined,
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+
+      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
+
+      expect(appState.terminals).toEqual([]);
+      expect(appState.activeWorktreeId).toBe("wt-kept");
+      expect(result.tabGroups).toEqual([]);
+      expect(result.draftInputs).toEqual({});
+    });
+
     // The legacy record has exactly one heir. Nothing used to consume it, so
     // every project row that had not saved terminals yet re-read the same list
     // and was seeded with another project's panels — `cwd` and `worktreeId`
