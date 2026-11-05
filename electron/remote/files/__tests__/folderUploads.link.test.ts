@@ -764,8 +764,10 @@ describe("cancelling a folder upload", () => {
     const { client, inbox } = await setup();
     const queued = deferred();
     const go = deferred();
+    let signal: AbortSignal | undefined;
     const publishTree = inbox.publishTree.bind(inbox);
     vi.spyOn(inbox, "publishTree").mockImplementation(async (...args) => {
+      signal = args[2];
       queued.resolve();
       await go.promise;
       return publishTree(...args);
@@ -775,7 +777,8 @@ describe("cancelling a folder upload", () => {
     await send(client, token, bytesTransferSource(folder.archive));
     await queued.promise;
     const cancelling = cancel(client, "op-1");
-    await until(async () => (await status(client, "op-1")).status !== "receiving");
+    // The host has taken the cancel before the publication goes on.
+    await until(async () => signal?.aborted === true);
     go.resolve();
     expect(await cancelling).toEqual({ status: "cancelled" });
     expect(await status(client, "op-1")).toEqual({ status: "cancelled" });
@@ -785,7 +788,13 @@ describe("cancelling a folder upload", () => {
 
   it("answers done, with its path, when publication's rename had already begun", async () => {
     // The cancel's own wait is short: it must still not answer before the rename settles.
-    const { client } = await setup({ cancelWaitMs: 10 });
+    const { client, inbox } = await setup({ cancelWaitMs: 10 });
+    let signal: AbortSignal | undefined;
+    const publishTree = inbox.publishTree.bind(inbox);
+    vi.spyOn(inbox, "publishTree").mockImplementation((...args) => {
+      signal = args[2];
+      return publishTree(...args);
+    });
     const renaming = deferred();
     const landed = deferred();
     const rename = fs.rename.bind(fs);
@@ -800,6 +809,8 @@ describe("cancelling a folder upload", () => {
     await send(client, token, bytesTransferSource(folder.archive));
     await renaming.promise;
     const cancelling = cancel(client, "op-1");
+    await until(async () => signal?.aborted === true);
+    // Well past the cancel's own wait, with the rename still out.
     await new Promise((resolve) => setTimeout(resolve, 50));
     landed.resolve();
     const answer = await cancelling;

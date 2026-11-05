@@ -312,9 +312,9 @@ export class HostUploadService {
       session.onClose(() => {
         for (const dispose of created.unregister.splice(0)) dispose();
         for (const token of [...created.pending.keys()]) this.dropPending(created, token);
-        for (const endpoint of created.endpoints.values()) {
-          this.subscriptions.get(endpoint.endpointId)?.sessions.delete(created);
-        }
+        // Every watch, not only those of the endpoints it holds now: one it held before may outlive it.
+        for (const subscription of this.subscriptions.values())
+          subscription.sessions.delete(created);
       })
     );
     this.sessions.set(session, created);

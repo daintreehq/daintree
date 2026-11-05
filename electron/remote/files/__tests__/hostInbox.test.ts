@@ -584,7 +584,7 @@ describe("staging and publishing a tree", () => {
     expect(await fs.readFile(path.join(two, "a.txt"), "utf8")).toBe("2");
   });
 
-  it("stops a publication aborted while it waited its turn, keeping the staging to discard", async () => {
+  it("stops a publication aborted while it waits its turn, at once, keeping the staging to discard", async () => {
     const inbox = new HostInbox({ root });
     const ahead = await inbox.createStaging();
     const staging = await inbox.createStaging();
@@ -594,18 +594,30 @@ describe("staging and publishing a tree", () => {
     const { rename, release } = gateRename();
     const first = inbox.publishTree(ahead, "first");
     await vi.waitFor(() => expect(rename).toHaveBeenCalledTimes(1));
+    const ensure = inbox.ensure.bind(inbox);
+    let ensured!: () => void;
+    const pastSetup = new Promise<void>((resolve) => {
+      ensured = resolve;
+    });
+    vi.spyOn(inbox, "ensure").mockImplementation(async () => {
+      await ensure();
+      ensured();
+    });
     const abort = new AbortController();
-    const publishing = inbox.publishTree(staging, "project", abort.signal);
-    const outcome = publishing.then(
+    const outcome = inbox.publishTree(staging, "project", abort.signal).then(
       () => "published",
       () => "stopped"
     );
-    // Past its own setup and queued behind the first.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await pastSetup;
+    // Let it hand its task to the queue.
+    await new Promise((resolve) => setImmediate(resolve));
     abort.abort();
+    // Answered without waiting for the publication ahead of it.
+    expect(await outcome).toBe("stopped");
     release();
     await first;
-    expect(await outcome).toBe("stopped");
+    // Queued behind its task, so that task has run (and not renamed) by now.
+    await inbox.cleanup();
     expect(rename).toHaveBeenCalledTimes(1);
     expect(await fs.readdir(path.join(root, "files"))).toHaveLength(1);
     expect(await fs.readFile(path.join(staging.treePath, "a.txt"), "utf8")).toBe("a");
