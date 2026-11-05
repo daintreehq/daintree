@@ -184,6 +184,15 @@ describe("CanopyToolbarButton", () => {
     expect(await pip()).toMatchObject({ label: "Canopy", visible: "false" });
   });
 
+  it("takes no credit for a run its agent said needs the user, whatever Canopy read of it", async () => {
+    setFleet([
+      run("agent", { agentState: "waiting", waitingReason: "prompt", handbackReport: "needs-you" }),
+      asking("agent-and-canopy", false, { handbackReport: "needs-you" }),
+      asking("canopy"),
+    ]);
+    expect(await pip()).toMatchObject({ label: "Canopy — 1 urgent", glyph: "1" });
+  });
+
   it("stays dark for an ask read on a turn the run has since moved past", async () => {
     // A held verdict applies only to a stop that may ask: back at work, it doesn't.
     setFleet([asking("r1", false, { agentState: "working", waitingReason: undefined })]);

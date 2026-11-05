@@ -94,14 +94,16 @@ describe("pane observation ahead of the band", () => {
 });
 
 describe("isUnseenAskPane", () => {
-  it("holds Canopy's ask at any stop the pane is still at", () => {
+  it("holds the agent's and Canopy's asks at any stop the pane is still at", () => {
+    for (const ask of ["agent", "canopy"] as const) {
+      for (const agentState of ["waiting", "completed", "idle", undefined] as const) {
+        expect(isUnseenAskPane(ask, { agentState }), `${ask} ${agentState}`).toBe(true);
+      }
+      expect(isUnseenAskPane(ask, { agentState: "waiting", waitingReason: "prompt" })).toBe(true);
+    }
     for (const agentState of ["waiting", "completed", "idle", undefined] as const) {
-      expect(isUnseenAskPane("canopy", { agentState }), String(agentState)).toBe(true);
       expect(isUnseenAskPane(undefined, { agentState }), String(agentState)).toBe(false);
     }
-    expect(isUnseenAskPane("canopy", { agentState: "waiting", waitingReason: "prompt" })).toBe(
-      true
-    );
   });
 
   it("holds an observed ask until the pane shows a different stop", () => {
@@ -119,11 +121,12 @@ describe("isUnseenAskPane", () => {
     ] as const) {
       expect(isUnseenAskPane("observed", pane), JSON.stringify(pane)).toBe(false);
       expect(isUnseenAskPane("canopy", pane), JSON.stringify(pane)).toBe(true);
+      expect(isUnseenAskPane("agent", pane), JSON.stringify(pane)).toBe(true);
     }
   });
 
-  it("drops either once the pane has seen the agent work, exit, restart or hit an error", () => {
-    for (const ask of ["canopy", "observed"] as const) {
+  it("drops any of them once the pane has seen the agent work, exit, restart or hit an error", () => {
+    for (const ask of ["agent", "canopy", "observed"] as const) {
       for (const agentState of ["working", "directing", "exited"] as const) {
         expect(isUnseenAskPane(ask, { agentState }), `${ask} ${agentState}`).toBe(false);
       }

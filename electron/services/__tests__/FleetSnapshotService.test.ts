@@ -35,6 +35,8 @@ import {
 } from "../canopy/canopyRefinementSource.js";
 import { setAnswerAttention } from "../runAnswerAttentionSource.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
+import { bandForRun } from "../../../shared/utils/fleetBands.js";
+import { computeProjectAgentCounts } from "../projectAgentCounts.js";
 
 const NOW = 1_830_001;
 
@@ -701,6 +703,127 @@ describe("FleetSnapshotService", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(broadcastMock).toHaveBeenCalledTimes(2);
     expect(lastSnapshot().runs[0].handBack).toEqual(record);
+    service.stop();
+  });
+
+  it("carries a needs-you handback report to the row without its summary, and publishes a report-only change", async () => {
+    const handback = (report: "done" | "needs-you" | undefined) => ({
+      message: "Approve the deploy at https://example.test/runs/1",
+      ...(report !== undefined ? { report } : {}),
+      observedAt: NOW - 500,
+      truncated: false,
+    });
+    const at = (lastHandback?: ReturnType<typeof handback>) =>
+      terminal({
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: NOW - 1_000,
+        ...(lastHandback !== undefined ? { lastHandback } : {}),
+      });
+    const client = makePtyClient([at(handback("done"))]);
+    const service = new FleetSnapshotService(client as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect("handbackReport" in lastSnapshot().runs[0]).toBe(false);
+
+    // The report alone changes; no state moves, and the row still publishes.
+    client.setFleet([at(handback("needs-you"))]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    const row = lastSnapshot().runs[0];
+    expect(row.handbackReport).toBe("needs-you");
+    expect(JSON.stringify(row)).not.toContain("example.test");
+
+    client.setFleet([at(handback("needs-you"))]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+
+    // The next prompt clears the terminal's handback, and the row drops it.
+    client.setFleet([at()]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(3);
+    expect("handbackReport" in lastSnapshot().runs[0]).toBe(false);
+
+    // An older host's observation carries no report and places nothing.
+    client.setFleet([at(handback(undefined))]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(3);
+    service.stop();
+  });
+
+  it("bands each run as the project counts do, from the same terminal records", async () => {
+    const records = [
+      { id: "needs-prompt", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
+      { id: "needs-done", agentState: "completed", report: "needs-you" },
+      {
+        id: "needs-question",
+        agentState: "waiting",
+        waitingReason: "question",
+        report: "needs-you",
+      },
+      { id: "needs-working", agentState: "working", report: "needs-you" },
+      { id: "needs-error", agentState: "waiting", waitingReason: "error", report: "needs-you" },
+      { id: "needs-idle", agentState: "idle", report: "needs-you" },
+      { id: "done-prompt", agentState: "waiting", waitingReason: "prompt", report: "done" },
+      { id: "bare-prompt", agentState: "waiting", waitingReason: "prompt" },
+      { id: "needs-parked", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
+      { id: "needs-seen", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
+    ] as const;
+    const terminals = records.map(({ report, ...rest }) =>
+      terminal({
+        ...rest,
+        lastStateChange: NOW - 1_000,
+        ...(report !== undefined
+          ? { lastHandback: { message: null, report, observedAt: NOW - 500, truncated: false } }
+          : {}),
+      })
+    );
+    const handBackOf = (id: string) =>
+      id === "needs-seen" ? { stoppedAt: NOW - 2_000, seenAt: NOW - 1_500 } : undefined;
+    const parks = new Map([["needs-parked", { parkedAt: NOW - 100 }]]);
+    const handBacks = {
+      getRecord: (id: string) => handBackOf(id),
+      retain: () => {},
+      noteInventoryWait: () => {},
+      getWait: () => undefined,
+      onWaitChanged: () => () => {},
+    };
+    const runAttention = { getAll: () => parks, getActiveSnoozes: () => new Map() };
+    const client = makePtyClient(terminals);
+    const service = new FleetSnapshotService(
+      client as never,
+      runAttention as never,
+      handBacks as never
+    );
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    const rows = new Map(lastSnapshot().runs.map((row) => [row.runId, row]));
+    const needsYou: string[] = [];
+    for (const t of terminals) {
+      const row = rows.get(t.id)!;
+      const band = bandForRun(row);
+      if (band === "needs-you") needsYou.push(t.id);
+      const counts = computeProjectAgentCounts(
+        ["p1"],
+        [t as never],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        (id) => handBackOf(id),
+        parks
+      ).get("p1")!;
+      expect(counts.waiting - counts.blocked, t.id).toBe(band === "needs-you" ? 1 : 0);
+      expect(counts.blocked, t.id).toBe(band === "blocked" ? 1 : 0);
+      expect(counts.unacknowledgedCompleted, t.id).toBe(band === "review" ? 1 : 0);
+    }
+    expect(needsYou.sort()).toEqual(["needs-done", "needs-prompt", "needs-question", "needs-seen"]);
     service.stop();
   });
 

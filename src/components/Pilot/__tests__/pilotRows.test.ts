@@ -8,6 +8,7 @@ import {
   filterPilotBands,
   filterPilotGroups,
   summarizePilotGroups,
+  AGENT_REPORT_EVIDENCE,
   type PilotRowContext,
 } from "../pilotRows";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
@@ -15,7 +16,7 @@ import { emptyBandCounts, FLEET_BANDS, type FleetBand } from "@/lib/fleetAttenti
 
 const NOW = 1_700_000_000_000;
 
-/** Canopy's unread reading that the run asks something: the only way into Needs you. */
+/** Canopy's unread reading that the run asks something: one way into Needs you. */
 const ASK = { kind: "asked", quote: "Which branch?", readAt: NOW, seen: false } as const;
 
 function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
@@ -1691,5 +1692,78 @@ describe("buildPilotGroups — Canopy attribution", () => {
       ctx()
     );
     expect(group!.rows.map((r) => r.canopyEvidence)).toEqual([null, null, null]);
+  });
+});
+
+describe("buildPilotGroups — the agent's own report", () => {
+  const NOT_ASKING = {
+    kind: "not-asking",
+    quote: "All 14 tests pass.",
+    readAt: NOW - 60_000,
+    seen: false,
+  } as const;
+  const reported = (overrides: Partial<FleetRunRow> = {}) =>
+    run({
+      agentState: "waiting",
+      waitingReason: "prompt",
+      handbackReport: "needs-you",
+      ...overrides,
+    });
+
+  it("ranks a seen needs-you report above every hand-back, under Attention, and says whose word it is", () => {
+    const rows = [
+      run({
+        runId: "unread-hand-back",
+        agentState: "waiting",
+        handBack: { stoppedAt: NOW - 5_000 },
+      }),
+      reported({
+        runId: "needs-you",
+        handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+      }),
+    ];
+    const groups = buildPilotGroups(rows, ctx());
+    const [group] = groups;
+    expect(group!.rows.map((r) => [r.run.runId, r.band])).toEqual([
+      ["needs-you", "needs-you"],
+      ["unread-hand-back", "review"],
+    ]);
+    expect(group!.rows[0]).toMatchObject({
+      agentReport: AGENT_REPORT_EVIDENCE,
+      canopyEvidence: null,
+    });
+    expect(group!.rows[1]!.agentReport).toBeNull();
+    expect(countPilotBands(groups)["needs-you"]).toBe(1);
+    expect(filterPilotBands(groups, "needs-you")[0]!.rows.map((r) => r.run?.runId)).toEqual([
+      "needs-you",
+    ]);
+  });
+
+  it("shows no Canopy reading on a row the agent's report placed, even one that read it otherwise", () => {
+    const [group] = buildPilotGroups(
+      [reported({ waitingReason: "question", canopy: NOT_ASKING })],
+      ctx()
+    );
+    expect(group!.rows[0]).toMatchObject({
+      band: "needs-you",
+      canopyEvidence: null,
+      agentReport: AGENT_REPORT_EVIDENCE,
+    });
+  });
+
+  it("says nothing of a report the user set aside, one the run has gone back to work past, or an error wait", () => {
+    const [group] = buildPilotGroups(
+      [
+        reported({ runId: "parked", park: { parkedAt: NOW } }),
+        reported({ runId: "working", agentState: "working" }),
+        reported({ runId: "error", waitingReason: "error" }),
+      ],
+      ctx()
+    );
+    expect(group!.rows.map((r) => [r.run?.runId, r.band, r.agentReport])).toEqual([
+      ["error", "blocked", null],
+      ["working", "running", null],
+      ["parked", "parked", null],
+    ]);
   });
 });
