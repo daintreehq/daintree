@@ -501,9 +501,7 @@ describe("staging and publishing a tree", () => {
     await expect(inbox.publishTree(staging, "project")).rejects.toThrow(/staging/);
 
     const elsewhere = await fs.mkdtemp(path.join(base, "elsewhere-"));
-    await expect(inbox.publishTree({ treePath: elsewhere }, "project")).rejects.toThrow(
-      /staging/
-    );
+    await expect(inbox.publishTree({ treePath: elsewhere }, "project")).rejects.toThrow(/staging/);
     expect(await exists(elsewhere)).toBe(true);
     expect(await fs.readdir(path.join(root, "files"))).toEqual([]);
   });
