@@ -1,16 +1,27 @@
 import { useSyncExternalStore } from "react";
+import type { FolderUploadCheck } from "@shared/types/ipc/fileTransfer";
 
 /**
  * Questions an upload asks before it goes ahead: a large file (above the
- * confirm threshold) and, for Add to project, replacing a file already in the
- * folder. A module queue, first one showing, answered by whichever mounted
+ * confirm threshold), for Add to project replacing a file already in the
+ * folder, and what a folder holds before any of it is sent. A module queue, first one showing, answered by whichever mounted
  * {@link UploadConfirmHost} holds the lead — several surfaces mount one, and
  * exactly one renders.
  */
 
 export type UploadQuestion =
   | { kind: "large"; name: string; bytes: number; hostLabel: string }
-  | { kind: "replace"; name: string; folder: string; hostLabel: string };
+  | { kind: "replace"; name: string; folder: string; hostLabel: string }
+  /**
+   * Asked for every folder, whatever its size. A refused check is still shown,
+   * so the person sees which limit or which names stopped it, and its only
+   * answer is no.
+   */
+  | { kind: "folder"; check: FolderUploadCheck; hostLabel: string };
+
+function canProceed(question: UploadQuestion): boolean {
+  return question.kind !== "folder" || question.check.status === "ready";
+}
 
 interface QueuedQuestion {
   id: number;
@@ -42,7 +53,7 @@ export function askUploadQuestion(question: UploadQuestion): Promise<boolean> {
         queue = queue.filter((candidate) => candidate !== entry);
         if (queue.length === before) return;
         emit();
-        resolve(yes);
+        resolve(yes && canProceed(question));
       },
     };
     queue = [...queue, entry];

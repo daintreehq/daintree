@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { HOST_INBOX_DIR_NAME } from "../../../shared/types/ipc/fileTransfer.js";
+import {
+  HOST_INBOX_DIR_NAME,
+  HOST_INBOX_ENTRY_TTL_MS,
+} from "../../../shared/types/ipc/fileTransfer.js";
 import { ensureOwnerOnlyDir, OWNER_RWX_DIR_MODE, OWNER_RW_FILE_MODE } from "../../utils/fs.js";
 import { logWarn } from "../../utils/logger.js";
 import { BULK_CHUNK_BYTES } from "../link/frames.js";
@@ -57,7 +60,7 @@ export interface InboxReservation {
   release(): void;
 }
 
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_TTL_MS = HOST_INBOX_ENTRY_TTL_MS;
 const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_MAX_CLIPBOARD_IMAGES = 50;
 const DEFAULT_STALE_PART_MS = 60 * 60 * 1000;

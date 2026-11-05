@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatBytes } from "@/lib/formatBytes";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { FolderUploadQuestion } from "./FolderUploadQuestion";
 import {
   registerUploadConfirmHost,
   useUploadConfirmState,
   type UploadQuestion,
 } from "./uploadConfirm";
 
-function copyFor(question: UploadQuestion) {
+function copyFor(question: Exclude<UploadQuestion, { kind: "folder" }>) {
   if (question.kind === "large") {
     return {
       title: `Send '${question.name}' to ${question.hostLabel}?`,
@@ -37,6 +38,9 @@ export function UploadConfirmHost() {
   }, [remote, token]);
   const { lead, head } = useUploadConfirmState();
   if (!remote || lead !== token || !head) return null;
+  if (head.question.kind === "folder") {
+    return <FolderUploadQuestion key={head.id} question={head.question} onAnswer={head.answer} />;
+  }
   const copy = copyFor(head.question);
   return (
     <ConfirmDialog

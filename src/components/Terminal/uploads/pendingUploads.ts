@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { FileTransferEvent } from "@shared/types/ipc/fileTransfer";
 import type { MaterializeOptions } from "@shared/types/remoteHosts";
 
 /**
@@ -15,11 +16,25 @@ import type { MaterializeOptions } from "@shared/types/remoteHosts";
 
 export const UPLOAD_PROGRESS_DELAY_MS = 250;
 
+/** A folder send's report, as the `folder-progress` event carries it. */
+export type FolderUploadProgress = Omit<
+  Extract<FileTransferEvent, { type: "folder-progress" }>,
+  "type" | "opId"
+>;
+
+/** A folder send's progress, cut down to what its chip says. */
+export type FolderUploadStage =
+  | { phase: "packing" }
+  | { phase: "sending"; percent: number | null }
+  | { phase: "unpacking"; filesDone: number | null; filesTotal: number };
+
 export interface PendingUpload {
   id: number;
   name: string;
   /** 0..1 once the host has confirmed any bytes; null before. */
   fraction: number | null;
+  /** A folder send's phase. Absent for a file, whose progress is {@link fraction}. */
+  folder?: FolderUploadStage;
   visible: boolean;
   cancel(): void;
 }
@@ -36,6 +51,9 @@ const sendHolds = new Map<string, number>();
 const heldBack = new Map<string, readonly PreparedAttachment[]>();
 const listeners = new Set<() => void>();
 let nextId = 1;
+/** Bumped by the test reset, so an upload from before it can't touch what comes after. */
+let generation = 0;
+const timers = new Set<ReturnType<typeof setTimeout>>();
 
 function emit(): void {
   for (const listener of [...listeners]) listener();
@@ -53,6 +71,53 @@ function update(surface: string, id: number, patch: Partial<PendingUpload> | nul
 }
 
 /**
+ * A chip on `surface` for one upload, shown after the delay and gone once
+ * `run` settles, whose cancel aborts the signal `run` is handed.
+ */
+function track<T>(
+  surface: string,
+  name: string,
+  folder: FolderUploadStage | undefined,
+  run: (signal: AbortSignal, patch: (patch: Partial<PendingUpload>) => void) => Promise<T>
+): Promise<T> {
+  const id = nextId++;
+  const controller = new AbortController();
+  const entry: PendingUpload = {
+    id,
+    name,
+    fraction: null,
+    ...(folder && { folder }),
+    visible: false,
+    cancel: () => controller.abort(),
+  };
+  bySurface.set(surface, [...(bySurface.get(surface) ?? EMPTY), entry]);
+  emit();
+  let settled = false;
+  const born = generation;
+  const timer = setTimeout(() => {
+    timers.delete(timer);
+    update(surface, id, { visible: true });
+  }, UPLOAD_PROGRESS_DELAY_MS);
+  timers.add(timer);
+  // A report that lands after the upload settled has no chip left to change.
+  const patch = (next: Partial<PendingUpload>) => {
+    if (!settled && born === generation) update(surface, id, next);
+  };
+  let running: Promise<T>;
+  try {
+    running = run(controller.signal, patch);
+  } catch (error) {
+    running = Promise.reject(error);
+  }
+  return running.finally(() => {
+    settled = true;
+    clearTimeout(timer);
+    timers.delete(timer);
+    if (born === generation) update(surface, id, null);
+  });
+}
+
+/**
  * Run one upload under a chip on `surface`. `run` gets the progress callback
  * and the signal the chip's cancel button aborts; the chip goes away however
  * the upload ends.
@@ -62,29 +127,74 @@ export function trackUpload<T>(
   name: string,
   run: (options: Pick<MaterializeOptions, "onProgress" | "signal">) => Promise<T>
 ): Promise<T> {
-  const id = nextId++;
-  const controller = new AbortController();
-  const entry: PendingUpload = {
-    id,
-    name,
-    fraction: null,
-    visible: false,
-    cancel: () => controller.abort(),
-  };
-  bySurface.set(surface, [...(bySurface.get(surface) ?? EMPTY), entry]);
-  emit();
-  const timer = setTimeout(() => update(surface, id, { visible: true }), UPLOAD_PROGRESS_DELAY_MS);
-  let lastPercent = -1;
-  const onProgress = (fraction: number) => {
-    const percent = Math.floor(Math.max(0, Math.min(1, fraction)) * 100);
-    if (percent === lastPercent) return;
-    lastPercent = percent;
-    update(surface, id, { fraction: percent / 100 });
-  };
-  return run({ onProgress, signal: controller.signal }).finally(() => {
-    clearTimeout(timer);
-    update(surface, id, null);
+  return track(surface, name, undefined, (signal, patch) => {
+    let lastPercent = -1;
+    const onProgress = (fraction: number) => {
+      const percent = Math.floor(Math.max(0, Math.min(1, fraction)) * 100);
+      if (percent === lastPercent) return;
+      lastPercent = percent;
+      patch({ fraction: percent / 100 });
+    };
+    return run({ onProgress, signal });
   });
+}
+
+/** What a folder's chip shows for a report: only what changes its words. */
+export function folderUploadStage(progress: FolderUploadProgress): FolderUploadStage {
+  switch (progress.phase) {
+    case "packing":
+      return { phase: "packing" };
+    case "sending": {
+      const { transferredBytes, totalBytes } = progress;
+      if (transferredBytes === null || totalBytes <= 0) return { phase: "sending", percent: null };
+      const fraction = Math.max(0, Math.min(1, transferredBytes / totalBytes));
+      return { phase: "sending", percent: Math.floor(fraction * 100) };
+    }
+    case "unpacking": {
+      const { filesDone, filesTotal } = progress;
+      return {
+        phase: "unpacking",
+        filesDone: filesDone === null ? null : Math.max(0, Math.min(filesTotal, filesDone)),
+        filesTotal,
+      };
+    }
+  }
+}
+
+function sameStage(a: FolderUploadStage, b: FolderUploadStage): boolean {
+  if (a.phase === "sending" && b.phase === "sending") return a.percent === b.percent;
+  if (a.phase === "unpacking" && b.phase === "unpacking") {
+    return a.filesDone === b.filesDone && a.filesTotal === b.filesTotal;
+  }
+  return a.phase === b.phase;
+}
+
+/**
+ * Run one folder send under a chip on `surface`, which follows it through
+ * packing, sending and unpacking. A send starts by packing, so that is what
+ * the chip says until the first report. The cancel and the delay are a
+ * file's: one signal stops the send in whichever phase it is.
+ */
+export function trackFolderUpload<T>(
+  surface: string,
+  name: string,
+  run: (options: {
+    onFolderProgress: (progress: FolderUploadProgress) => void;
+    signal: AbortSignal;
+  }) => Promise<T>
+): Promise<T> {
+  let stage: FolderUploadStage = { phase: "packing" };
+  return track(surface, name, stage, (signal, patch) =>
+    run({
+      onFolderProgress: (progress) => {
+        const next = folderUploadStage(progress);
+        if (sameStage(stage, next)) return;
+        stage = next;
+        patch({ folder: next });
+      },
+      signal,
+    })
+  );
 }
 
 export function getPendingUploads(surface: string): readonly PendingUpload[] {
@@ -175,6 +285,9 @@ export const fileBrowserUploadSurface = (panelId: string) => `file-browser:${pan
 
 /** @internal Tests only. */
 export function _resetPendingUploadsForTests(): void {
+  generation++;
+  for (const timer of timers) clearTimeout(timer);
+  timers.clear();
   bySurface.clear();
   sendHolds.clear();
   heldBack.clear();
