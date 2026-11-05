@@ -234,9 +234,6 @@ function progressReporter(emit: (event: FileTransferEvent) => void, opId: string
       lastSent = now;
       emit({ type: "folder-progress", opId, phase: next, ...fields });
     },
-    get phase() {
-      return phase;
-    },
     stop(): void {
       stopped = true;
     },
@@ -316,8 +313,9 @@ class FolderDelivery {
     this.hostOpId = options.opId;
   }
 
+  /** The folder is in place: its unpacking is reported finished, whatever was seen of it. */
   sent(hostPath: string): UploadLocalFolderResult {
-    if (this.progress.phase !== "unpacking") this.reportUnpacking(this.archive.totals.fileCount);
+    this.reportUnpacking(this.archive.totals.fileCount);
     return { status: "sent", hostPath, totals: { ...this.archive.totals } };
   }
 
