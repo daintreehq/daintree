@@ -106,7 +106,7 @@ vi.mock("../../../../shared/theme/index.js", () => ({
 }));
 
 vi.mock("../../utils.js", () => ({
-  typedSend: vi.fn(),
+  typedBroadcastToLocalViews: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -141,7 +141,7 @@ vi.mock("node:fs", () => ({
 import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerAppThemeHandlers } from "../appTheme.js";
-import { typedSend } from "../../utils.js";
+import { typedBroadcastToLocalViews } from "../../utils.js";
 import { getAppThemeFallbackType, resolveAppTheme } from "../../../../shared/theme/index.js";
 import {
   seedTitleBarOverlay,
@@ -190,6 +190,7 @@ describe("appTheme handlers", () => {
     vi.useFakeTimers();
     storeState.data = {};
     nativeThemeMock.shouldUseDarkColors = true;
+    browserWindowMock.getAllWindows.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -252,6 +253,7 @@ describe("appTheme handlers", () => {
         getHandler(CHANNELS.APP_THEME_SET_COLOR_SCHEME)({}, source.id)
       ).rejects.toThrow();
       expect(storeState.data.appTheme).toEqual({ colorSchemeId: "daintree" });
+      expect(typedBroadcastToLocalViews).not.toHaveBeenCalled();
     });
 
     it("keeps plugin themes out of the follow-system slots", async () => {
@@ -390,10 +392,10 @@ describe("appTheme handlers", () => {
     themeHandler();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).not.toHaveBeenCalled();
+    expect(typedBroadcastToLocalViews).not.toHaveBeenCalled();
   });
 
-  it("nativeTheme updated sends push event when followSystem is true", () => {
+  it("nativeTheme updated pushes the new settings to every view when followSystem is true", () => {
     const mockWindow = {
       isDestroyed: () => false,
       setBackgroundColor: vi.fn(),
@@ -402,16 +404,19 @@ describe("appTheme handlers", () => {
     storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
     nativeThemeMock.shouldUseDarkColors = false;
 
-    registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    registerAppThemeHandlers();
 
     const themeHandler = getNativeThemeHandler();
     themeHandler();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).toHaveBeenCalledWith(mockWindow, "app-theme:system-appearance-changed", {
-      isDark: false,
-      schemeId: "bondi",
-    });
+    // No view asked for it, so none is skipped.
+    expect(typedBroadcastToLocalViews).toHaveBeenCalledWith(
+      "app-theme:changed",
+      expect.objectContaining({ colorSchemeId: "bondi", followSystem: true }),
+      null
+    );
   });
 
   it("nativeTheme updated uses preferred scheme ids when set", () => {
@@ -428,16 +433,18 @@ describe("appTheme handlers", () => {
     };
     nativeThemeMock.shouldUseDarkColors = true;
 
-    registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    registerAppThemeHandlers();
 
     const themeHandler = getNativeThemeHandler();
     themeHandler();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).toHaveBeenCalledWith(mockWindow, "app-theme:system-appearance-changed", {
-      isDark: true,
-      schemeId: "custom-dark",
-    });
+    expect(typedBroadcastToLocalViews).toHaveBeenCalledWith(
+      "app-theme:changed",
+      expect.objectContaining({ colorSchemeId: "custom-dark" }),
+      null
+    );
   });
 
   it("debounces rapid nativeTheme updates to a single push", () => {
@@ -448,7 +455,8 @@ describe("appTheme handlers", () => {
     };
     storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
 
-    registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    registerAppThemeHandlers();
 
     const themeHandler = getNativeThemeHandler();
     themeHandler();
@@ -458,7 +466,7 @@ describe("appTheme handlers", () => {
     themeHandler();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).toHaveBeenCalledTimes(1);
+    expect(typedBroadcastToLocalViews).toHaveBeenCalledTimes(1);
   });
 
   it("cleanup cancels pending timer and removes listener", () => {
@@ -469,7 +477,8 @@ describe("appTheme handlers", () => {
     };
     storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
 
-    const cleanup = registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    const cleanup = registerAppThemeHandlers();
 
     const themeHandler = getNativeThemeHandler();
     themeHandler();
@@ -477,7 +486,7 @@ describe("appTheme handlers", () => {
     cleanup();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).not.toHaveBeenCalled();
+    expect(typedBroadcastToLocalViews).not.toHaveBeenCalled();
     expect(nativeThemeMock.removeListener).toHaveBeenCalledWith("updated", themeHandler);
   });
 
@@ -490,7 +499,8 @@ describe("appTheme handlers", () => {
     storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
     nativeThemeMock.shouldUseDarkColors = true;
 
-    registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    registerAppThemeHandlers();
 
     const themeHandler = getNativeThemeHandler();
     themeHandler();
@@ -512,7 +522,8 @@ describe("appTheme handlers", () => {
     };
     nativeThemeMock.shouldUseDarkColors = false;
 
-    registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    registerAppThemeHandlers();
 
     getNativeThemeHandler()();
     vi.advanceTimersByTime(300);
@@ -526,7 +537,7 @@ describe("appTheme handlers", () => {
     expect(resolveAppTheme).toHaveBeenCalledWith("custom-deleted", [], "dark");
   });
 
-  it("nativeTheme updated does not send when window is destroyed", () => {
+  it("nativeTheme updated skips a destroyed window's repaint", () => {
     const mockWindow = {
       isDestroyed: () => true,
       setBackgroundColor: vi.fn(),
@@ -534,13 +545,13 @@ describe("appTheme handlers", () => {
     };
     storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
 
-    registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    registerAppThemeHandlers();
 
     const themeHandler = getNativeThemeHandler();
     themeHandler();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).not.toHaveBeenCalled();
     expect(mockWindow.setBackgroundColor).not.toHaveBeenCalled();
   });
 
@@ -556,7 +567,8 @@ describe("appTheme handlers", () => {
       storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
       nativeThemeMock.shouldUseDarkColors = true;
 
-      registerAppThemeHandlers(mockWindow as never);
+      browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+      registerAppThemeHandlers();
 
       const themeHandler = getNativeThemeHandler();
       themeHandler();
@@ -586,7 +598,8 @@ describe("appTheme handlers", () => {
       storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
       nativeThemeMock.shouldUseDarkColors = true;
 
-      registerAppThemeHandlers(mockWindow as never);
+      browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+      registerAppThemeHandlers();
 
       // Match production: the window is seeded at creation, so the banner
       // report below is a real repaint rather than the first paint.
@@ -623,7 +636,8 @@ describe("appTheme handlers", () => {
       };
       storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
 
-      registerAppThemeHandlers(mockWindow as never);
+      browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+      registerAppThemeHandlers();
 
       const themeHandler = getNativeThemeHandler();
       themeHandler();
@@ -635,6 +649,135 @@ describe("appTheme handlers", () => {
     }
   });
 
+  describe.each(["darwin", "linux"])("window chrome on %s", (platform) => {
+    const originalPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    });
+
+    function makeWindows() {
+      const windows = [1, 2].map((id) => ({
+        id,
+        isDestroyed: () => false,
+        setBackgroundColor: vi.fn(),
+        setTitleBarOverlay: vi.fn(),
+      }));
+      browserWindowMock.getAllWindows.mockReturnValue(windows as never);
+      return windows;
+    }
+
+    it.each([
+      [CHANNELS.APP_THEME_SET_COLOR_SCHEME, "bondi"],
+      [CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, "red-green"],
+      [CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, "#ff8800"],
+      [CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, true],
+      [CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, "daintree"],
+      [CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, "bondi"],
+    ])("%s repaints every window's background", async (channel, value) => {
+      const windows = makeWindows();
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await getHandler(channel)({ sender: { id: 1 } }, value);
+
+      for (const win of windows) expect(win.setBackgroundColor).toHaveBeenCalledWith("#1a1a2e");
+    });
+
+    it("an OS appearance change repaints every window, not only the main one", () => {
+      const windows = makeWindows();
+      storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
+      registerAppThemeHandlers(windows[0] as never);
+
+      getNativeThemeHandler()();
+      vi.advanceTimersByTime(300);
+
+      for (const win of windows) expect(win.setBackgroundColor).toHaveBeenCalledWith("#1a1a2e");
+    });
+  });
+
+  describe("publishing committed writes to every other view (#16271)", () => {
+    it.each([
+      [CHANNELS.APP_THEME_SET_COLOR_SCHEME, "bondi", { colorSchemeId: "bondi" }],
+      [CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, "red-green", { colorVisionMode: "red-green" }],
+      [CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, "#FF8800", { accentColorOverride: "#ff8800" }],
+      [CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, null, { accentColorOverride: null }],
+      [CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, true, { followSystem: true }],
+      [
+        CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME,
+        " custom-dark ",
+        { preferredDarkSchemeId: "custom-dark" },
+      ],
+      [
+        CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME,
+        "custom-light",
+        { preferredLightSchemeId: "custom-light" },
+      ],
+      [
+        CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS,
+        ["bondi", "bondi"],
+        { recentSchemeIds: ["bondi"] },
+      ],
+    ])(
+      "%s pushes the persisted settings, skipping the view that wrote them",
+      async (channel, value, expected) => {
+        storeState.data.appTheme = { colorSchemeId: "daintree", accentColorOverride: "#112233" };
+        registerAppThemeHandlers();
+
+        await getHandler(channel)({ sender: { id: 7 } }, value);
+
+        expect(typedBroadcastToLocalViews).toHaveBeenCalledTimes(1);
+        const [pushed, config, except] = vi.mocked(typedBroadcastToLocalViews).mock.calls[0]!;
+        expect(pushed).toBe("app-theme:changed");
+        // What every view reads at boot, so a pushed view ends where a fresh one would.
+        expect(config).toEqual(storeState.data.appTheme);
+        expect(config).toMatchObject(expected);
+        expect(except).toBe(7);
+      }
+    );
+
+    it("pushes custom schemes as they were stored", async () => {
+      const scheme = {
+        id: "custom-1",
+        name: "Custom Theme",
+        type: "dark" as const,
+        builtin: false,
+        tokens: { "surface-canvas": "#111111" },
+      };
+      storeState.data.appTheme = { colorSchemeId: "custom-1" };
+      registerAppThemeHandlers();
+
+      await getHandler(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES)({ sender: { id: 3 } }, [scheme]);
+
+      expect(typedBroadcastToLocalViews).toHaveBeenCalledWith(
+        "app-theme:changed",
+        expect.objectContaining({ colorSchemeId: "custom-1", customSchemes: [scheme] }),
+        3
+      );
+    });
+
+    it.each([
+      [CHANNELS.APP_THEME_SET_COLOR_SCHEME, "  "],
+      [CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, "sepia"],
+      [CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, "not-a-colour"],
+      [CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, "yes"],
+      [CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, ""],
+      [CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, "bondi"],
+      [CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, [{ id: 1 }]],
+    ])("%s publishes nothing for input it refuses", async (channel, value) => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await getHandler(channel)({ sender: { id: 7 } }, value);
+
+      expect(typedBroadcastToLocalViews).not.toHaveBeenCalled();
+    });
+  });
+
   it("nativeTheme updated persists new colorSchemeId to store", () => {
     const mockWindow = {
       isDestroyed: () => false,
@@ -644,7 +787,8 @@ describe("appTheme handlers", () => {
     storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
     nativeThemeMock.shouldUseDarkColors = false;
 
-    registerAppThemeHandlers(mockWindow as never);
+    browserWindowMock.getAllWindows.mockReturnValue([mockWindow] as never);
+    registerAppThemeHandlers();
 
     const themeHandler = getNativeThemeHandler();
     themeHandler();

@@ -1840,9 +1840,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setPreferredLightScheme(schemeId: string): Promise<void>;
     setRecentSchemeIds(ids: string[]): Promise<void>;
     setAccentColorOverride(color: string | null): Promise<void>;
-    onSystemAppearanceChanged(
-      callback: (payload: { isDark: boolean; schemeId: string }) => void
-    ): () => void;
+    onChanged(callback: (config: AppThemeConfig) => void): () => void;
   };
   telemetry: {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;

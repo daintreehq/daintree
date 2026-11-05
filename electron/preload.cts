@@ -205,7 +205,7 @@ import type {
   VoiceSessionEndReason,
   VoiceStopRequest,
 } from "../shared/types/index.js";
-import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
+import type { ColorVisionMode, AppColorScheme, AppThemeConfig } from "../shared/types/appTheme.js";
 import type { VoiceSessionReport } from "../shared/types/voiceSessionSummary.js";
 import type {
   WorktreePortAction,
@@ -2834,9 +2834,8 @@ function buildElectronApi(): ElectronAPI {
       setAccentColorOverride: (color: string | null) =>
         _unwrappingInvoke(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, color),
 
-      onSystemAppearanceChanged: (
-        callback: (payload: { isDark: boolean; schemeId: string }) => void
-      ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),
+      onChanged: (callback: (config: AppThemeConfig) => void) =>
+        _typedOn(CHANNELS.APP_THEME_CHANGED, callback),
     },
 
     telemetry: (() => {

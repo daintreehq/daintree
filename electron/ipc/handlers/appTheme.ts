@@ -7,13 +7,8 @@ import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
 import { normalizeAccentHex } from "../../../shared/theme/index.js";
 import { isPluginThemeId } from "../../../shared/theme/pluginThemes.js";
 import { persistColorSchemeSelection } from "../../services/appThemePluginSelection.js";
-import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
-import {
-  repaintAllWindowThemes,
-  repaintWindowTheme,
-  visibleProjectIdOf,
-} from "../../window/projectThemeChrome.js";
-import { getWindowRegistry } from "../../window/windowRef.js";
+import { typedBroadcastToLocalViews, typedHandle, typedHandleWithContext } from "../utils.js";
+import { repaintAllWindowThemes } from "../../window/projectThemeChrome.js";
 import {
   appCustomSchemesReadSchema,
   appCustomSchemesWriteSchema,
@@ -80,19 +75,28 @@ function getAppThemeConfig(): AppThemeConfig {
 }
 
 /**
- * Push the freshly-persisted scheme at every window's caption strip.
- * Picking a theme in settings only writes the store — without this the
- * native strip keeps the previous theme's colours until an OS appearance
- * change happens to reapply them (#11766).
+ * Push the freshly-persisted theme at every window's chrome: the compositor
+ * background on every platform, and the caption strip on Windows. Writing the
+ * store alone leaves both on the previous theme's colours (#11766).
  *
  * Exported because writing `appTheme` is not confined to these handlers:
- * importing a configuration bundle writes the same keys and owes the strip the
+ * importing a configuration bundle writes the same keys and owes the chrome the
  * same repaint.
  */
 export function refreshTitleBarOverlayTheme(): void {
-  if (process.platform !== "win32") return;
   // Per window: a window showing a project with its own theme keeps it (#13833).
   repaintAllWindowThemes();
+}
+
+/**
+ * Tell every view, in every window and cached ones included, what the global
+ * settings now are, then repaint every window. Each view read them once at
+ * boot. The view that wrote them is skipped: it already shows the change, and
+ * a pick is several writes, so hearing an earlier one would undo the later.
+ */
+function publishAppThemeChange(exceptWebContentsId: number | null): void {
+  typedBroadcastToLocalViews("app-theme:changed", getAppThemeConfig(), exceptWebContentsId);
+  refreshTitleBarOverlayTheme();
 }
 
 /**
@@ -104,13 +108,13 @@ function isPreferredSlotId(schemeId: unknown): schemeId is string {
   return typeof schemeId === "string" && !!schemeId.trim() && !isPluginThemeId(schemeId.trim());
 }
 
-export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void {
+export function registerAppThemeHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
   handlers.push(typedHandle(CHANNELS.APP_THEME_GET, async () => getAppThemeConfig()));
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_COLOR_SCHEME, async (schemeId: string) => {
+    typedHandleWithContext(CHANNELS.APP_THEME_SET_COLOR_SCHEME, async (ctx, schemeId: string) => {
       if (typeof schemeId !== "string" || !schemeId.trim()) {
         console.warn("Invalid app theme colorSchemeId:", schemeId);
         return;
@@ -118,31 +122,35 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
       // Throws for a plugin theme no loaded plugin offers, so the picker
       // restores the theme that is actually saved.
       persistColorSchemeSelection(schemeId.trim());
-      refreshTitleBarOverlayTheme();
+      publishAppThemeChange(ctx.webContentsId);
     })
   );
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, async (schemes: unknown) => {
+    typedHandleWithContext(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, async (ctx, schemes: unknown) => {
       const result = appCustomSchemesWriteSchema.safeParse(schemes);
       if (!result.success) {
         console.warn("Invalid app custom schemes:", result.error.message);
         return;
       }
       store.set("appTheme.customSchemes", result.data as AppColorScheme[]);
-      refreshTitleBarOverlayTheme();
+      publishAppThemeChange(ctx.webContentsId);
     })
   );
 
   const VALID_COLOR_VISION_MODES = ["default", "red-green", "blue-yellow"];
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, async (mode: ColorVisionMode) => {
-      if (typeof mode !== "string" || !VALID_COLOR_VISION_MODES.includes(mode)) {
-        console.warn("Invalid color vision mode:", mode);
-        return;
+    typedHandleWithContext(
+      CHANNELS.APP_THEME_SET_COLOR_VISION_MODE,
+      async (ctx, mode: ColorVisionMode) => {
+        if (typeof mode !== "string" || !VALID_COLOR_VISION_MODES.includes(mode)) {
+          console.warn("Invalid color vision mode:", mode);
+          return;
+        }
+        store.set("appTheme.colorVisionMode", mode);
+        publishAppThemeChange(ctx.webContentsId);
       }
-      store.set("appTheme.colorVisionMode", mode);
-    })
+    )
   );
 
   handlers.push(
@@ -208,28 +216,37 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
   );
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, async (enabled: boolean) => {
+    typedHandleWithContext(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, async (ctx, enabled: boolean) => {
       if (typeof enabled !== "boolean") return;
       store.set("appTheme.followSystem", enabled);
+      publishAppThemeChange(ctx.webContentsId);
     })
   );
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, async (schemeId: string) => {
-      if (!isPreferredSlotId(schemeId)) return;
-      store.set("appTheme.preferredDarkSchemeId", schemeId.trim());
-    })
+    typedHandleWithContext(
+      CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME,
+      async (ctx, schemeId: string) => {
+        if (!isPreferredSlotId(schemeId)) return;
+        store.set("appTheme.preferredDarkSchemeId", schemeId.trim());
+        publishAppThemeChange(ctx.webContentsId);
+      }
+    )
   );
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, async (schemeId: string) => {
-      if (!isPreferredSlotId(schemeId)) return;
-      store.set("appTheme.preferredLightSchemeId", schemeId.trim());
-    })
+    typedHandleWithContext(
+      CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME,
+      async (ctx, schemeId: string) => {
+        if (!isPreferredSlotId(schemeId)) return;
+        store.set("appTheme.preferredLightSchemeId", schemeId.trim());
+        publishAppThemeChange(ctx.webContentsId);
+      }
+    )
   );
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, async (ids: unknown) => {
+    typedHandleWithContext(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, async (ctx, ids: unknown) => {
       if (!Array.isArray(ids)) {
         console.warn("Invalid app theme recentSchemeIds:", ids);
         return;
@@ -239,21 +256,26 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         .map((id) => id.trim());
       const sanitized = Array.from(new Set(trimmed)).slice(0, 5);
       store.set("appTheme.recentSchemeIds", sanitized);
+      publishAppThemeChange(ctx.webContentsId);
     })
   );
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, async (color: unknown) => {
-      let normalized: string | null = null;
-      if (color !== null && color !== undefined) {
-        normalized = normalizeAccentHex(color);
-        if (normalized === null) {
-          console.warn("Invalid accent color override:", color);
-          return;
+    typedHandleWithContext(
+      CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE,
+      async (ctx, color: unknown) => {
+        let normalized: string | null = null;
+        if (color !== null && color !== undefined) {
+          normalized = normalizeAccentHex(color);
+          if (normalized === null) {
+            console.warn("Invalid accent color override:", color);
+            return;
+          }
         }
+        store.set("appTheme.accentColorOverride", normalized);
+        publishAppThemeChange(ctx.webContentsId);
       }
-      store.set("appTheme.accentColorOverride", normalized);
-    })
+    )
   );
 
   // nativeTheme listener for auto-switching
@@ -273,19 +295,8 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         : (config.preferredLightSchemeId ?? DEFAULT_LIGHT_SCHEME);
 
       store.set("appTheme.colorSchemeId", schemeId);
-
-      const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
-      if (!win || win.isDestroyed()) return;
-
-      typedSend(win, "app-theme:system-appearance-changed", { isDark, schemeId });
-
-      // The overlay owner re-tints in place when a global banner currently
-      // holds the caption band, instead of reverting it to bare canvas
-      // (#11766). A project with its own theme keeps it (#13833).
-      repaintWindowTheme(
-        win,
-        visibleProjectIdOf(getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager)
-      );
+      // No view asked for this one, so every view hears it.
+      publishAppThemeChange(null);
     }, 300);
   };
 

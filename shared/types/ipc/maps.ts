@@ -2243,7 +2243,8 @@ export interface IpcEventMap {
   "idle-background:closed": IdleBackgroundClosedPayload;
 
   // App theme events
-  "app-theme:system-appearance-changed": { isDark: boolean; schemeId: string };
+  // The persisted global settings, after any view or the OS changed them
+  "app-theme:changed": AppThemeConfig;
 
   // Config reload events
   "app:config-reloaded": void;

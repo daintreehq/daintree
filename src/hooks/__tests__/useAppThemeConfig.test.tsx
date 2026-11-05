@@ -5,9 +5,11 @@ import type { AppThemeConfig } from "@shared/types/appTheme";
 
 const setSelectedSchemeIdSilent = vi.fn();
 const setProjectTheme = vi.fn();
+const reconcileAppThemeConfig = vi.fn();
 const storeActions = {
   setSelectedSchemeIdSilent,
   setProjectTheme,
+  reconcileAppThemeConfig,
   addCustomScheme: vi.fn(),
   setColorVisionMode: vi.fn(),
   setFollowSystem: vi.fn(),
@@ -33,10 +35,11 @@ vi.mock("@/clients/appThemeClient", () => ({
 
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
+import { appThemeClient } from "@/clients/appThemeClient";
 import { useAppThemeConfig } from "../useAppThemeConfig";
 
-/** Captures the listener the hook registers, so tests can fire an OS appearance change. */
-let appearanceListener: ((payload: { isDark: boolean; schemeId: string }) => void) | null = null;
+/** Captures the listener the hook registers, so tests can push a global theme change. */
+let changeListener: ((config: AppThemeConfig) => void) | null = null;
 const unsubscribe = vi.fn();
 
 function bootWith(appTheme: Partial<AppThemeConfig>) {
@@ -49,16 +52,14 @@ describe("useAppThemeConfig", () => {
     // previous test's hook after our afterEach runs, re-calling `unsubscribe`.
     vi.clearAllMocks();
 
-    appearanceListener = null;
+    changeListener = null;
     // Object.assign, not a cast — `window as unknown as {...}` trips the
     // no-unsafe-type-assertion lint ratchet.
     Object.assign(window, {
       electron: {
         appTheme: {
-          onSystemAppearanceChanged: (
-            cb: (payload: { isDark: boolean; schemeId: string }) => void
-          ) => {
-            appearanceListener = cb;
+          onChanged: (cb: (config: AppThemeConfig) => void) => {
+            changeListener = cb;
             return unsubscribe;
           },
         },
@@ -93,26 +94,63 @@ describe("useAppThemeConfig", () => {
     });
   });
 
-  it("crossfades an OS appearance change", async () => {
-    renderHook(() => useAppThemeConfig());
+  describe("global settings another view or the OS changed (#16271)", () => {
+    it("crossfades a push once the boot payload has painted", async () => {
+      bootWith({ colorSchemeId: "daintree" });
+      renderHook(() => useAppThemeConfig());
+      await waitFor(() => expect(setSelectedSchemeIdSilent).toHaveBeenCalled());
 
-    expect(appearanceListener).not.toBeNull();
-    appearanceListener!({ isDark: true, schemeId: "daintree" });
+      const pushed = { colorSchemeId: "bondi", accentColorOverride: "#ff8800" };
+      changeListener!(pushed);
 
-    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("daintree", {
-      crossfade: true,
-      fallbackType: "dark",
+      expect(reconcileAppThemeConfig).toHaveBeenCalledWith(pushed, { crossfade: true });
     });
-  });
 
-  it("falls back to the appearance the OS just switched to", async () => {
-    renderHook(() => useAppThemeConfig());
+    it("cuts to a push that beats the boot payload, which then leaves the global settings alone", async () => {
+      let resolveBoot!: (value: unknown) => void;
+      bootPromise.mockReturnValue(new Promise((resolve) => (resolveBoot = resolve)));
+      Object.assign(window, { __DAINTREE_INITIAL_PROJECT__: { id: "p1" } });
+      try {
+        renderHook(() => useAppThemeConfig());
 
-    appearanceListener!({ isDark: false, schemeId: "custom-deleted" });
+        const pushed = { colorSchemeId: "bondi" };
+        changeListener!(pushed);
+        expect(reconcileAppThemeConfig).toHaveBeenCalledWith(pushed, { crossfade: false });
 
-    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("custom-deleted", {
-      crossfade: true,
-      fallbackType: "light",
+        resolveBoot({
+          ok: true,
+          result: {
+            appTheme: {
+              colorSchemeId: "daintree",
+              projectThemes: { p1: { colorSchemeId: "namib" } },
+            },
+          },
+        });
+
+        // The project's own choice still hydrates; only the stale global part is skipped.
+        await waitFor(() =>
+          expect(setProjectTheme).toHaveBeenCalledWith({ colorSchemeId: "namib" })
+        );
+        expect(setSelectedSchemeIdSilent).not.toHaveBeenCalled();
+        expect(reconcileAppThemeConfig).toHaveBeenCalledTimes(1);
+      } finally {
+        Reflect.deleteProperty(window, "__DAINTREE_INITIAL_PROJECT__");
+      }
+    });
+
+    it("reads once more after the boot payload, for a change made before it subscribed", async () => {
+      const fresh = { colorSchemeId: "bondi" };
+      vi.mocked(appThemeClient.get).mockResolvedValueOnce(fresh);
+      bootWith({ colorSchemeId: "daintree" });
+
+      renderHook(() => useAppThemeConfig());
+
+      await waitFor(() =>
+        expect(reconcileAppThemeConfig).toHaveBeenCalledWith(fresh, { crossfade: true })
+      );
+      expect(setSelectedSchemeIdSilent.mock.invocationCallOrder[0]).toBeLessThan(
+        reconcileAppThemeConfig.mock.invocationCallOrder[0]!
+      );
     });
   });
 
@@ -167,7 +205,7 @@ describe("useAppThemeConfig", () => {
     });
   });
 
-  it("unsubscribes from the appearance listener on unmount", () => {
+  it("unsubscribes from global theme pushes on unmount", () => {
     const { unmount } = renderHook(() => useAppThemeConfig());
     expect(unsubscribe).not.toHaveBeenCalled();
 

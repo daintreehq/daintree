@@ -1164,6 +1164,28 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
   broadcastToRemoteEndpoints(channel as string, [payload]);
 }
 
+/**
+ * {@link typedBroadcast} for state this machine owns, such as its theme: every
+ * local app view hears it, cached ones included, and no remote endpoint does.
+ * `exceptWebContentsId` skips the view that made the change, which already
+ * shows it.
+ */
+export function typedBroadcastToLocalViews<K extends keyof IpcEventMap>(
+  channel: K,
+  payload: IpcEventMap[K],
+  exceptWebContentsId: number | null = null
+): void {
+  for (const wc of getAllAppWebContents()) {
+    if (wc.isDestroyed() || wc.id === exceptWebContentsId) continue;
+    if (isWithheldFromView(wc.id, channel as string, [payload])) continue;
+    try {
+      wc.send(channel as string, payload);
+    } catch {
+      // Silently ignore send failures during window initialization/disposal.
+    }
+  }
+}
+
 export function typedSend<K extends keyof IpcEventMap>(
   window: BrowserWindow,
   channel: K,
