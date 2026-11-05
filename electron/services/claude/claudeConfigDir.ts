@@ -20,5 +20,15 @@ type EnvLike = Readonly<Record<string, string | undefined>>;
 export function resolveLaunchClaudeConfigDir(env: EnvLike): string | undefined {
   if (!hasEnvVar(env, CONFIG_DIR_VAR)) return path.join(os.homedir(), ".claude");
   const configDir = getEnvVar(env, CONFIG_DIR_VAR)?.trim();
-  return configDir && path.isAbsolute(configDir) ? path.resolve(configDir) : undefined;
+  return configDir && isFullyQualified(configDir) ? path.resolve(configDir) : undefined;
+}
+
+/**
+ * Windows calls `\work` absolute, but it takes the drive of whichever cwd
+ * resolves it: the CLI's, in the pane's folder, not this process's. Only a
+ * drive-qualified or UNC path names one folder for both.
+ */
+function isFullyQualified(value: string): boolean {
+  if (!path.isAbsolute(value)) return false;
+  return process.platform !== "win32" || /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(value);
 }

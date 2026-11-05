@@ -184,8 +184,11 @@ describe("subagentUnavailableMessage", () => {
     expect(new Set(messages).size).toBe(reasons.length - 1);
   });
 
-  it("names the agent the message is actually about", () => {
-    expect(subagentUnavailableMessage("cli-missing", "Claude")).toContain("Claude");
-    expect(subagentUnavailableMessage("cli-missing", "Codex")).toContain("Codex");
-  });
+  it.each(["cli-missing", "store-unknown"] as const)(
+    "names the agent the message is actually about, for %s",
+    (reason) => {
+      expect(subagentUnavailableMessage(reason, "Claude")).toContain("Claude");
+      expect(subagentUnavailableMessage(reason, "Codex")).toContain("Codex");
+    }
+  );
 });

@@ -189,19 +189,26 @@ describe("listClaudeSubagents", () => {
 
 describe("the store a pane launched against (#16269)", () => {
   let accountDir: string;
+  let previousConfigDir: string | undefined;
 
   beforeEach(async () => {
     accountDir = await mkdtemp(path.join(tmpdir(), "claude-subagent-account-"));
+    // Daintree's own environment names the other store, which the old lookup
+    // read for every pane. Nothing here may come from it.
+    previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = root;
   });
 
   afterEach(async () => {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     await rm(accountDir, { recursive: true, force: true });
   });
 
-  it("lists an account pane's children from the account's store, not the default one", async () => {
+  it("lists an account pane's children from the account's store, not Daintree's own", async () => {
     getTerminalAsync.mockResolvedValue(claudeTerminal({ claudeConfigDir: accountDir }));
     await seedChild("acc1", [TASK, REPLY], accountDir);
-    // Same session id in the default store: nothing there is this pane's.
+    // Same session id in Daintree's store: nothing there is this pane's.
     await seedChild("def1", [TASK, REPLY], root);
 
     const result = await listClaudeSubagents("t1");
@@ -224,6 +231,22 @@ describe("the store a pane launched against (#16269)", () => {
     await expect(readClaudeSubagentTranscript("t1", "def1")).resolves.toEqual({
       status: "unavailable",
       reason: "subagent-not-found",
+    });
+  });
+
+  it("never falls back to Daintree's store when the account's holds nothing for the session", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal({ claudeConfigDir: accountDir }));
+    await seedChild("def1", [TASK, REPLY], root);
+
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "ok",
+      provider: "claude",
+      parentId: SESSION,
+      subagents: [],
+    });
+    await expect(readClaudeSubagentTranscript("t1", "def1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "no-session",
     });
   });
 

@@ -152,21 +152,26 @@ describe("TerminalProcess — Claude store on the record (#16269)", () => {
     });
   }
 
-  it("records the account folder the launch env named", () => {
+  // A plain shell too: `claude` typed into it later runs against the same env.
+  it.each([
+    ["a Claude launch", { launchAgentId: "claude" as const }],
+    ["a plain shell", {}],
+  ])("records the account folder the launch env named, for %s", (_label, options) => {
     const accountDir = path.resolve(os.tmpdir(), "accounts", "work");
-    const terminal = spawnedWith({ CLAUDE_CONFIG_DIR: accountDir }, { launchAgentId: "claude" });
+    const terminal = spawnedWith({ CLAUDE_CONFIG_DIR: accountDir }, options);
     try {
       expect(terminal.getInfo().claudeConfigDir).toBe(accountDir);
+      expect(terminal.getPublicState().claudeConfigDir).toBe(accountDir);
     } finally {
       terminal.dispose();
     }
   });
 
-  it("records the home store for a plain shell whose env names none", () => {
-    // `claude` typed into it later runs against the same env.
+  it("records the home store when the env names none", () => {
     const terminal = spawnedWith({ PATH: "/usr/bin" });
     try {
       expect(terminal.getInfo().claudeConfigDir).toBe(path.join(os.homedir(), ".claude"));
+      expect(terminal.getPublicState().claudeConfigDir).toBe(path.join(os.homedir(), ".claude"));
     } finally {
       terminal.dispose();
     }
@@ -176,6 +181,7 @@ describe("TerminalProcess — Claude store on the record (#16269)", () => {
     const terminal = spawnedWith({ CLAUDE_CONFIG_DIR: "relative/claude" });
     try {
       expect(terminal.getInfo().claudeConfigDir).toBeUndefined();
+      expect(terminal.getPublicState().claudeConfigDir).toBeUndefined();
     } finally {
       terminal.dispose();
     }

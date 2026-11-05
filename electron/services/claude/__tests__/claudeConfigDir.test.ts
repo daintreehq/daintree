@@ -17,9 +17,10 @@ describe("resolveLaunchClaudeConfigDir", () => {
 
   it("normalises the folder it names", () => {
     const accountDir = path.resolve(os.tmpdir(), "accounts", "work");
+    const { sep } = path;
     expect(
       resolveLaunchClaudeConfigDir({
-        CLAUDE_CONFIG_DIR: `  ${path.join(accountDir, "..", "work")}${path.sep}  `,
+        CLAUDE_CONFIG_DIR: `  ${accountDir}${sep}..${sep}work${sep}  `,
       })
     ).toBe(accountDir);
   });
@@ -43,6 +44,18 @@ describe("resolveLaunchClaudeConfigDir", () => {
     () => {
       expect(resolveLaunchClaudeConfigDir({ claude_config_dir: "C:\\accounts\\work" })).toBe(
         "C:\\accounts\\work"
+      );
+    }
+  );
+
+  it.runIf(process.platform === "win32")(
+    "names no store for a path rooted without a drive, which the CLI resolves on its own cwd's drive",
+    () => {
+      expect(
+        resolveLaunchClaudeConfigDir({ CLAUDE_CONFIG_DIR: "\\accounts\\work" })
+      ).toBeUndefined();
+      expect(resolveLaunchClaudeConfigDir({ CLAUDE_CONFIG_DIR: "\\\\server\\share\\work" })).toBe(
+        "\\\\server\\share\\work"
       );
     }
   );
