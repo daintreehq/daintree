@@ -76,9 +76,7 @@ export function PendingUploadChips({
             upload.folder ? "max-w-80" : "max-w-64"
           )}
         >
-          <span className="min-w-0 truncate text-text-primary" title={upload.name}>
-            {upload.name}
-          </span>
+          <span className="min-w-0 truncate text-text-primary">{upload.name}</span>
           <ChipProgress upload={upload} />
           <button
             type="button"
