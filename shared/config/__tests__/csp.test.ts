@@ -200,9 +200,7 @@ describe("Daintree app CSP", () => {
         [getDaintreeAppDevCSP(), getDevServerOrigins()],
       ] as const) {
         const fontSrc = csp.match(/font-src ([^;]*);/)?.[1] ?? "";
-        expect(fontSrc.split(" ").sort()).toEqual(
-          ["'self'", "data:", "plugin:", ...extra].sort()
-        );
+        expect(fontSrc.split(" ").sort()).toEqual(["'self'", "data:", "plugin:", ...extra].sort());
       }
     });
 
