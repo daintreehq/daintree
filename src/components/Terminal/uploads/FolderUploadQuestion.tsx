@@ -1,0 +1,490 @@
+import { File, Folder } from "lucide-react";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { PathSegments } from "@/components/ui/PathSegments";
+import { TitleEntity } from "@/components/ui/TitleEntity";
+import {
+  PreviewFrame,
+  PreviewNotice,
+  PreviewSectionHeading,
+  PreviewSummary,
+  SummaryRow,
+} from "@/components/Git/GitOperationPreview";
+import { formatBytes } from "@/lib/formatBytes";
+import { pluralize } from "@/lib/pluralize";
+import type {
+  FolderUploadPathProblem,
+  FolderUploadProblem,
+  FolderUploadTotals,
+} from "@shared/types/folderUpload";
+import {
+  HOST_INBOX_ENTRY_TTL_MS,
+  type FolderNotCopiedReason,
+  type FolderSummaryItem,
+  type FolderUploadSummary,
+} from "@shared/types/ipc/fileTransfer";
+import type { UploadQuestion } from "./uploadConfirm";
+
+type FolderQuestion = Extract<UploadQuestion, { kind: "folder" }>;
+
+/** Rows a list on the question shows before it says how many more there are. */
+const LIST_ROWS = 5;
+
+/** Hidden items named beside their count; the rest are in the count. */
+const HIDDEN_NAMES = 4;
+
+const INBOX_TTL = pluralize(Math.round(HOST_INBOX_ENTRY_TTL_MS / 3_600_000), "hour");
+
+/** A path inside the dropped folder, without the folder's own name in front. */
+function insideFolder(path: string, rootName: string): string {
+  const prefix = `${rootName}/`;
+  return path.startsWith(prefix) && path.length > prefix.length ? path.slice(prefix.length) : path;
+}
+
+function atLeast(lowerBound: boolean, text: string): string {
+  return lowerBound ? `at least ${text}` : text;
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function contentsText(totals: FolderUploadTotals, lowerBound: boolean): string {
+  const parts = [
+    pluralize(totals.fileCount, "file"),
+    pluralize(totals.folderCount, "folder"),
+    formatBytes(totals.totalBytes),
+  ].join(" · ");
+  return lowerBound ? `At least ${parts}` : parts;
+}
+
+const NOT_COPIED_LABEL: Record<FolderNotCopiedReason, string> = {
+  symlink: "symbolic link",
+  junction: "junction",
+  "reparse-point": "reparse point",
+  "special-file": "special file",
+  unreadable: "can't be read",
+};
+
+/** Why the listed items stay behind, said once for each kind present. */
+function notCopiedReasons(reasons: ReadonlySet<FolderNotCopiedReason>): string {
+  const sentences: string[] = [];
+  if (reasons.has("symlink") || reasons.has("junction") || reasons.has("reparse-point")) {
+    sentences.push("Links are never followed, so nothing from outside the folder is sent.");
+  }
+  if (reasons.has("special-file")) sentences.push("Devices, sockets and pipes aren't copied.");
+  if (reasons.has("unreadable")) sentences.push("Items this computer can't read are left out.");
+  return sentences.join(" ");
+}
+
+const PATH_PROBLEM: Record<FolderUploadPathProblem, { sentence: string; isName: boolean }> = {
+  "empty-name": { sentence: "An item in it has an empty name.", isName: true },
+  "dot-name": { sentence: "An item in it is named '.' or '..'.", isName: true },
+  separator: { sentence: "An item's name has a slash or backslash in it.", isName: true },
+  "control-character": {
+    sentence: "An item's name has a control character in it.",
+    isName: true,
+  },
+  "malformed-unicode": { sentence: "An item's name isn't valid Unicode.", isName: true },
+  absolute: { sentence: "An item's path leads outside the folder.", isName: false },
+  "drive-letter": { sentence: "An item's path leads outside the folder.", isName: false },
+  "outside-root": { sentence: "An item's path leads outside the folder.", isName: false },
+  "entry-form": {
+    sentence: "An item's path doesn't match whether it's a file or a folder.",
+    isName: false,
+  },
+};
+
+const SEND_LESS = "Send a smaller folder, or the folders inside it one at a time.";
+const RENAME = "Rename it, then drop the folder again.";
+
+export interface FolderRefusal {
+  title: string;
+  detail: string;
+  /** What the listed paths are, for the section that names them. */
+  pathsLabel: string;
+  paths: string[];
+}
+
+/** What the question says about the limit or names that stopped a folder. */
+export function folderRefusal(
+  problem: FolderUploadProblem,
+  summary: FolderUploadSummary
+): FolderRefusal {
+  if (problem.kind === "clash") {
+    return {
+      title: "Two names clash",
+      detail:
+        "A host's disk can't keep these two apart, for example names that differ only in letter case. Rename one, then drop the folder again.",
+      pathsLabel: "Names that clash",
+      paths: [...problem.paths],
+    };
+  }
+  if (problem.kind === "path") {
+    const { sentence, isName } = PATH_PROBLEM[problem.problem];
+    return {
+      title: isName ? "A name the host can't take" : "A path the host can't take",
+      detail: isName ? `${sentence} ${RENAME}` : sentence,
+      pathsLabel: "Item",
+      paths: [problem.path],
+    };
+  }
+  const { maximum, actual, paths } = problem;
+  const counted = (text: string) => atLeast(summary.lowerBound, text);
+  const contributors = { pathsLabel: "Largest contributors", paths };
+  switch (problem.limit) {
+    case "files":
+      return {
+        title: `Over the limit of ${pluralize(maximum, "file")}`,
+        detail: `It holds ${counted(pluralize(actual, "file"))}. ${SEND_LESS}`,
+        ...contributors,
+      };
+    case "folders":
+      return {
+        title: `Over the limit of ${pluralize(maximum, "folder")}`,
+        detail: `It holds ${counted(pluralize(actual, "folder"))}. ${SEND_LESS}`,
+        ...contributors,
+      };
+    case "bytes":
+      return {
+        title: `Over the ${formatBytes(maximum)} limit`,
+        detail: `Its files come to ${counted(formatBytes(actual))}. ${SEND_LESS}`,
+        ...contributors,
+      };
+    case "archive-bytes":
+      return {
+        title: `Over the ${formatBytes(maximum)} limit for a packed folder`,
+        detail: `Packed, it comes to ${counted(formatBytes(actual))}. ${SEND_LESS}`,
+        ...contributors,
+      };
+    // A depth or a length belongs to one entry and is measured exactly.
+    case "depth":
+      return {
+        title: `Nested deeper than ${pluralize(maximum, "level")}`,
+        detail: `An item in it sits ${pluralize(actual, "level")} below the folder. Move it higher, then drop the folder again.`,
+        pathsLabel: "Too deep",
+        paths,
+      };
+    case "name-bytes":
+      return {
+        title: `A name longer than ${pluralize(maximum, "byte")}`,
+        detail: `One name in it takes ${pluralize(actual, "byte")}. ${RENAME}`,
+        pathsLabel: "Name too long",
+        paths,
+      };
+    case "path-bytes":
+      return {
+        title: `A path longer than ${pluralize(maximum, "byte")}`,
+        detail: `One path in it takes ${pluralize(actual, "byte")}, the folder's own name included. Shorten it, then drop the folder again.`,
+        pathsLabel: "Path too long",
+        paths,
+      };
+  }
+}
+
+interface ItemRowData {
+  path: string;
+  kind: "file" | "folder";
+  detail: string | null;
+  /** 0..1 of the folder's bytes, or null when the totals can't give an honest share. */
+  share: number | null;
+}
+
+function shareText(share: number): string {
+  const percent = share * 100;
+  return percent > 0 && percent < 1 ? "<1%" : `${Math.round(percent)}%`;
+}
+
+/** A path as a value: primary ink, mono, wrapping only between folders. */
+function PathText({ path }: { path: string }) {
+  return (
+    <span className="min-w-0 font-mono text-text-primary">
+      <span className="sr-only">{path}</span>
+      <span aria-hidden="true">
+        <PathSegments path={path} />
+      </span>
+    </span>
+  );
+}
+
+function ItemRows({ rows, label }: { rows: ItemRowData[]; label: string }) {
+  return (
+    <ul className="space-y-1.5 px-3 pb-2.5" aria-label={label}>
+      {rows.map((row, index) => {
+        const Icon = row.kind === "folder" ? Folder : File;
+        return (
+          // Wraps rather than truncates: at a narrow width the figures drop under
+          // the name instead of cutting it, so every name stays whole.
+          <li
+            key={`${index}:${row.path}`}
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
+          >
+            <span className="flex min-w-0 flex-[1_1_10rem] items-baseline gap-1.5">
+              <Icon
+                aria-hidden="true"
+                className="size-3 shrink-0 self-center text-text-secondary"
+              />
+              <PathText path={row.path} />
+            </span>
+            {row.detail !== null && (
+              <span className="ml-auto shrink-0 tabular-nums text-text-secondary">
+                {row.detail}
+              </span>
+            )}
+            {row.share !== null && (
+              <>
+                <span className="w-9 shrink-0 text-right tabular-nums text-text-primary">
+                  {shareText(row.share)}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="block h-0.5 basis-full overflow-hidden rounded-full bg-overlay-medium"
+                >
+                  <span
+                    className="block h-full rounded-full bg-text-secondary"
+                    style={{ width: `${Math.min(1, row.share) * 100}%` }}
+                  />
+                </span>
+              </>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function largestRows(summary: FolderUploadSummary): ItemRowData[] {
+  const { totals, lowerBound } = summary;
+  // A lower bound over a lower bound is no share at all.
+  const shares = !lowerBound && totals.totalBytes > 0;
+  return summary.largest.slice(0, LIST_ROWS).map((item) => ({
+    path: insideFolder(item.path, summary.rootName),
+    kind: item.kind,
+    detail: atLeast(
+      lowerBound,
+      item.kind === "folder"
+        ? `${pluralize(item.fileCount, "file")} · ${formatBytes(item.totalBytes)}`
+        : formatBytes(item.totalBytes)
+    ),
+    share: shares ? item.totalBytes / totals.totalBytes : null,
+  }));
+}
+
+/** What a refused folder's listed path adds to the limit it crossed, when the summary knows. */
+function contributionText(
+  item: FolderSummaryItem | undefined,
+  problem: FolderUploadProblem,
+  lowerBound: boolean
+): string | null {
+  if (!item || problem.kind !== "limit") return null;
+  switch (problem.limit) {
+    case "files":
+      return atLeast(lowerBound, pluralize(item.fileCount, "file"));
+    case "folders":
+      return atLeast(lowerBound, pluralize(item.folderCount, "folder"));
+    case "bytes":
+    case "archive-bytes":
+      return atLeast(lowerBound, formatBytes(item.totalBytes));
+    default:
+      return null;
+  }
+}
+
+function HiddenValue({ summary }: { summary: FolderUploadSummary }) {
+  const { hidden, rootName, lowerBound } = summary;
+  if (hidden.fileCount === 0 && hidden.folderCount === 0) {
+    return <span className="text-text-secondary">None</span>;
+  }
+  const counts = [
+    hidden.fileCount > 0 ? pluralize(hidden.fileCount, "file") : null,
+    hidden.folderCount > 0 ? pluralize(hidden.folderCount, "folder") : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" and ");
+  const names = hidden.paths.slice(0, HIDDEN_NAMES).map((path) => insideFolder(path, rootName));
+  return (
+    <span className="block min-w-0">
+      <span className="text-text-primary">
+        {capitalize(atLeast(lowerBound, counts))}, copied like the rest
+      </span>
+      {names.length > 0 && (
+        <span className="block break-words font-mono text-text-secondary">
+          {names.join(", ")}
+          {hidden.paths.length > HIDDEN_NAMES ? " and others" : ""}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function NotCopiedSection({ summary }: { summary: FolderUploadSummary }) {
+  const { notCopied, rootName } = summary;
+  if (notCopied.count === 0) return null;
+  const shown = notCopied.items.slice(0, LIST_ROWS);
+  const more = notCopied.count - shown.length;
+  const reasons = new Set(notCopied.items.map((item) => item.reason));
+  return (
+    <section aria-label="Not copied">
+      <PreviewSectionHeading label="Not copied" count={notCopied.count} />
+      {reasons.size > 0 && (
+        <p className="px-3 pb-1.5 text-text-secondary">{notCopiedReasons(reasons)}</p>
+      )}
+      {shown.length > 0 && (
+        <ItemRows
+          label="Not copied"
+          rows={shown.map((item) => ({
+            path: insideFolder(item.path, rootName),
+            kind: item.path.endsWith("/") ? "folder" : "file",
+            detail: NOT_COPIED_LABEL[item.reason],
+            share: null,
+          }))}
+        />
+      )}
+      {more > 0 && (
+        <p className="px-3 pb-2.5 text-text-secondary">{`and ${pluralize(more, "other")}`}</p>
+      )}
+    </section>
+  );
+}
+
+function RefusedPaths({
+  problem,
+  summary,
+  refusal,
+}: {
+  problem: FolderUploadProblem;
+  summary: FolderUploadSummary;
+  refusal: FolderRefusal;
+}) {
+  // A host that had only counts names no contributors: the folder's own
+  // largest items still show where the bulk is.
+  if (refusal.paths.length === 0) {
+    if (summary.largest.length === 0) return null;
+    return (
+      <section aria-label="Largest items">
+        <PreviewSectionHeading label="Largest items" />
+        <ItemRows label="Largest items" rows={largestRows(summary)} />
+      </section>
+    );
+  }
+  const byPath = new Map(summary.largest.map((item) => [item.path, item]));
+  return (
+    <section aria-label={refusal.pathsLabel}>
+      <PreviewSectionHeading label={refusal.pathsLabel} />
+      <ItemRows
+        label={refusal.pathsLabel}
+        rows={refusal.paths.map((path) => ({
+          path: insideFolder(path, summary.rootName),
+          kind: path.endsWith("/") ? "folder" : "file",
+          detail: contributionText(byPath.get(path), problem, summary.lowerBound),
+          share: null,
+        }))}
+      />
+    </section>
+  );
+}
+
+/**
+ * The question a folder asks before any of it goes to the host: what it holds,
+ * where it lands, and what stays behind. A folder over the limits, or with
+ * names the host can't keep apart, gets the refusal form instead, which says
+ * why and offers only Close.
+ */
+export function FolderUploadQuestion({
+  question,
+  onAnswer,
+}: {
+  question: FolderQuestion;
+  onAnswer: (yes: boolean) => void;
+}) {
+  const { check, hostLabel } = question;
+  const { summary } = check;
+  const refused = check.status === "refused";
+  const refusal =
+    check.status === "refused"
+      ? { problem: check.problem, ...folderRefusal(check.problem, summary) }
+      : null;
+  const decline = () => onAnswer(false);
+  return (
+    <AppDialog
+      isOpen
+      onClose={decline}
+      size="md"
+      hasPreview
+      initialFocus="cancel"
+      data-testid="folder-upload-question"
+    >
+      <AppDialog.Header>
+        <AppDialog.Title>
+          <TitleEntity
+            action={refused ? "Can't send" : "Send"}
+            name={summary.rootName}
+            punctuation={refused ? "" : "?"}
+          />
+        </AppDialog.Title>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+
+      <AppDialog.Body>
+        <PreviewFrame>
+          {refusal && (
+            <PreviewNotice tone="error" title={refusal.title} testId="folder-upload-refusal">
+              {refusal.detail}
+            </PreviewNotice>
+          )}
+          <PreviewSummary testId="folder-upload-summary">
+            <SummaryRow label="Folder">
+              <PathText path={summary.rootName} />
+            </SummaryRow>
+            <SummaryRow label="Host">
+              <span className="break-words text-text-primary">{hostLabel}</span>
+            </SummaryRow>
+            {!refused && (
+              <SummaryRow label="Lands in">
+                <span className="block text-text-primary">
+                  A temporary inbox folder, outside the project
+                </span>
+                <span className="block text-text-secondary">
+                  {`Removed after ${INBOX_TTL}, or sooner if the inbox fills up`}
+                </span>
+              </SummaryRow>
+            )}
+            <SummaryRow
+              label="Contents"
+              aside={summary.lowerBound ? "counting stopped early" : undefined}
+            >
+              <span className="text-text-primary tabular-nums">
+                {contentsText(summary.totals, summary.lowerBound)}
+              </span>
+            </SummaryRow>
+            {!refused && (
+              <SummaryRow label="Hidden">
+                <HiddenValue summary={summary} />
+              </SummaryRow>
+            )}
+          </PreviewSummary>
+          {refusal ? (
+            <RefusedPaths problem={refusal.problem} summary={summary} refusal={refusal} />
+          ) : (
+            <>
+              {summary.largest.length > 0 && (
+                <section aria-label="Largest items">
+                  <PreviewSectionHeading label="Largest items" />
+                  <ItemRows label="Largest items" rows={largestRows(summary)} />
+                </section>
+              )}
+              <NotCopiedSection summary={summary} />
+            </>
+          )}
+        </PreviewFrame>
+      </AppDialog.Body>
+
+      <AppDialog.Footer
+        secondaryAction={{ label: refused ? "Close" : "Cancel", onClick: decline }}
+        primaryAction={
+          refused ? undefined : { label: "Send folder", onClick: () => onAnswer(true) }
+        }
+      />
+    </AppDialog>
+  );
+}

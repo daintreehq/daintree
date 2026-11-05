@@ -51,6 +51,8 @@ function startSend() {
         });
       })
   );
+  // Teardown cancels a send a test leaves running; that rejection is expected.
+  done.catch(() => {});
   return {
     done,
     report: (progress: FolderUploadProgress) => act(() => report(progress)),
@@ -74,6 +76,7 @@ describe("folder send chips", () => {
 
   afterEach(() => {
     cleanup();
+    for (const upload of getPendingUploads(SURFACE)) upload.cancel();
     vi.useRealTimers();
   });
 

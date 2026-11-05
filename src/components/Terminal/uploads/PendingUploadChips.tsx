@@ -48,9 +48,16 @@ export function PendingUploadChips({
       {uploads.map((upload) => (
         <span
           key={upload.id}
-          className="inline-flex max-w-64 items-center gap-1.5 rounded-full border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-1 text-xs text-text-secondary"
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-1 text-xs text-text-secondary",
+            // A folder's phase label runs longer than a file's, so it gets the room
+            // to keep some of the name beside "unpacking 1,204 of 3,000".
+            upload.folder ? "max-w-80" : "max-w-64"
+          )}
         >
-          <span className="min-w-0 truncate text-text-primary">{upload.name}</span>
+          <span className="min-w-0 truncate text-text-primary" title={upload.name}>
+            {upload.name}
+          </span>
           <span className="shrink-0 tabular-nums">{chipLabel(upload)}</span>
           <button
             type="button"

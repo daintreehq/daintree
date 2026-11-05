@@ -19,6 +19,9 @@ export type TransferDestination =
  */
 export const HOST_INBOX_DIR_NAME = "daintree-inbox";
 
+/** How long an inbox entry lasts once nothing in it has changed, as the questions about it say. */
+export const HOST_INBOX_ENTRY_TTL_MS = 24 * 60 * 60 * 1000;
+
 export interface UploadLocalFilePayload {
   hostId: HostId;
   localPath: string;
