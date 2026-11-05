@@ -178,17 +178,28 @@ export function NewWorktreeDialog({
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
-  const lastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
-    (s) => s.lastSelectedWorktreeRecipeIdByProject
+  // Issue and bare creates each remember their own setup. The mode is how the
+  // dialog was opened, not whether an issue gets linked inside it.
+  const isIssueCreate = Boolean(initialIssue);
+  const lastSelectedWorktreeRecipeIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.lastSelectedIssueWorktreeRecipeIdByProject
+      : s.lastSelectedWorktreeRecipeIdByProject
   );
-  const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
-    (s) => s.setLastSelectedWorktreeRecipeIdByProject
+  const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.setLastSelectedIssueWorktreeRecipeIdByProject
+      : s.setLastSelectedWorktreeRecipeIdByProject
   );
-  const lastSelectedWorktreeAgentIdByProject = usePreferencesStore(
-    (s) => s.lastSelectedWorktreeAgentIdByProject
+  const lastSelectedWorktreeAgentIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.lastSelectedIssueWorktreeAgentIdByProject
+      : s.lastSelectedWorktreeAgentIdByProject
   );
-  const setLastSelectedWorktreeAgentIdByProject = usePreferencesStore(
-    (s) => s.setLastSelectedWorktreeAgentIdByProject
+  const setLastSelectedWorktreeAgentIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.setLastSelectedIssueWorktreeAgentIdByProject
+      : s.setLastSelectedWorktreeAgentIdByProject
   );
   // Flattened to `[branch, id, name] x N` so the selector stays shallow-comparable
   // while still carrying the owning worktree's identity. One source for both the

@@ -74,6 +74,72 @@ describe("preferencesStore migration", () => {
     expect(store.getState().lastSelectedWorktreeAgentIdByProject["proj-1"]).toBe("claude");
   });
 
+  it("carries the one remembered setup into both openings during v<21 migration (#16283)", async () => {
+    setStoredState(
+      {
+        lastSelectedWorktreeRecipeIdByProject: { "proj-1": "r1", "proj-2": null },
+        lastSelectedWorktreeAgentIdByProject: { "proj-1": "claude", "proj-2": null, bad: 42 },
+      },
+      20
+    );
+    const store = await loadStore();
+    const state = store.getState();
+    expect(state.lastSelectedWorktreeRecipeIdByProject).toEqual({ "proj-1": "r1", "proj-2": null });
+    expect(state.lastSelectedWorktreeAgentIdByProject).toEqual({
+      "proj-1": "claude",
+      "proj-2": null,
+    });
+    expect(state.lastSelectedIssueWorktreeRecipeIdByProject).toEqual({
+      "proj-1": "r1",
+      "proj-2": null,
+    });
+    expect(state.lastSelectedIssueWorktreeAgentIdByProject).toEqual({
+      "proj-1": "claude",
+      "proj-2": null,
+    });
+  });
+
+  it("keeps an issue memory that is already on disk during v<21 migration", async () => {
+    setStoredState(
+      {
+        lastSelectedWorktreeRecipeIdByProject: { "proj-1": "r1" },
+        lastSelectedWorktreeAgentIdByProject: { "proj-1": "claude" },
+        lastSelectedIssueWorktreeRecipeIdByProject: { "proj-1": "issue-recipe" },
+        lastSelectedIssueWorktreeAgentIdByProject: { "proj-1": null },
+      },
+      20
+    );
+    const store = await loadStore();
+    expect(store.getState().lastSelectedIssueWorktreeRecipeIdByProject).toEqual({
+      "proj-1": "issue-recipe",
+    });
+    expect(store.getState().lastSelectedIssueWorktreeAgentIdByProject).toEqual({ "proj-1": null });
+  });
+
+  it("keeps the issue and bare memories apart when either is written (#16283)", async () => {
+    setStoredState(
+      {
+        lastSelectedIssueWorktreeAgentIdByProject: { "proj-1": "claude", bad: 42 },
+      },
+      21
+    );
+    const store = await loadStore();
+    expect(store.getState().lastSelectedIssueWorktreeAgentIdByProject).toEqual({
+      "proj-1": "claude",
+    });
+
+    store.getState().setLastSelectedIssueWorktreeRecipeIdByProject("proj-1", "issue-recipe");
+    store.getState().setLastSelectedIssueWorktreeAgentIdByProject("proj-1", null);
+    store.getState().setLastSelectedWorktreeRecipeIdByProject("proj-1", null);
+    store.getState().setLastSelectedWorktreeAgentIdByProject("proj-1", "claude");
+
+    const state = store.getState();
+    expect(state.lastSelectedIssueWorktreeRecipeIdByProject).toEqual({ "proj-1": "issue-recipe" });
+    expect(state.lastSelectedIssueWorktreeAgentIdByProject).toEqual({ "proj-1": null });
+    expect(state.lastSelectedWorktreeRecipeIdByProject).toEqual({ "proj-1": null });
+    expect(state.lastSelectedWorktreeAgentIdByProject).toEqual({ "proj-1": "claude" });
+  });
+
   it("removes lastSelectedWorktreeRecipeId and initializes the per-project map during v0 migration", async () => {
     setStoredState(
       {
@@ -599,7 +665,7 @@ describe("preferencesStore migration", () => {
       // Pin the bump too: `migrate` only runs for a blob below the configured
       // version, so leaving it at 17 would skip the branch above entirely and
       // hydration's sanitizer would quietly supply the same default.
-      expect(store.persist.getOptions().version).toBe(20);
+      expect(store.persist.getOptions().version).toBe(21);
     });
 
     it("leaves an already-valid rung alone when migrating", async () => {
@@ -1071,6 +1137,35 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     restoreLocalStorage();
     vi.resetModules();
     vi.restoreAllMocks();
+  });
+
+  it("a view's issue-create write preserves a sibling project's issue setup", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: store.persist.getOptions().version,
+        state: {
+          lastSelectedIssueWorktreeRecipeIdByProject: { "proj-b": "recipe-b" },
+          lastSelectedIssueWorktreeAgentIdByProject: { "proj-b": "claude" },
+        },
+      })
+    );
+
+    store.getState().setLastSelectedIssueWorktreeRecipeIdByProject("proj-a", "recipe-a");
+    store.getState().setLastSelectedIssueWorktreeAgentIdByProject("proj-a", null);
+
+    const written = readBlob(backing);
+    expect(written.state.lastSelectedIssueWorktreeRecipeIdByProject).toEqual({
+      "proj-a": "recipe-a",
+      "proj-b": "recipe-b",
+    });
+    expect(written.state.lastSelectedIssueWorktreeAgentIdByProject).toEqual({
+      "proj-a": null,
+      "proj-b": "claude",
+    });
   });
 
   it("a fresh view's recipe write preserves a sibling project's recipe and non-default scalar", async () => {

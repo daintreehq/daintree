@@ -101,6 +101,67 @@ describe("useRecipePicker", () => {
     expect(result.current.selectedRecipeId).toBe(null);
   });
 
+  it("selects initialRecipeId over a remembered recipe", () => {
+    const recipes = [makeRecipe("recipe-1"), makeRecipe("recipe-2")];
+    const { result } = renderHook(() =>
+      useRecipePicker({
+        ...defaultArgs,
+        startingLayoutRecipes: recipes,
+        lastSelectedWorktreeRecipeId: "recipe-1",
+        initialRecipeId: "recipe-2",
+      })
+    );
+    expect(result.current.selectedRecipeId).toBe("recipe-2");
+  });
+
+  it("clears a stale remembered recipe and falls back to the project default", () => {
+    const setter = vi.fn();
+    const { result } = renderHook(() =>
+      useRecipePicker({
+        ...defaultArgs,
+        startingLayoutRecipes: [makeRecipe("project-default")],
+        defaultRecipeId: "project-default",
+        lastSelectedWorktreeRecipeId: "deleted-recipe",
+        setLastSelectedWorktreeRecipeIdByProject: setter,
+      })
+    );
+    expect(setter).toHaveBeenCalledWith("test-project", undefined);
+    expect(result.current.selectedRecipeId).toBe("project-default");
+  });
+
+  it("reseeds from the memory it is handed when a kept-mounted picker reopens (#16283)", () => {
+    const recipes = [makeRecipe("issue-recipe")];
+    const bareSetter = vi.fn();
+    const issueSetter = vi.fn();
+    const { result, rerender } = renderHook((props) => useRecipePicker(props), {
+      initialProps: {
+        ...defaultArgs,
+        startingLayoutRecipes: recipes,
+        lastSelectedWorktreeRecipeId: "issue-recipe" as string | null | undefined,
+        setLastSelectedWorktreeRecipeIdByProject: issueSetter,
+      },
+    });
+    expect(result.current.selectedRecipeId).toBe("issue-recipe");
+
+    rerender({
+      ...defaultArgs,
+      isOpen: false,
+      startingLayoutRecipes: recipes,
+      lastSelectedWorktreeRecipeId: null,
+      setLastSelectedWorktreeRecipeIdByProject: bareSetter,
+    });
+    rerender({
+      ...defaultArgs,
+      startingLayoutRecipes: recipes,
+      lastSelectedWorktreeRecipeId: null,
+      setLastSelectedWorktreeRecipeIdByProject: bareSetter,
+    });
+
+    expect(result.current.selectedRecipeId).toBeNull();
+    expect(bareSetter).not.toHaveBeenCalled();
+    expect(issueSetter).not.toHaveBeenCalled();
+  });
+
   it("clears stale lastSelected and falls back to clone", () => {
     const setter = vi.fn();
     const { result } = renderHook(() =>
