@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, shell } from "electron";
+import { dialog, shell, type WebContents } from "electron";
 import { openWithDefaultApp } from "../../utils/openPath.js";
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
@@ -6,7 +6,7 @@ import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { getCrashRecoveryService } from "../../services/CrashRecoveryService.js";
 import { getDevServerUrl } from "../../../shared/config/devServer.js";
-import { isRecoveryPageUrl } from "../../../shared/utils/trustedRenderer.js";
+import { isMainAppRoute, isRecoveryPageUrl } from "../../../shared/utils/trustedRenderer.js";
 // Lazy-imported below (recovery export is only triggered from recovery.html
 // by user action — keeps DiagnosticsCollector and its archiver/v8 deps out
 // of the eager-import graph).
@@ -18,6 +18,27 @@ function getAppUrl(): string {
     return getDevServerUrl();
   }
   return "app://daintree/index.html";
+}
+
+// recovery.html replaces the crashed document in the view's own webContents,
+// so the app entry before it is what that view was showing. Only the window's
+// startup view carries its project in the URL (`?projectId=`); views from
+// ProjectViewFactory load the static entry and keep their project in
+// additionalArguments, which survive navigation, so the default URL restores
+// them too.
+function loadAppInView(sender: WebContents, label: string): void {
+  let url = getAppUrl();
+  const history = sender.navigationHistory;
+  for (let i = history.getActiveIndex(); i >= 0; i--) {
+    const entryUrl = history.getEntryAtIndex(i).url;
+    if (isMainAppRoute(entryUrl)) {
+      url = entryUrl;
+      break;
+    }
+  }
+  sender.loadURL(url).catch((err: unknown) => {
+    console.error(`[MAIN] Recovery: ${label} failed to load ${url}:`, err);
+  });
 }
 
 // All four recovery handlers validate event.senderFrame.url synchronously
@@ -36,11 +57,10 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
         );
       }
 
-      const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
-      if (win && !win.isDestroyed()) {
-        console.log("[MAIN] Recovery: reloading app");
-        win.loadURL(getAppUrl());
-      }
+      const sender = ctx.event?.sender;
+      if (!sender || sender.isDestroyed()) return;
+      console.log("[MAIN] Recovery: reloading app");
+      loadAppInView(sender, "reload");
     })
   );
 
@@ -53,18 +73,17 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
         );
       }
 
-      const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
-      if (win && !win.isDestroyed()) {
-        console.log("[MAIN] Recovery: resetting state and reloading app");
-        const service = getCrashRecoveryService();
-        service.resetToFresh();
-        // Drop the in-memory pending-crash record too — the reload below
-        // fires app:boot, which re-reads getPendingCrash(); without this the
-        // recovery dialog reappears immediately with the backup already
-        // deleted from disk (#10809, same surface as LRU switch-back).
-        service.clearPendingCrash();
-        win.loadURL(getAppUrl());
-      }
+      const sender = ctx.event?.sender;
+      if (!sender || sender.isDestroyed()) return;
+      console.log("[MAIN] Recovery: resetting state and reloading app");
+      const service = getCrashRecoveryService();
+      service.resetToFresh();
+      // Drop the in-memory pending-crash record too — the reload below
+      // fires app:boot, which re-reads getPendingCrash(); without this the
+      // recovery dialog reappears immediately with the backup already
+      // deleted from disk (#10809, same surface as LRU switch-back).
+      service.clearPendingCrash();
+      loadAppInView(sender, "reset-and-reload");
     })
   );
 
@@ -82,10 +101,10 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
       const json = JSON.stringify(payload, null, 2);
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      // BrowserWindow.fromWebContents() is null for a WebContentsView, which is
+      // where recovery.html lives; senderWindow resolves through the registry.
       const parentWin =
-        (ctx.event && BrowserWindow.fromWebContents(ctx.event.sender)) ??
-        deps.windowRegistry?.getPrimary()?.browserWindow ??
-        deps.mainWindow;
+        ctx.senderWindow ?? deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
       const dialogOpts = {
         title: "Save Diagnostics",
         defaultPath: `daintree-diagnostics-${timestamp}.json`,
