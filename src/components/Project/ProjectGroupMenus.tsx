@@ -22,6 +22,7 @@ import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdow
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -370,11 +371,7 @@ function GroupNameDialog({
             }
           }}
         />
-        {error && (
-          <div role="alert" className="text-xs text-status-danger">
-            {error}
-          </div>
-        )}
+        {error && <InlineError role="alert">{error}</InlineError>}
       </div>
     </ConfirmDialog>
   );

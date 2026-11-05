@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import { Field, FieldError, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH } from "@shared/types/decisions";
 
@@ -95,11 +95,7 @@ export function DecisionsExportDialog({
           {mismatch && <FieldError>The passphrases don't match</FieldError>}
         </Field>
       </form>
-      {error && (
-        <p role="alert" className="text-xs text-status-error select-text">
-          {error}
-        </p>
-      )}
+      {error && <InlineError role="alert">{error}</InlineError>}
     </ConfirmDialog>
   );
 }

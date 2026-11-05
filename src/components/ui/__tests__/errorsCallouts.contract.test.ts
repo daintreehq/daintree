@@ -59,6 +59,20 @@ const MIGRATED_FILES = [
   "src/components/Project/ProjectSwitcherConfirmDialogs.tsx",
   "src/components/Project/paletteTiles.tsx",
   "src/panels/dev-preview/element-picker/InspectorNotice.tsx",
+  "src/components/Settings/Decisions/DecisionsDeleteLocalDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsDeleteRelayDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsDisconnectDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsExportDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsModelClearDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsRevokeDeviceDialog.tsx",
+  "src/components/Settings/Hosts/AddHostDialog.tsx",
+  "src/components/Settings/Hosts/ChangeHostTargetDialog.tsx",
+  "src/components/Settings/Hosts/HostDetail.tsx",
+  "src/components/Settings/Hosts/HostsSettingsTab.tsx",
+  "src/components/Browser/BrowserToolbar.tsx",
+  "src/components/Terminal/TerminalNotifyChip.tsx",
+  "src/components/Project/ProjectGroupMenus.tsx",
+  "src/components/Plugin/ProjectPluginIndicator.tsx",
 ];
 
 /**

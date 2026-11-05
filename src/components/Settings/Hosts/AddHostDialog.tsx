@@ -3,7 +3,13 @@ import { Check, CircleCheck } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout, type CalloutSeverity } from "@/components/ui/Callout";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  InlineError,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -1496,11 +1502,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         {verdict === "newer" && localUpdate && <LocalUpdateStatus update={localUpdate} />}
         {noSystemd && (
           <div className="mt-3 space-y-2" data-testid="add-host-no-systemd">
-            <p role="alert" className="text-xs text-status-error">
+            <InlineError role="alert">
               {viaWsl
                 ? `${target} runs without systemd, which Daintree's Host mode needs.`
                 : "This machine runs without systemd, which Daintree's Host mode needs on Linux."}
-            </p>
+            </InlineError>
             {viaWsl && (
               <>
                 <p className="text-xs text-text-secondary">

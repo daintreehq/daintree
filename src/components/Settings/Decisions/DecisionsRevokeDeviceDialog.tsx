@@ -1,3 +1,4 @@
+import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { deviceRoleLabel } from "./devicesCopy";
@@ -47,11 +48,7 @@ export function DecisionsRevokeDeviceDialog({
       restoreFocusTo={restoreFocusTo}
       preferRestoreFocusTo={revoked}
     >
-      {error && (
-        <p role="alert" className="text-xs text-status-error select-text">
-          {error}
-        </p>
-      )}
+      {error && <InlineError role="alert">{error}</InlineError>}
     </ConfirmDialog>
   );
 }

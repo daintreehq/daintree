@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -198,9 +198,9 @@ export function ChangeHostTargetDialog({
           )}
         </div>
         {error && (
-          <p role="alert" className="mt-3 text-xs text-status-error select-text">
+          <InlineError role="alert" className="mt-3">
             {error}
-          </p>
+          </InlineError>
         )}
       </AppDialog.Body>
       <AppDialog.Footer

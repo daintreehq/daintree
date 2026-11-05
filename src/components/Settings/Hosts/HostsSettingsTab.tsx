@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
@@ -332,11 +333,7 @@ export default function HostsSettingsTab() {
         onConfirm={confirmForget}
         isConfirmLoading={forgetting}
       >
-        {forgetError && (
-          <p role="alert" className="text-xs text-status-error select-text">
-            {forgetError}
-          </p>
-        )}
+        {forgetError && <InlineError role="alert">{forgetError}</InlineError>}
       </ConfirmDialog>
     </div>
   );

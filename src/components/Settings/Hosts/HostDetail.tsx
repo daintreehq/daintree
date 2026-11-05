@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { getAgentConfig } from "@shared/config/agentRegistry";
@@ -552,11 +553,7 @@ export function HostDetail({
         onConfirm={remove}
         isConfirmLoading={removing}
       >
-        {removeError && (
-          <p role="alert" className="text-xs text-status-error select-text">
-            {removeError}
-          </p>
-        )}
+        {removeError && <InlineError role="alert">{removeError}</InlineError>}
       </ConfirmDialog>
       {changeTargetOpen && sshTarget !== null && (
         <ChangeHostTargetDialog
