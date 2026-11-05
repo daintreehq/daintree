@@ -55,7 +55,11 @@ import {
   useTerminalColorSchemeStore,
 } from "@/store/terminalColorSchemeStore";
 import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFence";
-import { isTerminalReply } from "@/services/terminal/inputUtils";
+import {
+  createSurrogatePairJoiner,
+  isTerminalReply,
+  isWindowCloseChord,
+} from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
@@ -293,6 +297,7 @@ export function CanopyTerminal({
       rows: 24,
       cursorBlink: false,
     });
+    terminal.attachCustomKeyEventHandler((event) => !isWindowCloseChord(event));
     // Awaited before the snapshot's first write, so widths are recorded as the grid records them.
     const unicodeReady = activateUnicode11(terminal);
     terminal.open(host);
@@ -581,7 +586,8 @@ export function CanopyTerminal({
       frame.scrollLeft += event.deltaX;
     };
     frame.addEventListener("wheel", sideways, { capture: true, passive: false });
-    const input = terminal.onData((data) => {
+    const joinSurrogatePairs = createSurrogatePairJoiner();
+    const forwardInput = (data: string) => {
       const watchId = stream.watchId;
       // A reply to the program's own query, or a focus change, can fall
       // inside a gesture: the terminal's own pane answers those, and focus
@@ -595,6 +601,13 @@ export function CanopyTerminal({
         },
         (error: unknown) => logWarn("[Canopy] input refused", { error })
       );
+    };
+    const input = terminal.onData((data) => {
+      if (!gesture || stream.watchId === null || reconnectingRef.current) {
+        joinSurrogatePairs.reset();
+        return;
+      }
+      for (const chunk of joinSurrogatePairs.join(data)) forwardInput(chunk);
     });
 
     // The link under the pointer when the menu opened: the hover ends as the pointer reaches it.

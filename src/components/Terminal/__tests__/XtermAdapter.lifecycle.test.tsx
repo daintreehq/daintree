@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => {
   let keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
   let exitHandler: ((exitCode: number) => void) | null = null;
   let paddingPaintHandler: ((paint: TerminalPaddingPaint) => void) | null = null;
-  const platform = { isMac: true };
+  const platform = { isMac: true, isWindows: false };
 
   const defaultAppearance = {
     fontSize: 14,
@@ -124,6 +124,7 @@ const mocks = vi.hoisted(() => {
       managed.isAttaching = false;
       (managed as { keyHandlerInstalled?: boolean }).keyHandlerInstalled = false;
       platform.isMac = true;
+      platform.isWindows = false;
       // vi.clearAllMocks() drops calls but keeps implementations, so a test that
       // switches to the alt buffer would otherwise leak into the next one.
       terminalInstanceService.getAltBufferState.mockReturnValue(false);
@@ -138,6 +139,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("@/lib/platform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/platform")>()),
   isMac: () => mocks.platform.isMac,
+  isWindows: () => mocks.platform.isWindows,
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
@@ -486,6 +488,45 @@ describe("XtermAdapter lifecycle", () => {
     expect(repeatedTabStopPropagationSpy).toHaveBeenCalled();
 
     expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("leaves Alt+F4 to Windows so a focused terminal does not keep the window open", async () => {
+    mocks.platform.isMac = false;
+    mocks.platform.isWindows = true;
+    renderAdapter();
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+    const keyHandler = mocks.getKeyHandler();
+
+    const altF4 = new KeyboardEvent("keydown", {
+      key: "F4",
+      code: "F4",
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(altF4, "preventDefault");
+    expect(keyHandler?.(altF4)).toBe(false);
+    expect(preventDefaultSpy).not.toHaveBeenCalled();
+
+    // Alt+Shift+F4 and plain F4 are still the program's.
+    const altShiftF4 = new KeyboardEvent("keydown", {
+      key: "F4",
+      code: "F4",
+      altKey: true,
+      shiftKey: true,
+    });
+    expect(keyHandler?.(altShiftF4)).toBe(true);
+    expect(keyHandler?.(new KeyboardEvent("keydown", { key: "F4", code: "F4" }))).toBe(true);
+  });
+
+  it("keeps Alt+F4 as terminal input off Windows", async () => {
+    mocks.platform.isMac = false;
+    renderAdapter();
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+    const keyHandler = mocks.getKeyHandler();
+    expect(
+      keyHandler?.(new KeyboardEvent("keydown", { key: "F4", code: "F4", altKey: true }))
+    ).toBe(true);
   });
 
   it("captures bare F11 so Electron's fullscreen accelerator does not fire (#9104)", async () => {

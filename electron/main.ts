@@ -66,7 +66,7 @@ import {
 } from "./lifecycle/windowRestore.js";
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
-import { registerShutdownHandler } from "./lifecycle/shutdown.js";
+import { registerShutdownHandler, routeLastWindowCloseThroughQuit } from "./lifecycle/shutdown.js";
 import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
@@ -1233,6 +1233,7 @@ if (!gotTheLock) {
       initialWindowRequest ? initialWindowRequest.open(request) : createWindow().then(() => {}),
     getMainWindow,
     windowRegistry,
+    onLastWindowClose: routeLastWindowCloseThroughQuit,
     keepsRunningWithoutWindows: () =>
       hostModeLaunch || hostModeHandedOff || isHostModeEnabled() || dueScheduleLaunch,
     isLaunchSettled: () => launchSettled,

@@ -791,6 +791,85 @@ describe("registerShutdownHandler", () => {
     }
   });
 
+  describe("closing the last window off macOS", () => {
+    const originalPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    });
+
+    it("becomes a quit, which can warn, while an agent is working", async () => {
+      vi.useFakeTimers({ toFake: ["setImmediate"] });
+      try {
+        quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(true);
+        expect(appMock.quit).not.toHaveBeenCalled();
+        vi.runAllTimers();
+        expect(appMock.quit).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets the window close when nothing would be warned about", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+      const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+      expect(routeLastWindowCloseThroughQuit()).toBe(false);
+    });
+
+    it("holds the window while the warning it raised is still open", async () => {
+      const { setExitConfirmationPending } = await import("../attachedShells.js");
+      quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+      setExitConfirmationPending(true);
+      try {
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(true);
+        expect(appMock.quit).not.toHaveBeenCalled();
+      } finally {
+        setExitConfirmationPending(false);
+      }
+    });
+
+    it("also asks for a shell another machine has attached", async () => {
+      const { setAttachedShellsProvider } = await import("../attachedShells.js");
+      quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+      setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+      vi.useFakeTimers({ toFake: ["setImmediate"] });
+      try {
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(true);
+        vi.runAllTimers();
+        expect(appMock.quit).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+        setAttachedShellsProvider(null);
+      }
+    });
+
+    it("lets a signal shutdown close the window without asking", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      try {
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(false);
+      } finally {
+        signalShutdownMock.isSignalShutdown.mockReturnValue(false);
+      }
+    });
+
+    it("does nothing on macOS, where closing the window never quits", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+      expect(routeLastWindowCloseThroughQuit()).toBe(false);
+    });
+  });
+
   describe("termination while the quit warning is open (#15563)", () => {
     // clearAllMocks keeps queued once-implementations, so a test that fails
     // before consuming one would hand it to the next test.

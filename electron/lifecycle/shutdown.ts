@@ -121,6 +121,24 @@ const REMOTE_HOSTS_STOP_BUDGET_MS = 2_000;
 
 let isConfirmingQuit = false;
 
+/**
+ * Off macOS, closing the last window quits the app, but by the time
+ * `before-quit` runs that window is gone and the warning about working agents
+ * has nowhere to show, so Alt+F4 or the caption's close button quit without
+ * it. Called from that window's `close` when closing it would quit: when the
+ * warning has something to say, the close becomes a quit, which asks while the
+ * window is still up and leaves it open if the answer is no.
+ */
+export function routeLastWindowCloseThroughQuit(): boolean {
+  if (process.platform === "darwin" || isE2EMode || isSmokeTest) return false;
+  if (getActiveShutdown() || isSignalShutdown()) return false;
+  if (isConfirmingQuit || isExitConfirmationPending()) return true;
+  const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
+  if (activeCount === 0 && getAttachedShells().length === 0) return false;
+  setImmediate(() => app.quit());
+  return true;
+}
+
 export function registerShutdownHandler(deps: ShutdownDeps): void {
   // Publish the cleanup chain to the coordinator so the update-install path
   // (AutoUpdaterService) can run the exact same shutdown work. On macOS,

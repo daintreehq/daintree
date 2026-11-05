@@ -1,4 +1,6 @@
 import type { AgentState } from "@/types";
+import type { WaitingReason } from "@shared/types/agent";
+import { isPtyPanel } from "@shared/types/panel";
 import type { ManagedTerminal } from "./types";
 import { usePanelStore } from "@/store/panelStore";
 import { logDebug, logError } from "@/utils/logger";
@@ -26,6 +28,15 @@ const DIRECTING_MAX_WALL_MS = 15000;
 // settling, both of which treat directing as busy.
 const DIRECTING_DRAFT_ABANDON_MS = 120_000;
 
+// Enter on a waiting agent shows working before the host says so. The host
+// confirms a submission within about a second (its input-confirm window plus a
+// poll); an Enter that submits nothing, such as one confirming a selection in
+// a startup dialog, gets no report at all, and without this the pane would
+// read working until the agent next changed state on its own. Only the host's
+// own reports move `lastAgentObservation`, so it tells a confirmation apart
+// from this controller's write echoed back through the panel store.
+const OPTIMISTIC_WORKING_CONFIRM_MS = 5000;
+
 type DirectingExitTrigger =
   | "timer"
   | "enter-key"
@@ -41,6 +52,7 @@ export class TerminalAgentStateController {
   private directingEnteredAt = new Map<string, number>();
   private compositionCounts = new Map<string, number>();
   private composerDraftHolds = new Set<string>();
+  private optimisticWorkingTimers = new Map<string, number>();
   private deps: AgentStateControllerDeps;
   private visibilityListenerAttached = false;
 
@@ -187,9 +199,53 @@ export class TerminalAgentStateController {
       logDebug("[directing] exit", { terminalId: id, trigger: "enter-key" });
     }
 
+    const before = usePanelStore.getState().panelsById[id];
+    const waitingReason = before && isPtyPanel(before) ? before.waitingReason : undefined;
+
     managed.agentState = "working";
     this.notifySubscribers(managed, "working");
     usePanelStore.getState().updateAgentState(id, "working");
+
+    this.clearOptimisticWorkingTimer(id);
+    this.optimisticWorkingTimers.set(
+      id,
+      window.setTimeout(() => {
+        this.optimisticWorkingTimers.delete(id);
+        this.revertUnconfirmedWorking(id, waitingReason);
+      }, OPTIMISTIC_WORKING_CONFIRM_MS)
+    );
+  }
+
+  private clearOptimisticWorkingTimer(id: string): void {
+    const timer = this.optimisticWorkingTimers.get(id);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.optimisticWorkingTimers.delete(id);
+  }
+
+  private revertUnconfirmedWorking(id: string, waitingReason: WaitingReason | undefined): void {
+    const managed = this.deps.getInstance(id);
+    const panel = usePanelStore.getState().panelsById[id];
+    if (!managed || !panel || !isPtyPanel(panel) || panel.agentState !== "working") return;
+    // A pane adopted from an orphaned terminal carries no observation yet; the
+    // waiting state this Enter was taken from is then the last thing seen.
+    const observed = panel.lastAgentObservation?.agentState ?? "waiting";
+    if (observed === "working" || observed === "directing") return;
+    managed.agentState = observed;
+    managed.canonicalAgentState = observed;
+    logDebug("[optimistic-working] unconfirmed, reverting", { terminalId: id, observed });
+    this.notifySubscribers(managed, observed);
+    usePanelStore
+      .getState()
+      .updateAgentState(
+        id,
+        observed,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        observed === "waiting" ? waitingReason : undefined
+      );
   }
 
   clearDirectingState(id: string, trigger: string = "external"): void {
@@ -211,6 +267,7 @@ export class TerminalAgentStateController {
   destroy(id: string): void {
     const managed = this.deps.getInstance(id);
     const wasDirecting = managed?.agentState === "directing";
+    this.clearOptimisticWorkingTimer(id);
 
     const timer = this.directingTimers.get(id);
     if (timer !== undefined) {
@@ -231,6 +288,10 @@ export class TerminalAgentStateController {
       clearTimeout(timer);
     }
     this.directingTimers.clear();
+    for (const timer of this.optimisticWorkingTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.optimisticWorkingTimers.clear();
     this.compositionCounts.clear();
     this.directingEnteredAt.clear();
     this.composerDraftHolds.clear();

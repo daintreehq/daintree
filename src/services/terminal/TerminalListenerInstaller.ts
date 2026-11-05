@@ -6,7 +6,12 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isUselessTitle, normalizeObservedTitle } from "@shared/utils/isUselessTitle";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ManagedTerminal } from "./types";
-import { isMouseReport, isNonKeyboardInput, isTerminalReply } from "./inputUtils";
+import {
+  createSurrogatePairJoiner,
+  isMouseReport,
+  isNonKeyboardInput,
+  isTerminalReply,
+} from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
 import {
@@ -946,7 +951,8 @@ export function installTerminalBoundListeners(
     });
   }
 
-  const inputDisposable = terminal.onData((data) => {
+  const joinSurrogatePairs = createSurrogatePairJoiner();
+  const handleInput = (data: string) => {
     if (managed.isInputLocked) {
       // A history refill holds typing, not the program's own queries (#14220).
       if (managed.historyRefilling && isTerminalReply(data)) terminalClient.writeReply(id, data);
@@ -981,6 +987,16 @@ export function installTerminalBoundListeners(
     if (managed.onInput) {
       managed.onInput(data);
     }
+  };
+  const inputDisposable = terminal.onData((data) => {
+    // Input that is dropped never reaches the joiner, so a half typed while
+    // blocked can't surface with whatever is typed after the block lifts.
+    if (managed.isInputLocked || isHostSwitchPending()) {
+      joinSurrogatePairs.reset();
+      handleInput(data);
+      return;
+    }
+    for (const chunk of joinSurrogatePairs.join(data)) handleInput(chunk);
   });
   managed.listeners.push(() => inputDisposable.dispose());
 

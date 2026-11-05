@@ -295,6 +295,7 @@ import {
   isWindowsAgentExecutableFor,
   resolveWindowsAgentExecutable,
   type WindowsAgentExecutable,
+  type WindowsClaudeResumeChoice,
 } from "../../../utils/windowsAgentLaunch.js";
 import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
@@ -1340,11 +1341,30 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         ? await import("../../../services/terminalWhenDone/terminalWhenDoneLive.js")
         : null;
 
+    // Main can't see a Windows pane's Claude store (its PowerShell profile may
+    // move it), so the lookup above stays unsure there and an untouched pane
+    // would come back as a resume the CLI refuses. The launch script checks the
+    // pane's own store instead and assigns the id afresh when there is nothing
+    // to resume. A caller resuming one exact conversation keeps the refusal.
+    const windowsClaudeResume: WindowsClaudeResumeChoice | undefined = (() => {
+      if (!windowsAgentExecutable || launchAgentId !== "claude" || untouchedSessionId) return;
+      if (claudePaneStore !== null || validatedOptions.exactResume === true) return;
+      const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
+      if (!relaunch) return;
+      if (spawnAgentSessionId && spawnAgentSessionId !== relaunch.sessionId) return;
+      return { assignedCommand: relaunch.command, sessionId: relaunch.sessionId };
+    })();
+
     try {
       // Inside the try: a failed resolution throws here, and the catch below is
       // what releases the pane config and help binding made above.
       const startupCommand = windowsAgentExecutable
-        ? buildWindowsAgentLaunchScript(safeCommand, windowsAgentExecutable, windowsAgentEnv())
+        ? buildWindowsAgentLaunchScript(
+            safeCommand,
+            windowsAgentExecutable,
+            windowsAgentEnv(),
+            windowsClaudeResume
+          )
         : safeCommand;
       // A relay removal's exit is the only word of how it went (#16202), so it
       // runs nothing but the pinned CLI, as the PTY's own process. A removal

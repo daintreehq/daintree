@@ -154,11 +154,27 @@ export function isWindowsAgentExecutableFor(
 }
 
 /** Inherit the PTY handles while avoiding both cmd.exe and PowerShell's native binder. */
-export function buildWindowsAgentLaunchScript(
+/**
+ * A Claude resume whose transcript store only the pane itself can see. On
+ * Windows the pane's PowerShell profile can move `CLAUDE_CONFIG_DIR` where main
+ * never looks (see `resolvePaneClaudeProjectsRoot`), so an untouched pane can't
+ * be told apart from one with a conversation before the launch. The script
+ * decides instead, after the profile has run: the resume when the transcript
+ * exists, otherwise the same id assigned afresh (#12371).
+ */
+export interface WindowsClaudeResumeChoice {
+  /** The same launch with its resume rewritten as an assignment of `sessionId`. */
+  readonly assignedCommand: string;
+  readonly sessionId: string;
+}
+
+const CLAUDE_CONFIG_DIR = "CLAUDE_CONFIG_DIR";
+
+function launchCommandLine(
   command: string,
   executable: WindowsAgentExecutable,
-  env: NodeJS.ProcessEnv = process.env
-): string {
+  env: NodeJS.ProcessEnv
+): { target: CliSpawnTarget; commandLine: string } {
   const [file, ...args] = parseWindowsAgentCommand(command);
   if (file !== executable.file) {
     throw new Error(`The Windows agent executable ${file} was not resolved for this launch`);
@@ -169,12 +185,64 @@ export function buildWindowsAgentLaunchScript(
   const commandLine = target.windowsVerbatimArguments
     ? target.args.join(" ")
     : serializeWindowsArgv(target.args);
+  return { target, commandLine };
+}
+
+function claudeResumeArguments(
+  resumeLine: string,
+  assignedLine: string,
+  sessionId: string,
+  targetEnv: Readonly<Record<string, string>> | undefined
+): string[] {
+  const configOverride = targetEnv
+    ? Object.entries(targetEnv).find(([name]) => name.toUpperCase() === CLAUDE_CONFIG_DIR)?.[1]
+    : undefined;
+  // What Claude Code itself reads: CLAUDE_CONFIG_DIR when it is set at all,
+  // else `.claude` under os.homedir(), which is USERPROFILE on Windows. An empty
+  // value is not guessed at, and neither is a store that can't be listed in
+  // full: both keep the resume, which is what ran before this check.
+  const configDir =
+    configOverride !== undefined
+      ? quotePowerShellArg(configOverride)
+      : `$(if (Test-Path Env:${CLAUDE_CONFIG_DIR}) { $env:${CLAUDE_CONFIG_DIR} } else { Join-Path $(if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }) '.claude' })`;
+  return [
+    `  $start.Arguments = ${quotePowerShellArg(resumeLine)}`,
+    `  $claudeConfig = ${configDir}`,
+    "  if ($claudeConfig) {",
+    "    $claudeProjects = Join-Path $claudeConfig 'projects'",
+    "    $claudeScanError = $null",
+    "    $claudeTranscript = @(Get-ChildItem -LiteralPath $claudeProjects -Directory -Force -ErrorAction SilentlyContinue -ErrorVariable claudeScanError |",
+    `      Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName ${quotePowerShellArg(`${sessionId}.jsonl`)}) })`,
+    "    $claudeStoreListed = -not (Test-Path -LiteralPath $claudeProjects) -or $claudeScanError.Count -eq 0",
+    `    if ($claudeTranscript.Count -eq 0 -and $claudeStoreListed) { $start.Arguments = ${quotePowerShellArg(assignedLine)} }`,
+    "  }",
+  ];
+}
+
+export function buildWindowsAgentLaunchScript(
+  command: string,
+  executable: WindowsAgentExecutable,
+  env: NodeJS.ProcessEnv = process.env,
+  claudeResume?: WindowsClaudeResumeChoice
+): string {
+  const { target, commandLine } = launchCommandLine(command, executable, env);
+  // A batch file run through cmd.exe may set its own CLAUDE_CONFIG_DIR before
+  // it starts Claude, so the pane's store says nothing about the one it reads.
+  const argumentLines =
+    claudeResume && !target.windowsVerbatimArguments
+      ? claudeResumeArguments(
+          commandLine,
+          launchCommandLine(claudeResume.assignedCommand, executable, env).commandLine,
+          claudeResume.sessionId,
+          target.env
+        )
+      : [`  $start.Arguments = ${quotePowerShellArg(commandLine)}`];
   return [
     WINDOWS_PS_UTF8_BOOTSTRAP,
     "& {",
     "  $start = [System.Diagnostics.ProcessStartInfo]::new()",
     `  $start.FileName = ${quotePowerShellArg(target.command)}`,
-    `  $start.Arguments = ${quotePowerShellArg(commandLine)}`,
+    ...argumentLines,
     "  $start.UseShellExecute = $false",
     "  $start.WorkingDirectory = (Get-Location).ProviderPath",
     // What an unwrapped shim would have set (NODE_PATH, a PATH prepend).

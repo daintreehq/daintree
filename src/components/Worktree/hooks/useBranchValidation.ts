@@ -15,6 +15,13 @@ export interface UseBranchValidationResult {
   consumeBranchResolution: (currentInput: string) => string | null;
 }
 
+// Main normalizes paths to forward slashes; a project opened from a Windows
+// path should be offered its worktree path in the same form the user sees
+// everywhere else, as the local fallback below already does.
+function withRootSeparators(path: string, rootPath: string): string {
+  return rootPath.includes("\\") ? path.replace(/\//g, "\\") : path;
+}
+
 export function useBranchValidation({
   branchInput,
   rootPath,
@@ -176,7 +183,11 @@ export function useBranchValidation({
             const pathBaseName = suggestedPath.split(/[/\\]/).pop() || "";
             const branchSlug = fullName.replace(/[^a-zA-Z0-9-_]/g, "-");
             const pathResolved = pathBaseName !== branchSlug && /-\d+$/.test(pathBaseName);
-            applySuggestedPath(suggestedPath, pathResolved, branchTaken);
+            applySuggestedPath(
+              withRootSeparators(suggestedPath, rootPath),
+              pathResolved,
+              branchTaken
+            );
           } else {
             logError("Failed to get default path", pathResult.reason);
             const sanitizedBranch = fullName.replace(/[^a-zA-Z0-9-_]/g, "-");
@@ -212,7 +223,7 @@ export function useBranchValidation({
         .then((suggestedPath) => {
           if (abortController.signal.aborted) return;
           setIsGeneratingPath(false);
-          applySuggestedPath(suggestedPath, false);
+          applySuggestedPath(withRootSeparators(suggestedPath, rootPath), false);
         })
         .catch((err) => {
           if (abortController.signal.aborted) return;

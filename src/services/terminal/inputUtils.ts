@@ -1,3 +1,5 @@
+import { isWindows } from "@/lib/platform";
+
 // eslint-disable-next-line no-control-regex
 const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
 
@@ -84,4 +86,65 @@ export function isNonKeyboardInput(data: string): boolean {
   if (data === "\x03" || data === "\x04" || data === "\x0c" || data === "\x1a") return true;
 
   return false;
+}
+
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
+export interface SurrogatePairJoiner {
+  /** The chunks to forward for `data`, in order; empty while a half is held. */
+  join(data: string): string[];
+  /** Forget a held half, for input that is being dropped rather than forwarded. */
+  reset(): void;
+}
+
+/**
+ * Rejoins a surrogate pair split across two `onData` events. xterm's keypress
+ * path emits one event per UTF-16 unit, so an emoji arriving as two Windows
+ * WM_CHARs (SendInput, AutoHotkey, remote-desktop and some keyboard layouts)
+ * reached the PTY as two lone halves, each UTF-8 encoded as U+FFFD. A trailing
+ * high surrogate is held for the next event; a half that never finds its
+ * partner is passed on as it would have been before.
+ */
+export function createSurrogatePairJoiner(): SurrogatePairJoiner {
+  let pendingHigh = "";
+  return {
+    join(data) {
+      const out: string[] = [];
+      let chunk = data;
+      if (pendingHigh) {
+        if (chunk.length > 0 && isLowSurrogate(chunk.charCodeAt(0))) {
+          chunk = pendingHigh + chunk;
+        } else {
+          out.push(pendingHigh);
+        }
+        pendingHigh = "";
+      }
+      if (chunk.length > 0 && isHighSurrogate(chunk.charCodeAt(chunk.length - 1))) {
+        pendingHigh = chunk.slice(-1);
+        chunk = chunk.slice(0, -1);
+      }
+      if (chunk.length > 0) out.push(chunk);
+      return out;
+    },
+    reset() {
+      pendingHigh = "";
+    },
+  };
+}
+
+/**
+ * Alt+F4, which closes the window on Windows. xterm reads it as a modified F4
+ * and cancels it, so a terminal holding focus kept the window from closing; a
+ * key handler returns false for it to leave the event to the system.
+ */
+export function isWindowCloseChord(event: KeyboardEvent): boolean {
+  return (
+    isWindows() &&
+    (event.key === "F4" || event.code === "F4") &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  );
 }
