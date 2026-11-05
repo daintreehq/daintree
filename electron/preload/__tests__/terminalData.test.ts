@@ -16,7 +16,7 @@ describe("createTerminalDataMultiplexer", () => {
     ipc.emit("terminal:data", {}, "t", data);
     ipc.emit("terminal:data", {}, "t", { invalid: true });
 
-    expect(subscriber.mock.calls).toEqual([[data]]);
+    expect(subscriber.mock.calls).toEqual([[data, undefined]]);
   });
 
   it("attaches one terminal:data listener lazily and routes chunks by terminal id", () => {
@@ -34,8 +34,32 @@ describe("createTerminalDataMultiplexer", () => {
     ipc.emit("terminal:data", {}, "b", new Uint8Array([1]));
     ipc.emit("terminal:data", {}, "a", { not: "data" });
 
-    expect(a.mock.calls).toEqual([["hello"]]);
-    expect(b.mock.calls).toEqual([[new Uint8Array([1])]]);
+    expect(a.mock.calls).toStrictEqual([["hello", 5]]);
+    expect(b.mock.calls).toStrictEqual([[new Uint8Array([1]), undefined]]);
+  });
+
+  it("hands every subscriber the chunk's stream offset, and undefined without a numeric one", () => {
+    const ipc = new FakeIpcRenderer();
+    const mux = createTerminalDataMultiplexer(ipc.asPreloadIpc());
+    const first = vi.fn();
+    const second = vi.fn();
+    mux.on("t", first);
+    mux.on("t", second);
+    mux.on("t", second);
+
+    ipc.emit("terminal:data", {}, "t", "x", 7);
+    ipc.emit("terminal:data", {}, "t", "y");
+    ipc.emit("terminal:data", {}, "t", "z", "9");
+
+    const expected = [
+      ["x", 7],
+      ["y", undefined],
+      ["z", undefined],
+    ];
+    expect(first.mock.calls).toStrictEqual(expected);
+    expect(second.mock.calls).toStrictEqual(
+      expected.flatMap((call) => [call, call])
+    );
   });
 
   it("removes only the disposed registration when one callback subscribes twice", () => {

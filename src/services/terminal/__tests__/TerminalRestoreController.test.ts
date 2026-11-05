@@ -9,6 +9,9 @@ import type { SuggestedCommandLinks } from "../SuggestedCommandLinksAddon";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { PARSER_GROUND, PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import { terminalClient } from "@/clients";
+import { CHANNELS } from "../../../../electron/ipc/channels";
+import { createTerminalDataMultiplexer } from "../../../../electron/preload/terminalData";
+import { FakeIpcRenderer } from "../../../../electron/preload/__tests__/fakeIpcRenderer";
 
 /** Wrap a payload in the snapshot envelope the IPC now returns (#11552). */
 function snapshot(data: string, cols = 80, rows = 24): SerializedTerminalSnapshot {
@@ -1735,11 +1738,18 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     const stream = { end: 0 };
     // What the ingest path does per delivered chunk: stamp its stream range at
     // receipt, then hand it to the write controller.
-    const deliver = (chunk: string, asBytes = false): void => {
+    const ingest = (data: string | Uint8Array, streamEnd?: number): void => {
+      writer.write("t1", data, 1, streamRangeOf(data, streamEnd));
+    };
+    // A view without a MessagePort reads terminal:data through the preload
+    // multiplexer, which must hand the chunk's offset on (#16259).
+    const ipc = new FakeIpcRenderer();
+    createTerminalDataMultiplexer(ipc.asPreloadIpc()).on("t1", ingest);
+    // Port chunks arrive as UTF-8 bytes, IPC chunks as strings.
+    const deliver = (chunk: string, via: "ipc" | "port" = "ipc"): void => {
       stream.end += utf8Length(chunk);
-      // Port chunks arrive as UTF-8 bytes, IPC chunks as strings.
-      const data = asBytes ? new TextEncoder().encode(chunk) : chunk;
-      writer.write("t1", data, 1, streamRangeOf(data, stream.end));
+      if (via === "ipc") ipc.emit(CHANNELS.TERMINAL_DATA, {}, "t1", chunk, stream.end);
+      else ingest(new TextEncoder().encode(chunk), stream.end);
     };
     return { managed, restorer, deliver, acks, stream };
   }
@@ -1761,12 +1771,12 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     chunks: string[],
     painted: number,
     parsed: number,
-    options: { withContinuation?: boolean; lateChunks?: number; asBytes?: boolean } = {}
+    options: { withContinuation?: boolean; lateChunks?: number; via?: "ipc" | "port" } = {}
   ): Promise<{ result: ReturnType<typeof screen>; acks: { port: number; ipcBytes: number } }> {
     const terminal = makeGrid();
     const pane = makePane(terminal);
     const late = options.lateChunks ?? 0;
-    const deliver = (chunk: string) => pane.deliver(chunk, options.asBytes);
+    const deliver = (chunk: string) => pane.deliver(chunk, options.via);
     for (const chunk of chunks.slice(0, painted)) deliver(chunk);
     await flush(terminal);
 
@@ -1858,9 +1868,22 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     it("fences port-delivered byte chunks the same way", async () => {
       for (const chunks of Object.values(SPLITS)) {
         const expected = await uninterrupted(chunks);
-        const { result } = await restoreMidStream(chunks, 0, 2, { asBytes: true });
+        const { result } = await restoreMidStream(chunks, 0, 2, { via: "port" });
         expect(result).toEqual(expected);
       }
+    });
+
+    it("acks IPC chunks the snapshot covers without repainting them, as on the port (#16259)", async () => {
+      const chunks = ["one\r\n", "twö 😀\r\n", "three\r\n", "four\r\n"];
+      const expected = await uninterrupted(chunks);
+      const viaPort = await restoreMidStream(chunks, 0, 3, { via: "port" });
+      const viaIpc = await restoreMidStream(chunks, 0, 3, { via: "ipc" });
+      expect(viaPort.result).toEqual(expected);
+      expect(viaIpc.result).toEqual(expected);
+      // Dropped or painted, every chunk settles the renderer's queue and the
+      // host's UTF-8 IPC ledger.
+      expect(viaPort.acks.port).toBe(chunks.length);
+      expect(viaIpc.acks).toEqual({ port: chunks.length, ipcBytes: utf8Length(chunks.join("")) });
     });
 
     it("restores a split through the incremental path for a large snapshot", async () => {
