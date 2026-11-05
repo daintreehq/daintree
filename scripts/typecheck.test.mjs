@@ -162,8 +162,6 @@ describe("PROJECTS", () => {
   });
 });
 
-const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-
 describe("runProjectSync", () => {
   const quietly = (fn) => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
