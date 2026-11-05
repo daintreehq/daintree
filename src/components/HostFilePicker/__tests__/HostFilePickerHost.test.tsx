@@ -415,9 +415,7 @@ describe("HostFilePickerHost typed path", () => {
     await act(async () => {});
     expect(settled()).toBe(false);
     expect(listDirectory).toHaveBeenCalledTimes(1);
-    expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe(
-      "home/greg/work"
-    );
+    expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe("home/greg/work");
   });
 
   it("holds the confirm on a folder that can't be opened", async () => {
