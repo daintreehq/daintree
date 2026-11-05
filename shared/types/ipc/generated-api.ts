@@ -387,6 +387,9 @@ export interface GeneratedElectronAPI {
     reassignAnswer(
       ...args: IpcInvokeMap["decisions:reassign-answer"]["args"]
     ): Promise<IpcInvokeMap["decisions:reassign-answer"]["result"]>;
+    reportComposerDrafts(
+      ...args: IpcInvokeMap["decisions:report-composer-drafts"]["args"]
+    ): Promise<IpcInvokeMap["decisions:report-composer-drafts"]["result"]>;
     restoreIdentity(
       ...args: IpcInvokeMap["decisions:restore-identity"]["args"]
     ): Promise<IpcInvokeMap["decisions:restore-identity"]["result"]>;

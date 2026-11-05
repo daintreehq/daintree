@@ -240,6 +240,7 @@ export const CHANNEL_LOCALITY = {
   "decisions:get-pairing": "shell",
   "decisions:get-pane-state": "host",
   "decisions:get-policy": "shell",
+  "decisions:report-composer-drafts": "host",
   "decisions:get-setup-check": "shell",
   "decisions:get-status": "shell",
   "decisions:list-answer-destinations": "shell",

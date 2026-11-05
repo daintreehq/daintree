@@ -104,10 +104,13 @@ describe("follow-ups in the needs-attention list (#16231)", () => {
     expect(
       outcomeText(
         4,
-        { result: "waiting", terminalId: "p", title: null, waitsFor: "idle" },
+        { result: "waiting", terminalId: "p", title: null, waitsFor: "composer" },
         "follow-ups"
       )
-    ).toBe("Follow-ups to q-4 go to its terminal, typed in once it's idle");
+    ).toBe("Follow-ups to q-4 go to its terminal, typed in once its composer is empty");
+    expect(
+      outcomeText(4, { result: "waiting", terminalId: "p", title: null, waitsFor: "prompt" })
+    ).toBe("Answer to q-4 goes to its terminal, typed in at the agent's next prompt");
     expect(
       outcomeText(
         4,

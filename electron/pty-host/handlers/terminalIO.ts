@@ -24,13 +24,17 @@ function exactPromptGuardOf(value: unknown): ExactPromptGuard | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const guard = value as Partial<Record<keyof ExactPromptGuard, unknown>>;
   if (guard.kind !== "settled-prompt-exact") return REFUSING_GUARD;
-  const { agentIncarnation, agentSessionId } = guard;
+  const { agentIncarnation, agentSessionId, acceptWorking, acceptQuestion } = guard;
   if (agentIncarnation !== undefined && !Number.isInteger(agentIncarnation)) return REFUSING_GUARD;
   if (agentSessionId !== undefined && typeof agentSessionId !== "string") return REFUSING_GUARD;
+  if (acceptWorking !== undefined && acceptWorking !== true) return REFUSING_GUARD;
+  if (acceptQuestion !== undefined && acceptQuestion !== true) return REFUSING_GUARD;
   return {
     kind: "settled-prompt-exact",
     ...(agentIncarnation !== undefined ? { agentIncarnation: agentIncarnation as number } : {}),
     ...(agentSessionId !== undefined ? { agentSessionId } : {}),
+    ...(acceptWorking === true ? { acceptWorking: true } : {}),
+    ...(acceptQuestion === true ? { acceptQuestion: true } : {}),
   };
 }
 

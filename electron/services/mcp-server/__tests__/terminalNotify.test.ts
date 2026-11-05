@@ -3086,7 +3086,12 @@ describe("decision wakes (#16015)", () => {
       expect.objectContaining({
         id: OWN,
         text: "Daintree Decisions: section",
-        guard: { kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "session-1" },
+        guard: {
+          kind: "settled-prompt-exact",
+          agentIncarnation: 2,
+          agentSessionId: "session-1",
+          acceptWorking: true,
+        },
       }),
     ]);
     expect(decision.outcomes).toEqual([
@@ -3115,6 +3120,84 @@ describe("decision wakes (#16015)", () => {
     ]);
     expect(other.outcomes).toEqual([{ kind: "delivered" }]);
     expect(decision.outcomes).toEqual([{ outcome: { kind: "held", reason: "working" } }]);
+  });
+
+  it.each([
+    [
+      "at a question asked in prose",
+      { ...atPrompt(Date.now() - 60_000), waitingReason: "question" },
+    ],
+    ["inside the notices' settle grace", atPrompt(Date.now() + NOTIFY_COALESCE_MS)],
+  ] as const)(
+    "puts a ready answer on a line of its own %s, leaving the rest for the pane's line (#16282)",
+    async (_label, info) => {
+      const h = setup({ enabled: false });
+      h.client.terminals.set(OWN, { ...info, lastStateChange: info.lastStateChange ?? Date.now() });
+      const scope = h.service.openWakeScope();
+      const decision = decisionWake("Daintree Decisions: section");
+      const other = fakeWake("decision-other");
+      scope.enqueueWake(PANE, PROJECT, other.wake);
+      scope.enqueueWake(PANE, PROJECT, decision.wake);
+
+      await flushWake();
+      expect(h.client.submitted).toEqual([
+        expect.objectContaining({
+          text: "Daintree Decisions: section",
+          guard: { kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true },
+        }),
+      ]);
+      expect(decision.outcomes[0]?.outcome).toEqual({ kind: "delivered" });
+      expect(other.outcomes).not.toContainEqual({ kind: "delivered" });
+    }
+  );
+
+  it("never carries a fired notice onto an answer's own line", async () => {
+    const h = setup();
+    h.client.terminals.set(OWN, { ...atPrompt(Date.now() - 60_000), waitingReason: "question" });
+    await h.service.whenIdle(PANE, { terminalId: "t-a" });
+    h.settle("t-a");
+    await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 50);
+    await flushWake();
+    // A notice typed at a question would read as its reply.
+    expect(h.client.submitted).toEqual([]);
+
+    const scope = h.service.openWakeScope();
+    const decision = decisionWake("Daintree Decisions: section");
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      expect.objectContaining({ text: "Daintree Decisions: section" }),
+    ]);
+
+    // The notice still goes, on the pane's own line, once it is at its prompt.
+    h.client.terminals.set(OWN, atPrompt(Date.now()));
+    h.settle(OWN);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(h.client.submitted).toHaveLength(2);
+    expect(h.client.submitted[1].text).toContain("terminal t-a stopped working");
+  });
+
+  it("follows a confirmed line still waiting on the pane's turn, but never one unconfirmed", async () => {
+    const h = setup({ enabled: false });
+    const scope = h.service.openWakeScope();
+    h.client.linePhase = "queued";
+    const first = fakeWake("decision-first");
+    scope.enqueueWake(PANE, PROJECT, first.wake);
+    await flushWake();
+    expect(h.client.submitted).toHaveLength(1);
+
+    const decision = decisionWake("Daintree Decisions: section");
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+    await vi.advanceTimersByTimeAsync(4_000);
+    // The host hasn't written the first line: nothing may land beside it.
+    expect(h.client.submitted).toHaveLength(1);
+
+    h.client.linePhase = "pty_written";
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(first.outcomes).toEqual([{ kind: "delivered" }]);
+    expect(h.client.submitted).toHaveLength(2);
+    expect(h.client.submitted[1]).toMatchObject({ text: "Daintree Decisions: section" });
+    expect(decision.outcomes[0]?.outcome).toEqual({ kind: "delivered" });
   });
 
   it("never reports delivered on a record that isn't this line's", async () => {

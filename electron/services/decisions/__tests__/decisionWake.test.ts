@@ -163,13 +163,61 @@ describe("createDecisionWake", () => {
   });
 
   it.each([
-    // Claude queues mid-turn input; an answer still waits for its prompt.
-    ["busy", { agentState: "working" }, "working"],
-    ["at an approval", { waitingReason: "approval" }, "approval"],
-    ["at a question", { waitingReason: "question" }, "question"],
-    ["typed into since it settled", { lastTypedInputAt: Date.now() }, "typing"],
-  ] as const)("holds while the pane is %s", (_label, patch, reason) => {
+    // Claude queues mid-turn input, so an empty composer is all it waits for (#16282).
+    ["mid-turn, nothing typed since the turn began", { agentState: "working" }],
+    [
+      "mid-turn, moments after the turn began",
+      { agentState: "working", lastStateChange: Date.now() },
+    ],
+    ["at a question asked in prose", { waitingReason: "question" }],
+    ["at its prompt the moment it settled", { lastStateChange: Date.now() }],
+  ] as const)("is ready %s", (_label, patch) => {
     const wake = createDecisionWake(sources().value, TARGET, section, vi.fn());
+    expect(wake.recheck(record(patch))).toEqual({ kind: "ready" });
+  });
+
+  it.each([
+    ["at an approval", {}, { waitingReason: "approval" }, "approval"],
+    ["at an error", {}, { waitingReason: "error" }, "error"],
+    ["typed into since it settled", {}, { lastTypedInputAt: Date.now() }, "typing"],
+    [
+      "typed into since its turn began",
+      {},
+      {
+        agentState: "working",
+        lastTypedInputAt: Date.now() - 1_000,
+        lastStateChange: Date.now() - 5_000,
+      },
+      "typing",
+    ],
+    ["holding a hybrid-input draft", { draft: true }, {}, "typing"],
+    ["holding a hybrid-input draft mid-turn", { draft: true }, { agentState: "working" }, "typing"],
+    // Gemini can't take a line mid-turn: its answer waits for a prompt that held.
+    [
+      "busy, for a CLI that can't queue",
+      {},
+      { agentState: "working", detectedAgentId: "gemini" },
+      "working",
+    ],
+    [
+      "just settled, for a CLI that can't queue",
+      {},
+      { detectedAgentId: "gemini", lastStateChange: Date.now() },
+      "settling",
+    ],
+  ] as const)("holds while the pane is %s", (_label, opts, patch, reason) => {
+    const value = {
+      ...sources().value,
+      hasComposerDraft: (paneId: string) => paneId === TARGET.paneId && "draft" in opts,
+    };
+    const wake = createDecisionWake(value, TARGET, section, vi.fn());
     expect(wake.recheck(record(patch))).toEqual({ kind: "held", reason });
+  });
+
+  it("takes a CLI that can't queue at a prose question once it has held", () => {
+    const wake = createDecisionWake(sources().value, TARGET, section, vi.fn());
+    expect(wake.recheck(record({ detectedAgentId: "gemini", waitingReason: "question" }))).toEqual({
+      kind: "ready",
+    });
   });
 });

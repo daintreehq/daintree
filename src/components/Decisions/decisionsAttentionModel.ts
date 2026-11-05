@@ -237,9 +237,12 @@ export function outcomeText(
     case "waiting": {
       const where = outcome.title !== null ? `“${outcome.title}”` : "its terminal";
       const goes = plural ? "go" : "goes";
-      return outcome.waitsFor === "host"
-        ? `${what} ${goes} to ${where}, typed in once its host is back`
-        : `${what} ${goes} to ${where}, typed in once it's idle`;
+      const when = {
+        host: "once its host is back",
+        composer: "once its composer is empty",
+        prompt: "at the agent's next prompt",
+      }[outcome.waitsFor];
+      return `${what} ${goes} to ${where}, typed in ${when}`;
     }
     case "needs-attention":
       // The item shows the new reason; the line says only what became of it.

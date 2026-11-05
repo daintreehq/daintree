@@ -28,6 +28,7 @@ import {
 import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
 import { basename } from "node:path";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 import type {
   DecisionsAnswerDestination,
   DecisionsAnswerDestinations,
@@ -75,10 +76,11 @@ export interface DecisionWakeHold {
 
 /**
  * Something happened to a pane that may let it take an answer now: it settled
- * waiting (`settled`), its run appeared or came back (`appeared`), or main
- * learned the conversation its run is in (`session`).
+ * waiting (`settled`), its run appeared or came back (`appeared`), main
+ * learned the conversation its run is in (`session`), or a hybrid-input
+ * draft emptied (`composer`, #16282).
  */
-export type PaneSignal = "settled" | "appeared" | "session";
+export type PaneSignal = "settled" | "appeared" | "session" | "composer";
 
 /**
  * The terminals that aren't agents' panes: the setup check's diagnostic
@@ -291,6 +293,7 @@ export class AnswerDelivery {
       hostId: deps.hostId,
       principalFor: deps.principalFor,
       getPtyClient: deps.getPtyClient,
+      ...(deps.hasComposerDraft ? { hasComposerDraft: deps.hasComposerDraft } : {}),
       queueWake: (pane, projectId, wake) => this.queueWake(pane, projectId, wake),
       ...(deps.now ? { now: deps.now } : {}),
     });
@@ -738,11 +741,13 @@ export class AnswerDelivery {
     const waiting =
       pendingEntries(row).length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
     if (!waiting) return { result: "delivered", terminalId, title };
+    // The run that asked is the only one it is typed into, so its agent says what it waits on.
+    const queues = wakeGateOptionsFor(row.origin.agent_kind || undefined).acceptWorking === true;
     return {
       result: "waiting",
       terminalId,
       title,
-      waitsFor: row.delivery_status === "pending-host" ? "host" : "idle",
+      waitsFor: row.delivery_status === "pending-host" ? "host" : queues ? "composer" : "prompt",
     };
   }
 
@@ -908,8 +913,8 @@ export class AnswerDelivery {
     this.offPanes = this.o.deps.watchPanes((signal) => {
       // Any of them may follow Daintree learning a session for a run that has already asked.
       this.sessionsToLearn = true;
-      if (signal === "appeared" || signal === "session") this.request();
-      else this.requestAfterSettle();
+      if (signal === "settled") this.requestAfterSettle();
+      else this.request();
     });
     this.timer = setInterval(
       () => this.request(),

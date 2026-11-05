@@ -1554,8 +1554,8 @@ export type TerminalSubmitGuard =
 /**
  * `settled-prompt-exact` (#16015): only an agent waiting at its own prompt,
  * settled since the lane last wrote to it, never mid-turn and never at a
- * question, and only the run main checked the line against. A Decisions
- * answer waits for exactly that.
+ * question, and only the run main checked the line against. A held prompt
+ * waits for exactly that; a Decisions answer relaxes it (#16282).
  */
 export interface ExactPromptGuard {
   kind: "settled-prompt-exact";
@@ -1563,6 +1563,14 @@ export interface ExactPromptGuard {
   agentIncarnation?: number;
   /** The agent session main read, when known. One learned since is still that run. */
   agentSessionId?: string;
+  /**
+   * Mid-turn too, when the host's own record says the agent's CLI queues
+   * input (`capabilities.queuesInputWhileWorking`), never on input typed
+   * since the turn began.
+   */
+  acceptWorking?: true;
+  /** At a question the agent asked in prose as well as at its prompt. */
+  acceptQuestion?: true;
 }
 
 /** A submission's text as a run's first-prompt record, before it was written (#15521). */

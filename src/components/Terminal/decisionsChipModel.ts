@@ -9,8 +9,30 @@ import { pluralize } from "@/lib/pluralize";
 
 export type DecisionItemKind = "attention" | "uncertain" | "answer" | "expired" | "open" | "queued";
 
+/**
+ * What an answer for this pane waits on before it's typed in (#16282): a
+ * draft in this view's hybrid input, an empty composer for an agent whose CLI
+ * takes a line mid-turn, or the next prompt of one whose CLI doesn't.
+ */
+export type PaneWait = "draft" | "composer" | "prompt";
+
 /** Where an answer or expiry notice waits before it can be typed in. */
-export type DecisionWaitFor = "idle" | "host";
+export type DecisionWaitFor = PaneWait | "host";
+
+/** The pane's wait from what this view observes of it. */
+export function paneWaitOf(pane: { hasDraft: boolean; queuesInput: boolean }): PaneWait {
+  if (pane.hasDraft) return "draft";
+  return pane.queuesInput ? "composer" : "prompt";
+}
+
+const PANE_WAITS: readonly PaneWait[] = ["draft", "composer", "prompt"];
+
+/** How each wait finishes a sentence: "…typing it in {once the composer is empty}". */
+const WAIT_PHRASES: Record<PaneWait, string> = {
+  draft: "once the draft here is sent or cleared",
+  composer: "once the composer is empty",
+  prompt: "at the agent's next prompt",
+};
 
 export interface DecisionItem {
   questionId: string;
@@ -96,7 +118,10 @@ function epoch(iso: string | null): number | null {
 }
 
 /** Every outstanding question for the pane, worst first, then in the order they were asked. */
-export function decisionItems(state: PaneDecisionState): DecisionItem[] {
+export function decisionItems(
+  state: PaneDecisionState,
+  wait: PaneWait = "composer"
+): DecisionItem[] {
   const items: DecisionItem[] = [];
   for (const entry of state.needsAttention) {
     const uncertain = entry.deliveryStatus === "delivery-uncertain";
@@ -121,12 +146,12 @@ export function decisionItems(state: PaneDecisionState): DecisionItem[] {
       status: expired
         ? hostAway
           ? "Expired unanswered, telling the agent when this terminal's host is back"
-          : "Expired unanswered, telling the agent when this terminal is idle"
+          : `Expired unanswered, telling the agent ${WAIT_PHRASES[wait]}`
         : hostAway
           ? "Answer received, delivering when this terminal's host is back"
-          : "Answer received, delivering when this terminal is idle",
+          : `Answer received, typing it in ${WAIT_PHRASES[wait]}`,
       reason: null,
-      waitsFor: hostAway ? "host" : "idle",
+      waitsFor: hostAway ? "host" : wait,
       askedAt: null,
       expiresAt: null,
     });
@@ -198,10 +223,13 @@ export function chipLabel(items: readonly DecisionItem[]): ChipLabel {
  * What the popover's closing lines promise, in the order they apply: answers
  * that will be typed in on their own, and answers that won't.
  */
-export function deliveryNotes(items: readonly DecisionItem[]): string[] {
+export function deliveryNotes(
+  items: readonly DecisionItem[],
+  wait: PaneWait = "composer"
+): string[] {
   const notes: string[] = [];
-  const waitsForIdle = items.some((item) => !isAttention(item) && item.waitsFor !== "host");
-  if (waitsForIdle) notes.push("Answers are typed in here once this terminal is idle");
+  const waitsHere = items.some((item) => !isAttention(item) && item.waitsFor !== "host");
+  if (waitsHere) notes.push(`Answers are typed in here ${WAIT_PHRASES[wait]}`);
   if (items.some((item) => item.waitsFor === "host")) {
     notes.push("Answers for a host that's away are typed in once it's back");
   }
@@ -237,11 +265,11 @@ const SUMMARY_GROUPS: Array<{
   many: string;
 }> = [
   { matches: isAttention, one: "needs attention", many: "need attention" },
-  {
-    matches: (item) => item.kind === "answer" && item.waitsFor === "idle",
-    one: "answered, delivering when this terminal is idle",
-    many: "answered, delivering when this terminal is idle",
-  },
+  ...PANE_WAITS.map((wait) => ({
+    matches: (item: DecisionItem) => item.kind === "answer" && item.waitsFor === wait,
+    one: `answered, typing in ${WAIT_PHRASES[wait]}`,
+    many: `answered, typing in ${WAIT_PHRASES[wait]}`,
+  })),
   {
     matches: (item) => item.kind === "answer" && item.waitsFor === "host",
     one: "answered, delivering when this terminal's host is back",

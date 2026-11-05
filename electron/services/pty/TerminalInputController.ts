@@ -3,7 +3,6 @@ import type { TerminalInfo } from "./types.js";
 import type { ExactPromptGuard, TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import {
   ASSISTANT_SEND_GATE,
-  EXACT_PROMPT_GATE,
   evaluateWakeGate,
   isAtChoiceDialog,
   wakeGateOptionsFor,
@@ -504,10 +503,12 @@ export class TerminalInputController {
   }
 
   /**
-   * The strict check without the prose-question allowance, for the run main
-   * checked the line against: an agent that restarted in this PTY since is
-   * another run, whatever its prompt shows. A session learned since main read
-   * the pane is still that run; a known one that changed is not.
+   * The strict check, for the run main checked the line against: an agent
+   * that restarted in this PTY since is another run, whatever its prompt
+   * shows. A session learned since main read the pane is still that run; a
+   * known one that changed is not. Main may widen it for a Decisions answer
+   * (#16282): mid-turn, for an agent this record says queues input, and at a
+   * question asked in prose.
    */
   private admitExact(run: ExactPromptGuard): () => boolean {
     // Main always says which incarnation it read; a guard without one pins the run the host holds now.
@@ -518,19 +519,28 @@ export class TerminalInputController {
       if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
         return false;
       }
-      return this.admitStrict(EXACT_PROMPT_GATE);
+      return this.admitStrict({
+        acceptWorking:
+          run.acceptWorking === true &&
+          wakeGateOptionsFor(terminal.detectedAgentId).acceptWorking === true,
+        acceptQuestion: run.acceptQuestion === true,
+      });
     };
   }
 
   /**
-   * Only at a prompt settled since the lane last wrote to it, and never
-   * mid-turn. `gate` says whether a prose question is still that prompt
-   * (#14475): for an assistant's brief it is, for a Decisions answer it isn't.
+   * Only at a prompt settled since the lane last wrote to it, and mid-turn
+   * only when `gate` accepts it. `gate` says whether a prose question is
+   * still that prompt (#14475): for an assistant's brief it is, for a held
+   * prompt it isn't. A turn the agent queues lines into takes another line
+   * whenever its composer is empty, as a notice line does.
    */
   private admitStrict(gate: WakeGateOptions): boolean {
     if (this.isInputLocked) return false;
     const terminal = this.host.terminalInfo;
+    const queuedBehindTurn = gate.acceptWorking === true && terminal.agentState === "working";
     if (
+      !queuedBehindTurn &&
       this.laneSubmittedAt !== undefined &&
       this.laneSubmittedAt >= (terminal.lastStateChange ?? 0)
     ) {
@@ -666,10 +676,26 @@ export class TerminalInputController {
       }
     }
 
+    // A body left in the composer without its Enter is a draft from here on
+    // (#16282): a line the gate admits mid-turn would otherwise be submitted
+    // with it. Only while the run it was written to still holds the pty: a run
+    // that replaced it starts with an empty composer, and a stamp would hold
+    // that run until its next state change.
+    const leaveDraft = () => {
+      const t = this.host.terminalInfo;
+      if (!t.ptyProcess || t.isExited) return;
+      if (t.detectedAgentId !== owner.agentId || t.agentIncarnation !== owner.incarnation) return;
+      stampTypedInput(t, Date.now());
+    };
+
     let bodyWritten: boolean;
     if (imageSegments) {
       const outcome = await this.writeImageSegments(imageSegments, generation, owner);
-      if (outcome === "abandoned") return;
+      // Abandoned only after a paste went in.
+      if (outcome === "abandoned") {
+        leaveDraft();
+        return;
+      }
       bodyWritten = outcome === "written";
     } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       // See `stage`: an unsanitised body could close the paste itself, and
@@ -693,6 +719,7 @@ export class TerminalInputController {
     const typedAtBodyWrite = carriesImages ? typedBeforeBody : terminal.lastTypedInputAt;
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
+      leaveDraft();
       return;
     }
 
@@ -711,6 +738,7 @@ export class TerminalInputController {
     }
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
+      leaveDraft();
       return;
     }
 

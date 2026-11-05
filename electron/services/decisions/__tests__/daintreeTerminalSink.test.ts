@@ -138,10 +138,13 @@ function setup() {
   const scope = service.openWakeScope();
   const identity = { hostId: HOST as string | null, principal: "principal-1" as string | null };
   const queued: LaneWake[] = [];
+  /** Panes a view's hybrid input holds a draft for (#16282). */
+  const drafts = new Set<string>();
   const sink = new DaintreeTerminalSink({
     hostId: () => identity.hostId,
     principalFor: (paneId) => (paneId === PANE ? identity.principal : null),
     getPtyClient: () => client,
+    hasComposerDraft: (paneId) => drafts.has(paneId),
     queueWake: (pane, projectId, wake) => {
       queued.push(wake);
       scope.enqueueWake(pane, projectId, wake);
@@ -151,7 +154,7 @@ function setup() {
   client.generations.set(PANE, 7);
   const patch = (fields: Partial<NotifyTerminalInfo>) =>
     client.terminals.set(PANE, { ...client.terminals.get(PANE)!, ...fields });
-  return { client, service, scope, sink, identity, patch, queued };
+  return { client, service, scope, sink, identity, patch, queued, drafts };
 }
 
 /** The library's notice for answers to Q1, each as its overrides change it. */
@@ -274,21 +277,43 @@ describe("DaintreeTerminalSink", () => {
   });
 
   describe("isIdle", () => {
-    it("is true only at the run's own prompt, settled past the grace, with nothing typed", async () => {
+    it("is true whenever the run's composer is empty and it can take a line (#16282)", async () => {
       const h = setup();
-      await expect(h.sink.isIdle(TARGET)).resolves.toBe(true);
-
+      // Claude queues a line typed mid-turn, so its turn and the grace don't matter.
       for (const fields of [
-        { agentState: "working" as const },
-        { waitingReason: "approval" as const },
+        {},
+        { agentState: "working" as const, lastStateChange: Date.now() },
         { waitingReason: "question" as const },
-        { lastTypedInputAt: Date.now() },
-        { lastStateChange: Date.now() - NOTIFY_SETTLE_GRACE_MS + 100 },
+        { lastStateChange: Date.now() },
+        { detectedAgentId: "gemini" },
+        { detectedAgentId: "gemini", waitingReason: "question" as const },
       ]) {
         h.client.terminals.set(PANE, { ...atPrompt(), ...fields });
-        await expect(h.sink.isIdle(TARGET)).resolves.toBe(false);
+        await expect(h.sink.isIdle(TARGET), JSON.stringify(fields)).resolves.toBe(true);
+      }
+    });
+
+    it("is false at a selector or error, on a draft, or mid-turn for a CLI that can't queue", async () => {
+      const h = setup();
+      for (const fields of [
+        { waitingReason: "approval" as const },
+        { waitingReason: "error" as const },
+        { lastTypedInputAt: Date.now() },
+        {
+          agentState: "working" as const,
+          lastStateChange: Date.now() - 5_000,
+          lastTypedInputAt: Date.now() - 1_000,
+        },
+        { detectedAgentId: "gemini", agentState: "working" as const },
+        { detectedAgentId: "gemini", lastStateChange: Date.now() - NOTIFY_SETTLE_GRACE_MS + 100 },
+      ]) {
+        h.client.terminals.set(PANE, { ...atPrompt(), ...fields });
+        await expect(h.sink.isIdle(TARGET), JSON.stringify(fields)).resolves.toBe(false);
       }
       h.client.terminals.set(PANE, atPrompt());
+      h.drafts.add(PANE);
+      await expect(h.sink.isIdle(TARGET)).resolves.toBe(false);
+      h.drafts.clear();
       h.identity.principal = "principal-2";
       await expect(h.sink.isIdle(TARGET)).resolves.toBe(false);
     });
@@ -317,15 +342,29 @@ describe("DaintreeTerminalSink", () => {
       });
     });
 
-    it("holds a follow-up while the agent works, and types it once settled at the prompt", async () => {
+    it("types a follow-up mid-turn when the composer is empty", async () => {
       const h = setup();
-      h.patch({ agentState: "working", lastStateChange: Date.now() - 30_000 });
+      h.patch({ agentState: "working", lastStateChange: Date.now() });
+      const result = track(h.sink.inject(TARGET, followUpNotice(), I2));
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      expect(h.client.submitted).toHaveLength(1);
+      await flushLine();
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("holds a follow-up while a CLI that can't queue works, and types it once settled at the prompt", async () => {
+      const h = setup();
+      h.patch({
+        agentState: "working",
+        lastStateChange: Date.now() - 30_000,
+        detectedAgentId: "gemini",
+      });
       const result = track(h.sink.inject(TARGET, followUpNotice(), I2));
       await vi.advanceTimersByTimeAsync(30_000);
       expect(h.client.submitted).toEqual([]);
       expect(result.settled).toBe(false);
 
-      h.client.terminals.set(PANE, atPrompt(10_000));
+      h.client.terminals.set(PANE, { ...atPrompt(10_000), detectedAgentId: "gemini" });
       await vi.advanceTimersByTimeAsync(10_000);
       await flushLine();
       expect(h.client.submitted).toHaveLength(1);
@@ -438,6 +477,7 @@ describe("DaintreeTerminalSink", () => {
             kind: "settled-prompt-exact",
             agentIncarnation: 0,
             agentSessionId: "session-1",
+            acceptWorking: true,
           },
         },
       ]);
@@ -451,18 +491,67 @@ describe("DaintreeTerminalSink", () => {
       });
     });
 
-    it("never types into a busy or approval-blocked pane, and waits rather than resolving held", async () => {
+    it("types an answer mid-turn the moment it arrives (#16282)", async () => {
       const h = setup();
-      // Claude queues input mid-turn, which an ordinary notice would be typed into.
+      h.patch({ agentState: "working", lastStateChange: Date.now() });
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].guard).toMatchObject({
+        kind: "settled-prompt-exact",
+        agentIncarnation: 0,
+        acceptWorking: true,
+      });
+      await flushLine();
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("types an answer at a question the agent asked in prose", async () => {
+      const h = setup();
+      h.patch({ waitingReason: "question" });
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].guard).toMatchObject({ acceptQuestion: true });
+      await flushLine();
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("never types over a draft or into a selector, and waits rather than resolving held", async () => {
+      const h = setup();
       h.patch({ agentState: "working", lastStateChange: Date.now() - 30_000 });
+      h.drafts.add(PANE);
       const result = track(h.sink.inject(TARGET, notice(), I1));
       await vi.advanceTimersByTimeAsync(30_000);
-      h.patch({ agentState: "waiting", waitingReason: "approval" });
+      // Typed into the CLI's own line since the turn began.
+      h.drafts.clear();
+      h.patch({ lastTypedInputAt: Date.now() });
+      await vi.advanceTimersByTimeAsync(30_000);
+      h.patch({ agentState: "waiting", waitingReason: "approval", lastStateChange: Date.now() });
       await vi.advanceTimersByTimeAsync(30_000);
       expect(h.client.submitted).toEqual([]);
       expect(result.settled).toBe(false);
 
       h.client.terminals.set(PANE, atPrompt(10_000));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushLine();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("never types into a running turn of a CLI that can't queue", async () => {
+      const h = setup();
+      h.patch({
+        agentState: "working",
+        lastStateChange: Date.now() - 30_000,
+        detectedAgentId: "gemini",
+      });
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.client.submitted).toEqual([]);
+      expect(result.settled).toBe(false);
+
+      h.client.terminals.set(PANE, { ...atPrompt(10_000), detectedAgentId: "gemini" });
       await vi.advanceTimersByTimeAsync(10_000);
       await flushLine();
       expect(h.client.submitted).toHaveLength(1);

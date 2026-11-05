@@ -123,6 +123,10 @@ describe("submit guards (#16015)", () => {
     send({ kind: "settled-prompt-exact", agentIncarnation: 1, agentSessionId: 7 });
     send({ kind: "anything-goes" });
     send("settled-prompt-strict");
+    // A Decisions answer's allowances (#16282) cross only as `true`.
+    send({ kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true });
+    send({ kind: "settled-prompt-exact", acceptWorking: "yes" });
+    send({ kind: "settled-prompt-exact", acceptQuestion: false });
 
     const refusing = { kind: "settled-prompt-exact", agentIncarnation: -1 };
     expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
@@ -132,6 +136,9 @@ describe("submit guards (#16015)", () => {
       refusing,
       refusing,
       "settled-prompt-strict",
+      { kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true },
+      refusing,
+      refusing,
     ]);
   });
 });

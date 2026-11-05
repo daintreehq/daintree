@@ -14,6 +14,7 @@ import { DEVICE_ANSWER_METHOD_CHANNELS } from "./deviceAnswer.preload.js";
 import { sshLoginTarget } from "../../utils/machineName.js";
 import { isRemoteView } from "../../window/webviewSrcGate.js";
 import { getVoiceSettings } from "./voiceInput.js";
+import { composerDrafts } from "../../services/composerDrafts.js";
 import type {
   DeviceAnswerStatus,
   SetDeviceAnswerPayload,
@@ -245,6 +246,12 @@ const setTerminalSnapshotsSchema = z
   .object({ enabled: z.boolean(), consent: z.boolean().optional() })
   .strict();
 
+// A view's whole set of draft keys, as its draft store keys them.
+const composerDraftKeysSchema = z.array(z.string().min(1).max(1024)).max(10_000);
+
+/** The views whose drafts are dropped when they close. */
+const composerDraftViews = new Set<string>();
+
 // Only the shape here; main refuses any id no agent could have.
 const agentAskHumanSchema = z
   .object({ agentId: z.string().min(1).max(256), enabled: z.boolean() })
@@ -326,6 +333,27 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         return decisions ? decisions.getDecisionsPaneState(terminalId) : null;
       }
+    ),
+    // Which terminals this view's hybrid input holds a draft for (#16282): an
+    // answer waits behind one. Kept whatever the switch says, so turning
+    // Decisions on never starts from an empty picture.
+    reportComposerDrafts: opValidated(
+      CHANNELS.DECISIONS_REPORT_COMPOSER_DRAFTS,
+      composerDraftKeysSchema,
+      (ctx, keys: string[]): void => {
+        const { endpoint } = ctx;
+        if (endpoint.isClosed()) return;
+        const viewId = endpoint.endpointId;
+        if (!composerDraftViews.has(viewId)) {
+          composerDraftViews.add(viewId);
+          endpoint.onClose(() => {
+            composerDraftViews.delete(viewId);
+            composerDrafts.dropView(viewId);
+          });
+        }
+        composerDrafts.report(viewId, keys);
+      },
+      { withContext: true }
     ),
     // Turning on is the one change that loads Decisions while the switch reads
     // off, and only after the person has agreed to what it sends. Turning off

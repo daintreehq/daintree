@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ASSISTANT_SEND_GATE,
+  EXACT_PROMPT_GATE,
+  decisionGateOptionsFor,
   evaluateWakeGate,
   isAtChoiceDialog,
   type WakeGateSnapshot,
@@ -99,6 +101,58 @@ describe("evaluateWakeGate (#12491)", () => {
         evaluateWakeGate({ ...AT_QUESTION, agentState: "working" }, ASSISTANT_SEND_GATE)
       ).toEqual({ kind: "hold", reason: "working" });
     });
+  });
+});
+
+describe("decisionGateOptionsFor (#16282)", () => {
+  const WORKING: WakeGateSnapshot = { ...AT_PROMPT, agentState: "working" };
+
+  it("takes a CLI that queues input mid-turn, and any agent at a prose question", () => {
+    expect(evaluateWakeGate(WORKING, decisionGateOptionsFor("claude"))).toEqual({ kind: "ready" });
+    for (const agentId of ["claude", "gemini"]) {
+      expect(
+        evaluateWakeGate(
+          { ...AT_PROMPT, detectedAgentId: agentId, waitingReason: "question" },
+          decisionGateOptionsFor(agentId)
+        )
+      ).toEqual({ kind: "ready" });
+    }
+  });
+
+  it("holds a CLI that can't queue input until its prompt", () => {
+    expect(
+      evaluateWakeGate({ ...WORKING, detectedAgentId: "gemini" }, decisionGateOptionsFor("gemini"))
+    ).toEqual({ kind: "hold", reason: "working" });
+  });
+
+  it("holds on a draft in the hybrid input or the CLI's line, at the prompt and mid-turn", () => {
+    const options = decisionGateOptionsFor("claude");
+    for (const snapshot of [AT_PROMPT, WORKING]) {
+      expect(evaluateWakeGate({ ...snapshot, hasComposerDraft: true }, options)).toEqual({
+        kind: "hold",
+        reason: "typing",
+      });
+      expect(evaluateWakeGate({ ...snapshot, lastTypedInputAt: 1_001 }, options)).toEqual({
+        kind: "hold",
+        reason: "typing",
+      });
+    }
+  });
+
+  it("still blocks at a selector or an error, whatever the composer holds", () => {
+    const options = decisionGateOptionsFor("claude");
+    for (const reason of ["approval", "error"] as const) {
+      expect(
+        evaluateWakeGate({ ...AT_PROMPT, waitingReason: reason, hasComposerDraft: true }, options)
+      ).toEqual({ kind: "blocked", reason });
+    }
+  });
+
+  it("leaves every other gate blind to the hybrid input", () => {
+    const draft = { ...AT_PROMPT, hasComposerDraft: true };
+    expect(evaluateWakeGate(draft)).toEqual({ kind: "ready" });
+    expect(evaluateWakeGate(draft, ASSISTANT_SEND_GATE)).toEqual({ kind: "ready" });
+    expect(evaluateWakeGate(draft, EXACT_PROMPT_GATE)).toEqual({ kind: "ready" });
   });
 });
 

@@ -6,6 +6,12 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Button } from "@/components/ui/button";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { hasDraftText } from "@/lib/draftKey";
+import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { useDecisionsOn } from "@/hooks/useDecisionsOn";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
@@ -30,6 +36,7 @@ import {
   deliveryNotes,
   itemSentence,
   needsAttention,
+  paneWaitOf,
   type DecisionItem,
 } from "./decisionsChipModel";
 
@@ -101,9 +108,19 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const headingId = useId();
   const [open, setOpen] = useState(false);
   const openAttention = useDecisionsAttentionStore((s) => s.open);
+  const hasDraft = useTerminalInputStore((s) => hasDraftText(s.draftInputs, terminalId));
+  const queuesInput = usePanelStore((s) => {
+    const panel = s.panelsById[terminalId];
+    const agentId = panel && isPtyPanel(panel) ? getRuntimeOrBootAgentId(panel) : undefined;
+    return (
+      agentId !== undefined &&
+      getEffectiveAgentConfig(agentId)?.capabilities?.queuesInputWhileWorking === true
+    );
+  });
+  const wait = paneWaitOf({ hasDraft, queuesInput });
 
   if (state === null) return null;
-  const items = decisionItems(state);
+  const items = decisionItems(state, wait);
   if (items.length === 0) return null;
 
   const attention = needsAttention(items);
@@ -178,7 +195,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
           ))}
         </ul>
         <div className="flex flex-col gap-0.5 border-t border-divider px-3 py-2 text-2xs text-text-secondary">
-          {deliveryNotes(items).map((note) => (
+          {deliveryNotes(items, wait).map((note) => (
             <p key={note}>{note}</p>
           ))}
         </div>

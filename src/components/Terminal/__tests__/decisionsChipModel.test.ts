@@ -10,6 +10,7 @@ import {
   chipSummary,
   decisionItems,
   deliveryNotes,
+  paneWaitOf,
   needsAttention,
 } from "../decisionsChipModel";
 
@@ -87,13 +88,33 @@ describe("decisionItems", () => {
     expect(unknown?.reason).toBeNull();
   });
 
-  it("says when an answer waits for its terminal's host rather than for idle", () => {
-    const [host, idle] = decisionItems(
+  it("says when an answer waits for its terminal's host rather than for the pane", () => {
+    const [host, here] = decisionItems(
       pane({ waiting: [waiting(1, "answer", "pending-host"), waiting(2)] })
     );
     expect(host?.waitsFor).toBe("host");
-    expect(idle?.waitsFor).toBe("idle");
-    expect(host?.status).not.toBe(idle?.status);
+    expect(here?.waitsFor).toBe("composer");
+    expect(host?.status).not.toBe(here?.status);
+  });
+
+  it("says what the pane's answer waits on, never that the terminal is idle (#16282)", () => {
+    const state = pane({ waiting: [waiting(1), waiting(2, "expired")] });
+    const statuses = (["draft", "composer", "prompt"] as const).map((wait) => {
+      const items = decisionItems(state, wait);
+      expect(items.map((item) => item.waitsFor)).toEqual([wait, wait]);
+      for (const item of items) expect(item.status).not.toMatch(/idle/);
+      return items[0]!.status;
+    });
+    expect(new Set(statuses).size).toBe(3);
+  });
+});
+
+describe("paneWaitOf", () => {
+  it("puts a draft here first, then whether the agent's CLI takes a line mid-turn", () => {
+    expect(paneWaitOf({ hasDraft: true, queuesInput: true })).toBe("draft");
+    expect(paneWaitOf({ hasDraft: true, queuesInput: false })).toBe("draft");
+    expect(paneWaitOf({ hasDraft: false, queuesInput: true })).toBe("composer");
+    expect(paneWaitOf({ hasDraft: false, queuesInput: false })).toBe("prompt");
   });
 });
 
@@ -158,10 +179,19 @@ describe("deliveryNotes", () => {
     ]);
   });
 
-  it("names a host that's away instead of promising idle delivery", () => {
+  it("names a host that's away instead of promising delivery here", () => {
     const hostOnly = decisionItems(pane({ waiting: [waiting(1, "answer", "pending-host")] }));
-    const idleOnly = decisionItems(pane({ waiting: [waiting(1)] }));
+    const hereOnly = decisionItems(pane({ waiting: [waiting(1)] }));
     expect(deliveryNotes(hostOnly)).toHaveLength(1);
-    expect(deliveryNotes(hostOnly)[0]).not.toBe(deliveryNotes(idleOnly)[0]);
+    expect(deliveryNotes(hostOnly)[0]).not.toBe(deliveryNotes(hereOnly)[0]);
+  });
+
+  it("says what answers here wait on, by the pane's wait", () => {
+    const items = decisionItems(pane({ open: [open(1)] }));
+    const notes = (["draft", "composer", "prompt"] as const).map(
+      (wait) => deliveryNotes(items, wait)[0]
+    );
+    expect(new Set(notes).size).toBe(3);
+    for (const note of notes) expect(note).not.toMatch(/idle/);
   });
 });
