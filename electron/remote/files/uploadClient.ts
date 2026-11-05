@@ -967,7 +967,9 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
         sendFolderArchive: transport.sendFolderArchive.bind(transport),
         folderStatus: transport.folderStatus.bind(transport),
         cancelFolder: transport.cancelFolder.bind(transport),
-        ...(transport.whenReachable ? { whenReachable: transport.whenReachable.bind(transport) } : {}),
+        ...(transport.whenReachable
+          ? { whenReachable: transport.whenReachable.bind(transport) }
+          : {}),
       };
       const handle = payload.handle;
       const controller = new AbortController();

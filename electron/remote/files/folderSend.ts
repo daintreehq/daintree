@@ -240,7 +240,9 @@ function progressReporter(emit: (event: FileTransferEvent) => void, opId: string
   };
 }
 
-export async function sendLocalFolder(options: FolderSendOptions): Promise<UploadLocalFolderResult> {
+export async function sendLocalFolder(
+  options: FolderSendOptions
+): Promise<UploadLocalFolderResult> {
   const { signal } = options;
   const progress = progressReporter(options.emit, options.opId);
   try {

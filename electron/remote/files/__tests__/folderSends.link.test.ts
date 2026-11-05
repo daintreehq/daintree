@@ -173,7 +173,8 @@ async function droppedFolder(
 ): Promise<string> {
   const root = path.join(localDir, name);
   await fs.mkdir(root, { recursive: true });
-  for (const folder of tree.folders ?? []) await fs.mkdir(path.join(root, folder), { recursive: true });
+  for (const folder of tree.folders ?? [])
+    await fs.mkdir(path.join(root, folder), { recursive: true });
   for (const [file, data] of Object.entries(tree.files)) {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await fs.writeFile(path.join(root, file), data);
@@ -183,7 +184,8 @@ async function droppedFolder(
     localPath: root,
     opId: `walk-${crypto.randomUUID()}`,
   });
-  if (summary.status !== "ready") throw new Error(`Expected a ready summary, got ${summary.status}`);
+  if (summary.status !== "ready")
+    throw new Error(`Expected a ready summary, got ${summary.status}`);
   return summary.handle;
 }
 
