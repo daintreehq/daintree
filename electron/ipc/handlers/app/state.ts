@@ -251,6 +251,25 @@ function withoutUndrivenHostFields(
 }
 
 /** Whether `projectId` has yet to have its first-open layout seed decided (#13782). */
+/**
+ * Give back the plugin launch records an earlier run left for the panes this
+ * hydrate restores (#16240). The ledger lives with the plugin host, off the
+ * startup graph, so it loads only once a record exists for it to restore.
+ */
+function admitRestoredPluginLaunchesFor(
+  terminals: ReadonlyArray<{ id?: unknown; launchedByPluginId?: unknown }>
+): void {
+  if (terminals.length === 0) return;
+  const stored = store.get("pluginLaunchedAgents");
+  if (stored === null || typeof stored !== "object" || Object.keys(stored).length === 0) return;
+  const panes = terminals.map(({ id, launchedByPluginId }) => ({ id, launchedByPluginId }));
+  void import("../../../services/plugin/pluginLaunchStore.js")
+    .then(({ admitRestoredPluginLaunchesFromStore }) => admitRestoredPluginLaunchesFromStore(panes))
+    .catch((error: unknown) => {
+      console.error("[AppHydrate] Failed to restore plugin launch records:", error);
+    });
+}
+
 function isLayoutSeedUndecided(projectId: string): boolean {
   try {
     return getProjectLayoutSeed(projectId) === null;
@@ -881,9 +900,21 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       userAgentRegistry: loadSanitizedUserAgentRegistry(),
     };
   };
-  handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.APP_HYDRATE, async (ctx: IpcContext) => {
+      const hydrate = await handleAppHydrate(ctx);
+      admitRestoredPluginLaunchesFor(hydrate.appState.terminals);
+      return hydrate;
+    })
+  );
 
-  const handleAppBoot = async (ctx: IpcContext) => composeBootResult(await handleAppHydrate(ctx));
+  const handleAppBoot = async (ctx: IpcContext) => {
+    const boot = composeBootResult(await handleAppHydrate(ctx));
+    // A pending crash throws this payload away and restores from the hydrate
+    // that follows the user's choice, so only that one hands panes back.
+    if (boot.crashPending === null) admitRestoredPluginLaunchesFor(boot.appState.terminals);
+    return boot;
+  };
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
 
   const handleAppGetState = async () => {

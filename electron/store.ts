@@ -705,6 +705,18 @@ export interface StoreSchema {
   pluginProjectInstances?: Record<string, string[]>;
 
   /**
+   * The agents each plugin started with its own `agent.launch`, by terminal id
+   * (#16240): what lets `host.agents` reach them again after an app restart.
+   * Written and read only by `pluginLaunchedAgents.ts`, which treats every
+   * entry as untrusted on load. Additive key with no numbered migration, like
+   * `projectPluginTrust`.
+   */
+  pluginLaunchedAgents?: Record<
+    string,
+    { pluginId: string; projectId: string | null; seenAt: number }
+  >;
+
+  /**
    * Per-project visibility for INSTALLED (global) plugins: which manifest ids
    * are hidden by default, plus each project's explicit answers, which win in
    * either direction. Absence everywhere means visible.

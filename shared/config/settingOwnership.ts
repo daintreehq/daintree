@@ -184,6 +184,7 @@ export const SETTING_CATALOG = {
       projectPluginTrust: hostPerProject,
       projectPluginVisibility: hostGlobalOrProject,
       pluginProjectInstances: hostPerProject,
+      pluginLaunchedAgents: host,
       projectSurfaceChoices: hostPerProject,
       projectFileEditorChoices: hostPerProject,
       projectLayoutSeeds: hostPerProject,

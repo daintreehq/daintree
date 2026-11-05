@@ -226,6 +226,10 @@ import {
   recordPluginLaunch,
 } from "../plugin/pluginLaunchedAgents.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import {
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+} from "../../../shared/types/plugin.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../pty/TerminalProcess.js";
 
@@ -869,5 +873,77 @@ describe("Agents a plugin launched, across unload and reload (#14018)", () => {
     service.unloadPlugin(PLUGIN, { reload: true });
     service.settlePluginReload(PLUGIN);
     expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBeNull();
+  });
+
+  describe("on disk, for the next run (#16240)", () => {
+    const stored = () =>
+      Object.keys(
+        (storeMock._state.get("pluginLaunchedAgents") as Record<string, unknown> | undefined) ?? {}
+      ).sort();
+    const record = (pluginId: string) => ({ pluginId, projectId: null, seenAt: Date.now() });
+    const REPO_PLUGIN = makeProjectPluginInstanceKey("c".repeat(64), "acme.repo");
+
+    it("keeps the launch, and an unload ends the reach there too", async () => {
+      const service = await loadLauncher();
+      expect(stored()).toEqual(["t-launched"]);
+      service.unloadPlugin(PLUGIN);
+      expect(stored()).toEqual([]);
+    });
+
+    it("keeps it across a reload that brings the plugin back, and drops it when one doesn't", async () => {
+      const service = await loadLauncher();
+      const loaded = service.plugins.get(PLUGIN);
+      service.unloadPlugin(PLUGIN, { reload: true });
+      service.plugins.set(PLUGIN, loaded);
+      service.settlePluginReload(PLUGIN);
+      expect(stored()).toEqual(["t-launched"]);
+      service.unloadPlugin(PLUGIN, { reload: true });
+      service.settlePluginReload(PLUGIN);
+      expect(stored()).toEqual([]);
+    });
+
+    it("leaves it there when the service is torn down, project controller first", async () => {
+      const service = await loadLauncher();
+      // The controller's teardown unloads its instances before the service's own sweep.
+      (service as unknown as { projectPluginController: unknown }).projectPluginController = {
+        dispose: () => service.unloadPlugin(PLUGIN),
+      };
+      (service as unknown as { dispose: () => void }).dispose();
+      expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBeNull();
+      expect(stored()).toEqual(["t-launched"]);
+    });
+
+    it("keeps at startup the records of a dev plugin whose rebuild is swapping it", async () => {
+      storeMock._state.set("pluginLaunchedAgents", {
+        "t-dev": record("acme.dev"),
+        "t-gone": record("acme.gone"),
+      });
+      const service = new PluginService(tmpDir);
+      (
+        service as unknown as { devSessions: Map<string, { reloadCount: number; detail: null }> }
+      ).devSessions.set("acme.dev", { reloadCount: 0, detail: null });
+      await service.initialize();
+      expect(stored()).toEqual(["t-dev"]);
+    });
+
+    it("drops at startup the records of an installed plugin that didn't come back", async () => {
+      storeMock._state.set("pluginLaunchedAgents", {
+        "t-gone": record("acme.gone"),
+        "t-gone-instance": record(makeInstalledProjectInstanceKey("c".repeat(64), "acme.gone")),
+        "t-kept": record(PLUGIN),
+        "t-repo": record(REPO_PLUGIN),
+      });
+      await loadLauncher();
+      expect(stored()).toEqual(["t-kept", "t-launched", "t-repo"]);
+    });
+
+    it("drops a stored record when its plugin unloads without being loaded", async () => {
+      storeMock._state.set("pluginLaunchedAgents", { "t-repo": record(REPO_PLUGIN) });
+      const service = await loadLauncher();
+      service.unloadPlugin(REPO_PLUGIN, { reload: true });
+      expect(stored()).toEqual(["t-launched", "t-repo"]);
+      service.unloadPlugin(REPO_PLUGIN);
+      expect(stored()).toEqual(["t-launched"]);
+    });
   });
 });

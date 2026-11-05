@@ -188,6 +188,10 @@ vi.mock("../../services/plugin/projectLayoutSeeds.js", () => ({
   captureProjectLayoutSeed: vi.fn(),
 }));
 
+vi.mock("../../services/plugin/pluginLaunchStore.js", () => ({
+  admitRestoredPluginLaunchesFromStore: vi.fn(),
+}));
+
 vi.mock("../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getAppWebContents: vi.fn(() => null),
@@ -211,6 +215,7 @@ import { noteDatabaseNoticeRendererReady } from "../../services/databaseBackupNo
 import { releaseReloadNotice } from "../../window/rendererReloadNotice.js";
 import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
+import { admitRestoredPluginLaunchesFromStore } from "../../services/plugin/pluginLaunchStore.js";
 import {
   captureProjectLayoutSeed,
   getProjectLayoutSeed,
@@ -1940,6 +1945,123 @@ describe("app:boot handler", () => {
     expect(result.workspaceId).toBeNull();
     expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+
+  describe("plugin launch records an earlier run left (#16240)", () => {
+    const SAVED = [
+      {
+        id: "agent",
+        kind: "terminal",
+        title: "A",
+        location: "grid",
+        cwd: "/tmp",
+        launchedByPluginId: "acme.orchestrator",
+      },
+      {
+        id: "suspect",
+        kind: "terminal",
+        title: "S",
+        location: "grid",
+        cwd: "/tmp",
+        launchedByPluginId: "acme.orchestrator",
+      },
+      { id: "shell", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+    ];
+    const RECORDS = {
+      agent: { pluginId: "acme.orchestrator", projectId: null, seenAt: Date.now() },
+      suspect: { pluginId: "acme.orchestrator", projectId: null, seenAt: Date.now() },
+    };
+
+    async function seedStore(launches: unknown, terminals: unknown[] = SAVED): Promise<void> {
+      const storeModule = await import("../../store.js");
+      vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+        if (key === "pluginLaunchedAgents") return launches;
+        if (key === "appState") return { terminals, sidebarWidth: 350 };
+        return defaultStoreGet(key);
+      });
+    }
+
+    async function invokeHydrate(): Promise<{ appState: { terminals: Array<{ id: string }> } }> {
+      ipcHandlers.clear();
+      const cleanup = registerAppStateHandlers();
+      const handler = ipcHandlers.get(CHANNELS.APP_HYDRATE);
+      if (!handler) throw new Error("app:hydrate handler not registered");
+      const result = await handler(makeInvokeEvent());
+      cleanup();
+      return result as { appState: { terminals: Array<{ id: string }> } };
+    }
+
+    function pendingCrash() {
+      crashService.getPendingCrash.mockReturnValue({
+        logPath: "/fake.json",
+        entry: {
+          id: "c",
+          timestamp: 0,
+          appVersion: "1",
+          platform: "x",
+          osVersion: "y",
+          arch: "z",
+        },
+        hasBackup: false,
+        panels: [],
+      });
+    }
+
+    it("hands the ledger exactly the panes the hydrate restores", async () => {
+      await seedStore(RECORDS);
+      crashGuard.isSafeMode.mockReturnValue(true);
+      panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["suspect"]));
+      const result = (await invokeBoot()) as { appState: { terminals: Array<{ id: string }> } };
+      expect(result.appState.terminals.map((t) => t.id)).toEqual(["agent", "shell"]);
+      await vi.waitFor(() =>
+        expect(admitRestoredPluginLaunchesFromStore).toHaveBeenCalledWith([
+          { id: "agent", launchedByPluginId: "acme.orchestrator" },
+          { id: "shell", launchedByPluginId: undefined },
+        ])
+      );
+    });
+
+    it("hands back a prefetched payload's panes too", async () => {
+      await seedStore(RECORDS);
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      legacyOwnerRef.current = "p1";
+      vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+        appState: { terminals: [SAVED[0]] },
+      } as never);
+      await invokeBoot();
+      await vi.waitFor(() =>
+        expect(admitRestoredPluginLaunchesFromStore).toHaveBeenCalledWith([
+          { id: "agent", launchedByPluginId: "acme.orchestrator" },
+        ])
+      );
+    });
+
+    it("waits for the hydrate that follows a pending crash's choice", async () => {
+      await seedStore(RECORDS);
+      pendingCrash();
+      await invokeBoot();
+      await vi.dynamicImportSettled();
+      expect(admitRestoredPluginLaunchesFromStore).not.toHaveBeenCalled();
+
+      await invokeHydrate();
+      await vi.waitFor(() => expect(admitRestoredPluginLaunchesFromStore).toHaveBeenCalled());
+    });
+
+    it.each([
+      ["no run left a record", {}, SAVED],
+      ["the ledger is missing", undefined, SAVED],
+      ["the ledger is malformed", "acme.orchestrator", SAVED],
+      ["nothing is restored", RECORDS, []],
+    ])("loads nothing when %s", async (_label, launches, terminals) => {
+      await seedStore(launches, terminals);
+      await invokeBoot();
+      await vi.dynamicImportSettled();
+      expect(admitRestoredPluginLaunchesFromStore).not.toHaveBeenCalled();
+    });
   });
 });
 

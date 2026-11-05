@@ -43,7 +43,13 @@ import {
   channelHandlerArityHint,
 } from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
-import { forgetPluginLaunches, forgetPluginLaunchesWhere } from "./plugin/pluginLaunchedAgents.js";
+import {
+  attachPluginLaunchPersistence,
+  detachPluginLaunchPersistence,
+  forgetPluginLaunches,
+  forgetPluginLaunchesWhere,
+} from "./plugin/pluginLaunchedAgents.js";
+import { storePluginLaunchPersistence } from "./plugin/pluginLaunchStore.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
@@ -1662,6 +1668,9 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    // Before any unload below can forget a launch: teardown ends the plugins'
+    // reach in memory only, and the records on disk carry it to the next run.
+    detachPluginLaunchPersistence();
     void this.shutdownArtifacts();
     this.metrics.dispose();
     // Native watchers go first: a settled burst arriving mid-teardown would
@@ -1758,6 +1767,7 @@ export class PluginService {
   }
 
   private async runInitialize(): Promise<void> {
+    attachPluginLaunchPersistence(storePluginLaunchPersistence);
     this.catalogScanInFlight = true;
     try {
       await this.scanStartupCatalog();
@@ -1847,6 +1857,10 @@ export class PluginService {
       // installed-id set is authoritative. A partial inventory would read as
       // "uninstalled" and delete live metadata (#6110).
       await this.reconcilePluginRecipeMetadata();
+      // The same holds for launch records: one whose installed plugin didn't
+      // come back belongs to a plugin removed or disabled while the app was
+      // closed, and a reinstall under its id must not inherit its agents.
+      forgetPluginLaunchesWhere((owner) => this.isMissingInstalledOwner(owner));
       // The same holds for the theme catalog: a selected plugin theme it lacks
       // now is genuinely gone.
       this.pluginThemeCatalogReady = true;
@@ -7144,7 +7158,31 @@ export class PluginService {
     if (opts.uninstall) {
       this.projectInstanceStore.removePackage(manifestId);
       this.projectInstancePackages.delete(manifestId);
+      this.forgetPackageInstanceLaunches(manifestId);
     }
+  }
+
+  /**
+   * End a package's reach on every agent its per-project instances launched,
+   * including instances of a project that isn't open, which no unload reaches.
+   */
+  private forgetPackageInstanceLaunches(manifestId: string): void {
+    forgetPluginLaunchesWhere(
+      (owner) =>
+        parseProjectPluginInstanceKey(owner)?.installed === true &&
+        pluginManifestIdFromInstanceKey(owner) === manifestId
+    );
+  }
+
+  /**
+   * Whether a launch record's plugin is an installed one the startup scan didn't
+   * load. A dev plugin mid-rebuild is out of `plugins` for the swap, and its own
+   * reload settles its records. A repository plugin's go when its project closes.
+   */
+  private isMissingInstalledOwner(owner: string): boolean {
+    const parsed = parseProjectPluginInstanceKey(owner);
+    if (parsed === null) return !this.plugins.has(owner) && !this.devSessions.has(owner);
+    return parsed.installed && !this.projectInstancePackages.has(parsed.manifestId);
   }
 
   /** Load a package's instances again in every still-open project that enabled it. */
@@ -7491,7 +7529,11 @@ export class PluginService {
 
   unloadPlugin(pluginId: string, options?: { reload: true }): void {
     const unloading = this.plugins.get(pluginId);
-    if (!unloading) return;
+    if (!unloading) {
+      // Nothing loaded to tear down, but records an earlier run left still end here.
+      if (!options?.reload) forgetPluginLaunches(pluginId);
+      return;
+    }
     // First, before anything else can run plugin code or yield: every agent
     // credential for this instance dies, and only then do its rosters go. The
     // other order leaves a window where a live grant resolves to an endpoint
@@ -8391,6 +8433,7 @@ export class PluginService {
         const catalogued = this.projectInstancePackages.get(pluginId);
         if (!running && catalogued) {
           this.unloadPackageInstances(pluginId, { uninstall: false, purge: false });
+          this.forgetPackageInstanceLaunches(pluginId);
           this.projectInstancePackages.delete(pluginId);
           this.disabledPlugins.set(pluginId, {
             manifest: catalogued.manifest as PluginManifest,
