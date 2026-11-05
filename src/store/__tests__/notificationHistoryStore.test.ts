@@ -1143,6 +1143,38 @@ describe("notificationHistorySlice", () => {
       });
       expect(result!.actions).toBeUndefined();
     });
+
+    it("strips a stored force delete by what it does, not by its label", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        message: "x",
+        actions: [
+          {
+            label: "Remove",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
+          { label: "Undo", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+          { label: "Delete", actionId: "worktree.delete", actionArgs: { worktreeId: "wt-2" } },
+          {
+            label: "Delete",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-3", force: false },
+          },
+          { label: "Close", actionId: "terminal.close", actionArgs: { force: true } },
+        ],
+      });
+      // Only the force delete goes: a plain delete is refused by the host on a
+      // changed tree, and `force` means nothing to other actions.
+      expect(result!.actions!.map((a) => [a.label, a.actionId, a.actionArgs])).toEqual([
+        ["Undo", "panel.focus", { panelId: "p1" }],
+        ["Delete", "worktree.delete", { worktreeId: "wt-2" }],
+        ["Delete", "worktree.delete", { worktreeId: "wt-3", force: false }],
+        ["Close", "terminal.close", { force: true }],
+      ]);
+    });
   });
 
   describe("snoozedThreads", () => {

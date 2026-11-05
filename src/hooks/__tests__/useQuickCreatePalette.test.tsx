@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { TerminalRecipe } from "@/types";
+import type { WorktreeChanges } from "@shared/types/git";
 import type { QuickCreateItem } from "../useQuickCreatePalette";
 
 const mockRecipes = vi.hoisted(() => ({ value: [] as TerminalRecipe[] }));
@@ -21,12 +22,23 @@ const quickCreateContext = vi.hoisted(() => ({
   },
 }));
 const openCreateDialogMock = vi.hoisted(() => vi.fn());
-const notifyMock = vi.hoisted(() => vi.fn((_payload: Record<string, unknown>) => "n-1"));
+interface CapturedNotification {
+  type?: string;
+  title?: string;
+  message?: unknown;
+  context?: Record<string, unknown>;
+  duration?: number;
+  transient?: boolean;
+  action?: { label: string; onClick: () => void; actionId?: string; actionArgs?: unknown };
+}
 
-const getFreshChangesMock = vi.hoisted(() => vi.fn());
+const notifyMock = vi.hoisted(() => vi.fn((_payload: CapturedNotification) => "n-1"));
+const getFreshChangesMock = vi.hoisted(() =>
+  vi.fn<(worktreeId: string) => Promise<WorktreeChanges | null>>()
+);
 
 vi.mock("@/lib/notify", () => ({
-  notify: (payload: Record<string, unknown>) => notifyMock(payload),
+  notify: (payload: CapturedNotification) => notifyMock(payload),
 }));
 
 vi.mock("@/clients", async (importOriginal) => {
@@ -377,6 +389,10 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
     rootPath: "/repo/.worktrees/fix",
     changes: [],
     changedFileCount: 0,
+  } satisfies WorktreeChanges;
+
+  type CreatedNotification = CapturedNotification & {
+    action: NonNullable<CapturedNotification["action"]>;
   };
 
   function routeDispatch(deleteResult: { ok: boolean; error?: unknown } = { ok: true }): void {
@@ -388,20 +404,16 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
     });
   }
 
-  async function createAndGetNotification(): Promise<{
-    action: { label: string; onClick: () => void; actionId?: string; actionArgs?: unknown };
-    duration?: number;
-    transient?: boolean;
-  }> {
+  async function createAndGetNotification(): Promise<CreatedNotification> {
     mockRecipes.value = [makeRecipe({ id: "project", name: "Project", projectId: "p" })];
     const { result } = renderHook(() => useQuickCreatePalette());
     await act(async () => {
       result.current.confirmItem(listedRow("project"));
     });
-    const call = notifyMock.mock.calls.find(([p]) => p.title === "Worktree created");
-    if (!call) throw new Error("No success notification");
+    const payload = notifyMock.mock.calls.find(([p]) => p.title === "Worktree created")?.[0];
+    if (!payload?.action) throw new Error("No success notification with an action");
     notifyMock.mockClear();
-    return call[0] as never;
+    return { ...payload, action: payload.action };
   }
 
   async function clickUndo(onClick: () => void): Promise<void> {
@@ -412,38 +424,53 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
   }
 
   function dispatchedIds(): string[] {
-    return dispatchMock.mock.calls.map(([id]) => id as string);
+    return dispatchMock.mock.calls.map(([id]) => String(id));
+  }
+
+  function onlyWarningMessage(): string {
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const warning = notifyMock.mock.calls[0]![0];
+    expect(warning).toMatchObject({ type: "warning", context: { worktreeId: "wt-new" } });
+    return String(warning.message);
   }
 
   function expectKeptAndStillAssigned(): void {
     expect(dispatchedIds()).not.toContain("worktree.delete");
     expect(dispatchedIds()).not.toContain("forge.unassignIssue");
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(notifyMock.mock.calls[0]![0]).toMatchObject({
-      type: "warning",
-      context: { worktreeId: "wt-new" },
-    });
   }
 
   it.each([
     [
       "a modified tracked file",
-      { ...clean, changes: [{ path: "src/a.ts", status: "modified" }], changedFileCount: 1 },
+      {
+        ...clean,
+        changes: [{ path: "src/a.ts", status: "modified", insertions: 2, deletions: 1 }],
+        changedFileCount: 1,
+      } satisfies WorktreeChanges,
     ],
     // Untracked files past the listing cap are counted but not listed.
-    ["untracked files left out of the listing", { ...clean, changedFileCount: 3 }],
+    [
+      "untracked files left out of the listing",
+      { ...clean, changedFileCount: 3, omittedUntrackedCount: 3 } satisfies WorktreeChanges,
+    ],
   ])(
-    "keeps a worktree that gained %s since creation, and its assignment",
+    "keeps a worktree that gained %s after it was created, and its assignment",
     async (_label, changes) => {
       routeDispatch();
-      getFreshChangesMock.mockResolvedValue(changes);
+      getFreshChangesMock.mockResolvedValue(clean);
       const notification = await createAndGetNotification();
+      // Clean when the toast went up; the agent writes before the click.
+      expect(getFreshChangesMock).not.toHaveBeenCalled();
+      getFreshChangesMock.mockResolvedValue(changes);
 
       await clickUndo(notification.action.onClick);
 
       expect(getFreshChangesMock).toHaveBeenCalledWith("wt-new");
       expectKeptAndStillAssigned();
-      expect(String(notifyMock.mock.calls[0]![0].message)).toContain(created.branch);
+      const message = onlyWarningMessage();
+      expect(message).toContain(created.branch);
+      expect(message).toMatch(/untracked/);
+      expect(message).toMatch(/Delete worktree/);
     }
   );
 
@@ -461,18 +488,16 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
     await clickUndo(notification.action.onClick);
 
     expectKeptAndStillAssigned();
+    const message = onlyWarningMessage();
+    expect(message).toMatch(/couldn't check/i);
+    expect(message).toMatch(/Delete worktree/);
   });
 
   it("asks for a plain delete, and keeps the assignment when the host refuses it", async () => {
     // Something can land between the status read and the delete; the plain
-    // delete is what lets the host and git refuse it then.
-    routeDispatch({
-      ok: false,
-      error: {
-        code: "EXECUTION_ERROR",
-        message: "Worktree has untracked files. Use force delete to proceed.",
-      },
-    });
+    // delete is what lets the host refuse it then.
+    const refusal = "Worktree has untracked files. Use force delete to proceed.";
+    routeDispatch({ ok: false, error: { code: "EXECUTION_ERROR", message: refusal } });
     getFreshChangesMock.mockResolvedValue(clean);
     const notification = await createAndGetNotification();
 
@@ -484,8 +509,7 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
       { source: "user" }
     );
     expect(dispatchedIds()).not.toContain("forge.unassignIssue");
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(notifyMock.mock.calls[0]![0]).toMatchObject({ type: "warning" });
+    expect(onlyWarningMessage()).toContain(refusal);
   });
 
   it("deletes an untouched worktree and takes the assignment back", async () => {
@@ -504,16 +528,35 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("acts once however many times Undo is clicked", async () => {
+  it("acts once however many times Undo is clicked, during or after the first", async () => {
     routeDispatch();
     getFreshChangesMock.mockResolvedValue(clean);
     const notification = await createAndGetNotification();
 
     notification.action.onClick();
     await clickUndo(notification.action.onClick);
+    await clickUndo(notification.action.onClick);
 
     expect(getFreshChangesMock).toHaveBeenCalledTimes(1);
     expect(dispatchedIds().filter((id) => id === "worktree.delete")).toHaveLength(1);
+    expect(dispatchedIds().filter((id) => id === "forge.unassignIssue")).toHaveLength(1);
+  });
+
+  it("stays spent after a refusal, so a second click can't try again", async () => {
+    routeDispatch();
+    getFreshChangesMock.mockResolvedValue({
+      ...clean,
+      changedFileCount: 1,
+      omittedUntrackedCount: 1,
+    });
+    const notification = await createAndGetNotification();
+
+    await clickUndo(notification.action.onClick);
+    getFreshChangesMock.mockResolvedValue(clean);
+    await clickUndo(notification.action.onClick);
+
+    expect(getFreshChangesMock).toHaveBeenCalledTimes(1);
+    expectKeptAndStillAssigned();
   });
 
   it("leaves the inbox entry no Undo to replay later, and lets the toast expire", async () => {

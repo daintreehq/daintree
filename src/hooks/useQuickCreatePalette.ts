@@ -18,6 +18,7 @@ import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export type QuickCreateItem =
   | (TerminalRecipe & { _kind: "recipe" })
@@ -219,7 +220,10 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                 type: "warning",
                 title: "Couldn't undo worktree creation",
                 message,
-                context: { worktreeId: createdWorktreeId },
+                // A reply to the click, so it toasts rather than taking
+                // uiFeedback's inbox-only default.
+                priority: "high",
+                context: { worktreeId: createdWorktreeId, eventKind: "uiFeedback" },
               });
             };
 
@@ -227,8 +231,9 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             // recipe's agents can start writing within seconds, and a force
             // delete would destroy that work with no preview (#16264). So it
             // refuses anything a fresh status shows, then asks for a plain
-            // delete, which the host and git refuse on their own if something
-            // lands after the read. `latestUndoOnly` keeps it single-use.
+            // delete, so whatever lands after the read meets the same host
+            // refusal as a plain delete from the dialog. `latestUndoOnly` keeps
+            // it single-use.
             const undo = latestUndoOnly(`quick-create:${createdWorktreeId}`, async () => {
               const changes = await worktreeClient
                 .getFreshChanges(createdWorktreeId)
@@ -278,7 +283,8 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               }
             });
             const undoOnClick = (): void => {
-              void undo();
+              const pending = undo();
+              if (pending) safeFireAndForget(pending, { context: "Quick-create Undo" });
             };
 
             if (assignmentError) {

@@ -182,7 +182,7 @@ const FUTURE_TIMESTAMP_SLACK_MS = 60_000;
 function isStoredForceDelete(action: Record<string, unknown>): boolean {
   if (action.actionId !== "worktree.delete") return false;
   const args = action.actionArgs;
-  return !!args && typeof args === "object" && (args as Record<string, unknown>).force === true;
+  return typeof args === "object" && args !== null && "force" in args && args.force === true;
 }
 
 function sanitizeActions(raw: unknown): NotificationHistoryEntry["actions"] {
