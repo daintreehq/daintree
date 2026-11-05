@@ -3707,6 +3707,7 @@ describe("createPluginProtocolHandler", () => {
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
       expect(response.headers.get("Vary")).toBe("Origin");
       expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+      expect(handle.readFile).toHaveBeenCalledTimes(1);
       expect(vi.mocked(fs.open).mock.calls[0]?.[0]).toBe(
         path.join(PLUGIN_ROOT, "view", "fonts", file)
       );
@@ -3726,6 +3727,7 @@ describe("createPluginProtocolHandler", () => {
       expect(response.status).toBe(304);
       expect(response.headers.get("Content-Type")).toBe("font/woff2");
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+      expect(response.headers.get("Vary")).toBe("Origin");
     });
 
     it("withholds the grant from a page that is not the app document", async () => {
@@ -3737,6 +3739,10 @@ describe("createPluginProtocolHandler", () => {
         })
       );
 
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("font/woff2");
+      expect(await response.text()).toBe("data");
+      expect(response.headers.get("Vary")).toBe("Origin");
       expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
     });
   });
