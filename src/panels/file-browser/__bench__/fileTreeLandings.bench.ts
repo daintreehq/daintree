@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { test, describe } from "vitest";
 import type { FileTreeNode } from "@shared/types";
 import {
   countHiddenRows,
@@ -124,8 +124,10 @@ function replay(impl: Impl, sort: FileBrowserSortOrder, upTo = LANDING_ORDER.len
 for (const [sortName, sort] of SORTS) {
   describe(`replay ${DIRS} landings × ${ENTRIES} entries — ${sortName}`, () => {
     for (const [implName, impl] of IMPLS) {
-      bench(implName, () => {
-        replay(impl, sort);
+      test(implName, async ({ bench }) => {
+        await bench(implName, () => {
+          replay(impl, sort);
+        }).run();
       });
     }
   });
@@ -134,8 +136,10 @@ for (const [sortName, sort] of SORTS) {
     for (const [implName, impl] of IMPLS) {
       const { listings, loading } = replay(impl, sort, LANDING_ORDER.length - 1);
       const last = LANDING_ORDER[LANDING_ORDER.length - 1]!;
-      bench(implName, () => {
-        land(impl, listings, loading, last, sort);
+      test(implName, async ({ bench }) => {
+        await bench(implName, () => {
+          land(impl, listings, loading, last, sort);
+        }).run();
       });
     }
   });

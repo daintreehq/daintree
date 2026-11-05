@@ -391,7 +391,7 @@ describe("preload event subscriptions", () => {
   });
 
   it("drops Blink's memory cache once a view has stayed cached for a moment", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       fakeElectron.webFrame.clearCache.mockClear();
 
@@ -411,7 +411,7 @@ describe("preload event subscriptions", () => {
   });
 
   it("never clears the cache of a view that became active again first", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       fakeElectron.webFrame.clearCache.mockClear();
 
@@ -666,7 +666,7 @@ describe("preload event subscriptions", () => {
   });
 
   it("still latches the cached state when clearing the cache throws", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       fakeElectron.webFrame.clearCache.mockImplementationOnce(() => {
         throw new Error("renderer tearing down");

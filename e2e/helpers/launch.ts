@@ -555,10 +555,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       args.unshift("--disable-gpu", "--disable-software-rasterizer");
     }
     if (isMacOSLocal && !options.enableWebgl) {
-      // Local macOS Electron E2E can hit Crashpad/GPU-process FATALs during
-      // restart-heavy specs. Mirror the screenshot harness mitigation for
-      // ordinary non-WebGL E2E launches; WebGL leak tests opt back into GPU.
-      args.unshift("--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs");
+      // Keep DOM terminals for ordinary specs and the compositor in its
+      // default process, so shutdown follows the production process model.
+      // WebGL leak tests opt back into GPU.
+      args.unshift("--disable-gpu", "--disable-breakpad", "--noerrdialogs");
     }
 
     if (options.extraArgs?.length) {

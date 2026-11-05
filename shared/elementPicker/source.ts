@@ -7,15 +7,15 @@ import { SourceLocationSchema } from "./coordinates.js";
  * resolver into existence. Meta-frameworks (SvelteKit, Next.js, Nuxt) are
  * detector evidence on top of the framework they render with.
  */
-export const ElementPickerFrameworkSchema = z.enum([
-  "svelte",
-  "react",
-  "vue",
-  "angular",
-  "astro",
-  "preact",
-  "solid",
-]);
+export const ElementPickerFrameworkSchema = z.enum({
+  svelte: "svelte",
+  react: "react",
+  vue: "vue",
+  angular: "angular",
+  astro: "astro",
+  preact: "preact",
+  solid: "solid",
+});
 export type ElementPickerFramework = z.infer<typeof ElementPickerFrameworkSchema>;
 
 /**
@@ -82,13 +82,13 @@ export type ObservedName = z.infer<typeof ObservedNameSchema>;
  * an element's creation site is not its component's definition, and the call
  * site that produced this copy of a component is neither.
  */
-export const SourceClaimKindSchema = z.enum([
-  "element-creation",
-  "component-invocation",
-  "component-definition",
-  "template-location",
-  "file-hint",
-]);
+export const SourceClaimKindSchema = z.enum({
+  "element-creation": "element-creation",
+  "component-invocation": "component-invocation",
+  "component-definition": "component-definition",
+  "template-location": "template-location",
+  "file-hint": "file-hint",
+});
 export type SourceClaimKind = z.infer<typeof SourceClaimKindSchema>;
 
 const candidateFields = {

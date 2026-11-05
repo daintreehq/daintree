@@ -620,4 +620,5 @@ interface EditFileResult {
  */
 declare function editFile(host: EditFileHost, filePath: string, transform: EditFileTransform, options?: EditFileOptions): Promise<EditFileResult>;
 
-export { type EditFileHost, type EditFileOptions, type EditFileResult, type EditFileTransform, FrontmatterError, type JsonlError, type ParsedFrontmatter, type ParsedJsonl, contentRevision, editFile, parseFrontmatter, parseJsonl, stringifyFrontmatter, stringifyJsonlLine, updateFrontmatter };
+export { FrontmatterError, contentRevision, editFile, parseFrontmatter, parseJsonl, stringifyFrontmatter, stringifyJsonlLine, updateFrontmatter };
+export type { EditFileHost, EditFileOptions, EditFileResult, EditFileTransform, JsonlError, ParsedFrontmatter, ParsedJsonl };

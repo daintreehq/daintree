@@ -85,8 +85,7 @@ const EDITS = [
     replace:
       "      if (pfnClosePseudoConsole && handle->hpc != nullptr)\n      {\n" +
       "        pfnClosePseudoConsole(handle->hpc);\n" +
-      "        // The handle stays in ptyHandles until the exit watcher erases it, so\n" +
-      "        // null hpc to keep a later call from using the closed pseudoconsole.\n" +
+      "        // Closing frees the pseudoconsole, but the baton lives until the exit thread erases it.\n" +
       "        handle->hpc = nullptr;\n      }",
   },
 ];

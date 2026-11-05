@@ -1,5 +1,5 @@
-import type { HOST_IMPORTMAP_SERVED_SPECIFIERS } from "../../packages/plugin-vite/src/hostImportMap";
-import { PLUGIN_SDK_REACT_RUNTIME_EXPORTS } from "../../src/pluginSdkReact/runtimeExports";
+import type { HOST_IMPORTMAP_SERVED_SPECIFIERS } from "../../packages/plugin-vite/src/hostImportMap.ts";
+import { PLUGIN_SDK_REACT_RUNTIME_EXPORTS } from "../../src/pluginSdkReact/runtimeExports.ts";
 
 export type HostFacadeSpecifier = (typeof HOST_IMPORTMAP_SERVED_SPECIFIERS)[number];
 

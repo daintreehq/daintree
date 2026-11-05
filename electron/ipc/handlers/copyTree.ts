@@ -1,3 +1,4 @@
+import { writeClipboardFileFormat } from "../../utils/clipboardAccess.js";
 import { clipboard } from "electron";
 import crypto from "crypto";
 import path from "path";
@@ -575,7 +576,7 @@ async function runCopyTreeOperation(
  * file manager's Copy does. A remote window's copy-as-file lands here too,
  * with the bundle already downloaded from its host.
  */
-export function copyFileToClipboard(filePath: string): void {
+export async function copyFileToClipboard(filePath: string): Promise<void> {
   if (process.platform === "darwin") {
     // Electron's `clipboard.writeBuffer` maps to Chromium's
     // `WritePortableAndPlatformRepresentations`, which calls
@@ -591,11 +592,11 @@ export function copyFileToClipboard(filePath: string): void {
     <string>${escapeXml(filePath)}</string>
 </array>
 </plist>`;
-    clipboard.writeBuffer("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
+    await writeClipboardFileFormat("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
   } else if (process.platform === "win32") {
-    clipboard.writeText(filePath);
+    await clipboard.writeText(filePath);
   } else {
-    clipboard.writeBuffer(
+    await writeClipboardFileFormat(
       "text/uri-list",
       Buffer.from(pathToFileURL(filePath).href + "\r\n", "utf8")
     );
@@ -850,7 +851,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const filePath = result.filePath;
 
     try {
-      copyFileToClipboard(filePath);
+      await copyFileToClipboard(filePath);
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
 

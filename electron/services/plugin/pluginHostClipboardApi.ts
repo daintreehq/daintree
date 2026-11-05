@@ -1,3 +1,4 @@
+import { writeClipboardImage } from "../../utils/clipboardAccess.js";
 import { clipboard } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 
@@ -84,7 +85,7 @@ export function buildClipboardApi(
         );
         return;
       }
-      clipboard.writeText(text);
+      await clipboard.writeText(text);
     },
     writeImage: async (pngData): Promise<void> => {
       requireLoaded("writeImage");
@@ -128,7 +129,7 @@ export function buildClipboardApi(
           { timeoutMs: REMOTE_CLIPBOARD_TIMEOUT_MS }
         );
       } else {
-        clipboard.writeImage(image);
+        await writeClipboardImage(image);
       }
       // Audit the byte count only — never the bytes. An image write is
       // user-visible state the plugin changed without a prompt, so it belongs

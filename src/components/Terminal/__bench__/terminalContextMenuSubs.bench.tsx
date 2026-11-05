@@ -7,7 +7,7 @@
 // worktree stores, then pushes the traffic an active fleet produces: worktree
 // snapshot changes to a worktree none of the panels live in, activity writes
 // on the panels themselves, and fleet snapshot pushes.
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useStore } from "zustand";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -232,6 +232,14 @@ process.stderr.write(
 );
 
 describe(`TerminalContextMenu subscriptions (${MENU_COUNT} mounted menus)`, () => {
-  bench(`${UPDATES}× worktree tick + activity write + fleet push`, traffic, { iterations: 10 });
-  bench("open to content, then close", () => void openAndCheck(), { iterations: 50 });
+  test(`${UPDATES}× worktree tick + activity write + fleet push`, async ({ bench }) => {
+    await bench(`${UPDATES}× worktree tick + activity write + fleet push`, {}, traffic).run({
+      iterations: 10,
+    });
+  });
+  test("open to content, then close", async ({ bench }) => {
+    await bench("open to content, then close", {}, () => void openAndCheck()).run({
+      iterations: 50,
+    });
+  });
 });

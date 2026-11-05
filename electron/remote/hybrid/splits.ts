@@ -382,8 +382,11 @@ export function buildRemoteEditorUrl(
  * No editor here can open the host's file, so its path goes to this
  * machine's clipboard instead, and the window says so, naming the host.
  */
-function copyHostPathInstead(hostId: HostId, hostPath: string): SystemOpenInEditorFallback {
-  clipboard.writeText(hostPath);
+async function copyHostPathInstead(
+  hostId: HostId,
+  hostPath: string
+): Promise<SystemOpenInEditorFallback> {
+  await clipboard.writeText(hostPath);
   return { outcome: "copied-host-path", path: hostPath, hostName: hostLabel(hostId) };
 }
 
@@ -467,7 +470,7 @@ const copyHostPath: HybridSplit = async ({ hostId, args }) => {
     shell.showItemInFolder(windowsPath);
     return undefined;
   }
-  clipboard.writeText(targetPath);
+  await clipboard.writeText(targetPath);
   return undefined;
 };
 

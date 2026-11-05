@@ -6,6 +6,7 @@ type SentryInit = {
   beforeSend?: (event: unknown) => unknown;
   beforeBreadcrumb?: (breadcrumb: unknown) => unknown;
   maxBreadcrumbs?: number;
+  dataCollection?: { userInfo?: boolean };
 };
 
 const sentryInit = vi.fn<(opts: SentryInit) => void>();
@@ -79,6 +80,26 @@ describe("rendererSentry", () => {
     expect(result).not.toContain("GlobalHandlers");
     expect(result).toContain("BrowserApiErrors");
     expect(result).toContain("Dedupe");
+  });
+
+  it("instructs the Sentry backend never to infer a renderer user's IP address", async () => {
+    const mod = await import("../rendererSentry");
+    await mod.initRendererSentry();
+    const { BrowserClient } = await vi.importActual<typeof import("@sentry/electron/renderer")>(
+      "@sentry/electron/renderer"
+    );
+    const client = new BrowserClient({
+      dsn: "https://public@example.invalid/1",
+      dataCollection: sentryInit.mock.calls[0]![0].dataCollection,
+      integrations: [],
+      stackParser: () => [],
+      transport: () => ({ send: async () => ({}), flush: async () => true }),
+    });
+    try {
+      expect(client.getOptions()._metadata?.sdk?.settings?.infer_ip).toBe("never");
+    } finally {
+      await client.close();
+    }
   });
 
   // #7575 — the renderer keeps its own breadcrumb ring buffer, so the bump must

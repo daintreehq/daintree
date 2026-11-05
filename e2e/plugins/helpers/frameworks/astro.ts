@@ -61,7 +61,8 @@ const { title, body } = Astro.props;
 };
 
 export const ASTRO_COMMANDS = {
-  dev: (port: number) => `npm run dev -- --host 127.0.0.1 --port ${port}`,
+  // Astro backgrounds agent-launched servers; the preview owns a foreground PTY.
+  dev: (port: number) => `npm run dev -- --ignore-lock --host 127.0.0.1 --port ${port}`,
 };
 
 export const ASTRO_HEADING = `${PAGE_FILE}:${lineOf(PAGE_SOURCE, "<h1>")}`;

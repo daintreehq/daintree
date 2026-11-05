@@ -15,6 +15,7 @@ import {
   waitForTerminalText,
 } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
+import { connectListeningFixtureHost } from "../helpers/remoteHostSetup";
 import {
   SSH_ALIAS,
   controlSocketsUnder,
@@ -364,13 +365,10 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     await page.getByRole("button", { name: "Add host", exact: true }).click();
     const dialog = page.locator(SEL.remoteHosts.addHostDialog);
     await dialog.getByPlaceholder("user@devbox.local").fill(SSH_ALIAS);
-    await dialog.getByPlaceholder(SSH_ALIAS).fill(HOST_NAME);
+    await dialog.getByPlaceholder("devbox", { exact: true }).fill(HOST_NAME);
     await dialog.getByRole("button", { name: "Check host" }).click();
     await expect(dialog).toContainText(/Host mode\s*Listening/, { timeout: 60_000 });
-    await dialog.getByRole("button", { name: "Continue" }).click();
-    await dialog.getByRole("button", { name: "Skip" }).click();
-    await dialog.getByRole("button", { name: "Add host", exact: true }).click();
-    await expect(dialog).toBeHidden({ timeout: 60_000 });
+    await connectListeningFixtureHost(page, dialog, HOST_NAME);
     await expect(page.locator('[id="hosts-list"]')).toContainText("Connected", {
       timeout: 60_000,
     });
@@ -389,8 +387,10 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     await page.locator(SEL.remoteHosts.hostMenuRow(run.hostId)).click();
     await page.locator(SEL.remoteHosts.projectPickerOption(run.hostProject.name)).click();
     run.remotePage = await waitForView(run.b.app, run.hostId, run.hostProject.name);
-    // Opening it takes control from the host's own screen.
+    // Opening observes the Host's screen; explicitly take control to drive it.
     const driven = run.remotePage.locator(SEL.remoteHosts.drivenElsewhereBanner);
+    await expect(driven).toBeVisible({ timeout: 15_000 });
+    await driven.getByRole("button", { name: "Take control" }).click();
     await expect(driven).toHaveCount(0, { timeout: 15_000 });
     await openTerminal(run.remotePage);
     await waitForTerminalReady(run.remotePage, getFirstGridPanel(run.remotePage), 60_000);
@@ -869,6 +869,11 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     });
     timings.recoveredAfterSshdRestartMs = Date.now() - upAt;
     await waitForTerminalText(panel, "outage=64", 30_000);
+    // Waiting for the settled outage banner outlasts the driver's reservation.
+    const control = page.locator(SEL.remoteHosts.drivenElsewhereBanner);
+    await expect(control).toBeVisible({ timeout: 15_000 });
+    await control.getByRole("button", { name: "Take control" }).click();
+    await expect(control).toHaveCount(0, { timeout: 15_000 });
     await runTerminalCommand(page, panel, 'echo "post-outage=$((9*9))"');
     await waitForTerminalText(panel, "post-outage=81", 30_000);
   });
@@ -933,19 +938,17 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     await expect(hostTaken).toBeVisible({ timeout: 30_000 });
     await hostTaken.getByRole("button", { name: "Take control" }).click();
     await expect(driven).toBeVisible({ timeout: 30_000 });
-    // A terminal asked for while observing is refused in words, not wire format.
+    // An observer's launch waits in words and starts once this window has control.
     await openTerminal(top);
     const refused = top.locator("[data-panel-id]").last();
-    await expect(refused).toContainText("Couldn't start terminal", { timeout: 30_000 });
+    await expect(refused).toContainText("The terminal is waiting for control", { timeout: 30_000 });
     await expect(refused).toContainText("Take control");
     await expect(refused).not.toContainText("[AppError");
-    await refused
-      .getByRole("button", { name: /Close|Trash|Remove/ })
-      .first()
-      .click()
-      .catch(() => undefined);
     await driven.getByRole("button", { name: "Take control" }).click();
     await expect(driven).toHaveCount(0, { timeout: 15_000 });
+    await waitForTerminalReady(top, refused, 60_000);
+    await runTerminalCommand(top, refused, 'echo "held=$((16*16))"');
+    await waitForTerminalText(refused, "held=256", 30_000);
     // A fresh terminal on the restarted Host works.
     await openTerminal(top);
     const panels = top.locator("[data-panel-id]");
@@ -968,7 +971,7 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     await page.locator(SEL.remoteHosts.hostChip).click();
     await page.getByRole("menuitem", { name: "Hosts overview…" }).click();
     await page.getByRole("button", { name: `Add project on ${HOST_NAME}` }).click();
-    await page.getByRole("button", { name: `Open a folder on ${HOST_NAME}` }).click();
+    await page.getByRole("button", { name: "Open a folder…", exact: true }).click();
     const field = page.getByRole("textbox", { name: "Folder path" });
     await field.fill(repo.dir);
     await field.press("Enter");

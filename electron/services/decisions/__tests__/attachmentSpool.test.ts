@@ -149,8 +149,10 @@ describe("DecisionsAttachments", () => {
       order.push("second");
       return "asked";
     });
-    await vi.waitFor(() => expect(order).toEqual(["first:start"]));
-    expect(spooled()).toEqual(["first_entry"]);
+    await vi.waitFor(() => {
+      expect(order).toEqual(["first:start"]);
+      expect(spooled()).toEqual(["first_entry"]);
+    });
     release();
 
     await expect(first).rejects.toThrow(/second image was refused/);

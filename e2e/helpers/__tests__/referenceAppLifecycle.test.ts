@@ -21,7 +21,7 @@ import {
  * with its reason, and the workload still evicts on any machine's default cache.
  */
 
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
 const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), "utf8");
 
 /** Titles of real `test(...)` calls — a comment or a stray string does not count. */

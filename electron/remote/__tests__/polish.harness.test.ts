@@ -13,20 +13,23 @@ const os = vi.hoisted(() => ({
   opened: [] as string[],
 }));
 
+vi.mock("../../utils/clipboardAccess.js", () => ({
+  readClipboardImage: () => {
+    const png = os.image?.png ?? null;
+    return {
+      isEmpty: () => png === null,
+      toPNG: () => png ?? Buffer.alloc(0),
+      getSize: () => ({ width: 800, height: 400 }),
+      resize: () => ({ toPNG: () => Buffer.from("thumb") }),
+    };
+  },
+}));
+
 vi.mock("electron", async () => {
   const { electronMock } = await import("./harness/fakeElectron.js");
   return {
     ...electronMock,
     clipboard: {
-      readImage: () => {
-        const png = os.image?.png ?? null;
-        return {
-          isEmpty: () => png === null,
-          toPNG: () => png ?? Buffer.alloc(0),
-          getSize: () => ({ width: 800, height: 400 }),
-          resize: () => ({ toPNG: () => Buffer.from("thumb") }),
-        };
-      },
       writeText: (text: string) => void os.written.push(text),
     },
     shell: {

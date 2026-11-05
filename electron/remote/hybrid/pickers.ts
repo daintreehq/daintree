@@ -28,7 +28,7 @@ type PickerClient = Pick<HostFileClient, "pickHostPaths" | "downloadToTemp">;
 export interface PickerSplitDeps {
   client(): PickerClient | undefined;
   /** Put a file on this machine's clipboard as a file. */
-  copyFileToClipboard(localPath: string): void;
+  copyFileToClipboard(localPath: string): void | Promise<void>;
 }
 
 function requireClient(deps: PickerSplitDeps): PickerClient {
@@ -173,7 +173,7 @@ function copyTreeGenerateAndCopyFile(deps: PickerSplitDeps): HybridSplit {
       return { ...bundle, error: `Failed to download context file from the host: ${message}` };
     }
     try {
-      deps.copyFileToClipboard(localPath);
+      await deps.copyFileToClipboard(localPath);
     } catch (error) {
       const message = formatErrorMessage(error, "clipboard write failed");
       return {

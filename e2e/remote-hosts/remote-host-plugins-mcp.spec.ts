@@ -10,6 +10,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { getFirstGridPanel, openSettings, openTerminal } from "../helpers/panels";
 import { waitForTerminalReady } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
+import { connectListeningFixtureHost } from "../helpers/remoteHostSetup";
 import {
   SSH_ALIAS,
   controlSocketsUnder,
@@ -351,13 +352,10 @@ test.describe.serial("Remote hosts: host plugins and the host MCP server, from a
     await page.getByRole("button", { name: "Add host", exact: true }).click();
     const dialog = page.locator(SEL.remoteHosts.addHostDialog);
     await dialog.getByPlaceholder("user@devbox.local").fill(SSH_ALIAS);
-    await dialog.getByPlaceholder(SSH_ALIAS).fill(HOST_NAME);
+    await dialog.getByPlaceholder("devbox", { exact: true }).fill(HOST_NAME);
     await dialog.getByRole("button", { name: "Check host" }).click();
     await expect(dialog).toContainText(/Host mode\s*Listening/, { timeout: 60_000 });
-    await dialog.getByRole("button", { name: "Continue" }).click();
-    await dialog.getByRole("button", { name: "Skip" }).click();
-    await dialog.getByRole("button", { name: "Add host", exact: true }).click();
-    await expect(dialog).toBeHidden({ timeout: 60_000 });
+    await connectListeningFixtureHost(page, dialog, HOST_NAME);
     await expect(page.locator('[id="hosts-list"]')).toContainText("Connected", {
       timeout: 60_000,
     });
@@ -376,8 +374,12 @@ test.describe.serial("Remote hosts: host plugins and the host MCP server, from a
     await page.locator(SEL.remoteHosts.hostMenuRow(run.hostId)).click();
     await page.locator(SEL.remoteHosts.projectPickerOption(run.hostProject.name)).click();
     run.remotePage = await waitForView(run.b.app, run.hostId, run.hostProject.name);
-    // Opening it takes control from the host's own screen.
+    // Opening observes the Host's screen; explicitly take control to drive it.
     const driven = run.remotePage.locator(SEL.remoteHosts.drivenElsewhereBanner);
+    await run.remotePage.evaluate(async () => {
+      const project = await window.electron.project.getCurrent();
+      await window.electron.driveLease.takeOver({ projectId: project!.id });
+    });
     await expect(driven).toHaveCount(0, { timeout: 15_000 });
     await openTerminal(run.remotePage);
     await waitForTerminalReady(run.remotePage, getFirstGridPanel(run.remotePage), 60_000);
@@ -534,9 +536,16 @@ test.describe.serial("Remote hosts: host plugins and the host MCP server, from a
     await run.wrapper.hold();
     try {
       for (const pid of await liveMasters()) process.kill(pid, "SIGKILL");
-      await expect(page.locator(SEL.remoteHosts.connectionBanner).first()).toBeVisible({
-        timeout: 30_000,
-      });
+      // The window banner deliberately waits 30s, past the driver's 15s reservation.
+      await expect
+        .poll(
+          async () => {
+            const hosts = await run.b.window.evaluate(() => window.electron.remoteHosts.list());
+            return hosts.find((entry) => entry.descriptor.id === run.hostId)?.connection.status;
+          },
+          { timeout: 10_000 }
+        )
+        .not.toBe("connected");
       const started = Date.now();
       outage = await Promise.race([
         run.mcp!.callTool("terminal.list", {}),
@@ -560,6 +569,15 @@ test.describe.serial("Remote hosts: host plugins and the host MCP server, from a
     };
     expect(refusal.code).toBe("SESSION_BINDING_GONE");
     expect(refusal.retriable).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const hosts = await run.b.window.evaluate(() => window.electron.remoteHosts.list());
+          return hosts.find((entry) => entry.descriptor.id === run.hostId)?.connection.status;
+        },
+        { timeout: 60_000 }
+      )
+      .toBe("connected");
     await expect(page.locator(SEL.remoteHosts.connectionBanner)).toHaveCount(0, {
       timeout: 60_000,
     });

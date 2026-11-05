@@ -25,6 +25,7 @@ const appMock = vi.hoisted(() => ({
   // a bare `() => undefined` pins the mock's return to `undefined`.
   getGPUFeatureStatus: vi.fn((): Record<string, string> | undefined => undefined),
   getGPUInfo: vi.fn(() => Promise.resolve(null)),
+  whenReady: vi.fn<() => Promise<void>>(() => Promise.resolve()),
 }));
 
 const loggerMethods = vi.hoisted(() => ({
@@ -122,6 +123,7 @@ describe("GpuCrashMonitorService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    appMock.whenReady.mockResolvedValue(undefined);
     shutdownMock.result = "started";
     shutdownMock.onSettled = null;
     Object.keys(appListeners).forEach((k) => delete appListeners[k]);
@@ -1011,6 +1013,28 @@ describe("GpuCrashMonitorService", () => {
 
     afterEach(() => {
       vi.useRealTimers();
+    });
+
+    it("keeps crash listeners early while deferring GPU reads until app.ready", async () => {
+      vi.useFakeTimers();
+      let ready!: () => void;
+      appMock.whenReady.mockReturnValue(
+        new Promise<void>((resolve) => {
+          ready = resolve;
+        })
+      );
+      await initFresh();
+
+      expect(appMock.on.mock.calls.some(([event]) => event === "child-process-gone")).toBe(true);
+      fireGpuInfoUpdate();
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(appMock.getGPUInfo).not.toHaveBeenCalled();
+      expect(appMock.getGPUFeatureStatus).not.toHaveBeenCalled();
+
+      ready();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(appMock.getGPUInfo).toHaveBeenCalledWith("basic");
+      expect(appMock.getGPUFeatureStatus).toHaveBeenCalled();
     });
 
     it("logs the status the GPU process reports once its updates go quiet", async () => {

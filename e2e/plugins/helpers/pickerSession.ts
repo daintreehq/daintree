@@ -123,7 +123,13 @@ export function registerPickerSession(options: PickerSessionOptions) {
  */
 export async function expectNotTraced(page: Page, sourceFile: string): Promise<void> {
   const identity = selectedElement(page);
-  await expect(identity.getByText("Not traced to source")).toBeVisible();
+  await expect(
+    page
+      .getByRole("complementary", { name: "Element Picker details" })
+      .getByText(
+        /^(?:No source reported for this element|No file or line for this element|Production build — elements can't be traced to source)$/
+      )
+  ).toBeVisible();
   await expect(identity.getByRole("button", { name: "Copy path" })).toHaveCount(0);
   await expect(identity.getByRole("button", { name: "Open in editor" })).toHaveCount(0);
   await expect(identity).not.toContainText(sourceFile);

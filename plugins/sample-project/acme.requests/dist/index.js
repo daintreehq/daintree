@@ -6,9 +6,9 @@ var OPERATION_TERMINAL_STATES = [
 	"cancelled",
 	"abandoned"
 ];
-var OPERATION_INPUT_MAX_CHARS = 32 * 1024;
-var OPERATION_CHECKPOINT_MAX_CHARS = 16 * 1024;
-var OPERATION_RESULT_MAX_CHARS = 64 * 1024;
+var OPERATION_INPUT_MAX_CHARS = 32768;
+var OPERATION_CHECKPOINT_MAX_CHARS = 16384;
+var OPERATION_RESULT_MAX_CHARS = 65536;
 var OperationError = class extends Error {
 	code;
 	retryable;
@@ -75,7 +75,7 @@ var DEFAULT_RETRY = {
 	maximumIntervalMs: 6e4,
 	maximumAttempts: 10
 };
-var DEFAULT_DEADLINE_MS = 1440 * 60 * 1e3;
+var DEFAULT_DEADLINE_MS = 864e5;
 var DEFAULT_POLL_INTERVAL_MS = 5e3;
 var DEFAULT_CALL_TIMEOUT_MS = 3e4;
 var TASK_START_RETRY_MS = 5e3;
@@ -173,7 +173,7 @@ function createOperationManager(host, options) {
 	const random = options.random ?? Math.random;
 	const concurrency = Math.min(16, Math.max(1, Math.floor(positiveNumber(options.concurrency, 4))));
 	const maxUnfinished = Math.floor(positiveNumber(options.maxUnfinished, 200));
-	const retentionAgeMs = positiveNumber(options.retention?.maxAgeMs, 10080 * 60 * 1e3);
+	const retentionAgeMs = positiveNumber(options.retention?.maxAgeMs, 6048e5);
 	const retentionCount = Math.floor(positiveNumber(options.retention?.maxCount, 500));
 	let db = null;
 	let starting = null;
@@ -866,7 +866,7 @@ function syntheticReportKind(deps) {
 	return {
 		title: (input) => input.requestedBy === "agent" ? "Building a report for an agent" : "Building a report",
 		pollIntervalMs: deps.pollIntervalMs ?? 1e3,
-		deadlineMs: 10 * 6e4,
+		deadlineMs: 6e5,
 		provider: {
 			async submit(_input, { idempotencyKey }) {
 				if (!await deps.workspace()) throw new OperationError("NOT_CONNECTED", "Connect the report provider in Request Desk's settings, then build the report again.", { retryable: false });
@@ -1373,7 +1373,8 @@ async function activate(host) {
 				additionalProperties: false
 			},
 			async execute(args) {
-				return startReport("agent", typeof args.key === "string" ? `agent:${args.key}` : void 0);
+				const key = typeof args.key === "string" ? `agent:${args.key}` : void 0;
+				return startReport("agent", key);
 			}
 		},
 		get_report: {

@@ -5,7 +5,7 @@ import path from "path";
 import { createFixtureRepo, type FixtureRepo } from "../../helpers/fixtures";
 import { REFERENCE_APP_ID, REFERENCE_APP_SOURCE } from "../../helpers/referenceAppLifecycle";
 
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
 const SOURCE_DIR = path.join(REPO_ROOT, ...REFERENCE_APP_SOURCE.split("/"));
 /** Local build and preview output, never part of what a project ships. */
 const SKIPPED = new Set(["node_modules", "test-results", "playwright-report", ".tour-preview"]);

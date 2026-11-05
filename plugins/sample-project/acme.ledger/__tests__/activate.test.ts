@@ -482,9 +482,11 @@ describe("acme.ledger — row ids past 2^53", () => {
     const { call, dispose } = await activated();
     await call("summarize_by_category");
     const agent = external();
-    agent
-      .prepare("INSERT INTO transactions (id, date, amount_cents, category) VALUES (?, ?, ?, ?)")
-      .run(9007199254740992n, "2026-01-01", -1, "external");
+    const insert = agent.prepare(
+      "INSERT INTO transactions (id, date, amount_cents, category) VALUES (?, ?, ?, ?)"
+    );
+    insert.setReadBigInts(true);
+    insert.run(9007199254740992n, "2026-01-01", -1, "external");
     agent.close();
 
     const result = transaction("2026-09-01", 200, "mine");

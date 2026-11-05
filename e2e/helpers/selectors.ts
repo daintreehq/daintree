@@ -263,7 +263,7 @@ export const SEL = {
     cancel: '[data-confirm-role="cancel"]',
   },
   welcome: {
-    openFolder: '[data-testid="quick-actions"] button[aria-label="Open project"]',
+    openFolder: '[data-testid="quick-actions"] button[aria-label^="Open project"]',
   },
   firstRun: {
     welcomeTitle: 'h1:text-is("Welcome to Daintree")',
@@ -375,11 +375,11 @@ export const SEL = {
     addHostDialog: '[data-testid="add-host-dialog"]',
     /** The recovery banner for the window's link to its host (every variant). */
     connectionBanner:
-      '[role="status"]:has-text("Reconnecting…"), [role="status"]:has-text("Connecting to"), [role="alert"]:has-text("is unreachable"), [role="status"]:has-text("runs a different build")',
+      '[role="status"]:has-text("Terminals are read-only until"), [role="status"]:has-text("This window connects once"), [role="status"]:has-text("Checking with")',
     /** Another frontend drives the host project this view shows. */
-    drivenElsewhereBanner: '[role="status"]:has-text("has control of this project")',
+    drivenElsewhereBanner: '[role="status"]:has-text("Read-only ·")',
     /** On the host's own screen, once a Shell has taken its project over. */
-    takenFromHostBanner: '[role="status"]:has-text("has control of this project")',
+    takenFromHostBanner: '[role="status"]:has-text("Read-only ·")',
     projectPickerOption: (projectName: string) =>
       `[role="option"][id^="host-project-picker-"]:has-text("${projectName}")`,
   },

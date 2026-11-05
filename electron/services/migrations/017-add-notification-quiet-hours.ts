@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 export const migration017: Migration = {
@@ -22,6 +23,6 @@ export const migration017: Migration = {
     }
 
     console.log("[Migration 017] Backfilling quiet hours schedule fields");
-    store.set("notificationSettings", { ...settings, ...patch });
+    setRawStoreValue(store, "notificationSettings", { ...settings, ...patch });
   },
 };

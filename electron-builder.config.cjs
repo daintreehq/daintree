@@ -282,7 +282,7 @@ module.exports = async function () {
         ...baseFiles(),
         "!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node",
         "!node_modules/onnxruntime-node/bin/napi-v*/{linux,win32}/**/*",
-        "!node_modules/onnxruntime-node/bin/napi-v*/darwin/*/libonnxruntime.1.30.0.dylib",
+        "!node_modules/onnxruntime-node/bin/napi-v*/darwin/*/libonnxruntime.1.31.1.dylib",
       ],
       x64ArchFiles:
         "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/prebuilds/darwin-*.node,win-job-object/bin/**,posix-pty-reaper/build/Release/**,mac-phys-footprint/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",

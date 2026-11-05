@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { test, describe } from "vitest";
 import { MAX_CONSOLE_ROWS } from "@shared/config/devPreviewConsole";
 import { reconcileCollapsedGroups } from "../consoleRowState";
 
@@ -32,11 +32,15 @@ function mergeAccumulated(prev: Set<number>, arrived: readonly number[]): Set<nu
 for (const streamedGroups of [5_000, 100_000, 144_000, 576_000]) {
   const { rows, arrived, accumulated, pruned } = makeFlush(streamedGroups);
   describe(`collapse-state update, ${streamedGroups.toLocaleString("en-US")} groups streamed`, () => {
-    bench("unpruned: copy every id ever logged", () => {
-      mergeAccumulated(accumulated, arrived);
+    test("unpruned: copy every id ever logged", async ({ bench }) => {
+      await bench("unpruned: copy every id ever logged", () => {
+        mergeAccumulated(accumulated, arrived);
+      }).run();
     });
-    bench("pruned: reconcile against live rows", () => {
-      reconcileCollapsedGroups(pruned, rows, arrived);
+    test("pruned: reconcile against live rows", async ({ bench }) => {
+      await bench("pruned: reconcile against live rows", () => {
+        reconcileCollapsedGroups(pruned, rows, arrived);
+      }).run();
     });
   });
 }

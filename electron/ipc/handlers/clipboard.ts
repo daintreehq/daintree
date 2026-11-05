@@ -1,3 +1,4 @@
+import { readClipboardImage, writeClipboardImage } from "../../utils/clipboardAccess.js";
 import { BrowserWindow, clipboard, dialog, nativeImage } from "electron";
 import * as path from "node:path";
 import type { Dirent } from "node:fs";
@@ -177,7 +178,7 @@ export async function saveElementCapture(png: Buffer): Promise<string> {
 async function handleSaveImage(
   _options?: ClipboardSaveImageOptions
 ): Promise<{ filePath: string; thumbnailDataUrl: string }> {
-  const image = clipboard.readImage();
+  const image = await readClipboardImage();
   if (image.isEmpty()) {
     throw new AppError({
       code: "CLIPBOARD_EMPTY",
@@ -319,7 +320,7 @@ async function handleWriteImage(pngData: Uint8Array): Promise<void> {
       userMessage: "Couldn't write the image — the data is corrupt or unsupported.",
     });
   }
-  clipboard.writeImage(image);
+  await writeClipboardImage(image);
 }
 
 async function handleWriteText(text: string): Promise<void> {
@@ -336,7 +337,7 @@ async function handleWriteText(text: string): Promise<void> {
       userMessage: "The text is too large to copy to the clipboard.",
     });
   }
-  clipboard.writeText(text);
+  await clipboard.writeText(text);
 }
 
 // Linux PRIMARY selection — underpins copy-on-select and middle-click paste.
@@ -360,7 +361,7 @@ async function handleWriteSelection(text: string): Promise<void> {
       message: "Text must not be empty",
     });
   }
-  clipboard.writeText(text, "selection");
+  await clipboard.selection.writeText(text);
 }
 
 async function handleReadSelection(): Promise<{ text: string }> {
@@ -370,7 +371,7 @@ async function handleReadSelection(): Promise<{ text: string }> {
       message: "PRIMARY selection is only available on Linux",
     });
   }
-  const text = clipboard.readText("selection");
+  const text = await clipboard.selection.readText();
   return { text };
 }
 

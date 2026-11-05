@@ -432,7 +432,7 @@ test("git init dialog review — configuration, progress, recovery and success",
     // 2. Arrival with an identity already chosen. The create-project-folder flow is the
     //    only path that carries one, so it is the only honest way to reach this state.
     await step("identity-carried", async () => {
-      await page.getByRole("button", { name: "Create project", exact: true }).click();
+      await page.getByRole("button", { name: /^Create project\b/, exact: true }).click();
       await dialogButton("Browse for a location").waitFor({ state: "visible", timeout: 8000 });
       await mockOpenDialog(app, parentForCreateFlow);
       await dialogButton("Browse for a location").click();

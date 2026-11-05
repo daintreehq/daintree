@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
@@ -220,7 +221,7 @@ export function setProjectSurfaceChoices(
   }
   // Whole-key rewrite: electron-store dot-notation would nest on a key
   // containing dots, and a project id is opaque.
-  store.set(STORE_KEY, all);
+  setRawStoreValue(store, STORE_KEY, all);
   return parseChoices(entry);
 }
 

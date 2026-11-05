@@ -161,7 +161,11 @@ describe("readWorktreeDiffNames", () => {
     expect(["clean", "smudge", "process", "empty-clean"].filter(spy.ran)).toEqual([]);
     expect(readFileSync(path.join(dir, ".git", "index")).equals(index)).toBe(true);
     // The filters do run for a diff that allows them, so their silence above means something.
-    plainDiff(dir, "HEAD");
+    // A failing process-filter handshake can stop Git before later paths.
+    // Exercise each positive control independently so none masks another.
+    for (const file of ["spans.ts", "notes.empty", "data.proc"]) {
+      plainDiff(dir, "HEAD", "--", file);
+    }
     expect(["clean", "process", "empty-clean"].filter(spy.ran)).toEqual([
       "clean",
       "process",
@@ -225,13 +229,18 @@ describe("readWorktreeDiffNames", () => {
 
     expect(await readWorktreeDiffNames(dir, 5_000)).toEqual(["modifiedTrackedName"]);
     expect(["sub-clean", "sub-process", "sub-textconv"].filter(spy.ran)).toEqual([]);
-    // Checking the submodule for changes runs status inside it, filters on.
-    spawnSync("git", ["diff-index", "-p", "--submodule=short", "origin/HEAD", "--"], {
-      cwd: dir,
-      stdio: "ignore",
-    });
+    // Check each path independently: the deliberately broken process
+    // handshake can abort Git before it reaches another path.
+    for (const file of ["inner.ts", "data.proc"]) {
+      spawnSync("git", ["status", "--porcelain", "--", file], {
+        cwd: sub,
+        stdio: "ignore",
+      });
+    }
     expect(["sub-clean", "sub-process"].filter(spy.ran)).toEqual(["sub-clean", "sub-process"]);
-    // Showing it inline runs a diff inside it, textconv on.
+    // The process filter's positive control is complete; don't let its bad
+    // handshake prevent the separate textconv positive control from running.
+    inSub("config", "--unset", "filter.proc.process");
     plainDiff(dir, "--submodule=diff", "origin/HEAD");
     expect(spy.ran("sub-textconv")).toBe(true);
   });

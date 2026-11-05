@@ -66,7 +66,7 @@ vi.mock("electron", () => {
       isPackaged: false,
     },
     clipboard: {
-      writeText: vi.fn(),
+      writeText: vi.fn().mockResolvedValue(undefined),
     },
   };
 });
@@ -199,6 +199,48 @@ describe("PortalManager", () => {
       handler(event, { type: "keyDown", key: "k", meta: true, isAutoRepeat: false });
 
       expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("context-menu clipboard actions", () => {
+    it.each([
+      ["Copy Link Address", "https://linked.example.com", "link"],
+      ["Copy Page URL", "https://page.example.com", "page"],
+    ])("handles an asynchronous write failure for %s", async (label, url, kind) => {
+      const { clipboard, Menu } = await import("electron");
+      const failure = new Error("clipboard unavailable");
+      vi.mocked(clipboard.writeText).mockRejectedValueOnce(failure);
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const manager = new PortalManagerClass(mockWindow);
+        manager.createTab("tab-clipboard", "https://page.example.com");
+        const handler = createdWebContents[0]!.on.mock.calls.find(
+          ([event]) => event === "context-menu"
+        )![1] as (event: unknown, params: unknown) => void;
+        handler(
+          {},
+          {
+            isEditable: false,
+            editFlags: { canCopy: false, canCut: false, canPaste: false },
+            linkURL: "https://linked.example.com",
+            pageURL: "https://page.example.com",
+          }
+        );
+        const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)![0];
+        const item = template.find((entry) => "label" in entry && entry.label === label)!;
+        // Native menus discard callback return values, so a rejected write must
+        // be handled by the callback itself.
+        item.click!({} as Electron.MenuItem, mockWindow, {} as Electron.KeyboardEvent);
+        await vi.waitFor(() => {
+          expect(errorLog).toHaveBeenCalledWith(
+            `[PortalManager] Failed to copy ${kind} URL:`,
+            failure
+          );
+        });
+        expect(clipboard.writeText).toHaveBeenCalledWith(url);
+      } finally {
+        errorLog.mockRestore();
+      }
     });
   });
 
@@ -1433,12 +1475,12 @@ describe("PortalManager idle release (#14538)", () => {
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
   const frontView = { id: 1, send: vi.fn(), isDestroyed: () => false };
   const cachedView = { id: 2, send: vi.fn(), isDestroyed: () => false };
-  const logMocks = vi.hoisted(() => ({ logInfo: vi.fn(), logWarn: vi.fn() }));
-  const metricsMocks = vi.hoisted(() => ({
+  const logMocks = { logInfo: vi.fn(), logWarn: vi.fn() };
+  const metricsMocks = {
     getAppMetricsSnapshot: vi.fn(
       (): Array<{ pid: number; memory: { workingSetSize: number } }> => []
     ),
-  }));
+  };
   const bounds = { x: 0, y: 0, width: 800, height: 600 };
   const HOUR = 60 * 60 * 1000;
 

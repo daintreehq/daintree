@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 // eager-import-allow: reads project welcome answers via store.get so recording one tour preserves other projects and earlier answers
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -97,7 +98,7 @@ export function setProjectWelcome(
   if (existing !== null && existing.version > version) return existing;
   const record: ProjectWelcomeRecord = { version, status, at: now };
   // Whole-key rewrite: ids carry dots, which electron-store would nest on.
-  store.set(STORE_KEY, {
+  setRawStoreValue(store, STORE_KEY, {
     ...all,
     [projectId]: { ...byOwner, [ownerId]: { ...byTour, [tourId]: record } },
   });

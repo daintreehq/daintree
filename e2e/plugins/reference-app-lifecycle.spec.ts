@@ -1,14 +1,7 @@
 import { test, expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { appendFileSync } from "fs";
 import path from "path";
-import {
-  launchApp,
-  closeApp,
-  refreshActiveWindow,
-  waitForActiveProject,
-  waitForProcessExit,
-  type AppContext,
-} from "../helpers/launch";
+import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../helpers/workflows";
 import { fakeAgentEnv } from "../helpers/fakeAgent";
@@ -186,12 +179,12 @@ async function waitForApp(page: Page, project: DeskProject): Promise<void> {
     .poll(
       () =>
         requestTitles(page, project).then(
-          () => true,
-          () => false
+          () => ({ ready: true }),
+          (error) => ({ ready: false, error: String(error) })
         ),
       { timeout: APP_TIMEOUT, message: `${project.name}: Request Desk never answered` }
     )
-    .toBe(true);
+    .toEqual({ ready: true });
 }
 
 /** Trust the project's plugins, read the app's runtime identity, wait for it to serve. */
@@ -210,6 +203,12 @@ async function trustAndResolve(page: Page, pending: DeskProject): Promise<DeskPr
     sentinel: `Sentinel for ${pending.name}`,
     workspace: `Workspace ${pending.name}`,
   };
+  const consent = page.getByRole("dialog", {
+    name: "Allow 'Request Desk' to write files in your project?",
+    exact: true,
+  });
+  await expect(consent).toBeVisible({ timeout: APP_TIMEOUT });
+  await consent.getByRole("button", { name: "Allow and remember", exact: true }).click();
   await waitForApp(page, project);
   return project;
 }
@@ -544,11 +543,26 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
     await waitForProcessExit(pid);
 
     ctx = await launchApp({ userDataDir, env: fakeAgentEnv(binDir) });
-    ctx.window = await waitForActiveProject(
-      ctx.app,
-      await refreshActiveWindow(ctx.app, ctx.window),
-      first.name
-    );
+    // A restored background view can follow the active one in native child order.
+    await expect
+      .poll(() => withPvm<string | null>(ctx.app, "getActiveProjectId"), { timeout: APP_TIMEOUT })
+      .toBe(first.projectId);
+    let restored: Page | undefined;
+    await expect
+      .poll(
+        async () => {
+          for (const candidate of ctx.app.windows()) {
+            if ((await currentProjectId(candidate).catch(() => null)) === first.projectId) {
+              restored = candidate;
+              return true;
+            }
+          }
+          return false;
+        },
+        { timeout: APP_TIMEOUT }
+      )
+      .toBe(true);
+    ctx.window = restored!;
     expect(await currentProjectId(ctx.window)).toBe(first.projectId);
 
     // Trust was remembered: nothing here grants it again.

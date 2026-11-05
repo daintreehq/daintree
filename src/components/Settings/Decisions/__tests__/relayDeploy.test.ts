@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 
 const addPanel = vi.hoisted(() =>
   vi.fn<(options: Record<string, unknown>) => Promise<string | null>>()
@@ -21,12 +19,7 @@ vi.mock("@/lib/notify", () => ({ notify }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 vi.mock("@/lib/platform", () => ({ isWindows: () => windows.on }));
 
-import {
-  DECISIONS_CLI_VERSION,
-  freshRelayName,
-  openRelayDeployTerminal,
-  relayDeployCommand,
-} from "../relayDeploy";
+import { freshRelayName, openRelayDeployTerminal, relayDeployCommand } from "../relayDeploy";
 import { isScreenNeverSaved } from "@shared/config/terminalScreenPersistence";
 
 // A Worker name and an R2 bucket name both: lowercase letters, digits and hyphens, 3–63 long.
@@ -58,18 +51,6 @@ describe("relay deploy", () => {
     vi.stubGlobal("window", { electron: { decisions } });
   });
 
-  it("runs the CLI release that matches the Decisions libraries this build pins", () => {
-    const readJson = (file: string): unknown =>
-      JSON.parse(readFileSync(path.resolve(process.cwd(), file), "utf8"));
-
-    expect(readJson("package.json")).toMatchObject({
-      dependencies: { "@daintreehq/decisions-protocol": DECISIONS_CLI_VERSION },
-    });
-    expect(readJson("node_modules/@daintreehq/decisions-protocol/package.json")).toMatchObject({
-      version: DECISIONS_CLI_VERSION,
-    });
-  });
-
   it("names a new Worker and bucket each time, never the CLI's default", () => {
     const names = new Set(Array.from({ length: 50 }, freshRelayName));
 
@@ -80,13 +61,13 @@ describe("relay deploy", () => {
     }
   });
 
-  it("runs the pinned deploy under that name against main's channel, with no token, account, claim or key", () => {
+  it("runs the latest published deploy under that name against main's channel, with no token, account, claim or key", () => {
     const command = relayDeployCommand("daintree-decisions-0a1b2c3d", false, CHANNEL);
 
     expect(command.split(" ")).toEqual([
       "npx",
       "--yes",
-      `@daintreehq/decisions-cli@${DECISIONS_CLI_VERSION}`,
+      "@daintreehq/decisions-cli@latest",
       "deploy",
       "--name",
       "daintree-decisions-0a1b2c3d",

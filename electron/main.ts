@@ -1056,17 +1056,6 @@ if (!gotTheLock) {
     return "ok";
   }
 
-  // A macOS login item started hidden (`open -gj` or an "hide on launch" login
-  // item). Not reported on every macOS version, so `--hidden` stands in too.
-  function wasOpenedAsHiddenLoginItem(): boolean {
-    if (process.platform !== "darwin") return false;
-    try {
-      return app.getLoginItemSettings().wasOpenedAsHidden === true;
-    } catch {
-      return false;
-    }
-  }
-
   // For folders opened from outside the app that need a window of their own
   // (#12593). Resolves to the new window's id so the open can report where it
   // landed.
@@ -1455,9 +1444,9 @@ if (!gotTheLock) {
         resolveHostModeLaunch({
           argv: process.argv,
           hostModeEnabled,
-          // Only asked when it can matter, so a launch without Host mode makes
-          // no login-item query at all.
-          openedAsHidden: hostModeEnabled && wasOpenedAsHiddenLoginItem(),
+          // Electron 44 removed the macOS 12 hidden-login-item signal.
+          // Windowless launches use the existing --hidden flag.
+          openedAsHidden: false,
         });
       // A launch that opens a folder starts on the picker, so the folder routing
       // fills that window instead of opening a second one beside the last-active

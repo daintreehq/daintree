@@ -1,4 +1,5 @@
 import { isVoiceSessionSummaryLine } from "@shared/utils/voiceLogFields";
+import { buildSentryDataCollection } from "@shared/config/sentryDataCollection";
 
 export type ConsentLevel = "off" | "errors" | "full";
 
@@ -62,6 +63,7 @@ export function initRendererSentry(): Promise<void> {
   // queued and replayed; consent is still checked in beforeSend at send time.
   return import("@sentry/electron/renderer").then((Sentry) => {
     Sentry.init({
+      dataCollection: buildSentryDataCollection(),
       // globalHandlersIntegration would double-capture with our existing
       // window.error / unhandledrejection listeners (rendererGlobalErrorHandlers).
       // The React error boundary and root callbacks call captureException

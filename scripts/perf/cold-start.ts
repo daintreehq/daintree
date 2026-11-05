@@ -369,7 +369,7 @@ Options:
       --warm      Reuse one profile dir + warmup boot so runs are cache-warm
       --json      Emit structured JSON instead of the text table
       --trace     Capture a GPU/compositor contentTracing trace per run into
-                  .tmp/perf-results/trace-run-N.json (open in ui.perfetto.dev).
+                  .tmp/perf-results/trace-run-N.pftrace (open in ui.perfetto.dev).
                   Adds tracing overhead — do NOT mix with baseline runs.
   -h, --help      Show this message
 
@@ -461,7 +461,7 @@ Requires a packaged binary under release/. Build one first with:
         const result = await launchPackagedAndMeasure(executablePath, i, {
           projectRoot,
           ...(warmDir ? { userDataDir: warmDir } : {}),
-          traceFile: trace ? path.join(traceResultsDir, `trace-run-${i + 1}.json`) : undefined,
+          traceFile: trace ? path.join(traceResultsDir, `trace-run-${i + 1}.pftrace`) : undefined,
         });
         const marks = parseNdjson(result.ndjsonPath);
         // Only true-degraded runs (wall-clock fallback) are excluded from

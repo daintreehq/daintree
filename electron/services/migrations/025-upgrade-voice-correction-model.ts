@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 // Hard-coded target — a migration is an immutable snapshot. Do NOT import the
@@ -29,6 +30,9 @@ export const migration025: Migration = {
     console.log(
       `[Migration 025] Upgrading correctionModel from "${voiceInput.correctionModel ?? "(unset)"}" to "${TARGET_CORRECTION_MODEL}"`
     );
-    store.set("voiceInput", { ...voiceInput, correctionModel: TARGET_CORRECTION_MODEL });
+    setRawStoreValue(store, "voiceInput", {
+      ...voiceInput,
+      correctionModel: TARGET_CORRECTION_MODEL,
+    });
   },
 };

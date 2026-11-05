@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { test, describe } from "vitest";
 import { matchesFilter, sortFiles } from "../reviewHubUtils";
 import type { SortKey } from "../reviewHubUtils";
 import type { StagingFileEntry } from "@shared/types";
@@ -29,20 +29,26 @@ for (const n of [2000, 5000, 20000]) {
   const files = makeFiles(n);
   describe(`sortFiles ${n}`, () => {
     for (const key of KEYS) {
-      bench(`${key} asc`, () => {
-        sortFiles(files, key, "asc");
+      test(`${key} asc`, async ({ bench }) => {
+        await bench(`${key} asc`, () => {
+          sortFiles(files, key, "asc");
+        }).run();
       });
     }
-    bench("path desc", () => {
-      sortFiles(files, "path", "desc");
+    test("path desc", async ({ bench }) => {
+      await bench("path desc", () => {
+        sortFiles(files, "path", "desc");
+      }).run();
     });
   });
   describe(`matchesFilter ${n}`, () => {
     for (const q of ["module42", "src/**/*.test.ts", "**/file1?*.ts", "src/store/*"]) {
-      bench(q, () => {
-        let c = 0;
-        for (const f of files) if (matchesFilter(f.path, q)) c++;
-        return c as unknown as void;
+      test(q, async ({ bench }) => {
+        await bench(q, () => {
+          let c = 0;
+          for (const f of files) if (matchesFilter(f.path, q)) c++;
+          return c as unknown as void;
+        }).run();
       });
     }
   });

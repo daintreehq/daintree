@@ -1,3 +1,6 @@
+vi.mock("../../../utils/clipboardAccess.js", () => ({
+  writeClipboardFileFormat: clipboardMock.writeBuffer,
+}));
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import nodeFs from "fs/promises";
 import nodeOs from "os";

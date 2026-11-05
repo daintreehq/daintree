@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 // eager-import-allow: reads project and assistant MCP access via store.get for launch-scope calculation and request-time grant validation
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -585,7 +586,7 @@ export function setProjectAgentMcpAccess(
   all[projectId] = project;
   // Whole-key rewrite: electron-store dot-notation would nest on the dots in a
   // plugin id.
-  store.set(PROJECT_STORE_KEY, all);
+  setRawStoreValue(store, PROJECT_STORE_KEY, all);
 
   pluginMcpGrantRegistry.revokeDisabledInProject(
     projectId,
@@ -617,7 +618,7 @@ export function setAllProjectsAgentMcpAccess(
       groups ?? accessRecord(own(all, pluginInstanceId))?.groups
     );
   }
-  store.set(ALL_PROJECTS_STORE_KEY, all);
+  setRawStoreValue(store, ALL_PROJECTS_STORE_KEY, all);
 
   pluginMcpGrantRegistry.revokeDisallowedForPlugin(pluginInstanceId, isPluginMcpGrantAllowed);
 }
@@ -652,7 +653,7 @@ export function setProjectAssistantAgentMcpAccess(
   }
   if (Object.keys(project).length > 0) all[projectId] = project;
   else delete all[projectId];
-  store.set(ASSISTANT_STORE_KEY, all);
+  setRawStoreValue(store, ASSISTANT_STORE_KEY, all);
 
   pluginMcpGrantRegistry.revokeDisabledInProject(
     projectId,

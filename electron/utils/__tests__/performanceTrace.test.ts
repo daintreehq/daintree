@@ -47,7 +47,7 @@ describe("performanceTrace", () => {
 
   it("starts recording with the compositor categories when fully enabled", async () => {
     process.env.DAINTREE_PERF_TRACE = "1";
-    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.json";
+    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.pftrace";
     const mod = await loadModule();
     await mod.startPerformanceTraceIfEnabled();
 
@@ -61,19 +61,19 @@ describe("performanceTrace", () => {
 
   it("stops recording to the configured file and is idempotent", async () => {
     process.env.DAINTREE_PERF_TRACE = "1";
-    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.json";
+    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.pftrace";
     const mod = await loadModule();
     await mod.startPerformanceTraceIfEnabled();
     await mod.stopPerformanceTraceIfActive();
     await mod.stopPerformanceTraceIfActive();
 
     expect(tracing.stopRecording).toHaveBeenCalledTimes(1);
-    expect(tracing.stopRecording).toHaveBeenCalledWith("/tmp/trace-run-1.json");
+    expect(tracing.stopRecording).toHaveBeenCalledWith("/tmp/trace-run-1.pftrace");
   });
 
   it("does not stop when tracing was never started", async () => {
     process.env.DAINTREE_PERF_TRACE = "1";
-    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.json";
+    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.pftrace";
     const mod = await loadModule();
     await mod.stopPerformanceTraceIfActive();
     expect(tracing.stopRecording).not.toHaveBeenCalled();
@@ -81,7 +81,7 @@ describe("performanceTrace", () => {
 
   it("swallows a startRecording rejection without throwing", async () => {
     process.env.DAINTREE_PERF_TRACE = "1";
-    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.json";
+    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.pftrace";
     tracing.startRecording.mockRejectedValueOnce(new Error("boom"));
     const mod = await loadModule();
     await expect(mod.startPerformanceTraceIfEnabled()).resolves.toBeUndefined();
@@ -93,7 +93,7 @@ describe("performanceTrace", () => {
 
   it("swallows a stopRecording rejection without throwing", async () => {
     process.env.DAINTREE_PERF_TRACE = "1";
-    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.json";
+    process.env.DAINTREE_PERF_TRACE_FILE = "/tmp/trace-run-1.pftrace";
     tracing.stopRecording.mockRejectedValueOnce(new Error("boom"));
     const mod = await loadModule();
     await mod.startPerformanceTraceIfEnabled();
@@ -101,6 +101,6 @@ describe("performanceTrace", () => {
     // Prove the swallowed-error path actually attempted the stop, not that it
     // short-circuited before calling stopRecording.
     expect(tracing.stopRecording).toHaveBeenCalledTimes(1);
-    expect(tracing.stopRecording).toHaveBeenCalledWith("/tmp/trace-run-1.json");
+    expect(tracing.stopRecording).toHaveBeenCalledWith("/tmp/trace-run-1.pftrace");
   });
 });

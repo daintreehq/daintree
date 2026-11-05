@@ -23,7 +23,7 @@ export function createTerminalDataMultiplexer(ipcRenderer: PreloadIpcRenderer): 
         const subs = _terminalDataSubscribers.get(terminalId);
         if (!subs || subs.size === 0) return;
         // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
-        if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
+        if (typeof data === "string" || data instanceof Uint8Array) {
           const end = typeof streamEnd === "number" ? streamEnd : undefined;
           // Iterate the live Set directly — unlike the events:push dispatcher
           // (eventBus.ts), terminal data subscribers don't unsubscribe during dispatch,

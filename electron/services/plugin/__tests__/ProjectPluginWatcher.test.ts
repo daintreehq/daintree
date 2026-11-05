@@ -31,6 +31,7 @@ const watchers: ProjectPluginWatcher[] = [];
 const FAST = {
   debounceMs: 40,
   sentinelPollMs: 30,
+  sentinelWatchedPollMs: 30,
   gitLockPollMs: 30,
   gitLockMaxDeferMs: 3_000,
   invalidManifestRetryMs: 40,

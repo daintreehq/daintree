@@ -336,6 +336,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
   const documentPackages = options.documentPackages ?? {};
   const packagePrefix = "virtual:daintree-document-package/";
   const packageModules = new Map<string, string>();
+  const packageReferences = new Set<string>();
   let root = process.cwd();
 
   if (target === "guest") {
@@ -435,6 +436,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
     name: "daintree-plugin-vite",
     async buildStart() {
       packageModules.clear();
+      packageReferences.clear();
       for (const [name, descriptor] of Object.entries(documentPackages)) {
         if (
           !/^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(name) ||
@@ -501,6 +503,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
           fileName: `document-packages/${name}/${buildId}.js`,
           source: chunk.code,
         });
+        packageReferences.add(reference);
         packageModules.set(
           name,
           `export default function loadDocumentPackage() {
@@ -510,6 +513,15 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
         }`
         );
       }
+    },
+    resolveFileUrl: {
+      order: "pre",
+      handler({ referenceId, relativePath }) {
+        if (!packageReferences.has(referenceId)) return null;
+        // Vite's app-root asset URLs escape plugin://.../dist/. Retained
+        // adapters must stay relative to the view that owns their authority.
+        return `new URL(${JSON.stringify(relativePath)}, import.meta.url).href`;
+      },
     },
     load(id) {
       if (id.startsWith(`\0${packagePrefix}`)) {

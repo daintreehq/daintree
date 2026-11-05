@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../utils/storeValues.js";
 // eager-import-allow: reads custom titles via store.get with revisioned updates so title replies and plugin snapshots see the latest saved titles
 import { store } from "../store.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
@@ -136,7 +137,7 @@ function writeEntry(
   entry: RecordedEntry
 ): StoredWorktreeCustomTitles {
   const next: RecordedEntry = { recorded: entry.recorded, revision: entry.revision + 1 };
-  store.set(STORE_KEY, {
+  setRawStoreValue(store, STORE_KEY, {
     ...all,
     [workspaceId]: { titles: { ...next.recorded }, revision: next.revision },
   });

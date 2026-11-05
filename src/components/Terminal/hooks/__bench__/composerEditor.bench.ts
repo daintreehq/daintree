@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useRef } from "react";
 import { EditorState } from "@codemirror/state";
@@ -157,15 +157,21 @@ function typedUpdates() {
 }
 
 describe("composer compartment driver", () => {
-  bench("mount + one autocomplete open/close cycle", () => {
-    const { hook, dispose } = mountComposer();
-    hook.rerender({ isAutocompleteOpen: true });
-    hook.rerender({ isAutocompleteOpen: false });
-    dispose();
+  test("mount + one autocomplete open/close cycle", async ({ bench }) => {
+    await bench("mount + one autocomplete open/close cycle", () => {
+      const { hook, dispose } = mountComposer();
+      hook.rerender({ isAutocompleteOpen: true });
+      hook.rerender({ isAutocompleteOpen: false });
+      dispose();
+    }).run();
   });
 });
 
 describe("context detection (200 KB draft)", () => {
-  bench("1000 selection-only updates", selectionOnlyUpdates);
-  bench("1000 typed-character updates", typedUpdates);
+  test("1000 selection-only updates", async ({ bench }) => {
+    await bench("1000 selection-only updates", selectionOnlyUpdates).run();
+  });
+  test("1000 typed-character updates", async ({ bench }) => {
+    await bench("1000 typed-character updates", typedUpdates).run();
+  });
 });

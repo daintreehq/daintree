@@ -223,6 +223,24 @@ function approvalDialog(page: Page, actionTitle: string): Locator {
     .filter({ hasText: actionTitle });
 }
 
+/** Keep an early tool refusal in the failure, instead of only reporting a missing dialog. */
+async function expectApprovalWhilePending(dialog: Locator, reply: Promise<unknown>): Promise<void> {
+  let outcome: { reply?: unknown; error?: string } = {};
+  void reply.then(
+    (value) => {
+      outcome = { reply: value };
+    },
+    (error: unknown) => {
+      outcome = { error: String(error) };
+    }
+  );
+  await expect
+    .poll(async () => ({ visible: await dialog.isVisible(), ...outcome }), {
+      timeout: T_LONG,
+    })
+    .toMatchObject({ visible: true });
+}
+
 /**
  * Runs `call` while watching both windows for any modal naming `actionTitle`,
  * and keeps watching for a dwell after it settles. Returns the call's reply
@@ -398,10 +416,12 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
       .poll(() => worktreeOnDisk(ownerRepo, worktreePath))
       .toEqual({ dir: true, git: true });
 
+    // This client follows focus. Give each request its owner context explicitly.
+    await focusWindow(ctx.app, inA ? windowIdA : windowIdB, ownerPage);
     // Fired unawaited: the call does not return until someone answers.
     const declined = callTool(session, "worktree.deleteOwned", { worktreeId: created.worktreeId });
     const dialog = approvalDialog(ownerPage, "Delete worktree");
-    await expect(dialog).toBeVisible({ timeout: T_LONG });
+    await expectApprovalWhilePending(dialog, declined);
     await expect(approvalDialog(otherPage, "Delete worktree")).toHaveCount(0);
     // Provenance: this client, by its user agent and its key's last characters.
     await expect(dialog).toContainText("Requested by");
@@ -416,6 +436,7 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     await expect(dialog).toHaveCount(0);
     expect(worktreeOnDisk(ownerRepo, worktreePath)).toEqual({ dir: true, git: true });
 
+    await focusWindow(ctx.app, inA ? windowIdA : windowIdB, ownerPage);
     let approvalSettled = false;
     const approved = callTool(session, "worktree.deleteOwned", {
       worktreeId: created.worktreeId,
@@ -423,7 +444,7 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
       approvalSettled = true;
     });
     const again = approvalDialog(ownerPage, "Delete worktree");
-    await expect(again).toBeVisible({ timeout: T_LONG });
+    await expectApprovalWhilePending(again, approved);
     await expect(approvalDialog(otherPage, "Delete worktree")).toHaveCount(0);
     // A window that doesn't know the worktree can only title it generically (#13667).
     await expect(again).toContainText("mcp-consent-delete");

@@ -1,4 +1,4 @@
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 
 // ProjectViewManager's agent-state cache while N terminals are restored or
 // batch-launched: each spawn registers the terminal in a modelled pty-host and
@@ -191,12 +191,10 @@ for (const [n, mode] of CASES) {
 
 describe("agent-state cache during terminal restore", () => {
   for (const [n, mode] of CASES) {
-    bench(
-      `N=${n} ${mode} spawn-results`,
-      async () => {
+    test(`N=${n} ${mode} spawn-results`, async ({ bench }) => {
+      await bench(`N=${n} ${mode} spawn-results`, {}, async () => {
         await restore(n, mode);
-      },
-      { time: 2_000 }
-    );
+      }).run({ time: 2_000 });
+    });
   }
 });

@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 export const migration007: Migration = {
@@ -14,7 +15,7 @@ export const migration007: Migration = {
 
     if (config.scrollbackLines === 2500) {
       console.log("[Migration 007] Migrating scrollbackLines from 2500 to 1000");
-      store.set("terminalConfig", { ...config, scrollbackLines: 1000 });
+      setRawStoreValue(store, "terminalConfig", { ...config, scrollbackLines: 1000 });
     } else {
       console.log(
         `[Migration 007] scrollbackLines is ${config.scrollbackLines ?? "(unset)"}, skipping`

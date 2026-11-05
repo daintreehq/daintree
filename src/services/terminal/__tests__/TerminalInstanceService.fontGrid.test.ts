@@ -87,8 +87,7 @@ const mockDocument = {
   },
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-(global as any).document = mockDocument;
+vi.stubGlobal("document", mockDocument);
 
 function stubMatchMedia(): void {
   window.matchMedia = vi.fn().mockReturnValue({

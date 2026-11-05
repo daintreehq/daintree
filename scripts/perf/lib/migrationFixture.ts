@@ -504,6 +504,7 @@ export const webContents = bridge.webContents;
 export const ipcMain = bridge.ipcMain;
 export const nativeTheme = bridge.nativeTheme;
 export const nativeImage = bridge.nativeImage;
+export const ClipboardItem = bridge.ClipboardItem;
 export const shell = bridge.shell;
 export const dialog = bridge.dialog;
 export const screen = bridge.screen;
