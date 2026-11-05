@@ -500,6 +500,26 @@ export function saveOpenWindowsNow(excludeWindowId?: number): void {
 }
 
 /**
+ * Record a window that is about to close when it is the last one, off macOS.
+ *
+ * There the last window closing is the quit, and by its `closed` listener and
+ * the quit's own snapshot the window is gone, so the save it gets is the empty
+ * set the guard in `persist` refuses: the manifest keeps whatever an earlier
+ * save captured. Anything that changed since without scheduling a save of its
+ * own (a host switch, for one) was lost, and the window came back on what it
+ * showed before. macOS keeps running windowless and Cmd+Q snapshots the live
+ * set, so it needs none of this.
+ */
+export function saveBeforeLastWindowCloses(windowId: number): void {
+  if (process.platform === "darwin" || !state) return;
+  const others = state.registry
+    .all()
+    .filter((ctx) => ctx.windowId !== windowId && !ctx.browserWindow.isDestroyed());
+  if (others.length > 0) return;
+  saveOpenWindowsNow();
+}
+
+/**
  * Lift a recovery launch's read-only hold (#12801).
  *
  * Only for a single crash whose whole fleet came back cleanly: the manifest is
