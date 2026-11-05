@@ -78,6 +78,20 @@ describe("docs/plugins/actions.md", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("leaves out an action classed restricted", async () => {
+    const registry = await createActionRegistry();
+    // No built-in is classed `restricted` today, so the exclusion has nothing
+    // real to act on: reclass an action the page lists to see it dropped.
+    const [id, factory] = [...registry].find(
+      ([, f]) => f().danger === "safe" && f().denyPluginDispatch !== true
+    )!;
+    expect(renderPluginActionsDoc(registry)).toContain(`\`${id}\``);
+
+    registry.set(id, () => ({ ...factory(), danger: "restricted" as const }));
+
+    expect(renderPluginActionsDoc(registry)).not.toContain(`\`${id}\``);
+  });
+
   it("leaves out an id that is not a built-in", async () => {
     const registry = await createActionRegistry();
     const [, factory] = [...registry].find(([, f]) => f().danger === "safe")!;
