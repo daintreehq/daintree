@@ -612,8 +612,9 @@ describe("appThemeStore.setColorVisionMode", () => {
   });
 
   afterEach(() => {
-    useAppThemeStore.getState().setColorVisionMode("default");
     useAppThemeStore.setState({ previewSchemeId: null, customSchemes: [] });
+    useAppThemeStore.getState().setColorVisionMode("default");
+    injectSchemeToDOM(resolveAppTheme(DEFAULT_APP_SCHEME_ID), { immediate: true });
     useTerminalColorSchemeStore.setState({ selectedSchemeId: DEFAULT_SCHEME_ID });
     clearThemeCache();
   });
