@@ -615,6 +615,44 @@ describe("TerminalProcess settled-prompt-exact guard, widened for a Decisions an
     expect(ptyWriteMock).not.toHaveBeenCalled();
   });
 
+  it("treats a body a shutdown lock left in the composer as a draft", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentState: "working", lastStateChange: Date.now() - 2_000 });
+    terminal.submit("a person's prompt");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["a person's prompt"]);
+    // The lock is taken while the body waits for its Enter, then let go.
+    const release = (
+      terminal as unknown as { inputController: { acquireShutdownInputLock(): () => void } }
+    ).inputController.acquireShutdownInputLock();
+    release();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    terminal.submit("answer", "tok-1", undefined, ANSWER);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["a person's prompt"]);
+  });
+
+  it("never holds a run that replaced the one a body was left with", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentIncarnation: 0 });
+    terminal.submit("a person's prompt");
+    await vi.advanceTimersByTimeAsync(0);
+    // A new run takes the pty and settles at its prompt before the Enter is due.
+    await vi.advanceTimersByTimeAsync(5);
+    Object.assign(info(terminal), { agentIncarnation: 1 });
+    settleAtPrompt(terminal, Date.now());
+    await vi.advanceTimersByTimeAsync(3_000);
+    ptyWriteMock.mockClear();
+
+    terminal.submit("answer", "tok-1", undefined, ANSWER);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+
   it("queues a second line behind a turn the lane already typed into", async () => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);
