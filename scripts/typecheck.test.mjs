@@ -1,5 +1,10 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, it, expect } from "vitest";
 import { PROJECTS, parseNameStatus, runAllReason, selectProjects } from "./typecheck.mjs";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const programs = {
   "a/tsconfig.json": ["src/a.ts", "shared/s.ts"],
@@ -108,5 +113,33 @@ describe("PROJECTS", () => {
   it("has unique names and at least one config per project", () => {
     expect(new Set(PROJECTS.map((project) => project.name)).size).toBe(PROJECTS.length);
     for (const project of PROJECTS) expect(project.configs.length).toBeGreaterThan(0);
+  });
+
+  it("emits every tsc -b build, references included, under dist-typecheck", () => {
+    // dist-electron/** is packaged wholesale, and esbuild owns dist-electron/electron,
+    // so a referenced project writing there ships its per-file output in app.asar
+    // (#6279, #16279).
+    const host = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} };
+    const typecheckDir = path.join(ROOT, "dist-typecheck");
+    const pending = PROJECTS.flatMap((project) =>
+      project.steps.filter((args) => args[0] === "-b").map((args) => path.join(ROOT, args[1]))
+    );
+    const seen = new Set();
+    while (pending.length > 0) {
+      const config = pending.pop();
+      if (seen.has(config)) continue;
+      seen.add(config);
+      const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, host);
+      const label = path.relative(ROOT, config);
+      expect(parsed?.options.outDir, `${label} has no outDir`).toBeTruthy();
+      const outDir = path.relative(typecheckDir, parsed.options.outDir);
+      expect(outDir.startsWith(".."), `${label} emits to ${parsed.options.outDir}`).toBe(false);
+      for (const ref of parsed.projectReferences ?? []) {
+        pending.push(ts.resolveProjectReferencePath(ref));
+      }
+    }
+    expect([...seen].map((config) => path.relative(ROOT, config))).toContain(
+      path.join("shared", "tsconfig.json")
+    );
   });
 });

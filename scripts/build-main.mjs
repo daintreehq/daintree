@@ -660,7 +660,9 @@ async function run() {
     // Clean both the electron host bundles and the built-in plugin outputs
     // so a renamed source file or removed contribution does not survive
     // between production builds and ship inside `dist-electron/**/*`.
-    for (const dir of ["dist-electron/electron", "dist-electron/plugins"]) {
+    // `dist-electron/shared` is no build output: typecheck emitted shared/
+    // there until #16279, and a checkout's leftover copy would still ship.
+    for (const dir of ["dist-electron/electron", "dist-electron/plugins", "dist-electron/shared"]) {
       const abs = path.join(root, dir);
       if (fs.existsSync(abs)) {
         fs.rmSync(abs, { recursive: true, force: true });
