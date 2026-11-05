@@ -54,9 +54,20 @@ export const FOLDER_UPLOAD_SINK_PREFIX = "daintree-folder-upload:";
  * (3) with its mode in the upper 16 bits of the external attributes, and the
  * only mode carried is whether a file is executable: files are 0600 or 0700
  * and folders 0700, with no links, devices or other special entries.
+ *
+ * The host reads it strictly (`folderArchiveUnpack.ts`). A name that is plain
+ * ASCII may leave the UTF-8 flag off, since it reads the same either way, and
+ * an entry may carry its sizes and CRC in a signed data descriptor after its
+ * data, as a streaming packer writes them; no other flag is set. The entries
+ * tile the archive: the first starts at byte 0, each starts where the last
+ * one's data (and descriptor) ended, and the central directory starts where
+ * the last ended, so no byte is unaccounted for. There is no archive
+ * comment, so the end record is the archive's last 22 bytes. Entries may
+ * come in any order; a folder's entry need not precede what is inside it.
  */
 export const FOLDER_ARCHIVE_METHOD_STORED = 0;
 export const FOLDER_ARCHIVE_FLAG_UTF8 = 0x0800;
+export const FOLDER_ARCHIVE_FLAG_DATA_DESCRIPTOR = 0x0008;
 export const FOLDER_ARCHIVE_FILE_MODE = 0o600;
 export const FOLDER_ARCHIVE_EXECUTABLE_MODE = 0o700;
 export const FOLDER_ARCHIVE_FOLDER_MODE = 0o700;
