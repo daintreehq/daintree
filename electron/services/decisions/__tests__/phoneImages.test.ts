@@ -149,7 +149,13 @@ describe("DecisionsPhoneImages.store (#16233)", () => {
     // Nothing for Git to show or commit, and what the repository tracks is untouched.
     expect(git(repo, "status", "--porcelain", "--untracked-files=all")).toBe("");
     expect(git(repo, "ls-files")).toBe(tracked);
-    expect(git(repo, "check-ignore", stored).trim()).toBe(stored);
+    expect(
+      execFileSync("git", ["check-ignore", "--stdin", "-z"], {
+        cwd: repo,
+        input: `${stored}\0`,
+        encoding: "utf8",
+      })
+    ).toBe(`${stored}\0`);
     expect(fs.readFileSync(path.join(repo, ".daintree", "recipes", "build.json"), "utf8")).toBe(
       "{}\n"
     );

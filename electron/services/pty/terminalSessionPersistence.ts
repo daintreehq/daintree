@@ -440,6 +440,14 @@ export function restoreSessionFromFile(
     headlessTerminal.write(`\x1b[2m\x1b[38;5;240m${label}\x1b[0m\r\n`);
     const bannerEndMarker = headlessTerminal.registerMarker(0) ?? null;
 
+    if (process.platform === "win32") {
+      // ConPTY's first frame clears its entire empty console with absolute
+      // cursor moves. Keep the old session above that viewport, including
+      // when replay closes onto a taller live grid, then give ConPTY its origin.
+      const liveRows = replayWindows.get(headlessTerminal)?.target.rows ?? headlessTerminal.rows;
+      headlessTerminal.write("\r\n".repeat(Math.max(headlessTerminal.rows, liveRows)) + "\x1b[H");
+    }
+
     // Queued behind the replay so it runs once the parser has laid the content
     // out at the capture grid. Live PTY output written after this point queues
     // behind the callback and therefore parses at the restored geometry.
