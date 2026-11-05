@@ -174,6 +174,8 @@ function splitParent(entryPath: string): { parent: string; name: string } | null
 
 interface ExpectedChild {
   path: string;
+  /** What a copied item is; null for one left out. */
+  kind: "file" | "folder" | null;
   /** Set for an item left out; null for one that is copied. */
   notCopied: FolderNotCopiedReason | null;
 }
@@ -183,29 +185,48 @@ function expectedChildren(
   snapshot: Readonly<FolderSnapshot>
 ): Map<string, Map<string, ExpectedChild>> {
   const byFolder = new Map<string, Map<string, ExpectedChild>>();
-  const add = (entryPath: string, notCopied: FolderNotCopiedReason | null) => {
-    const split = splitParent(entryPath);
+  const add = (child: ExpectedChild) => {
+    const split = splitParent(child.path);
     if (!split) return;
     let children = byFolder.get(split.parent);
     if (!children) {
       children = new Map();
       byFolder.set(split.parent, children);
     }
-    children.set(split.name, { path: entryPath, notCopied });
+    children.set(split.name, child);
   };
-  for (const entry of snapshot.entries) add(entry.path, null);
-  for (const item of snapshot.notCopied) add(item.path, item.reason);
+  for (const entry of snapshot.entries)
+    add({ path: entry.path, kind: entry.kind, notCopied: null });
+  for (const item of snapshot.notCopied)
+    add({ path: item.path, kind: null, notCopied: item.reason });
   return byFolder;
 }
 
+type ListedKind = "file" | "folder" | "other" | "unknown";
+
 /**
- * A left-out item that now lists as a plain file or folder is something the
- * summary never showed. One left out as unreadable may simply read now, and
- * stays left out.
+ * What a listing says an item is. Some filesystems don't say, and the
+ * listing can't be held to a type it never gave.
  */
-function nowCopyable(dirent: Dirent, reason: FolderNotCopiedReason): boolean {
-  if (reason === "unreadable") return false;
-  return !dirent.isSymbolicLink() && (dirent.isFile() || dirent.isDirectory());
+function listedKind(dirent: Dirent): ListedKind {
+  if (dirent.isSymbolicLink()) return "other";
+  if (dirent.isFile()) return "file";
+  if (dirent.isDirectory()) return "folder";
+  if (dirent.isFIFO() || dirent.isSocket() || dirent.isBlockDevice()) return "other";
+  return dirent.isCharacterDevice() ? "other" : "unknown";
+}
+
+/**
+ * A copied item that now lists as something else, a link above all (which
+ * Windows would open through), or a left-out item that now lists as a plain
+ * file or folder, is not what the summary showed. One left out as unreadable
+ * may simply read now, and stays left out.
+ */
+function listedAsChanged(dirent: Dirent, child: ExpectedChild): boolean {
+  const listed = listedKind(dirent);
+  if (child.notCopied === null) return listed !== "unknown" && listed !== child.kind;
+  if (child.notCopied === "unreadable") return false;
+  return listed === "file" || listed === "folder";
 }
 
 function sameFolder(entry: FolderSnapshotEntry, stat: Stats): boolean {
@@ -362,9 +383,7 @@ async function verifyFolder(
       throwIfAborted(signal);
       const known = expected?.get(dirent.name);
       if (!known) throw new Changed(`${entry.path}${dirent.name}`, "new");
-      if (known.notCopied && nowCopyable(dirent, known.notCopied)) {
-        throw new Changed(known.path, "type");
-      }
+      if (listedAsChanged(dirent, known)) throw new Changed(known.path, "type");
       seen.add(dirent.name);
     }
   } catch (error) {
@@ -375,6 +394,18 @@ async function verifyFolder(
     if (!child.notCopied && !seen.has(name)) throw new Changed(child.path, "gone");
   }
   await check();
+}
+
+/** A copied file, by its path, still as the summary counted it. */
+async function verifyCopiedFile(
+  snapshot: Readonly<FolderSnapshot>,
+  entry: FolderSnapshotEntry,
+  platform: NodeJS.Platform
+): Promise<void> {
+  const stat = await fs.lstat(localPathOf(snapshot, entry.path)).catch(() => null);
+  if (!stat) throw new Changed(entry.path, "gone");
+  if (!stat.isFile()) throw new Changed(entry.path, "type");
+  if (!sameFile(entry, stat, platform)) throw new Changed(entry.path, "modified");
 }
 
 /**
@@ -449,7 +480,19 @@ function packedArchive(
   totals: FolderUploadTotals
 ): PackedFolderArchive {
   const sources = new Set<FileHandle>();
+  /** Sources still opening, which a removal waits out so none outlives it. */
+  const opening = new Set<Promise<unknown>>();
   let removal: Promise<void> | null = null;
+  const open = async (): Promise<FileHandle> => {
+    const handle = await fs.open(archivePath, ARCHIVE_READ_FLAGS);
+    const stat = await handle.stat().catch(() => null);
+    if (removal || !stat?.isFile() || stat.size !== archiveBytes) {
+      await handle.close().catch(() => {});
+      throw new Error("The folder archive is no longer as it was packed");
+    }
+    sources.add(handle);
+    return handle;
+  };
   return {
     path: archivePath,
     archiveBytes,
@@ -457,13 +500,14 @@ function packedArchive(
     totals,
     async openSource() {
       if (removal) throw new Error("The folder archive has been removed");
-      const handle = await fs.open(archivePath, ARCHIVE_READ_FLAGS);
-      const stat = await handle.stat().catch(() => null);
-      if (removal || !stat?.isFile() || stat.size !== archiveBytes) {
-        await handle.close().catch(() => {});
-        throw new Error("The folder archive is no longer as it was packed");
+      const opened = open();
+      opening.add(opened);
+      let handle: FileHandle;
+      try {
+        handle = await opened;
+      } finally {
+        opening.delete(opened);
       }
-      sources.add(handle);
       let closed: Promise<void> | null = null;
       return {
         size: archiveBytes,
@@ -486,14 +530,17 @@ function packedArchive(
     },
     remove() {
       removal ??= (async () => {
+        await Promise.allSettled([...opening]);
         await Promise.all([...sources].map((handle) => handle.close().catch(() => {})));
         sources.clear();
         try {
           await removeArchive(archivePath);
-        } finally {
-          // One that couldn't be removed is the startup sweep's.
-          liveArchives.delete(archivePath);
+        } catch (error) {
+          // Asked again, it tries again; never asked, it is the startup sweep's.
+          removal = null;
+          throw error;
         }
+        liveArchives.delete(archivePath);
       })();
       return removal;
     },
@@ -548,7 +595,6 @@ export async function packLocalFolder(
     }
     const writer = new ArchiveWriter(handle);
     const children = expectedChildren(snapshot);
-    const folders = snapshot.entries.filter((entry) => entry.kind === "folder");
     const records: CentralRecord[] = [];
     const buffer = Buffer.allocUnsafe(BULK_CHUNK_BYTES);
     report();
@@ -588,10 +634,16 @@ export async function packLocalFolder(
       progress.filesDone += 1;
       report();
     }
-    // A file that arrived in a folder after it was listed is caught here.
-    for (const folder of folders) {
+    // Anything that changed after it was copied or listed (a file grown,
+    // swapped or arrived in a folder already listed) is caught here, so what
+    // is sent still matches the folder when packing ends.
+    for (const entry of snapshot.entries) {
       throwIfAborted(signal);
-      await verifyFolder(snapshot, folder, children.get(folder.path), signal);
+      if (entry.kind === "folder") {
+        await verifyFolder(snapshot, entry, children.get(entry.path), signal);
+      } else {
+        await verifyCopiedFile(snapshot, entry, platform);
+      }
     }
     await writer.write(centralDirectory(records, writer.offset));
     const written = handle;

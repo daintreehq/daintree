@@ -85,7 +85,20 @@ async function packFailure(promise: Promise<unknown>): Promise<LocalFolderPackEr
 }
 
 async function archivesLeft(): Promise<string[]> {
-  return fs.readdir(packs).catch(() => []);
+  try {
+    return await fs.readdir(packs);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+/** Bytes that don't repeat within a chunk, spanning several of the packer's 64 KiB reads. */
+function multiChunk(size = 200_000): Buffer {
+  const blocks = Array.from({ length: Math.ceil(size / 32) }, (_, i) =>
+    crypto.createHash("sha256").update(String(i)).digest()
+  );
+  return Buffer.concat(blocks).subarray(0, size);
 }
 
 interface ReadEntry {
@@ -172,6 +185,8 @@ describe("packing a summarized folder", () => {
     };
     const root = await fixture("Project", files);
     if (posix) await fs.chmod(path.join(root, "bin/run.sh"), 0o755);
+    const large = multiChunk();
+    await fs.writeFile(path.join(root, "src/large.bin"), large);
     const snapshot = await summarize(root);
 
     const packed = await pack(snapshot);
@@ -200,12 +215,15 @@ describe("packing a summarized folder", () => {
     expect(entries.map((entry) => entry.path)).toEqual(
       expect.arrayContaining(["Project/", "Project/empty/", "Project/.env", "Project/.git/HEAD"])
     );
+    const largeEntry = entries.find((entry) => entry.path === "Project/src/large.bin");
+    expect(largeEntry?.data.equals(large)).toBe(true);
     const contents = Object.values(files).filter((content) => content !== null);
     expect(packed.totals).toEqual({
-      fileCount: contents.length,
+      fileCount: contents.length + 1,
       // src, src/lib, src/lib/deep, empty, .git, bin
       folderCount: 6,
-      totalBytes: contents.reduce((sum, content) => sum + Buffer.byteLength(content), 0),
+      totalBytes:
+        contents.reduce((sum, content) => sum + Buffer.byteLength(content), 0) + large.byteLength,
     });
   });
 
@@ -242,6 +260,19 @@ describe("packing a summarized folder", () => {
     expect(entries.map((entry) => entry.path)).toEqual(["Project/", "Project/a.txt"]);
   });
 
+  it("reports bytes within a file as it is read, not only once it is done", async () => {
+    const root = await fixture("Project", {});
+    await fs.writeFile(path.join(root, "large.bin"), multiChunk());
+    const seen: FolderPackProgress[] = [];
+
+    await pack(await summarize(root), { onProgress: (progress) => seen.push(progress) });
+
+    const partway = seen.filter(
+      (p) => p.filesDone === 0 && p.bytesDone > 0 && p.bytesDone < p.bytesTotal
+    );
+    expect(partway.length).toBeGreaterThan(1);
+  });
+
   it("reports files and bytes as it goes, ending at the totals", async () => {
     const snapshot = await summarize(
       await fixture("Project", { "a.txt": "aaaa", "b/c.txt": "cc", "d/": null })
@@ -269,6 +300,7 @@ describe("packing a summarized folder", () => {
     expect(bytes.equals(await fs.readFile(packed.path))).toBe(true);
     await first.close?.();
     const second = await packed.openSource();
+    expect(Buffer.from(await second.read(4, 8)).equals(bytes.subarray(4, 12))).toBe(true);
 
     await Promise.all([packed.remove(), packed.remove()]);
     await packed.remove();
@@ -292,6 +324,60 @@ describe("a folder that changed after its summary", () => {
       change: "modified",
     });
     expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("stops when a file grows while it is being read", async () => {
+    const root = await fixture("Project", {});
+    const target = path.join(root, "large.bin");
+    await fs.writeFile(target, multiChunk());
+    const snapshot = await summarize(root);
+    let grown = false;
+
+    const result = await changedBy(
+      packResult(snapshot, {
+        onProgress: (progress) => {
+          if (grown || progress.bytesDone === 0) return;
+          grown = true;
+          fsSync.appendFileSync(target, "more");
+        },
+      })
+    );
+
+    expect(result).toMatchObject({ path: "Project/large.bin", change: "modified" });
+    expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("stops when a file was replaced by another of the same size and time", async () => {
+    const root = await fixture("Project", { "a.txt": "same" });
+    const snapshot = await summarize(root);
+    const original = snapshot.entries[1]!;
+    const replacement = path.join(dir, "replacement.txt");
+    await fs.writeFile(replacement, "same");
+    const when = new Date(original.mtimeMs);
+    await fs.utimes(replacement, when, when);
+    await fs.rename(replacement, path.join(root, "a.txt"));
+
+    const result = await changedBy(packResult(snapshot));
+
+    expect(result).toMatchObject({ path: "Project/a.txt", change: "modified" });
+  });
+
+  it("stops when a file it already copied changes before packing ends", async () => {
+    const root = await fixture("Project", { "a.txt": "a", "b.txt": "b" });
+    const snapshot = await summarize(root);
+    let touched = false;
+
+    const result = await changedBy(
+      packResult(snapshot, {
+        onProgress: (progress) => {
+          if (touched || progress.filesDone !== 1) return;
+          touched = true;
+          fsSync.appendFileSync(path.join(root, "a.txt"), "grew");
+        },
+      })
+    );
+
+    expect(result).toMatchObject({ path: "Project/a.txt", change: "modified" });
   });
 
   it("stops when a file shrank", async () => {
@@ -457,6 +543,38 @@ describe("cancelling a pack", () => {
     expect(await archivesLeft()).toEqual([]);
   });
 
+  it("stops partway through a file and leaves no temporary file", async () => {
+    const root = await fixture("Project", {});
+    await fs.writeFile(path.join(root, "large.bin"), multiChunk(1_000_000));
+    const snapshot = await summarize(root);
+    const controller = new AbortController();
+    const seen: FolderPackProgress[] = [];
+
+    const error = await packFailure(
+      packResult(snapshot, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          seen.push(progress);
+          if (progress.bytesDone > 0) controller.abort();
+        },
+      })
+    );
+
+    expect(error.reason).toBe("cancelled");
+    expect(seen.at(-1)!.bytesDone).toBeLessThan(seen.at(-1)!.bytesTotal);
+    expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("reports a folder it can't make as a write failure, naming nothing", async () => {
+    const snapshot = await summarize(await fixture("Project", { "a.txt": "a" }));
+    await fs.writeFile(packs, "a file where the folder would go");
+
+    const error = await packFailure(packResult(snapshot));
+
+    expect(error.reason).toBe("write-failed");
+    expect(error.message).not.toContain("Project");
+  });
+
   it("refuses at once when already cancelled", async () => {
     const snapshot = await summarize(await fixture("Project", { "a.txt": "a" }));
     const controller = new AbortController();
@@ -508,6 +626,22 @@ describe("the startup sweep", () => {
     await packed.remove();
     await fs.writeFile(packed.path, "left behind");
     expect(await sweepFolderPacks(packs)).toBe(1);
+  });
+
+  it("never removes an archive still being written", async () => {
+    const root = await fixture("Project", {});
+    await fs.writeFile(path.join(root, "large.bin"), multiChunk(4_000_000));
+    const snapshot = await summarize(root);
+    let sweeping: Promise<number> | null = null;
+
+    const packed = await pack(snapshot, {
+      onProgress: (progress) => {
+        if (!sweeping && progress.bytesDone > 0) sweeping = sweepFolderPacks(packs);
+      },
+    });
+
+    expect(await sweeping).toBe(0);
+    expect(readArchive(await fs.readFile(packed.path))).toHaveLength(2);
   });
 
   it("never sweeps through a folder that is a link", async () => {

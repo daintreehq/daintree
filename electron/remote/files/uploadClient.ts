@@ -859,7 +859,8 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
           status: "packed",
           archive: {
             ...archive,
-            remove: () => archive.remove().finally(() => packs.delete(pack)),
+            // Its place is held until it is actually gone, so a failed removal can be retried.
+            remove: () => archive.remove().then(() => void packs.delete(pack)),
           },
         };
       } catch (error) {
