@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { FolderUploadTotals } from "../../../shared/types/folderUpload.js";
-import type { FolderNotCopiedReason } from "../../../shared/types/ipc/fileTransfer.js";
+import type {
+  FolderNotCopiedReason,
+  FolderPackChange,
+} from "../../../shared/types/ipc/fileTransfer.js";
 import { ensureOwnerOnlyDir, OWNER_RW_FILE_MODE, resilientUnlink } from "../../utils/fs.js";
 import { BULK_CHUNK_BYTES } from "../link/frames.js";
 import type { TransferSource } from "../link/transfer.js";
@@ -63,8 +66,7 @@ const SOURCE_FLAGS =
   fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
 const ARCHIVE_READ_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
 
-/** How a summarized entry no longer matches what is on disk. */
-export type FolderPackChange = "gone" | "modified" | "type" | "new";
+export type { FolderPackChange };
 
 export type LocalFolderPackFailure = "cancelled" | "no-space" | "write-failed";
 

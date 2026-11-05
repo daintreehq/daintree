@@ -1737,6 +1737,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileTransfer.js").UploadLocalFilePayload];
     result: import("./fileTransfer.js").UploadResult;
   };
+  "file-transfer:upload-local-folder": {
+    args: [payload: import("./fileTransfer.js").UploadLocalFolderPayload];
+    result: import("./fileTransfer.js").UploadLocalFolderResult;
+  };
   "file-watch:fingerprint": {
     args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
     result: import("./fileWatch.js").FileWatchFingerprintResult;

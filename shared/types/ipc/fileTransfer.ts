@@ -180,6 +180,36 @@ export type LocalFolderSummaryResult =
   | (Extract<FolderUploadCheck, { status: "ready" }> & { handle: string })
   | Extract<FolderUploadCheck, { status: "refused" }>;
 
+export interface UploadLocalFolderPayload {
+  hostId: HostId;
+  /** What `summarizeLocalFolder` answered this view for the folder. */
+  handle: string;
+  /** Only the inbox takes a folder: main refuses anything else, whatever the page asks. */
+  destination: TransferDestination;
+  /** The whole send runs under it: its progress events carry it and `cancel` stops it in any phase. */
+  opId: OperationId;
+}
+
+/** How a summarized entry no longer matches what is on disk. */
+export type FolderPackChange = "gone" | "modified" | "type" | "new";
+
+/**
+ * A folder send that ended without an error. Anything that names a path
+ * inside the folder is a result rather than an error, since errors are
+ * logged whole.
+ */
+export type UploadLocalFolderResult =
+  /**
+   * The whole folder is in the host inbox at `hostPath`. A cancel that
+   * reached the host after publication began ends here too: the folder is
+   * there.
+   */
+  | { status: "sent"; hostPath: string; totals: FolderUploadTotals }
+  /** The folder changed since it was summarized; nothing was sent. */
+  | { status: "changed"; path: string; change: FolderPackChange }
+  /** The host held what arrived to its content rules and refused it, naming why. */
+  | { status: "refused"; problem: FolderUploadProblem };
+
 export type FolderUploadPhase = "packing" | "sending" | "unpacking";
 
 export type FileTransferEvent =

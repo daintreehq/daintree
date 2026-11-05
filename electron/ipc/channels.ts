@@ -1717,6 +1717,7 @@ export const CHANNELS = {
   FILE_TRANSFER_GET_PREVIEW_CAPABILITY: "file-transfer:get-preview-capability",
   FILE_TRANSFER_STAT_LOCAL_FILE: "file-transfer:stat-local-file",
   FILE_TRANSFER_SUMMARIZE_LOCAL_FOLDER: "file-transfer:summarize-local-folder",
+  FILE_TRANSFER_UPLOAD_LOCAL_FOLDER: "file-transfer:upload-local-folder",
   FILE_TRANSFER_GET_UPLOAD_PREFERENCES: "file-transfer:get-upload-preferences",
   FILE_TRANSFER_SET_UPLOAD_PREFERENCES: "file-transfer:set-upload-preferences",
   FILE_TRANSFER_EVENT: "file-transfer:event",
