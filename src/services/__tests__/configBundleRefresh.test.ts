@@ -57,4 +57,27 @@ describe("refreshImportedConfig theme refresh", () => {
 
     expect(selectedSchemeType()).toBe("dark");
   });
+
+  it("repaints the current id when an import changes the theme it names", async () => {
+    const light = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === "light")!;
+    const paper = { ...light, id: "custom-paper", name: "Paper", builtin: false };
+    useAppThemeStore.getState().addCustomScheme(paper);
+    useAppThemeStore.getState().setSelectedSchemeIdSilent(paper.id);
+    flushPendingTheme();
+
+    const imported = { ...paper, tokens: { ...paper.tokens, "surface-canvas": "#fafafa" } };
+    getThemeConfig.mockResolvedValue({
+      colorSchemeId: paper.id,
+      customSchemes: [imported],
+      recentSchemeIds: ["bondi"],
+    });
+
+    await refreshImportedConfig();
+    flushPendingTheme();
+
+    expect(document.documentElement.style.getPropertyValue("--theme-surface-canvas").trim()).toBe(
+      "#fafafa"
+    );
+    expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["bondi"]);
+  });
 });

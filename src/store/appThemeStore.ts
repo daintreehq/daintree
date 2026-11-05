@@ -3,18 +3,30 @@ import { DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import {
   applyAccentOverrideToScheme,
   getAppThemeById,
+  getAppThemeCssVariables,
+  getAppThemeFallbackType,
   isPluginThemeId,
+  normalizeAccentHex,
+  normalizeAppColorScheme,
   readPluginThemeSnapshot,
   resolveAppTheme,
   type AppColorScheme,
+  type AppThemeConfig,
   type ProjectThemeChoice,
 } from "@shared/theme";
 import type { ColorVisionMode } from "@shared/types";
-import { applyAppThemeToRoot, applyColorVisionMode } from "@/theme/applyAppTheme";
+import {
+  applyAppThemeToRoot,
+  applyColorVisionMode,
+  systemPrefersDark,
+} from "@/theme/applyAppTheme";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { runThemeCrossfade } from "@/lib/appThemeViewTransition";
 
 const RECENT_SCHEMES_LIMIT = 5;
+const DEFAULT_PREFERRED_DARK_SCHEME_ID = "daintree";
+const DEFAULT_PREFERRED_LIGHT_SCHEME_ID = "bondi";
+const COLOR_VISION_MODES: readonly ColorVisionMode[] = ["default", "red-green", "blue-yellow"];
 
 interface AppThemeState {
   selectedSchemeId: string;
@@ -93,6 +105,13 @@ interface AppThemeState {
   setPreferredLightSchemeId: (id: string) => void;
   setRecentSchemeIds: (ids: string[]) => void;
   setAccentColorOverride: (color: string | null) => void;
+  /**
+   * Take on the global settings main last persisted, after another view or
+   * the OS changed them. Repaints only when what this view shows changes, and
+   * leaves a preview's DOM alone. Pass `{ crossfade: true }` when the outgoing
+   * theme is already on screen.
+   */
+  reconcileAppThemeConfig: (config: AppThemeConfig, opts?: { crossfade?: boolean }) => void;
 }
 
 /** What `pluginSnapshotScheme` holds once `scheme` is the selection. */
@@ -136,6 +155,23 @@ export function resolveCommittedScheme(state: CommittedSchemeSources): AppColorS
   );
 }
 
+/**
+ * The root's variables and attributes the committed scheme paints for
+ * `state`, before any colour vision mode, so a change that leaves them alone,
+ * such as renaming the shown theme, neither repaints nor fades.
+ */
+function paintSignature(state: AppThemeState): string {
+  const effective = applyAccentOverrideToScheme(
+    resolveCommittedScheme(state),
+    state.accentColorOverride
+  );
+  return JSON.stringify([effective.id, effective.type, getAppThemeCssVariables(effective)]);
+}
+
+function trimmedIdOr(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
 let pendingScheme: AppColorScheme | null = null;
 let pendingFrame: number | null = null;
 
@@ -154,9 +190,12 @@ function claimThemeIntent(): number {
 function applySchemeToDOMNow(scheme: AppColorScheme): void {
   const { colorVisionMode, accentColorOverride } = useAppThemeStore.getState();
   const effective = applyAccentOverrideToScheme(scheme, accentColorOverride);
-  applyAppThemeToRoot(document.documentElement, effective);
-  if (colorVisionMode !== "default") {
-    applyColorVisionMode(document.documentElement, colorVisionMode, effective);
+  const root = document.documentElement;
+  applyAppThemeToRoot(root, effective);
+  // Also clears a mode the store has since left, which the root keeps until a
+  // paint drops it: a pushed return to the default lands under an open preview.
+  if (colorVisionMode !== "default" || root.dataset.colorblind !== undefined) {
+    applyColorVisionMode(root, colorVisionMode, effective);
   }
 }
 
@@ -211,8 +250,8 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   projectSnapshotScheme: null,
   colorVisionMode: "default" as ColorVisionMode,
   followSystem: false,
-  preferredDarkSchemeId: "daintree",
-  preferredLightSchemeId: "bondi",
+  preferredDarkSchemeId: DEFAULT_PREFERRED_DARK_SCHEME_ID,
+  preferredLightSchemeId: DEFAULT_PREFERRED_LIGHT_SCHEME_ID,
   recentSchemeIds: [],
   accentColorOverride: null,
   previewSchemeId: null,
@@ -388,6 +427,88 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   setAccentColorOverride: (color) => {
     set({ accentColorOverride: color });
     injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()));
+  },
+
+  reconcileAppThemeConfig: (config, opts) => {
+    const before = useAppThemeStore.getState();
+    const painted = paintSignature(before);
+    const colorVisionMode = COLOR_VISION_MODES.find((mode) => mode === config.colorVisionMode);
+    const recentSchemeIds = Array.isArray(config.recentSchemeIds)
+      ? config.recentSchemeIds
+          .filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
+          .map((id) => id.trim())
+      : [];
+    // Replaced, not merged: a theme another view deleted is gone here too. The
+    // plugin snapshot goes in before the selection, which it may name.
+    set({
+      customSchemes: Array.isArray(config.customSchemes)
+        ? config.customSchemes.map((scheme) => normalizeAppColorScheme(scheme))
+        : [],
+      pluginSnapshotScheme: readPluginThemeSnapshot(config),
+      accentColorOverride: normalizeAccentHex(config.accentColorOverride),
+      followSystem: config.followSystem === true,
+      preferredDarkSchemeId: trimmedIdOr(
+        config.preferredDarkSchemeId,
+        DEFAULT_PREFERRED_DARK_SCHEME_ID
+      ),
+      preferredLightSchemeId: trimmedIdOr(
+        config.preferredLightSchemeId,
+        DEFAULT_PREFERRED_LIGHT_SCHEME_ID
+      ),
+      recentSchemeIds: Array.from(new Set(recentSchemeIds)).slice(0, RECENT_SCHEMES_LIMIT),
+    });
+
+    const schemeId = typeof config.colorSchemeId === "string" ? config.colorSchemeId.trim() : "";
+    if (schemeId) {
+      const selected = resolveAppTheme(
+        schemeId,
+        selectSelectableSchemes(useAppThemeStore.getState()),
+        getAppThemeFallbackType(schemeId, config, systemPrefersDark())
+      );
+      set({ selectedSchemeId: selected.id, pluginSnapshotScheme: retainedPluginScheme(selected) });
+    }
+
+    const mode = colorVisionMode ?? "default";
+    const modeChanged = mode !== before.colorVisionMode;
+    // Through the picker's own setter, which paints the mode's CSS onto what is
+    // on screen before publishing the mode the terminals recolour from.
+    const publishMode = () => useAppThemeStore.getState().setColorVisionMode(mode);
+
+    const next = useAppThemeStore.getState();
+    let previewEnded = false;
+    if (next.previewSchemeId !== null) {
+      // A preview owns the DOM and paints the committed theme when it ends,
+      // unless the theme it shows has just gone. The mode lands on it either way.
+      if (getAppThemeById(next.previewSchemeId, selectSelectableSchemes(next))) {
+        if (modeChanged) publishMode();
+        return;
+      }
+      set({ previewSchemeId: null });
+      previewEnded = true;
+    }
+    const schemeChanged = previewEnded || paintSignature(next) !== painted;
+
+    // Resolved when it paints, so a project theme pushed meanwhile wins.
+    const paint = () =>
+      injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
+    if (modeChanged) {
+      // The whole scheme first, superseding a fade still pending, so nothing that
+      // recolours from the mode reads the outgoing one; no fade of its own, which
+      // would show the mode half-applied.
+      paint();
+      publishMode();
+      return;
+    }
+    if (!schemeChanged) return;
+    if (opts?.crossfade) {
+      const intent = claimThemeIntent();
+      runThemeCrossfade(() => {
+        if (intent !== themeIntentSeq) return;
+        paint();
+      });
+    } else {
+      paint();
+    }
   },
 }));
 

@@ -41,9 +41,10 @@ import {
   sendToRendererContext,
   setRemoteBoundViewFilter,
   typedBroadcast,
+  typedBroadcastToLocalViews,
   typedSend,
 } from "../utils.js";
-import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { getAppWebContents, isCachedViewWebContents } from "../../window/webContentsRegistry.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
 import type { ClientEndpoint, EndpointGroup, HostFrame } from "../endpoint.js";
 import type { IpcContext } from "../types.js";
@@ -84,6 +85,7 @@ beforeEach(() => {
   hasProjectViewsMock.mockReset().mockReturnValue(false);
   projectViewsMock.mockReset().mockReturnValue([]);
   registeredViewsMock.mockReset().mockReturnValue([]);
+  vi.mocked(isCachedViewWebContents).mockReset().mockReturnValue(false);
 });
 
 describe("broadcast helpers with no remote endpoints", () => {
@@ -333,6 +335,47 @@ describe("remote-bound view filter", () => {
     second();
     broadcastToRenderer("a:b");
     expect(view.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("typedBroadcastToLocalViews", () => {
+  it("reaches every local view but the excluded one, and no remote endpoint", () => {
+    const sender = localView(1);
+    const cached = localView(2);
+    const otherWindow = localView(3);
+    localViews.push(sender, cached, otherWindow);
+    vi.mocked(isCachedViewWebContents).mockImplementation((id) => id === cached.id);
+    const remote = endpoint(-1, "proj-1");
+    getEndpointRegistry().add(remote);
+
+    typedBroadcastToLocalViews("a:d" as never, { x: 1 } as never, 1);
+
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(cached.send).toHaveBeenCalledWith("a:d", { x: 1 });
+    expect(otherWindow.send).toHaveBeenCalledWith("a:d", { x: 1 });
+    expect(remote.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps a send failure in one view from stopping the rest, and honours the remote-bound filter", () => {
+    const failing = Object.assign(localView(1), {
+      send: vi.fn(() => {
+        throw new Error("disposed");
+      }),
+    });
+    const withheld = localView(2);
+    const next = localView(3);
+    localViews.push(failing, withheld, next);
+    const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 2);
+
+    try {
+      typedBroadcastToLocalViews("a:d" as never, 7 as never);
+    } finally {
+      uninstall();
+    }
+
+    expect(failing.send).toHaveBeenCalled();
+    expect(withheld.send).not.toHaveBeenCalled();
+    expect(next.send).toHaveBeenCalledWith("a:d", 7);
   });
 });
 

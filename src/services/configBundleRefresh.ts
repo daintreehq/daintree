@@ -2,8 +2,6 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { logError } from "@/utils/logger";
-import { systemPrefersDark } from "@/theme/applyAppTheme";
-import { getAppThemeFallbackType } from "@shared/theme";
 
 /**
  * Bring the renderer's mirrors back in line after a configuration bundle was
@@ -29,31 +27,10 @@ export async function refreshImportedConfig(): Promise<void> {
 
 async function refreshTheme(): Promise<void> {
   try {
-    const config = await appThemeClient.get();
-    const store = useAppThemeStore.getState();
-
-    // Custom schemes first: a selected id pointing at an imported scheme can
-    // only resolve once that scheme is in the store.
-    useAppThemeStore.setState({
-      customSchemes: config.customSchemes ?? [],
-      followSystem: config.followSystem ?? false,
-      preferredDarkSchemeId: config.preferredDarkSchemeId ?? store.preferredDarkSchemeId,
-      preferredLightSchemeId: config.preferredLightSchemeId ?? store.preferredLightSchemeId,
-      accentColorOverride: config.accentColorOverride ?? null,
-    });
-
-    // These setters only touch store state and the DOM — main has already
-    // persisted the imported values, so nothing is written twice.
-    const next = useAppThemeStore.getState();
-    // Always re-inject, even when the bundle carried no scheme id: imported
-    // custom schemes can change how the *current* id resolves, and skipping the
-    // injection would leave the DOM painted with the pre-import palette.
-    const schemeId = config.colorSchemeId || next.selectedSchemeId;
-    next.setSelectedSchemeIdSilent(schemeId, {
-      fallbackType: getAppThemeFallbackType(schemeId, next, systemPrefersDark()),
-    });
-    // After the injection, so it layers onto the new scheme rather than the old.
-    next.setColorVisionMode(config.colorVisionMode ?? "default");
+    // Only mirrors what main has already persisted, so nothing is written
+    // twice. It repaints whenever the result looks different, which includes
+    // an imported theme changing how the current id resolves.
+    useAppThemeStore.getState().reconcileAppThemeConfig(await appThemeClient.get());
   } catch (error) {
     logError("[importConfig] Failed to refresh theme after import", error);
   }

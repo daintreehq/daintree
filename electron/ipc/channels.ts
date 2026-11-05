@@ -703,7 +703,7 @@ export const CHANNELS = {
   APP_THEME_SET_PREFERRED_LIGHT_SCHEME: "app-theme:set-preferred-light-scheme",
   APP_THEME_SET_RECENT_SCHEME_IDS: "app-theme:set-recent-scheme-ids",
   APP_THEME_SET_ACCENT_COLOR_OVERRIDE: "app-theme:set-accent-color-override",
-  APP_THEME_SYSTEM_APPEARANCE_CHANGED: "app-theme:system-appearance-changed",
+  APP_THEME_CHANGED: "app-theme:changed",
 
   WINDOW_CHROME_SET_BANNER_SEVERITY: "window-chrome:set-banner-severity",
 
