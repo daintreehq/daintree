@@ -34,7 +34,6 @@
 import { createReadStream } from "fs";
 import { lstat, open, readdir, realpath, stat } from "fs/promises";
 import { createInterface } from "readline";
-import os from "os";
 import path from "path";
 import {
   SUBAGENT_LIST_LIMIT,
@@ -97,23 +96,6 @@ export const CLAUDE_SUBAGENT_LOCATION_CACHE_MAX = 256;
 export interface ClaudeSubagentReaderOptions {
   configDir?: string;
   now?: () => number;
-}
-
-/**
- * `CLAUDE_CONFIG_DIR` is a real override the CLI honours, and this repo already
- * treats it as one when discovering commands and skills. Never sourced from the
- * renderer — the process environment is the only input.
- *
- * Known limitation: this reads Daintree's own environment, not the terminal's.
- * A project preset or the user's shell can export a different
- * `CLAUDE_CONFIG_DIR` to the agent alone, and that store is invisible here —
- * the list comes back empty rather than wrong. Closing it means recording the
- * effective value on the pty-host terminal record at spawn.
- */
-export function resolveClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.CLAUDE_CONFIG_DIR?.trim();
-  if (override) return path.resolve(override);
-  return path.join(os.homedir(), ".claude");
 }
 
 /**
@@ -221,10 +203,10 @@ async function holdsSessionTranscript(
 export async function findSubagentsDir(
   cwd: string,
   parentSessionId: string,
-  options: ClaudeSubagentReaderOptions = {}
+  options: ClaudeSubagentReaderOptions & { configDir: string }
 ): Promise<string | null> {
   if (!isSafeSessionId(parentSessionId)) return null;
-  const projectsRoot = path.join(options.configDir ?? resolveClaudeConfigDir(), "projects");
+  const projectsRoot = path.join(options.configDir, "projects");
   // Resolved once so a user who symlinks their whole config dir still matches,
   // while a symlink planted *inside* it cannot point the read somewhere else.
   // A store that is there but unreadable is a failure worth reporting, not an

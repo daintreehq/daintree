@@ -93,6 +93,7 @@ export function mapTerminalInfo(
     // callers can tell "not exited yet" from a host that never said.
     isExited: t.isExited === true,
     agentSessionId: t.agentSessionId,
+    claudeConfigDir: t.claudeConfigDir,
     agentLaunchFlags: t.agentLaunchFlags,
     agentModelId: t.agentModelId,
     scheduledRun: t.scheduledRun,

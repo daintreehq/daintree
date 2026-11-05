@@ -16,8 +16,6 @@ import type { AgentSubagentUnavailableReason, SubagentProvider } from "./ipc/age
  */
 export type AgentLastMessageUnavailableReason =
   | Exclude<AgentSubagentUnavailableReason, "subagent-not-found">
-  /** The pane's store could not be pinned down, so no file was trusted to be its. */
-  | "store-unknown"
   /** Nothing the agent wrote is on record yet. */
   | "no-message"
   /**

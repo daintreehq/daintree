@@ -1348,6 +1348,12 @@ export interface PtyHostTerminalInfo {
   ptyRows?: number;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
+  /**
+   * The Claude Code config folder this terminal's launch env names: its
+   * `CLAUDE_CONFIG_DIR` (an account's folder, #16269), or `~/.claude` when it
+   * sets none. Absent when the env names one that can't be resolved.
+   */
+  claudeConfigDir?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */

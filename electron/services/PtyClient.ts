@@ -207,6 +207,8 @@ interface TerminalInfoResponse {
    */
   isExited?: boolean;
   agentSessionId?: string;
+  /** The Claude store the launch env names; absent when it can't be resolved (#16269). */
+  claudeConfigDir?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
   /** The scheduled run this terminal was launched for (#15977). */

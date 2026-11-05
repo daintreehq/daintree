@@ -39,6 +39,7 @@ import { SubmissionOutputLedger } from "./SubmissionOutputLedger.js";
 import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
 import { reportRunHandback } from "./runHandback.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
+import { resolveLaunchClaudeConfigDir } from "../claude/claudeConfigDir.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
@@ -409,6 +410,10 @@ export class TerminalProcess {
       // launch, and writing it here — rather than at teardown — is what lets it
       // survive a kill path that never runs `gracefulShutdown()` at all.
       agentSessionId: options.agentSessionId,
+      // Every terminal, not only Claude launches: `claude` typed into a plain
+      // shell inherits the same env. Read off the env the PTY really got, so an
+      // account's folder and Daintree's own override both land here (#16269).
+      claudeConfigDir: resolveLaunchClaudeConfigDir(spawnContext.env),
       worktreeId: options.worktreeId,
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
@@ -1021,6 +1026,7 @@ export class TerminalProcess {
       activityTier: this._activityTier,
       hasPty,
       agentSessionId: t.agentSessionId,
+      claudeConfigDir: t.claudeConfigDir,
       agentLaunchFlags: t.agentLaunchFlags,
       agentModelId: t.agentModelId,
       scheduledRun: t.scheduledRun,
