@@ -131,15 +131,22 @@ vi.mock("@/store/preferencesStore", () => ({
     selector({
       assignWorktreeToSelf: mockAssignWorktreeToSelf,
       setAssignWorktreeToSelf: vi.fn(),
-      lastSelectedWorktreeRecipeIdByProject: {},
+      lastSelectedWorktreeRecipeIdByProject: firstAgentFixtures.lastRecipeByProject,
       setLastSelectedWorktreeRecipeIdByProject: mockSetLastRecipe,
       lastSelectedWorktreeAgentIdByProject: firstAgentFixtures.lastAgentByProject,
       setLastSelectedWorktreeAgentIdByProject: mockSetLastAgent,
+      lastSelectedIssueWorktreeRecipeIdByProject: firstAgentFixtures.lastIssueRecipeByProject,
+      setLastSelectedIssueWorktreeRecipeIdByProject: mockSetLastIssueRecipe,
+      lastSelectedIssueWorktreeAgentIdByProject: firstAgentFixtures.lastIssueAgentByProject,
+      setLastSelectedIssueWorktreeAgentIdByProject: mockSetLastIssueAgent,
     }),
 }));
 
 const firstAgentFixtures = vi.hoisted(() => ({
   lastAgentByProject: {} as Record<string, string | null>,
+  lastRecipeByProject: {} as Record<string, string | null>,
+  lastIssueAgentByProject: {} as Record<string, string | null>,
+  lastIssueRecipeByProject: {} as Record<string, string | null>,
   options: [{ id: "claude", name: "Claude", iconId: "claude" }] as {
     id: string;
     name: string;
@@ -148,6 +155,8 @@ const firstAgentFixtures = vi.hoisted(() => ({
 }));
 const mockSetLastAgent = vi.hoisted(() => vi.fn());
 const mockSetLastRecipe = vi.hoisted(() => vi.fn());
+const mockSetLastIssueAgent = vi.hoisted(() => vi.fn());
+const mockSetLastIssueRecipe = vi.hoisted(() => vi.fn());
 vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
   useFirstAgentOptions: () => firstAgentFixtures.options,
 }));
@@ -230,7 +239,12 @@ vi.mock("@/store/worktreeStore", () => {
 });
 
 const recipePickerCalls = vi.hoisted(() => ({
-  last: null as { startingLayoutRecipes: unknown[]; defaultRecipeId: string | undefined } | null,
+  last: null as {
+    startingLayoutRecipes: unknown[];
+    defaultRecipeId: string | undefined;
+    lastSelectedWorktreeRecipeId?: string | null;
+    setLastSelectedWorktreeRecipeIdByProject?: unknown;
+  } | null,
   selected: null as { id: string; name: string; terminals: { type: string }[] } | null,
 }));
 // Only `useRecipePicker` is stubbed — `resolveEligibleDefaultRecipeId` stays
@@ -2792,5 +2806,203 @@ describe("NewWorktreeDialog — remembered setup on discard (#14996)", () => {
     expect(mockAddPendingCreation).toHaveBeenCalled();
     expect(mockSetLastRecipe).not.toHaveBeenCalled();
     expect(mockSetLastAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
+  const WORK = { id: "global-work", name: "Work", terminals: [], createdAt: 0 };
+  const ISSUE: Issue = {
+    number: 42,
+    title: "Fix the thing",
+    body: "",
+    state: "open",
+    rawState: "open",
+    url: "https://example.com/issues/42",
+    assignees: [],
+    labels: [],
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } }
+        : { ok: true, result: undefined }
+    );
+    // A bare create last used Claude and no recipe; an issue create a recipe
+    // and no agent.
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    firstAgentFixtures.lastRecipeByProject = { "test-project": null };
+    firstAgentFixtures.lastIssueAgentByProject = { "test-project": null };
+    firstAgentFixtures.lastIssueRecipeByProject = { "test-project": "global-work" };
+  });
+
+  afterEach(() => {
+    firstAgentFixtures.lastAgentByProject = {};
+    firstAgentFixtures.lastRecipeByProject = {};
+    firstAgentFixtures.lastIssueAgentByProject = {};
+    firstAgentFixtures.lastIssueRecipeByProject = {};
+    recipePickerCalls.selected = null;
+    recipeFixtures.recipes = [];
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function createWithAgentAndRecipe() {
+    await act(async () => {
+      fireEvent.click(document.getElementById("recipe-selector-option-2")!);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+  }
+
+  it("seeds a bare create from the last bare create", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+    expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBeNull();
+    expect(recipePickerCalls.last?.setLastSelectedWorktreeRecipeIdByProject).toBe(
+      mockSetLastRecipe
+    );
+  });
+
+  it("seeds a create from an issue from the last create from an issue", async () => {
+    renderDialog({ initialIssue: ISSUE });
+    await advanceTimersGradually(500);
+
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
+    expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBe("global-work");
+    expect(recipePickerCalls.last?.setLastSelectedWorktreeRecipeIdByProject).toBe(
+      mockSetLastIssueRecipe
+    );
+  });
+
+  it("seeds each opening from its own memory when the setups are swapped", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": null, other: "claude" };
+    firstAgentFixtures.lastRecipeByProject = { "test-project": "global-work", other: null };
+    firstAgentFixtures.lastIssueAgentByProject = { "test-project": "claude", other: null };
+    firstAgentFixtures.lastIssueRecipeByProject = { "test-project": null, other: "global-work" };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
+    expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBe("global-work");
+    cleanup();
+
+    renderDialog({ initialIssue: ISSUE });
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+    expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBeNull();
+  });
+
+  it("saves an issue create's picks to the issue memory only", async () => {
+    recipeFixtures.recipes = [WORK];
+    firstAgentFixtures.lastIssueRecipeByProject = { "test-project": "older-recipe" };
+    renderDialog({ initialIssue: ISSUE });
+    await advanceTimersGradually(500);
+
+    await createWithAgentAndRecipe();
+
+    expect(mockSetLastIssueRecipe.mock.calls).toEqual([["test-project", "global-work"]]);
+    expect(mockSetLastIssueAgent.mock.calls).toEqual([["test-project", "claude"]]);
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+  });
+
+  it("saves a bare create's picks to the bare memory only", async () => {
+    recipeFixtures.recipes = [WORK];
+    firstAgentFixtures.lastAgentByProject = {};
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    await createWithAgentAndRecipe();
+
+    expect(mockSetLastRecipe.mock.calls).toEqual([["test-project", "global-work"]]);
+    expect(mockSetLastAgent.mock.calls).toEqual([["test-project", "claude"]]);
+    expect(mockSetLastIssueRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastIssueAgent).not.toHaveBeenCalled();
+  });
+
+  it("reseeds from the other opening's memory when the kept-mounted dialog reopens", async () => {
+    const { rerender } = render(
+      <NewWorktreeDialog isOpen={true} onClose={vi.fn()} rootPath="/test/root" />
+    );
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+
+    rerender(<NewWorktreeDialog isOpen={false} onClose={vi.fn()} rootPath="/test/root" />);
+    rerender(
+      <NewWorktreeDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        rootPath="/test/root"
+        initialIssue={ISSUE}
+      />
+    );
+    await advanceTimersGradually(500);
+
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
+    expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBe("global-work");
+  });
+
+  it("restores a Retry's agent over an issue create's remembered No agent", async () => {
+    renderDialog({ initialIssue: ISSUE, initialAgentId: "claude", initialPrompt: "" });
+    await advanceTimersGradually(500);
+
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+  });
+
+  it("remembers nothing in either memory when an issue create is discarded", async () => {
+    const onClose = vi.fn();
+    renderDialog({ initialIssue: ISSUE, onClose });
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockSetLastIssueAgent).not.toHaveBeenCalled();
+    expect(mockSetLastIssueRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Retry's agent over an issue create's remembered agent", async () => {
+    firstAgentFixtures.lastIssueAgentByProject = { "test-project": "claude" };
+    renderDialog({ initialIssue: ISSUE, initialAgentId: null, initialPrompt: "" });
+    await advanceTimersGradually(500);
+
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
   });
 });

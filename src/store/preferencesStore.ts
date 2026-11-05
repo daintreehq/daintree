@@ -186,6 +186,18 @@ interface PreferencesState {
   /** Agent last chosen to start in a new worktree, per project. `null` = none. */
   lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>;
   setLastSelectedWorktreeAgentIdByProject: (projectId: string, id: string | null) => void;
+  /**
+   * The same two memories for a dialog opened from an issue. Issue creates
+   * usually want a recipe matched to the issue and no agent, bare creates the
+   * reverse, so sharing one memory left each opening with the other's setup.
+   */
+  lastSelectedIssueWorktreeRecipeIdByProject: Record<string, string | null | undefined>;
+  setLastSelectedIssueWorktreeRecipeIdByProject: (
+    projectId: string,
+    id: string | null | undefined
+  ) => void;
+  lastSelectedIssueWorktreeAgentIdByProject: Record<string, string | null | undefined>;
+  setLastSelectedIssueWorktreeAgentIdByProject: (projectId: string, id: string | null) => void;
   skipPushConfirmByWorktreePath: Record<string, boolean>;
   setSkipPushConfirmForWorktree: (worktreePath: string, value: boolean) => void;
   /**
@@ -334,6 +346,12 @@ function sanitizePersistedPreferences(
   sanitized.lastSelectedWorktreeAgentIdByProject = normalizeRecipeMap(
     sanitized.lastSelectedWorktreeAgentIdByProject
   );
+  sanitized.lastSelectedIssueWorktreeRecipeIdByProject = normalizeRecipeMap(
+    sanitized.lastSelectedIssueWorktreeRecipeIdByProject
+  );
+  sanitized.lastSelectedIssueWorktreeAgentIdByProject = normalizeRecipeMap(
+    sanitized.lastSelectedIssueWorktreeAgentIdByProject
+  );
 
   // A non-boolean here would be truthy for any hand-edited string, retiring the
   // hint for a user who never saw it.
@@ -369,6 +387,8 @@ type PreferencesPersistedState = Pick<
   | "projectSwitcherCollapsedBands"
   | "lastSelectedWorktreeRecipeIdByProject"
   | "lastSelectedWorktreeAgentIdByProject"
+  | "lastSelectedIssueWorktreeRecipeIdByProject"
+  | "lastSelectedIssueWorktreeAgentIdByProject"
   | "skipPushConfirmByWorktreePath"
   | "fileBrowserAlwaysHiddenPatterns"
   | "hasSeenActionPalettePrefixHint"
@@ -398,6 +418,8 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   projectSwitcherCollapsedBands: {},
   lastSelectedWorktreeRecipeIdByProject: {},
   lastSelectedWorktreeAgentIdByProject: {},
+  lastSelectedIssueWorktreeRecipeIdByProject: {},
+  lastSelectedIssueWorktreeAgentIdByProject: {},
   skipPushConfirmByWorktreePath: {},
   fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
   hasSeenActionPalettePrefixHint: false,
@@ -481,6 +503,12 @@ function toPreferencesPersisted(
     ),
     lastSelectedWorktreeAgentIdByProject: normalizeRecipeMap(
       raw.lastSelectedWorktreeAgentIdByProject
+    ),
+    lastSelectedIssueWorktreeRecipeIdByProject: normalizeRecipeMap(
+      raw.lastSelectedIssueWorktreeRecipeIdByProject
+    ),
+    lastSelectedIssueWorktreeAgentIdByProject: normalizeRecipeMap(
+      raw.lastSelectedIssueWorktreeAgentIdByProject
     ),
     skipPushConfirmByWorktreePath: normalizeBooleanMap(raw.skipPushConfirmByWorktreePath),
     fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(
@@ -620,6 +648,16 @@ function mergePreferencesPersistedWrite({
         inc.lastSelectedWorktreeAgentIdByProject,
         disk.lastSelectedWorktreeAgentIdByProject
       ),
+      lastSelectedIssueWorktreeRecipeIdByProject: mergeRecordByWriterDelta(
+        base.lastSelectedIssueWorktreeRecipeIdByProject,
+        inc.lastSelectedIssueWorktreeRecipeIdByProject,
+        disk.lastSelectedIssueWorktreeRecipeIdByProject
+      ),
+      lastSelectedIssueWorktreeAgentIdByProject: mergeRecordByWriterDelta(
+        base.lastSelectedIssueWorktreeAgentIdByProject,
+        inc.lastSelectedIssueWorktreeAgentIdByProject,
+        disk.lastSelectedIssueWorktreeAgentIdByProject
+      ),
       skipPushConfirmByWorktreePath: mergeRecordByWriterDelta(
         base.skipPushConfirmByWorktreePath,
         inc.skipPushConfirmByWorktreePath,
@@ -697,6 +735,22 @@ export const usePreferencesStore = create<PreferencesState>()(
             [projectId]: id,
           },
         })),
+      lastSelectedIssueWorktreeRecipeIdByProject: {},
+      setLastSelectedIssueWorktreeRecipeIdByProject: (projectId, id) =>
+        set((state) => ({
+          lastSelectedIssueWorktreeRecipeIdByProject: {
+            ...state.lastSelectedIssueWorktreeRecipeIdByProject,
+            [projectId]: id,
+          },
+        })),
+      lastSelectedIssueWorktreeAgentIdByProject: {},
+      setLastSelectedIssueWorktreeAgentIdByProject: (projectId, id) =>
+        set((state) => ({
+          lastSelectedIssueWorktreeAgentIdByProject: {
+            ...state.lastSelectedIssueWorktreeAgentIdByProject,
+            [projectId]: id,
+          },
+        })),
       skipPushConfirmByWorktreePath: {},
       setSkipPushConfirmForWorktree: (worktreePath, value) =>
         set((state) => {
@@ -746,7 +800,7 @@ export const usePreferencesStore = create<PreferencesState>()(
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 20,
+      version: 21,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -774,6 +828,9 @@ export const usePreferencesStore = create<PreferencesState>()(
         projectSwitcherCollapsedBands: state.projectSwitcherCollapsedBands,
         lastSelectedWorktreeRecipeIdByProject: state.lastSelectedWorktreeRecipeIdByProject,
         lastSelectedWorktreeAgentIdByProject: state.lastSelectedWorktreeAgentIdByProject,
+        lastSelectedIssueWorktreeRecipeIdByProject:
+          state.lastSelectedIssueWorktreeRecipeIdByProject,
+        lastSelectedIssueWorktreeAgentIdByProject: state.lastSelectedIssueWorktreeAgentIdByProject,
         skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
         fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
         hasSeenActionPalettePrefixHint: state.hasSeenActionPalettePrefixHint,
@@ -931,6 +988,20 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.diffMarkdownRendered = false;
           }
         }
+        if (version < 21 && isRecord(persisted)) {
+          // Issue creates got their own memory (#16283). Both openings start
+          // from the one setup everyone had, so neither loses what it showed.
+          if (!isRecord(persisted.lastSelectedIssueWorktreeRecipeIdByProject)) {
+            persisted.lastSelectedIssueWorktreeRecipeIdByProject = normalizeRecipeMap(
+              persisted.lastSelectedWorktreeRecipeIdByProject
+            );
+          }
+          if (!isRecord(persisted.lastSelectedIssueWorktreeAgentIdByProject)) {
+            persisted.lastSelectedIssueWorktreeAgentIdByProject = normalizeRecipeMap(
+              persisted.lastSelectedWorktreeAgentIdByProject
+            );
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -941,7 +1012,7 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; doubleShiftOpensCanopy: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; doubleShiftOpensCanopy: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; lastSelectedIssueWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedIssueWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean }",
 });
 
 // Turning double-Shift off in one project view must reach every other view at
