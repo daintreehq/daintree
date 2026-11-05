@@ -10,7 +10,8 @@ const ELECTRON_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
 // (#16258), which carries its `?projectId=`. That only brings the project back
 // if loadRenderer records the same URL it loads, before loading it.
 // createWindow.ts can't be imported by a unit test, so the wiring is read from
-// its source.
+// its source. Only loadRenderer's own statements count: a call nested in a
+// callback runs at some other time, or never.
 
 function parse(relativePath: string): ts.SourceFile {
   const file = path.join(ELECTRON_ROOT, relativePath);
@@ -27,69 +28,86 @@ function collect<T extends ts.Node>(root: ts.Node, match: (node: ts.Node) => nod
   return found;
 }
 
-function mentions(root: ts.Node, identifier: string): boolean {
-  if (ts.isIdentifier(root) && root.text === identifier) return true;
-  return ts.forEachChild(root, (child) => mentions(child, identifier) || undefined) ?? false;
-}
-
-function isIdentifierNamed(node: ts.Node | undefined, name: string): boolean {
+function isIdentifierNamed(node: ts.Node | undefined, name: string): node is ts.Identifier {
   return node !== undefined && ts.isIdentifier(node) && node.text === name;
 }
 
-function loadRendererBody(): ts.Node {
-  const [declaration] = collect(
+function identifiersIn(root: ts.Node): string[] {
+  return collect(root, ts.isIdentifier).map((identifier) => identifier.text);
+}
+
+function loadRendererStatements(): readonly ts.Statement[] {
+  const declarations = collect(
     parse("window/createWindow.ts"),
     (node): node is ts.VariableDeclaration =>
       ts.isVariableDeclaration(node) && isIdentifierNamed(node.name, "loadRenderer")
   );
-  const initializer = declaration?.initializer;
-  expect(initializer && ts.isArrowFunction(initializer)).toBe(true);
-  return (initializer as ts.ArrowFunction).body;
+  expect(declarations).toHaveLength(1);
+  const initializer = declarations[0].initializer;
+  expect(initializer && ts.isArrowFunction(initializer) && ts.isBlock(initializer.body)).toBe(true);
+  return ((initializer as ts.ArrowFunction).body as ts.Block).statements;
+}
+
+function directCalls(
+  statements: readonly ts.Statement[],
+  match: (call: ts.CallExpression) => boolean
+): Array<{ index: number; call: ts.CallExpression }> {
+  return statements.flatMap((statement, index) =>
+    ts.isExpressionStatement(statement) &&
+    ts.isCallExpression(statement.expression) &&
+    match(statement.expression)
+      ? [{ index, call: statement.expression }]
+      : []
+  );
+}
+
+function directDeclaration(
+  statements: readonly ts.Statement[],
+  name: string
+): ts.VariableDeclaration | undefined {
+  for (const statement of statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    const found = statement.declarationList.declarations.find((declaration) =>
+      isIdentifierNamed(declaration.name, name)
+    );
+    if (found) return found;
+  }
+  return undefined;
 }
 
 describe("the startup view's entry URL", () => {
   it("is recorded on the app view, then loaded, as the same project-scoped URL", () => {
-    const body = loadRendererBody();
+    const statements = loadRendererStatements();
 
-    const records = collect(
-      body,
-      (node): node is ts.CallExpression =>
-        ts.isCallExpression(node) && isIdentifierNamed(node.expression, "recordAppEntryUrl")
+    const records = directCalls(statements, (call) =>
+      isIdentifierNamed(call.expression, "recordAppEntryUrl")
     );
-    const loads = collect(
-      body,
-      (node): node is ts.CallExpression =>
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "loadURL" &&
-        isIdentifierNamed(node.expression.expression, "appWebContents")
+    const loads = directCalls(
+      statements,
+      (call) =>
+        ts.isPropertyAccessExpression(call.expression) &&
+        call.expression.name.text === "loadURL" &&
+        isIdentifierNamed(call.expression.expression, "appWebContents")
     );
     expect(records).toHaveLength(1);
     expect(loads).toHaveLength(1);
-
     const [record] = records;
     const [load] = loads;
-    expect(isIdentifierNamed(record.arguments[0], "appWebContents")).toBe(true);
-    const recorded = record.arguments[1];
-    const loaded = load.arguments[0];
-    expect(recorded && ts.isIdentifier(recorded)).toBe(true);
-    expect(isIdentifierNamed(loaded, (recorded as ts.Identifier).text)).toBe(true);
-    expect(record.getStart()).toBeLessThan(load.getStart());
+    expect(record.index).toBeLessThan(load.index);
 
-    const [urlDeclaration] = collect(
-      body,
-      (node): node is ts.VariableDeclaration =>
-        ts.isVariableDeclaration(node) &&
-        isIdentifierNamed(node.name, (recorded as ts.Identifier).text)
-    );
-    const [queryDeclaration] = collect(
-      body,
-      (node): node is ts.VariableDeclaration =>
-        ts.isVariableDeclaration(node) && isIdentifierNamed(node.name, "qs")
-    );
-    expect(urlDeclaration?.initializer && mentions(urlDeclaration.initializer, "qs")).toBe(true);
-    expect(
-      queryDeclaration?.initializer && mentions(queryDeclaration.initializer, "projectId")
-    ).toBe(true);
+    expect(isIdentifierNamed(record.call.arguments[0], "appWebContents")).toBe(true);
+    const recorded = record.call.arguments[1];
+    expect(recorded && ts.isIdentifier(recorded)).toBe(true);
+    const urlName = (recorded as ts.Identifier).text;
+    expect(isIdentifierNamed(load.call.arguments[0], urlName)).toBe(true);
+
+    // The URL is built from a sibling declaration that carries the project id.
+    const url = directDeclaration(statements, urlName)?.initializer;
+    expect(url).toBeDefined();
+    const carriesProject = identifiersIn(url!).some((name) => {
+      const part = directDeclaration(statements, name)?.initializer;
+      return part !== undefined && identifiersIn(part).includes("projectId");
+    });
+    expect(carriesProject).toBe(true);
   });
 });
