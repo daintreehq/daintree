@@ -53,7 +53,7 @@ import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { pluralize } from "@/lib/pluralize";
-import { projectLocalRecipes } from "@shared/utils/recipeListing";
+import { inRepoDisplayRecipes, projectLocalRecipes } from "@shared/utils/recipeListing";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { TEAM_SCOPE_DETAIL } from "./recipeScopeCopy";
 
@@ -91,13 +91,18 @@ export function RecipeManager({
 }: RecipeManagerProps) {
   const globalRecipes = useRecipeStore((s) => s.globalRecipes);
   const storedProjectRecipes = useRecipeStore((s) => s.projectRecipes);
-  const inRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
+  const storedInRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
   const pluginRecipes = useRecipeStore((s) => s.pluginRecipes);
-  // The machine-local store also holds a mirror of every team recipe, so the
-  // section for machine-local recipes lists the rest (as mergeRecipes does).
+  // The machine-local store also holds a mirror of every team recipe: the team
+  // row is that recipe (its edit then carries the env values the canonical file
+  // leaves out), and the machine-local section lists the rest, as mergeRecipes does.
   const projectRecipes = useMemo(
-    () => projectLocalRecipes(storedProjectRecipes, inRepoRecipes),
-    [storedProjectRecipes, inRepoRecipes]
+    () => projectLocalRecipes(storedProjectRecipes, storedInRepoRecipes),
+    [storedProjectRecipes, storedInRepoRecipes]
+  );
+  const inRepoRecipes = useMemo(
+    () => inRepoDisplayRecipes(storedProjectRecipes, storedInRepoRecipes),
+    [storedProjectRecipes, storedInRepoRecipes]
   );
 
   // Derive which project recipes are shadowed by in-repo recipes

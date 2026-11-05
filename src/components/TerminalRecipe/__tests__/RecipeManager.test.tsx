@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 
@@ -54,6 +54,7 @@ import { useProjectStore } from "@/store/projectStore";
 import type { Project, TerminalRecipe } from "@/types";
 import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
 import { inspectRecipeTerminals } from "@shared/utils/recipeSanitizer";
+import { mergeRecipes } from "@shared/utils/recipeListing";
 
 const recipe = (id: string, name: string, extra: Partial<TerminalRecipe> = {}): TerminalRecipe => ({
   id,
@@ -78,20 +79,30 @@ function seed(inv: {
   team?: TerminalRecipe[];
   plugin?: TerminalRecipe[];
 }) {
+  const [global, project, team, plugin] = [
+    inv.global ?? [],
+    inv.project ?? [],
+    inv.team ?? [],
+    inv.plugin ?? [],
+  ];
   useRecipeStore.setState({
-    globalRecipes: inv.global ?? [],
-    projectRecipes: inv.project ?? [],
-    inRepoRecipes: inv.team ?? [],
-    pluginRecipes: inv.plugin ?? [],
+    globalRecipes: global,
+    projectRecipes: project,
+    inRepoRecipes: team,
+    pluginRecipes: plugin,
+    recipes: mergeRecipes(global, project, team, plugin),
   });
 }
 
-const renderManager = (onCreateRecipe: (scope: "global" | "project") => void = () => {}) =>
+const renderManager = (
+  onCreateRecipe: (scope: "global" | "project") => void = () => {},
+  onEditRecipe: (recipe: TerminalRecipe) => void = () => {}
+) =>
   render(
     <RecipeManager
       isOpen
       onClose={() => {}}
-      onEditRecipe={() => {}}
+      onEditRecipe={onEditRecipe}
       onCreateRecipe={onCreateRecipe}
     />
   );
@@ -99,6 +110,10 @@ const renderManager = (onCreateRecipe: (scope: "global" | "project") => void = (
 const sectionOf = (name: RegExp) => screen.getByRole("heading", { name }).closest("section")!;
 
 const rows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-recipe-row]"));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 beforeEach(() => {
   useProjectStore.setState({
@@ -213,54 +228,74 @@ describe("RecipeManager — only a recipe that is actually overridden says so", 
 });
 
 describe("RecipeManager — a new recipe in a project is a team recipe, and says so (#16262)", () => {
+  const click = async (el: HTMLElement) => {
+    await act(async () => {
+      el.click();
+    });
+  };
+  const creatorLabels = () =>
+    screen
+      .getAllByRole("button", { name: /^New / })
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent?.trim());
+  const rowNames = (section: HTMLElement) =>
+    Array.from(section.querySelectorAll("[data-recipe-row]")).map((r) =>
+      r.getAttribute("data-recipe-row")
+    );
+
   it("puts the project-level New on Team recipes and opens the editor on the project scope", async () => {
     seed({ global: GLOBAL, project: PROJECT, team: TEAM });
     const onCreateRecipe = vi.fn();
     renderManager(onCreateRecipe);
 
-    const teamNew = within(sectionOf(/Team recipes/)).getByRole("button", {
-      name: "New team recipe",
-    });
-    await act(async () => {
-      teamNew.click();
-    });
+    await click(within(sectionOf(/Team recipes/)).getByRole("button", { name: "New team recipe" }));
     expect(onCreateRecipe).toHaveBeenLastCalledWith("project");
 
-    const globalNew = within(sectionOf(/Global recipes/)).getByRole("button", {
-      name: "New global recipe",
-    });
-    await act(async () => {
-      globalNew.click();
-    });
+    await click(
+      within(sectionOf(/Global recipes/)).getByRole("button", { name: "New global recipe" })
+    );
     expect(onCreateRecipe).toHaveBeenLastCalledWith("global");
   });
 
-  it("offers no New on the legacy Project recipes section and keeps its rows editable", () => {
-    seed({ global: GLOBAL, project: PROJECT, team: TEAM });
+  it("lists sections global, team, project, plugin", () => {
+    seed({ global: GLOBAL, project: PROJECT, team: TEAM, plugin: PLUGIN });
     renderManager();
+    expect(
+      Array.from(document.querySelectorAll("section h3")).map((h) => h.firstChild?.textContent)
+    ).toEqual(["Global recipes", "Team recipes", "Project recipes", "Plugin recipes"]);
+  });
+
+  it("keeps a legacy machine-local recipe editable, and makes no promise about new ones", async () => {
+    seed({ global: GLOBAL, project: PROJECT, team: TEAM });
+    const onEditRecipe = vi.fn();
+    renderManager(() => {}, onEditRecipe);
 
     const section = sectionOf(/Project recipes/);
     expect(within(section).queryAllByRole("button", { name: /^New/ })).toEqual([]);
-    expect(section.textContent).not.toMatch(/None yet/);
-    const [row] = within(section).getAllByText("Storybook");
-    expect(row).toBeDefined();
-    expect(within(section).getByRole("button", { name: "Edit recipe Storybook" })).toBeDefined();
+    const description = section.querySelector("p")!.textContent!;
+    expect(description).toMatch(/this machine/);
+    expect(description).toMatch(/team recipe/);
+    expect(description).not.toMatch(/\bnew\b|none yet/i);
+
+    await click(within(section).getByRole("button", { name: "Edit recipe Storybook" }));
+    expect(onEditRecipe).toHaveBeenCalledWith(expect.objectContaining({ id: "p1" }));
   });
 
-  it("never describes a new recipe as a project recipe or as staying on this machine, outside Global", () => {
-    seed({ global: GLOBAL, project: PROJECT, team: TEAM });
+  it.each([
+    ["a populated inventory", { global: GLOBAL, project: PROJECT, team: TEAM }],
+    ["a team section with nothing in it", { global: GLOBAL }],
+  ])("never promises a new recipe stays on this machine outside Global (%s)", (_, inventory) => {
+    seed(inventory);
     renderManager();
 
-    const creating = screen.getAllByRole("button", { name: /^New / });
-    expect(creating.map((b) => b.getAttribute("aria-label"))).toEqual([
-      "New global recipe",
-      "New team recipe",
-    ]);
-    const outsideGlobal = Array.from(document.querySelectorAll("section")).filter(
-      (s) => !s.querySelector("h3")?.textContent?.startsWith("Global")
-    );
-    for (const section of outsideGlobal) {
-      expect(section.textContent).not.toMatch(/stays on this machine/i);
+    expect(creatorLabels()).toEqual(["New global recipe", "New team recipe"]);
+    for (const section of Array.from(document.querySelectorAll("section"))) {
+      if (section.querySelector("h3")?.textContent?.startsWith("Global")) continue;
+      // The legacy section may say where its existing recipes live, never where
+      // a new one will go.
+      const promise = Array.from(section.querySelectorAll("p"))
+        .map((p) => p.textContent)
+        .filter((text) => /stays on this machine until/i.test(text ?? ""));
+      expect(promise).toEqual([]);
     }
   });
 
@@ -275,28 +310,65 @@ describe("RecipeManager — a new recipe in a project is a team recipe, and says
     expect(team.textContent).toMatch(/git status/);
   });
 
-  it("lists only machine-local recipes under Project recipes, never a team recipe's mirror", () => {
-    // ProjectFileStore carries a same-id mirror of each team recipe for its usage
-    // metadata; it is the team recipe, not a second, machine-local one.
-    const mirror = { ...TEAM[0]!, lastUsedAt: 5 };
-    seed({ project: [mirror, ...PROJECT], team: TEAM });
-    renderManager();
+  it.each([
+    ["an opaque id marked by scope", { id: "recipe-opaque-1", scope: "inrepo" as const }],
+    ["an inrepo- id without the scope marker", { id: "inrepo-legacy" }],
+  ])(
+    "lists only machine-local recipes under Project recipes, never a team recipe's mirror (%s)",
+    (_, ids) => {
+      const team = recipe(ids.id, "Deploy", { ...ids, projectId: "proj" });
+      const mirror = { ...team, lastUsedAt: 5 };
+      seed({ project: [mirror, ...PROJECT], team: [team] });
+      renderManager();
 
-    const project = sectionOf(/Project recipes/);
-    expect(
-      Array.from(project.querySelectorAll("[data-recipe-row]")).map((r) =>
-        r.getAttribute("data-recipe-row")
-      )
-    ).toEqual(["Storybook"]);
-    const team = sectionOf(/Team recipes/);
-    expect(team.querySelectorAll("[data-recipe-row]").length).toBe(1);
-    expect(team.textContent).not.toContain("Overridden by team recipe");
-  });
+      expect(rowNames(sectionOf(/Project recipes/))).toEqual(["Storybook"]);
+      const teamSection = sectionOf(/Team recipes/);
+      expect(rowNames(teamSection)).toEqual(["Deploy"]);
+      expect(teamSection.textContent).not.toContain("Overridden by team recipe");
+    }
+  );
 
   it("hides Project recipes when the machine-local store holds only team mirrors", () => {
     seed({ project: [{ ...TEAM[0]! }], team: TEAM });
     renderManager();
 
+    expect(screen.queryByRole("heading", { name: /Project recipes/ })).toBeNull();
+  });
+
+  it("keeps listing a marked local record that no team recipe backs", () => {
+    seed({ project: [recipe("inrepo-orphan", "Orphan", { scope: "inrepo", projectId: "proj" })] });
+    renderManager();
+
+    expect(rowNames(sectionOf(/Project recipes/))).toEqual(["Orphan"]);
+  });
+
+  it("opens a team recipe from its row with the env values only the mirror holds", async () => {
+    const canonical = recipe("inrepo-env", "Env", {
+      scope: "inrepo",
+      projectId: "proj",
+      terminals: [{ type: "terminal", env: { MODE: "" } }],
+    });
+    const mirror = {
+      ...canonical,
+      terminals: [{ type: "terminal" as const, env: { MODE: "dev" } }],
+    };
+    seed({ project: [mirror], team: [canonical] });
+    const onEditRecipe = vi.fn();
+    renderManager(() => {}, onEditRecipe);
+
+    await click(within(sectionOf(/Team recipes/)).getByRole("button", { name: "Edit recipe Env" }));
+    expect(onEditRecipe.mock.calls[0]![0].terminals[0].env).toEqual({ MODE: "dev" });
+  });
+
+  it("filters to the team row once, with no mirror left under Project recipes", () => {
+    const team = recipe("inrepo-full", "Full stack", { scope: "inrepo", projectId: "proj" });
+    seed({ project: [{ ...team }, ...PROJECT], team: [team] });
+    renderManager();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter recipes" }), {
+      target: { value: "Full" },
+    });
+    expect(rows().map((r) => r.dataset.recipeRow)).toEqual(["Full stack"]);
     expect(screen.queryByRole("heading", { name: /Project recipes/ })).toBeNull();
   });
 
@@ -314,14 +386,16 @@ describe("RecipeManager — a new recipe in a project is a team recipe, and says
     expect(screen.getByRole("button", { name: "New team recipe" })).toBeDefined();
   });
 
-  it("offers no team New when no project is open", () => {
-    useProjectStore.setState({ currentProject: null });
+  it.each([
+    ["no project is open", null],
+    ["the open project has no id", { id: "", name: "x", path: "/x", lastOpened: 0 } as Project],
+  ])("offers no team New when %s", (_, currentProject) => {
+    useProjectStore.setState({ currentProject });
     seed({ global: GLOBAL });
     renderManager();
 
     expect(screen.queryByRole("heading", { name: /Team recipes/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "New team recipe" })).toBeNull();
-    expect(screen.getByRole("button", { name: "New global recipe" })).toBeDefined();
+    expect(creatorLabels()).toEqual(["New global recipe"]);
   });
 
   it("leads the zero-data state with a team recipe when a project is open", async () => {
@@ -329,31 +403,25 @@ describe("RecipeManager — a new recipe in a project is a team recipe, and says
     const onCreateRecipe = vi.fn();
     renderManager(onCreateRecipe);
 
-    const primary = screen.getByRole("button", { name: "New team recipe" });
-    await act(async () => {
-      primary.click();
-    });
+    expect(creatorLabels()).toEqual(["New team recipe", "New global recipe"]);
+    const [primary, secondary] = screen.getAllByRole("button", { name: /^New / });
+    await click(primary!);
     expect(onCreateRecipe).toHaveBeenLastCalledWith("project");
-
-    await act(async () => {
-      screen.getByRole("button", { name: "New global recipe" }).click();
-    });
+    await click(secondary!);
     expect(onCreateRecipe).toHaveBeenLastCalledWith("global");
-    expect(screen.queryByRole("button", { name: /project recipe/i })).toBeNull();
   });
 
-  it("leads the zero-data state with a global recipe when no project is open", async () => {
-    useProjectStore.setState({ currentProject: null });
+  it.each([
+    ["no project is open", null],
+    ["the open project has no id", { id: "", name: "x", path: "/x", lastOpened: 0 } as Project],
+  ])("leads the zero-data state with a global recipe when %s", async (_, currentProject) => {
+    useProjectStore.setState({ currentProject });
     seed({});
     const onCreateRecipe = vi.fn();
     renderManager(onCreateRecipe);
 
-    expect(screen.queryByRole("button", { name: "New team recipe" })).toBeNull();
-    const globals = screen.getAllByRole("button", { name: "New global recipe" });
-    expect(globals.length).toBe(1);
-    await act(async () => {
-      globals[0]!.click();
-    });
+    expect(creatorLabels()).toEqual(["New global recipe"]);
+    await click(screen.getByRole("button", { name: "New global recipe" }));
     expect(onCreateRecipe).toHaveBeenLastCalledWith("global");
   });
 

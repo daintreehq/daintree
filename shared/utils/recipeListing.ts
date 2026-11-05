@@ -94,6 +94,29 @@ export function projectLocalRecipes(
 }
 
 /**
+ * The in-repo recipes as the UI shows them: each stands in for its ProjectFileStore
+ * mirror when there is one, because the mirror holds what the canonical file
+ * leaves out (env values, usage).
+ */
+export function inRepoDisplayRecipes(
+  projectRecipes: TerminalRecipe[],
+  inRepoRecipes: TerminalRecipe[]
+): TerminalRecipe[] {
+  const inRepoIds = new Set(inRepoRecipes.map((r) => r.id));
+  const mirrors = new Map(
+    projectRecipes
+      .filter((r) => inRepoIds.has(r.id) && isInRepoRecipeId(r))
+      .map((r) => [r.id, r] as const)
+  );
+  return inRepoRecipes.map((r) => {
+    const mirror = mirrors.get(r.id);
+    if (!mirror) return r;
+    const { shadowedBy: _shadowedBy, ...displayRecipe } = mirror;
+    return displayRecipe;
+  });
+}
+
+/**
  * Flatten the four recipe tiers into the list the UI renders.
  *
  * `pluginRecipes` is REQUIRED and deliberately has no default: a default would
@@ -112,22 +135,11 @@ export function mergeRecipes(
   // ProjectFileStore also carries a reconciled mirror of each in-repo recipe so
   // runtime metadata can survive. Do not render those mirrors as project-local
   // duplicates; use the mirror as the displayed in-repo recipe instead.
-  const inRepoIds = new Set(inRepoRecipes.map((r) => r.id));
   const inRepoNames = new Set(inRepoRecipes.map((r) => r.name));
-  const inRepoMirrors = new Map(
-    projectRecipes
-      .filter((r) => inRepoIds.has(r.id) && isInRepoRecipeId(r))
-      .map((r) => [r.id, r] as const)
-  );
   const projectWithMarkers = projectLocalRecipes(projectRecipes, inRepoRecipes).map((r) =>
     inRepoNames.has(r.name) ? { ...r, shadowedBy: r.name } : r
   );
-  const inRepoWithMirrors = inRepoRecipes.map((r) => {
-    const mirror = inRepoMirrors.get(r.id);
-    if (!mirror) return r;
-    const { shadowedBy: _shadowedBy, ...displayRecipe } = mirror;
-    return displayRecipe;
-  });
+  const inRepoWithMirrors = inRepoDisplayRecipes(projectRecipes, inRepoRecipes);
   // Plugin recipes sit with the other always-available entries and take no part
   // in name shadowing: their ids are plugin-qualified, so identity is exact and
   // a user recipe that happens to share a display name is a different recipe,
