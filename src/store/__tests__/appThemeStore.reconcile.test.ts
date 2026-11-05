@@ -35,8 +35,8 @@ function canvasOf(scheme: AppColorScheme): string {
   return scheme.tokens["surface-canvas"].trim();
 }
 
-function reconcile(config: Partial<AppThemeConfig>, opts?: { crossfade?: boolean }) {
-  useAppThemeStore.getState().reconcileAppThemeConfig(config as AppThemeConfig, opts);
+function reconcile(config: AppThemeConfig, opts?: { crossfade?: boolean }) {
+  useAppThemeStore.getState().reconcileAppThemeConfig(config, opts);
 }
 
 /** Paints `scheme` behind the store's back, so a repaint the store skipped stays visible. */
