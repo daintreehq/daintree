@@ -524,7 +524,12 @@ describe("a link that drops during a folder send", () => {
     await held.entered;
     expect(await stagedFiles()).toHaveLength(1);
     dropLink();
-    await vi.waitFor(() => expect(statusFailures).toContain("HOST_DISCONNECTED"));
+    // A poll on the dead link, or one cut off on its way, whose answer never came.
+    await vi.waitFor(() =>
+      expect(
+        statusFailures.some((code) => code === "HOST_DISCONNECTED" || code === "OUTCOME_UNKNOWN")
+      ).toBe(true)
+    );
     await relink();
     held.release();
 
@@ -578,6 +583,25 @@ describe("a folder's destination", () => {
 
     const records = (folders as unknown as { operations: Map<string, unknown> }).operations;
     expect(records.size).toBe(0);
+    expect(packs).not.toHaveBeenCalled();
+  });
+
+  it("is never reached for a handle that isn't one, whatever the page sends", async () => {
+    const { uploads } = await setup();
+    const packs = vi.spyOn(uploads, "packFolder");
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    for (const handle of [cyclic, 10n, "not-a-handle"]) {
+      await expect(
+        uploads.uploadLocalFolder(7, {
+          hostId: HOST,
+          handle: handle as string,
+          opId: "op-folder",
+          destination: INBOX,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
     expect(packs).not.toHaveBeenCalled();
   });
 });

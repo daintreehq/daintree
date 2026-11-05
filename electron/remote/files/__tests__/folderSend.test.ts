@@ -132,11 +132,9 @@ describe("following a folder send's outcome", () => {
     const { options } = setup(transport);
 
     await expect(sendLocalFolder(options)).resolves.toMatchObject({ status: "sent" });
-    expect(transport.prepareFolder.mock.calls.map(([, request]) => request.opId)).toEqual([
-      "op-1",
-      "op-1",
-      "op-1",
-    ]);
+    expect(
+      vi.mocked(transport.prepareFolder).mock.calls.map(([, request]) => request.opId)
+    ).toEqual(["op-1", "op-1", "op-1"]);
   });
 
   it("gives up on a host that stays busy", async () => {
@@ -171,16 +169,16 @@ describe("following a folder send's outcome", () => {
   });
 
   it("answers sent when a cancel reaches the host after publication began", async () => {
-    let cancel!: () => void;
+    const stop = { cancel: () => {} };
     const transport = fakeTransport({
       folderStatus: vi.fn(async () => {
-        cancel();
+        stop.cancel();
         return { status: "unpacking" as const, filesDone: 1, filesTotal: 2 };
       }),
       cancelFolder: vi.fn(async () => ({ status: "done" as const, hostPath: "/inbox/x/Audit" })),
     });
     const { options, controller, events } = setup(transport);
-    cancel = () => controller.abort();
+    stop.cancel = () => controller.abort();
 
     await expect(sendLocalFolder(options)).resolves.toEqual({
       status: "sent",
@@ -191,24 +189,66 @@ describe("following a folder send's outcome", () => {
     expect(events.at(-1)).toMatchObject({ phase: "unpacking", filesDone: 2, filesTotal: 2 });
   });
 
-  it("asks the host to cancel once, and rejects cancelled when it ends there", async () => {
-    let cancel!: () => void;
+  it("keeps a folder the host had already placed when a cancel lands as it answers", async () => {
+    const stop = { cancel: () => {} };
     const transport = fakeTransport({
       folderStatus: vi.fn(async () => {
-        cancel();
-        return { status: "unpacking" as const, filesDone: 0, filesTotal: 2 };
+        stop.cancel();
+        return { status: "done" as const, hostPath: "/inbox/x/Audit" };
       }),
+      cancelFolder: vi.fn(async () => ({ status: "unknown" as const })),
     });
-    const { options, controller, release } = setup(transport);
-    cancel = () => controller.abort();
+    const { options, controller } = setup(transport);
+    stop.cancel = () => controller.abort();
+
+    await expect(sendLocalFolder(options)).resolves.toMatchObject({
+      status: "sent",
+      hostPath: "/inbox/x/Audit",
+    });
+    expect(transport.cancelFolder).not.toHaveBeenCalled();
+  });
+
+  it("settles a packed archive lost to a view that went through the cancel", async () => {
+    const transport = fakeTransport();
+    const { options, controller } = setup(transport);
+    const { archive, remove } = fakeArchive();
+    archive.openSource = vi.fn(async () => {
+      controller.abort();
+      throw new Error("ENOENT");
+    });
+    options.pack = vi.fn(async () => ({ status: "packed" as const, archive }));
 
     await expect(sendLocalFolder(options)).rejects.toMatchObject({ code: "CANCELLED" });
     expect(transport.cancelFolder).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalled();
+  });
+
+  it("asks the host to cancel once, holding its slot until the host answers", async () => {
+    const stop = { cancel: () => {} };
+    let answer!: () => void;
+    const transport = fakeTransport({
+      folderStatus: vi.fn(async () => {
+        stop.cancel();
+        return { status: "unpacking" as const, filesDone: 0, filesTotal: 2 };
+      }),
+      cancelFolder: vi.fn(
+        () =>
+          new Promise<{ status: "cancelled" }>((resolve) => {
+            answer = () => resolve({ status: "cancelled" });
+          })
+      ),
+    });
+    const { options, controller, release } = setup(transport);
+    stop.cancel = () => controller.abort();
+
+    const sent = sendLocalFolder(options);
+    const settled = sent.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(transport.cancelFolder).toHaveBeenCalledTimes(1));
+    expect(release).not.toHaveBeenCalled();
+    answer();
+
+    expect(await settled).toMatchObject({ code: "CANCELLED" });
     expect(release).toHaveBeenCalledTimes(1);
-    // The host's slot is held until it has answered the cancel.
-    expect(release.mock.invocationCallOrder[0]).toBeGreaterThan(
-      transport.cancelFolder.mock.invocationCallOrder[0]!
-    );
   });
 
   it("stops waiting on an archive the host reports arriving for too long, and stops it there", async () => {
@@ -228,7 +268,7 @@ describe("following a folder send's outcome", () => {
   });
 
   it("rejects cancelled when the person cancels while that stop is on its way", async () => {
-    let cancel!: () => void;
+    const stop = { cancel: () => {} };
     const transport = fakeTransport({
       prepareFolder: vi.fn(async () => ({
         result: { status: "receiving" as const },
@@ -236,12 +276,12 @@ describe("following a folder send's outcome", () => {
       })),
       folderStatus: vi.fn(async () => ({ status: "receiving" as const })),
       cancelFolder: vi.fn(async () => {
-        cancel();
+        stop.cancel();
         return { status: "cancelled" as const };
       }),
     });
     const { options, controller } = setup(transport);
-    cancel = () => controller.abort();
+    stop.cancel = () => controller.abort();
 
     await expect(sendLocalFolder({ ...options, receivingWaitMs: 0 })).rejects.toMatchObject({
       code: "CANCELLED",
