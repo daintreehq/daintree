@@ -52,7 +52,13 @@ async function fixture(root: string, files: Record<string, string | null>): Prom
 }
 
 function walk(localPath: string, options: Partial<Parameters<typeof walkLocalFolder>[1]> = {}) {
-  return walkLocalFolder(localPath, { signal: new AbortController().signal, ...options });
+  return walkLocalFolder(localPath, {
+    signal: new AbortController().signal,
+    // A stand-in filesystem is POSIX unless a test says otherwise, so one
+    // that models no parent folder runs the same on a Windows runner.
+    platform: options.fs && "lstated" in options.fs ? "linux" : undefined,
+    ...options,
+  });
 }
 
 function ready(result: LocalFolderWalkResult) {

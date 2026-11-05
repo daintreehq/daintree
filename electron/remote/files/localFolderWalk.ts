@@ -214,7 +214,7 @@ async function isListedAsReparsePoint(
   signal: AbortSignal
 ): Promise<boolean> {
   const parent = path.dirname(localPath);
-  // A drive or share root has no parent to list, and no name to send by.
+  // A drive or share root has no parent to list, and is never a reparse point.
   if (parent === localPath) return false;
   const name = path.basename(localPath);
   const folded = name.toLowerCase();
