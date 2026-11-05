@@ -22,6 +22,7 @@ const MAIN_CONTEXT_ID = 7;
 const ISOLATED_CONTEXT_ID = 31;
 const PANEL_ID = "panel-1";
 const PROJECT_ID = "project-1";
+const EMBEDDER_ID = 3;
 
 class FakeDebugger extends EventEmitter {
   readonly commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
@@ -62,7 +63,8 @@ class FakeDebugger extends EventEmitter {
 class FakeWebContents extends EventEmitter {
   readonly id = WEB_CONTENTS_ID;
   readonly debugger = new FakeDebugger();
-  readonly hostWebContents = null;
+  /** The project view embedding the guest; console rows are addressed to it. */
+  readonly hostWebContents = { id: EMBEDDER_ID, isDestroyed: () => false };
   isDestroyed(): boolean {
     return false;
   }
@@ -98,10 +100,12 @@ const consoleRows = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
 vi.mock("../../../ipc/utils.js", () => ({
   sendToRenderer: vi.fn(),
-  broadcastToRenderer: vi.fn((channel: string, payload: unknown) => {
-    if (channel === "webview:console-message") {
+  broadcastToRenderer: vi.fn(),
+  sendToWebContents: vi.fn((target: { id: number } | null, channel: string, payload: unknown) => {
+    if (target?.id === EMBEDDER_ID && channel === "webview:console-message") {
       consoleRows.push(payload as Record<string, unknown>);
     }
+    return true;
   }),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>

@@ -384,6 +384,28 @@ export function sendToRenderer(
   }
 }
 
+/**
+ * Push to one particular renderer rather than a window's active app view. A
+ * push that belongs to a cached project view (a `<webview>` guest's embedder,
+ * say) has to reach that view while another project is on screen. False when
+ * nothing was sent.
+ */
+export function sendToWebContents(
+  webContents: WebContents | null | undefined,
+  channel: string,
+  ...args: unknown[]
+): boolean {
+  if (!webContents || webContents.isDestroyed()) return false;
+  if (isWithheldFromView(webContents.id, channel, args)) return false;
+  try {
+    webContents.send(channel, ...args);
+    return true;
+  } catch {
+    // A renderer torn down mid-send has nothing left to receive it.
+    return false;
+  }
+}
+
 function sendToEndpoints(
   endpoints: readonly ClientEndpoint[],
   exclude: ReadonlySet<number> | null,
