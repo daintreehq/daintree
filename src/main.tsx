@@ -5,6 +5,9 @@
 // a Portal throws.
 import "./lib/trustedTypesPolicy";
 
+// Must run before xterm rasterizes its first glyph atlas.
+import "./lib/canvasFontWhitespaceShim";
+
 // Fires the `app:boot` IPC at the top of entry-graph evaluation — see the
 // module comment for ordering semantics (#8820).
 import "./lib/bootIpcEager";
