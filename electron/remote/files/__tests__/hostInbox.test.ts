@@ -584,6 +584,20 @@ describe("staging and publishing a tree", () => {
     expect(await fs.readFile(path.join(two, "a.txt"), "utf8")).toBe("2");
   });
 
+  it("stops a publication aborted while it waited its turn, keeping the staging to discard", async () => {
+    const inbox = new HostInbox({ root });
+    const staging = await inbox.createStaging();
+    await buildTree(staging.treePath, { "a.txt": "a" });
+    const abort = new AbortController();
+    const publishing = inbox.publishTree(staging, "project", abort.signal);
+    abort.abort();
+    await expect(publishing).rejects.toThrow();
+    expect(await fs.readdir(path.join(root, "files"))).toEqual([]);
+    expect(await fs.readFile(path.join(staging.treePath, "a.txt"), "utf8")).toBe("a");
+    await inbox.discardStaging(staging);
+    expect(await exists(path.dirname(staging.treePath))).toBe(false);
+  });
+
   it("keeps a staging whose publication failed, to publish again or discard", async () => {
     const inbox = new HostInbox({ root });
     const staging = await inbox.createStaging();
