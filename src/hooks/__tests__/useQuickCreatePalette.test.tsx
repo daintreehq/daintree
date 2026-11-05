@@ -372,7 +372,12 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
     assignmentError: null,
   };
 
-  const clean = { worktreeId: "wt-new", rootPath: "/repo/.worktrees/fix", changes: [], changedFileCount: 0 };
+  const clean = {
+    worktreeId: "wt-new",
+    rootPath: "/repo/.worktrees/fix",
+    changes: [],
+    changedFileCount: 0,
+  };
 
   function routeDispatch(deleteResult: { ok: boolean; error?: unknown } = { ok: true }): void {
     dispatchMock.mockImplementation(async (actionId: string) => {
@@ -443,7 +448,10 @@ describe("useQuickCreatePalette — quick-create Undo (#16264)", () => {
   );
 
   it.each([
-    ["the status read fails", () => getFreshChangesMock.mockRejectedValue(new Error("port closed"))],
+    [
+      "the status read fails",
+      () => getFreshChangesMock.mockRejectedValue(new Error("port closed")),
+    ],
     ["the worktree has no monitor", () => getFreshChangesMock.mockResolvedValue(null)],
   ])("keeps the worktree when %s, since its changes can't be checked", async (_label, arrange) => {
     routeDispatch();

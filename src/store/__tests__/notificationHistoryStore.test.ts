@@ -1114,7 +1114,11 @@ describe("notificationHistorySlice", () => {
         correlationId: "wt-1",
         context: { worktreeId: "wt-1" },
         actions: [
-          { label: "Undo", actionId: "worktree.delete", actionArgs: { worktreeId: "wt-1", force: true } },
+          {
+            label: "Undo",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
           { label: "Open", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
         ],
       });
@@ -1130,7 +1134,11 @@ describe("notificationHistorySlice", () => {
         type: "success",
         message: "x",
         actions: [
-          { label: "Undo", actionId: "worktree.delete", actionArgs: { worktreeId: "wt-1", force: true } },
+          {
+            label: "Undo",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
         ],
       });
       expect(result!.actions).toBeUndefined();
