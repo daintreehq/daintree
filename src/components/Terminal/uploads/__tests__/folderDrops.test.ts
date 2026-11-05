@@ -102,13 +102,11 @@ function installRemote() {
         handle: HANDLE,
       })
     ),
-    uploadLocalFolder: vi.fn(
-      async (): Promise<UploadLocalFolderResult> => ({
-        status: "sent",
-        hostPath: FOLDER_HOST_PATH,
-        totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
-      })
-    ),
+    uploadLocalFolder: vi.fn(async (): Promise<UploadLocalFolderResult> => ({
+      status: "sent",
+      hostPath: FOLDER_HOST_PATH,
+      totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
+    })),
     cancel: vi.fn(async () => {}),
     onEvent: (callback: (event: FileTransferEvent) => void) => {
       listeners.add(callback);
@@ -186,7 +184,8 @@ beforeEach(() => {
   registerUploadConfirmHost(Symbol("host"));
   (window as unknown as { electron: unknown }).electron = {
     files: {
-      getDroppedFilePaths: (files: readonly File[]) => files.map((file) => `/Users/me/${file.name}`),
+      getDroppedFilePaths: (files: readonly File[]) =>
+        files.map((file) => `/Users/me/${file.name}`),
     },
     clipboard: { thumbnailFromPath: vi.fn(async () => ({ thumbnailDataUrl: "data:," })) },
   };

@@ -253,9 +253,7 @@ export type FolderUploadProgress = Omit<
  * phases.
  */
 export type FolderMaterializeProgress =
-  | { phase: "waiting" }
-  | { phase: "reading" }
-  | FolderUploadProgress;
+  { phase: "waiting" } | { phase: "reading" } | FolderUploadProgress;
 
 export interface AnswerHostPickPayload {
   requestId: string;

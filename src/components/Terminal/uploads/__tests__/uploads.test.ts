@@ -202,8 +202,7 @@ describe("upload questions", () => {
   });
 
   describe("withdrawn by the upload's signal", () => {
-    const large = (name: string) =>
-      ({ kind: "large", name, bytes: 1, hostLabel: "h" }) as const;
+    const large = (name: string) => ({ kind: "large", name, bytes: 1, hostLabel: "h" }) as const;
 
     it("closes the question showing and shows the next, answering no", async () => {
       registerUploadConfirmHost(Symbol("only"));

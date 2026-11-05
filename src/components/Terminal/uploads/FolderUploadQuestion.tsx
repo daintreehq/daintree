@@ -18,12 +18,7 @@ import {
   type FolderSummaryItem,
   type FolderUploadSummary,
 } from "@shared/types/ipc/fileTransfer";
-import {
-  atLeast,
-  folderRefusal,
-  type FolderRefusal,
-  type RefusalProblem,
-} from "./folderRefusal";
+import { atLeast, folderRefusal, type FolderRefusal, type RefusalProblem } from "./folderRefusal";
 import type { UploadQuestion } from "./uploadConfirm";
 
 type FolderQuestion = Extract<UploadQuestion, { kind: "folder" }>;

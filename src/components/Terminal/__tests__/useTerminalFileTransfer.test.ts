@@ -2616,27 +2616,23 @@ describe("useTerminalFileTransfer hook", () => {
           statLocalFile: vi.fn(async () => ({ size: 96, isDirectory: true })),
           uploadLocalFile: vi.fn(),
           uploadBytes: vi.fn(),
-          summarizeLocalFolder: vi.fn(
-            async (): Promise<LocalFolderSummaryResult> => ({
-              status: "ready",
-              summary: {
-                rootName: "designs",
-                totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
-                lowerBound: false,
-                hidden: { fileCount: 0, folderCount: 0, totalBytes: 0, paths: [] },
-                largest: [],
-                notCopied: { count: 0, items: [] },
-              },
-              handle: "fedcba9876543210fedcba9876543210",
-            })
-          ),
-          uploadLocalFolder: vi.fn(
-            async (): Promise<UploadLocalFolderResult> => ({
-              status: "sent",
-              hostPath: FOLDER_HOST_PATH,
+          summarizeLocalFolder: vi.fn(async (): Promise<LocalFolderSummaryResult> => ({
+            status: "ready",
+            summary: {
+              rootName: "designs",
               totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
-            })
-          ),
+              lowerBound: false,
+              hidden: { fileCount: 0, folderCount: 0, totalBytes: 0, paths: [] },
+              largest: [],
+              notCopied: { count: 0, items: [] },
+            },
+            handle: "fedcba9876543210fedcba9876543210",
+          })),
+          uploadLocalFolder: vi.fn(async (): Promise<UploadLocalFolderResult> => ({
+            status: "sent",
+            hostPath: FOLDER_HOST_PATH,
+            totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
+          })),
           cancel: vi.fn(async () => {}),
           onEvent: () => () => {},
         };
@@ -2664,7 +2660,9 @@ describe("useTerminalFileTransfer hook", () => {
         await vi.waitFor(() => expect(currentUploadQuestion()?.question.kind).toBe("folder"));
         await act(async () => {
           currentUploadQuestion()!.answer(yes);
-          await vi.waitFor(() => expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false));
+          await vi.waitFor(() =>
+            expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false)
+          );
           await settle();
         });
       }

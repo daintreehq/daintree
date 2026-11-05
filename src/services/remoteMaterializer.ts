@@ -346,15 +346,11 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     report({ phase: "waiting" });
     const summarized = await inTurn(walkTurns, signal, () => {
       report({ phase: "reading" });
-      return upload(options, (opId) =>
-        deps.fileTransfer.summarizeLocalFolder({ localPath, opId })
-      );
+      return upload(options, (opId) => deps.fileTransfer.summarizeLocalFolder({ localPath, opId }));
     });
     report({ phase: "waiting" });
     const check: FolderUploadCheck =
-      summarized.status === "ready"
-        ? { status: "ready", summary: summarized.summary }
-        : summarized;
+      summarized.status === "ready" ? { status: "ready", summary: summarized.summary } : summarized;
     const confirmed = await deps.confirmFolder({ check, hostLabel: host }, signal);
     if (!confirmed || summarized.status !== "ready" || signal?.aborted) throw cancelled();
     const { handle, summary } = summarized;
@@ -377,7 +373,10 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
           `${result.path} ${CHANGE_TEXT[result.change]} on ${deps.localLabel} after the folder was checked, so nothing was sent. Drop the folder again to send it as it is now.`
         );
       case "refused":
-        throw new MaterializeError("FOLDER_REFUSED", hostRefusalText(result.problem, summary, host));
+        throw new MaterializeError(
+          "FOLDER_REFUSED",
+          hostRefusalText(result.problem, summary, host)
+        );
     }
   };
 
