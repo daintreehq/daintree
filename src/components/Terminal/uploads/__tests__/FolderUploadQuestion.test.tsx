@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import type { FolderUploadPathProblem, FolderUploadProblem } from "@shared/types/folderUpload";
 import type { FolderUploadCheck, FolderUploadSummary } from "@shared/types/ipc/fileTransfer";
 import { UploadConfirmHost } from "../UploadConfirmHost";
-import { folderRefusal } from "../FolderUploadQuestion";
+import { folderRefusal } from "../folderRefusal";
 import { checkFolderUploadRootName } from "@shared/utils/folderUpload";
 import {
   _resetUploadConfirmForTests,
