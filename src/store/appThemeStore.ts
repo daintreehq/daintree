@@ -363,13 +363,16 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   },
 
   setColorVisionMode: (mode) => {
-    // Pass the active scheme so base --theme-* values are restored for tokens
-    // the mode doesn't override, rather than stripped to undefined.
+    // Pass the scheme on screen, a theme preview's while one is open, so base
+    // --theme-* values are restored for tokens the mode doesn't override rather
+    // than stripped to undefined, and the mode is fitted to the surfaces it lands
+    // on, as the terminals' palette is.
     const state = useAppThemeStore.getState();
-    const effective = applyAccentOverrideToScheme(
-      resolveCommittedScheme(state),
-      state.accentColorOverride
-    );
+    const onScreen =
+      state.previewSchemeId !== null
+        ? resolveAppTheme(state.previewSchemeId, selectSelectableSchemes(state))
+        : resolveCommittedScheme(state);
+    const effective = applyAccentOverrideToScheme(onScreen, state.accentColorOverride);
     // The CSS goes first: publishing the mode re-runs terminal selectors
     // synchronously, and the unknown-scheme fallback reads these variables.
     applyColorVisionMode(document.documentElement, mode, effective);

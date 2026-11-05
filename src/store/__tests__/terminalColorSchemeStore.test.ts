@@ -543,12 +543,19 @@ describe("terminalColorSchemeStore", () => {
         useAppThemeStore.setState({ selectedSchemeId: appId, colorVisionMode: mode });
         const appScheme = resolveAppTheme(appId, []);
         const writes = getColorVisionWrites(mode, appScheme);
-        const theme = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
         const own = getTerminalThemeFromAppScheme(appScheme);
+        const accessors = {
+          selectEffectiveTheme: selectEffectiveTheme(useTerminalColorSchemeStore.getState()),
+          getEffectiveTheme: useTerminalColorSchemeStore.getState().getEffectiveTheme(),
+        };
 
-        for (const [slot, token] of slots) {
-          expect(theme[slot], `${slot}`).toBe(writes[`--theme-${token}`]);
-          expect(theme[slot], `${slot} differs from the scheme's own`).not.toBe(own[slot]);
+        for (const [accessor, theme] of Object.entries(accessors)) {
+          for (const [slot, token] of slots) {
+            expect(theme[slot], `${accessor} ${slot}`).toBe(writes[`--theme-${token}`]);
+            expect(theme[slot], `${accessor} ${slot} differs from the scheme's own`).not.toBe(
+              own[slot]
+            );
+          }
         }
       });
     }

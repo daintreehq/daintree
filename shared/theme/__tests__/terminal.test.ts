@@ -152,24 +152,36 @@ describe("getTerminalThemeFromAppScheme under a colour-vision mode (#16272)", ()
     }
   );
 
-  it.each(MODES)("%s fits its inks to a light terminal background at their own hues", (mode) => {
-    const scheme = createTestScheme("light", "#666666", { "terminal-background": "#e0e0e0" });
-    const raw = getColorVisionTerminalWrites(mode);
-    // The authored inks are too light for this background, so there is a fit to make.
-    expect(addedTerminalWarnings(scheme, overlay(scheme, raw)).length).toBeGreaterThan(0);
+  // The direction follows the terminal's own background, not the app theme's type:
+  // a light app theme can carry a dark terminal and the other way round.
+  const FIT_CASES = MODES.flatMap((mode) => [
+    [mode, "light", "#e0e0e0", "darker"] as const,
+    [mode, "dark", "#d0d0d0", "darker"] as const,
+    [mode, "light", "#555555", "lighter"] as const,
+  ]);
 
-    const fitted = getColorVisionTerminalWrites(mode, scheme);
-    expect(addedTerminalWarnings(scheme, overlay(scheme, fitted))).toEqual([]);
-    const moved = Object.keys(fitted).filter((name) => fitted[name] !== raw[name]);
-    expect(moved.length).toBeGreaterThan(0);
-    for (const name of moved) {
-      const seed = hexToOklch(raw[name]!)!;
-      const ink = hexToOklch(fitted[name]!)!;
-      const angle = Math.abs(ink.h - seed.h) % 360;
-      expect(Math.min(angle, 360 - angle), `${name} hue`).toBeLessThan(2.5);
-      expect(ink.l, `${name} darkens on a light background`).toBeLessThan(seed.l);
+  it.each(FIT_CASES)(
+    "%s on a %s theme fits its inks to a %s terminal, %s, at their own hues",
+    (mode, type, background, direction) => {
+      const scheme = createTestScheme(type, "#666666", { "terminal-background": background });
+      const raw = getColorVisionTerminalWrites(mode);
+      // The authored inks sit too close to this background, so there is a fit to make.
+      expect(addedTerminalWarnings(scheme, overlay(scheme, raw)).length).toBeGreaterThan(0);
+
+      const fitted = getColorVisionTerminalWrites(mode, scheme);
+      expect(addedTerminalWarnings(scheme, overlay(scheme, fitted))).toEqual([]);
+      const moved = Object.keys(fitted).filter((name) => fitted[name] !== raw[name]);
+      expect(moved.length).toBeGreaterThan(0);
+      for (const name of moved) {
+        const seed = hexToOklch(raw[name]!)!;
+        const ink = hexToOklch(fitted[name]!)!;
+        const angle = Math.abs(ink.h - seed.h) % 360;
+        expect(Math.min(angle, 360 - angle), `${name} hue`).toBeLessThan(2.5);
+        if (direction === "darker") expect(ink.l, `${name} darkens`).toBeLessThan(seed.l);
+        else expect(ink.l, `${name} lightens`).toBeGreaterThan(seed.l);
+      }
     }
-  });
+  );
 
   it("leaves the raw inks when the terminal background isn't hex", () => {
     const scheme = createTestScheme("dark", "#666666", {

@@ -240,9 +240,8 @@ const TERMINAL_FIT_HEADROOM = 0.01;
  * themes included), so there they ship as authored. On a terminal background they
  * sit too close to, such as a custom theme's light one, each pair moves along
  * lightness, away from the background and at its own hues, until both inks clear
- * the gap the theme's own ANSI inks are held to; a pair no single step rescues
- * stays raw for the theme's contrast warnings to report. Without a scheme, or on
- * a background the hex maths can't read, the map's raw values are all there is.
+ * the gap the theme's own ANSI inks are held to. Without a scheme, or on a
+ * background the hex maths can't read, the map's raw values are all there is.
  */
 export function getColorVisionTerminalWrites(
   mode: ColorVisionMode,
@@ -259,6 +258,7 @@ export function getColorVisionTerminalWrites(
   if (!backdrop) return writes;
 
   const lighter = backdrop.l < 0.5;
+  const goal = TERMINAL_ANSI_LIGHTNESS_FLOOR + TERMINAL_FIT_HEADROOM;
   const clears = (lightness: number) =>
     Math.abs(lightness - backdrop.l) >= TERMINAL_ANSI_LIGHTNESS_FLOOR;
   for (const pair of TERMINAL_ANSI_PAIRS) {
@@ -269,19 +269,18 @@ export function getColorVisionTerminalWrites(
       return color ? [{ name, color }] : [];
     });
     if (inks.every(({ color }) => clears(color.l))) continue;
-    const goal = TERMINAL_ANSI_LIGHTNESS_FLOOR + TERMINAL_FIT_HEADROOM;
+    // The step the ink nearest the background needs takes every ink in the pair
+    // past the floor on the side away from it; one pinned at black or white is
+    // further still. `oklchToHex` keeps lightness, and the headroom covers its
+    // rounding to bytes.
     const step = Math.max(
       ...inks.map(({ color }) =>
         lighter ? backdrop.l + goal - color.l : color.l - (backdrop.l - goal)
       )
     );
-    const fitted = inks.map(({ name, color }) => {
+    for (const { name, color } of inks) {
       const l = Math.min(1, Math.max(0, lighter ? color.l + step : color.l - step));
-      return [name, oklchToHex({ ...color, l })] as const;
-    });
-    // Measured as the hex that ships, so a clamped or rounded ink can't pass unseen.
-    if (fitted.every(([, hex]) => clears(hexToOklch(hex)?.l ?? backdrop.l))) {
-      for (const [name, hex] of fitted) writes[name] = hex;
+      writes[name] = oklchToHex({ ...color, l });
     }
   }
   return writes;

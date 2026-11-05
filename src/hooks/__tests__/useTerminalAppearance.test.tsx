@@ -79,6 +79,18 @@ describe("useTerminalAppearance", () => {
     expect(result.current.effectiveTheme).not.toBe(initialTheme);
   });
 
+  it("rerenders effectiveTheme with the mode's ANSI colours when colour-vision mode changes", () => {
+    const { result } = renderHook(() => useTerminalAppearance());
+    const initialTheme = result.current.effectiveTheme;
+
+    act(() => {
+      useAppThemeStore.getState().setColorVisionMode("red-green");
+    });
+
+    expect(result.current.effectiveTheme).not.toBe(initialTheme);
+    expect(result.current.effectiveTheme.red).not.toBe(initialTheme.red);
+  });
+
   it("resolves screenReaderMode from screen-reader and OS accessibility state", () => {
     const { result } = renderHook(() => useTerminalAppearance());
     expect(result.current.screenReaderMode).toBe(false);
