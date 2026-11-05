@@ -3517,7 +3517,8 @@ type PluginTerminalLifecycleEvent = (PluginTerminalLifecycleEventBase & {
  * - `project-unavailable` — the plugin's project has no open view, or it did not
  *   answer in time.
  * - `launch-failed` — the user chose to start a new agent and it did not start,
- *   or the new worktree's setup failed, needs approval or is still running.
+ *   or the new worktree's setup needs approval or is still running. A setup
+ *   that failed or timed out doesn't refuse: the agent starts anyway.
  * - `prompt-open` — another picker from this plugin is already open.
  * - `busy` — too many targeted sends from this plugin are already in flight.
  */

@@ -2295,6 +2295,96 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     ).toBeDefined();
   });
 
+  function settleSetupAs(setupState: string) {
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      switch (actionId) {
+        case "worktree.create":
+          return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+        case "worktree.waitUntilReady":
+          return {
+            ok: true,
+            result: {
+              worktreeId: "new-wt-id",
+              setupState,
+              stage: "setup-script",
+              error: "Command exited with code 1",
+              timedOut: false,
+            },
+          };
+        case "agent.launch":
+          return { ok: true, result: { launched: true, terminalId: "t-1" } };
+        default:
+          return { ok: true, result: undefined };
+      }
+    });
+  }
+
+  function notStartedBars() {
+    return mockNotify.mock.calls.filter(
+      ([payload]) => payload.title === "Recipe not started" || payload.title === "Agent not started"
+    );
+  }
+
+  it.each(["failed", "timed-out"])(
+    "hands a recipe that starts an agent to the runner once after setup ends %s (#16242)",
+    async (setupState) => {
+      recipePickerCalls.selected = {
+        id: "r1",
+        name: "Agent recipe",
+        terminals: [{ type: "claude" }, { type: "terminal" }],
+      };
+      const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
+      runRecipe.mockResolvedValue({ spawned: [], failed: [] });
+      settleSetupAs(setupState);
+      renderDialog();
+      await advanceTimersGradually(500);
+      await nameBranch();
+      await submit();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(actionCalls("worktree.waitUntilReady")).toHaveLength(1);
+      expect(runRecipe).toHaveBeenCalledTimes(1);
+      expect(runRecipe).toHaveBeenCalledWith(
+        "r1",
+        "/test/root-worktrees/feature/test",
+        "new-wt-id",
+        expect.objectContaining({ branchName: "feature/test" })
+      );
+      expect(notStartedBars()).toEqual([]);
+    }
+  );
+
+  it.each(["failed", "timed-out"])(
+    "starts the picked agent with its prompt after setup ends %s (#16242)",
+    async (setupState) => {
+      settleSetupAs(setupState);
+      renderDialog();
+      await advanceTimersGradually(500);
+      await nameBranch();
+      await pickClaudeAndType(PROMPT);
+      await submit();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(actionCalls("agent.launch")).toEqual([
+        [
+          "agent.launch",
+          {
+            agentId: "claude",
+            worktreeId: "new-wt-id",
+            cwd: "/test/root-worktrees/feature/test",
+            prompt: PROMPT,
+          },
+          { source: "user" },
+        ],
+      ]);
+      expect(notStartedBars()).toEqual([]);
+    }
+  );
+
   it("runs a recipe with no agent straight away, without waiting on setup", async () => {
     recipePickerCalls.selected = { id: "r2", name: "Shells", terminals: [{ type: "terminal" }] };
     const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
