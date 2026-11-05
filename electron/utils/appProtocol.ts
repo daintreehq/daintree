@@ -64,6 +64,7 @@ const MIME_TYPES: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".ttf": "font/ttf",
+  ".otf": "font/otf",
   ".eot": "application/vnd.ms-fontobject",
   ".wasm": "application/wasm",
   // Spellings Chromium actually accepts: canPlayType("audio/flac") is
