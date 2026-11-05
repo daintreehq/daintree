@@ -110,7 +110,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `diagnostics.openReview` | Send diagnostics | safe | `scope?` |
 | `diagnostics.openWhySlow` | Why am I slow? | safe | — |
-| `eventInspector.clear` | Clear event inspector | safe | — |
+| `eventInspector.clear` | Clear event inspector | confirm | — |
 | `eventInspector.getEvents` | Get events | safe | `cursor?`, `limit?`, `offset?`, `skip?` |
 | `eventInspector.getFiltered` | Get filtered events | safe | `after?`, `before?`, `categories?`, `category?`, `limit?`, `offset?`, `search?`, `terminalId?`, `types?`, `worktreeId?` |
 | `eventInspector.subscribe` | Subscribe to events | safe | — |
