@@ -311,6 +311,77 @@ describe("HostFilePickerHost", () => {
   });
 });
 
+// A real click: the press moves focus onto the target, blurring the path field,
+// before the click itself lands. `fireEvent.click` alone skips that blur.
+function press(target: HTMLElement) {
+  fireEvent.pointerDown(target);
+  fireEvent.mouseDown(target);
+  act(() => target.focus());
+  fireEvent.pointerUp(target);
+  fireEvent.mouseUp(target);
+  fireEvent.click(target);
+}
+
+async function openFolderPick(): Promise<{
+  picked: Promise<string[] | null>;
+  settled: () => boolean;
+  field: HTMLInputElement;
+}> {
+  render(<HostFilePickerHost />);
+  const picked = openPick({ mode: "directory", title: "Open folder", buttonLabel: "Open" });
+  let done = false;
+  void picked.then(() => {
+    done = true;
+  });
+  await findRow("work");
+  const field = screen.getByLabelText("Folder path") as HTMLInputElement;
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  return { picked, settled: () => done, field };
+}
+
+describe("HostFilePickerHost typed path", () => {
+  it("opens the folder typed into the path field when the primary is clicked", async () => {
+    const { picked, field } = await openFolderPick();
+    fireEvent.change(field, { target: { value: "/home/greg/work" } });
+    press(confirmButton("Open"));
+    await expect(picked).resolves.toEqual(["/home/greg/work"]);
+    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg/work", showHidden: false });
+  });
+
+  it("holds the confirm on a path that isn't absolute", async () => {
+    const { settled, field } = await openFolderPick();
+    fireEvent.change(field, { target: { value: "home/greg/work" } });
+    press(confirmButton("Open"));
+    expect(screen.getByRole("alert").textContent).toMatch(/absolute path/);
+    await act(async () => {});
+    expect(settled()).toBe(false);
+    expect(listDirectory).toHaveBeenCalledTimes(1);
+    expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe(
+      "home/greg/work"
+    );
+  });
+
+  it("holds the confirm on a folder that can't be opened", async () => {
+    const { settled, field } = await openFolderPick();
+    fireEvent.change(field, { target: { value: "/nope" } });
+    press(confirmButton("Open"));
+    await screen.findByText(/doesn't exist/);
+    await act(async () => {});
+    expect(settled()).toBe(false);
+    expect(confirmButton("Open").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("still drops the typed path when focus leaves the field for anything else", async () => {
+    const { picked, field } = await openFolderPick();
+    fireEvent.change(field, { target: { value: "/home/greg/work" } });
+    press(screen.getByRole("listbox"));
+    expect(screen.queryByLabelText("Folder path", { selector: "input" })).toBeNull();
+    press(confirmButton("Open"));
+    await expect(picked).resolves.toEqual(["/home/greg"]);
+    expect(listDirectory).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("HostFilePickerHost focus", () => {
   it("focuses the path field on open and hands focus back to the invoker on close", async () => {
     const invoker = document.createElement("button");
