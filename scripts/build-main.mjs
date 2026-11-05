@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
 import { mainBundlePlugins } from "./lib/main-bundle.mjs";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
+import { runProjectSync } from "./typecheck.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -572,27 +573,22 @@ function validateCommandHandlerExtensions() {
 /**
  * Typecheck plugin code (`tsconfig.plugins.json`) before emitting output so a
  * type error in a built-in/sample plugin's main code fails the build instead of
- * surfacing at runtime (#10620). Uses `tsc --noEmit` — never `tsc -b`, which
- * emits `.js` into the source tree and would clobber the esbuild output. Skipped
- * in watch mode (a full typecheck would stall the watcher); a banner points devs
- * at `npm run check`.
+ * surfacing at runtime (#10620). Runs the `plugins` project from
+ * `scripts/typecheck.mjs`, so it uses the same TS7 compiler and arguments as
+ * `npm run typecheck` (`--noEmit`, never `tsc -b`, which emits `.js` into the
+ * source tree and would clobber the esbuild output). Skipped in watch mode (a
+ * full typecheck would stall the watcher); a banner points devs at
+ * `npm run check`.
  */
 function runPluginTypecheck() {
   if (isWatch) {
     console.log("[Build] Plugin types skipped in watch mode — run npm run check to typecheck.");
     return;
   }
-  const tscPath = path.join(root, "node_modules", "typescript", "bin", "tsc");
-  const result = spawnSync(process.execPath, [tscPath, "--noEmit", "-p", "tsconfig.plugins.json"], {
-    stdio: "inherit",
-    cwd: root,
-  });
-  if (result.status !== 0) {
-    if (result.error) {
-      console.error("[Build] Plugin typecheck spawn failed:", result.error);
-    }
+  const status = runProjectSync("plugins");
+  if (status !== 0) {
     console.error("[Build] Plugin typecheck failed.");
-    process.exit(result.status ?? 1);
+    process.exit(status);
   }
 }
 

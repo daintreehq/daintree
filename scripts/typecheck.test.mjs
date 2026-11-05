@@ -1,8 +1,18 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { describe, it, expect } from "vitest";
-import { PROJECTS, parseNameStatus, runAllReason, selectProjects } from "./typecheck.mjs";
+import { describe, it, expect, vi } from "vitest";
+import {
+  PROJECTS,
+  parseNameStatus,
+  runAllReason,
+  runProjectSync,
+  selectProjects,
+} from "./typecheck.mjs";
+
+const readRepoFile = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -144,5 +154,125 @@ describe("PROJECTS", () => {
     expect([...seen].map((config) => path.relative(ROOT, config))).toContain(
       path.join("shared", "tsconfig.json")
     );
+  });
+});
+
+describe("runProjectSync", () => {
+  const quietly = (fn) => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      return fn(error);
+    } finally {
+      error.mockRestore();
+    }
+  };
+
+  it("fails with a message naming the known projects when the project does not exist", () => {
+    quietly((error) => {
+      const spawnStep = vi.fn();
+      expect(runProjectSync("nope", { spawnStep })).toBe(1);
+      expect(spawnStep).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('unknown project "nope"'));
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("root, "));
+    });
+  });
+
+  it("runs the project's steps in order on the TS7 compiler from the repo root", () => {
+    const spawnStep = vi.fn(() => ({ status: 0 }));
+    expect(runProjectSync("electron", { spawnStep })).toBe(0);
+    expect(spawnStep.mock.calls.map(([, args]) => args.slice(1))).toEqual(
+      PROJECTS.find((project) => project.name === "electron").steps
+    );
+    for (const [command, args, options] of spawnStep.mock.calls) {
+      expect(command).toBe(process.execPath);
+      expect(args[0].replaceAll("\\", "/")).toBe("node_modules/typescript7/bin/tsc");
+      expect(options).toEqual({ cwd: expect.stringMatching(/\S/), stdio: "inherit" });
+    }
+  });
+
+  it("stops at the first failing step and returns its status", () => {
+    const spawnStep = vi.fn().mockReturnValueOnce({ status: 2 });
+    expect(runProjectSync("electron", { spawnStep })).toBe(2);
+    expect(spawnStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails when the compiler was killed by a signal or could not be spawned", () => {
+    quietly((error) => {
+      expect(runProjectSync("root", { spawnStep: () => ({ status: null }) })).toBe(1);
+      const failure = new Error("spawn failed");
+      expect(runProjectSync("root", { spawnStep: () => ({ status: null, error: failure }) })).toBe(
+        1
+      );
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("spawn failed"), failure);
+    });
+  });
+
+  it("covers the root and plugins projects the build gates on", () => {
+    const names = PROJECTS.map((project) => project.name);
+    expect(names).toContain("root");
+    expect(names).toContain("plugins");
+  });
+});
+
+describe("--only", () => {
+  const cli = (...args) =>
+    spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("./typecheck.mjs", import.meta.url)), ...args],
+      {
+        encoding: "utf8",
+      }
+    );
+
+  it("rejects an unknown project", () => {
+    const result = cli("--only", "nope");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unknown project "nope"');
+  });
+
+  it("rejects a missing project name", () => {
+    expect(cli("--only").status).toBe(1);
+  });
+
+  it("rejects being combined with --changed or --dry-run", () => {
+    for (const flag of ["--changed", "--dry-run"]) {
+      const result = cli("--only", "root", flag);
+      expect(result.status, flag).toBe(2);
+      expect(result.stderr).toContain("cannot be combined");
+    }
+  });
+});
+
+describe("build type gates", () => {
+  const scripts = JSON.parse(readRepoFile("package.json")).scripts;
+  const buildMain = readRepoFile("scripts/build-main.mjs");
+
+  it("never typechecks with the TS6 compiler", () => {
+    const offenders = Object.entries(scripts).filter(([, command]) =>
+      command
+        .split(/[\s;&|]+/)
+        .some((token) => token === "tsc" || /typescript\/bin\/tsc$/.test(token))
+    );
+    expect(offenders.map(([name]) => name)).toEqual([]);
+    // Matches both the literal path and a path.join("typescript", "bin", ...) spelling.
+    expect(buildMain).not.toMatch(/typescript["'`]?\s*[,/]\s*["'`]?bin/);
+  });
+
+  it("starts every build with the TS7 root typecheck", () => {
+    for (const name of ["build:app", "build:e2e", "build:e2e:bench"]) {
+      expect(scripts[name], name).toMatch(/^node scripts\/typecheck\.mjs --only root && /);
+    }
+  });
+
+  it("runs the plugin gates in build-main before it cleans or emits anything", () => {
+    expect(buildMain).toContain('runProjectSync("plugins")');
+    const manifests = buildMain.indexOf("  validatePluginManifests();");
+    const handlers = buildMain.indexOf("  validateCommandHandlerExtensions();");
+    const typecheck = buildMain.indexOf("  runPluginTypecheck();");
+    const clean = buildMain.indexOf("fs.rmSync(abs, { recursive: true, force: true });");
+    expect(manifests).toBeGreaterThan(-1);
+    expect(manifests).toBeLessThan(handlers);
+    expect(handlers).toBeLessThan(typecheck);
+    expect(typecheck).toBeLessThan(clean);
   });
 });

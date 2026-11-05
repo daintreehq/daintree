@@ -5,6 +5,11 @@
 //   node scripts/typecheck.mjs                 all projects (`npm run typecheck`)
 //   node scripts/typecheck.mjs --changed       only projects the branch touches
 //   node scripts/typecheck.mjs --changed --base <ref> --dry-run
+//   node scripts/typecheck.mjs --only <project>   one project, no output prefix
+//
+// `--only` and `runProjectSync` are what the build's type gates call (`root`
+// ahead of `vite build`, `plugins` inside build-main.mjs), so the build and
+// `npm run typecheck` cannot drift onto different compilers or arguments.
 //
 // `--changed` exists for machines running many agent worktrees at once, where
 // every agent checking all twelve projects stacks compiler processes into swap.
@@ -17,7 +22,7 @@
 // removed JavaScript, which can shadow a module resolution without ever
 // entering a program (`allowJs` is off).
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -175,6 +180,30 @@ function command(project) {
   return project.steps.map((args) => `node ${TSC} ${args.join(" ")}`).join(" && ");
 }
 
+function tscMissing() {
+  if (existsSync(path.join(ROOT, TSC))) return false;
+  console.error(`[typecheck] ${TSC} is missing; run npm install`);
+  return true;
+}
+
+// Runs one project's steps in order with inherited stdio and returns the exit
+// status: the first failing step's, or 0.
+export function runProjectSync(name, { spawnStep = spawnSync } = {}) {
+  const project = PROJECTS.find((candidate) => candidate.name === name);
+  if (!project) {
+    const known = PROJECTS.map((candidate) => candidate.name).join(", ");
+    console.error(`[typecheck] unknown project "${name}"; expected one of: ${known}`);
+    return 1;
+  }
+  if (tscMissing()) return 1;
+  for (const args of project.steps) {
+    const result = spawnStep(process.execPath, [TSC, ...args], { cwd: ROOT, stdio: "inherit" });
+    if (result.error) console.error(`[typecheck] ${project.name} spawn failed:`, result.error);
+    if (result.status !== 0) return result.status ?? 1;
+  }
+  return 0;
+}
+
 function run(projects) {
   const args = [
     CONCURRENTLY,
@@ -195,11 +224,17 @@ function main() {
   const dryRun = argv.includes("--dry-run");
   const baseIndex = argv.indexOf("--base");
   const explicitBase = baseIndex === -1 ? null : argv[baseIndex + 1];
+  const onlyIndex = argv.indexOf("--only");
 
-  if (!existsSync(path.join(ROOT, TSC))) {
-    console.error(`[typecheck] ${TSC} is missing; run npm install`);
-    process.exit(1);
+  if (onlyIndex !== -1) {
+    if (changedMode || dryRun) {
+      console.error("[typecheck] --only cannot be combined with --changed or --dry-run");
+      process.exit(2);
+    }
+    process.exit(runProjectSync(argv[onlyIndex + 1] ?? ""));
   }
+
+  if (tscMissing()) process.exit(1);
 
   if (!changedMode) {
     if (!dryRun) run(PROJECTS);
