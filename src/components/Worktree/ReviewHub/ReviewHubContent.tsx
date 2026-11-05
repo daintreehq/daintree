@@ -1307,8 +1307,10 @@ export function ReviewHubContent({
       fileStatus: GitStatus,
       e: React.MouseEvent
     ) => {
-      const files = section === "staged" ? status?.staged : status?.unstaged;
-      if (e.shiftKey && files && selectionSection === section && selectionAnchorRef.current) {
+      // The drawn rows, not the raw status: a range must cover exactly what sits
+      // between the anchor and the click on screen, never filtered-out or hidden files.
+      const files = section === "staged" ? derivedStaged : derivedUnstaged;
+      if (e.shiftKey && selectionSection === section && selectionAnchorRef.current) {
         const anchorIdx = files.findIndex((f) => f.path === selectionAnchorRef.current);
         const clickIdx = files.findIndex((f) => f.path === filePath);
         if (anchorIdx !== -1 && clickIdx !== -1) {
@@ -1354,7 +1356,8 @@ export function ReviewHubContent({
       );
     },
     [
-      status,
+      derivedStaged,
+      derivedUnstaged,
       selectionSection,
       openFileDiff,
       setSelectedPaths,
