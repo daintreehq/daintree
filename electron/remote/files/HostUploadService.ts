@@ -222,7 +222,11 @@ function operationInUse(): AppError {
 
 export class HostUploadService {
   private readonly sessions = new WeakMap<LinkSession, SessionUploads>();
-  private readonly subscriptions = new Map<string, { dispose(): void }>();
+  /** Per endpoint, its close watch and every link it was attached on (a resumed link reuses it). */
+  private readonly subscriptions = new Map<
+    string,
+    { dispose(): void; sessions: Set<SessionUploads> }
+  >();
   private readonly replaceGrants = new Map<string, ReplaceGrant>();
   /** By Shell client and operation id. */
   private readonly operations = new Map<string, OperationRecord>();
@@ -240,21 +244,27 @@ export class HostUploadService {
     if (this.disposed) return;
     const uploads = this.sessionUploads(session);
     uploads.endpoints.set(endpoint.clientEndpointId, endpoint);
-    if (!this.subscriptions.has(endpoint.endpointId)) {
-      this.subscriptions.set(
-        endpoint.endpointId,
-        endpoint.onClose(() => {
-          this.subscriptions.delete(endpoint.endpointId);
-          uploads.endpoints.delete(endpoint.clientEndpointId);
-          for (const [token, pending] of uploads.pending) {
-            if (pending.endpoint === endpoint) this.dropPending(uploads, token);
-          }
-          for (const [token, grant] of this.replaceGrants) {
-            if (grant.endpointId === endpoint.endpointId) this.replaceGrants.delete(token);
-          }
-        })
-      );
+    const existing = this.subscriptions.get(endpoint.endpointId);
+    if (existing) {
+      existing.sessions.add(uploads);
+      return;
     }
+    const sessions = new Set([uploads]);
+    const watch = endpoint.onClose(() => {
+      this.subscriptions.delete(endpoint.endpointId);
+      for (const attached of sessions) {
+        if (attached.endpoints.get(endpoint.clientEndpointId) === endpoint) {
+          attached.endpoints.delete(endpoint.clientEndpointId);
+        }
+        for (const [token, pending] of attached.pending) {
+          if (pending.endpoint === endpoint) this.dropPending(attached, token);
+        }
+      }
+      for (const [token, grant] of this.replaceGrants) {
+        if (grant.endpointId === endpoint.endpointId) this.replaceGrants.delete(token);
+      }
+    });
+    this.subscriptions.set(endpoint.endpointId, { dispose: () => watch.dispose(), sessions });
   }
 
   /** The project's drive lease changed: uploads admitted under the old one stop. */
@@ -271,7 +281,13 @@ export class HostUploadService {
     for (const subscription of this.subscriptions.values()) subscription.dispose();
     this.subscriptions.clear();
     this.replaceGrants.clear();
-    for (const [key, record] of this.operations) this.forgetOperation(key, record);
+    for (const [key, record] of this.operations) {
+      // A prepared upload holds inbox room until it is dropped.
+      if (record.pendingIn !== null && record.pendingToken !== null) {
+        this.dropPending(record.pendingIn, record.pendingToken);
+      }
+      this.forgetOperation(key, record);
+    }
     this.operations.clear();
   }
 
@@ -296,6 +312,9 @@ export class HostUploadService {
       session.onClose(() => {
         for (const dispose of created.unregister.splice(0)) dispose();
         for (const token of [...created.pending.keys()]) this.dropPending(created, token);
+        for (const endpoint of created.endpoints.values()) {
+          this.subscriptions.get(endpoint.endpointId)?.sessions.delete(created);
+        }
       })
     );
     this.sessions.set(session, created);

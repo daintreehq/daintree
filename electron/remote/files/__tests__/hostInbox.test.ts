@@ -586,13 +586,28 @@ describe("staging and publishing a tree", () => {
 
   it("stops a publication aborted while it waited its turn, keeping the staging to discard", async () => {
     const inbox = new HostInbox({ root });
+    const ahead = await inbox.createStaging();
     const staging = await inbox.createStaging();
+    await buildTree(ahead.treePath, { "first.txt": "1" });
     await buildTree(staging.treePath, { "a.txt": "a" });
+    // Another publication holds the queue mid-rename, so this one waits its turn.
+    const { rename, release } = gateRename();
+    const first = inbox.publishTree(ahead, "first");
+    await vi.waitFor(() => expect(rename).toHaveBeenCalledTimes(1));
     const abort = new AbortController();
     const publishing = inbox.publishTree(staging, "project", abort.signal);
+    const outcome = publishing.then(
+      () => "published",
+      () => "stopped"
+    );
+    // Past its own setup and queued behind the first.
+    await new Promise((resolve) => setTimeout(resolve, 50));
     abort.abort();
-    await expect(publishing).rejects.toThrow();
-    expect(await fs.readdir(path.join(root, "files"))).toEqual([]);
+    release();
+    await first;
+    expect(await outcome).toBe("stopped");
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(path.join(root, "files"))).toHaveLength(1);
     expect(await fs.readFile(path.join(staging.treePath, "a.txt"), "utf8")).toBe("a");
     await inbox.discardStaging(staging);
     expect(await exists(path.dirname(staging.treePath))).toBe(false);

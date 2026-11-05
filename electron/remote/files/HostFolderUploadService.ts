@@ -101,6 +101,14 @@ interface FolderOperation {
   readonly abort: AbortController;
   /** Set while receiving: what a stop does to the archive arriving. */
   onStop: (() => void) | null;
+  /**
+   * Set while a transfer has begun but none of the archive has reached it:
+   * gives that transfer up and puts the admission back to awaiting its
+   * archive. False once it can't.
+   */
+  withdraw: (() => boolean) | null;
+  /** Set once publication is asked for: its rename decides whether a cancel lost the race. */
+  publishing: Promise<string> | null;
   /** Resolves once the operation has settled and released everything it held. */
   readonly settled: Promise<void>;
   markSettled(): void;
@@ -345,9 +353,10 @@ export class HostFolderUploadService {
   }
 
   /**
-   * Stop an operation and answer where it ended once its work has wound down:
-   * `cancelled` when nothing will be published, `done` when publishing had
-   * already won, and as it was for one already settled.
+   * Stop an operation and answer where it ended: `cancelled` once nothing
+   * will be published, `done` when publishing had already won, and as it was
+   * for one already settled. It waits for the work to wind down, so staging
+   * is gone by the answer.
    */
   private async cancel(
     folders: SessionFolders,
@@ -359,6 +368,13 @@ export class HostFolderUploadService {
     const operation = this.operations.get(this.opKey(endpoint, payload.opId));
     if (!operation) return { status: "unknown" };
     this.stop(operation, "cancelled");
+    // A publication already asked for settles the race itself: with the stop
+    // now set, its rename has either happened or never will.
+    const publishing = operation.publishing;
+    if (publishing !== null) {
+      const hostPath = await publishing.catch(() => null);
+      if (hostPath !== null) return { status: "done", hostPath };
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       operation.settled,
@@ -368,7 +384,7 @@ export class HostFolderUploadService {
       }),
     ]);
     clearTimeout(timer);
-    // Still unwinding: its stop is set, so all that can still publish is a rename already under way.
+    // Still unwinding, with no publication asked for: none ever will be.
     return operation.outcome ?? { status: "cancelled" };
   }
 
@@ -389,6 +405,7 @@ export class HostFolderUploadService {
     this.revokeToken(operation);
     this.clearAwaitTimer(operation);
     operation.onStop = null;
+    operation.withdraw = null;
     operation.reservation?.release();
     operation.reservation = null;
     this.active.delete(operation);
@@ -427,12 +444,17 @@ export class HostFolderUploadService {
     operation.token = token;
     operation.tokenIn = folders;
     folders.tokens.set(token, operation);
+    this.awaitArchive(operation);
+    return token;
+  }
+
+  /** (Re)start the wait for an archive that never starts arriving. */
+  private awaitArchive(operation: FolderOperation): void {
     this.clearAwaitTimer(operation);
     operation.awaitTimer = setTimeout(() => {
       if (operation.phase === "awaiting") this.settle(operation, TRANSFER_FAILED);
     }, this.options.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS);
     operation.awaitTimer.unref?.();
-    return token;
   }
 
   private async prepare(
@@ -486,6 +508,8 @@ export class HostFolderUploadService {
       stopReason: null,
       abort: new AbortController(),
       onStop: null,
+      withdraw: null,
+      publishing: null,
       settled,
       markSettled,
       expiresAt: Number.POSITIVE_INFINITY,
@@ -540,12 +564,16 @@ export class HostFolderUploadService {
     operation: FolderOperation
   ): FolderUploadPrepareResult {
     if (operation.phase === "preparing") return { status: "refused", reason: "busy" };
-    if (operation.phase !== "awaiting") return this.statusOf(operation);
+    // A transfer that began on a link the Shell has given up on, with none of
+    // the archive in, is no reason to stop it sending again.
+    const nothingArrived = operation.phase === "receiving" && operation.withdraw !== null;
+    if (operation.phase !== "awaiting" && !nothingArrived) return this.statusOf(operation);
     if (!this.leaseHeld(operation)) {
       this.stop(operation, "not-driving");
       return this.statusOf(operation);
     }
     if (!this.mayDrive(operation, endpoint)) return { status: "refused", reason: "not-driving" };
+    if (nothingArrived && !operation.withdraw!()) return this.statusOf(operation);
     // Nothing has arrived yet: the archive may still come, on this link.
     operation.endpoint = endpoint;
     return { status: "ready", token: this.issueToken(folders, operation) };
@@ -586,13 +614,15 @@ export class HostFolderUploadService {
       part = await inbox.createPart();
     } catch (error) {
       this.settle(operation, writeFailure(error));
-      throw new Error("The folder archive could not be stored");
+      throw new Error("The folder archive could not be stored", { cause: error });
     }
 
     let written = 0;
     let closed = false;
     let handedOff = false;
     let ended = false;
+    /** Set by the first write: from then on the archive has started arriving. */
+    let arrived = false;
     /** Why a write or save failed, kept for when the transfer layer aborts the sink. */
     let failed: Outcome | null = null;
     const discardPart = async () => {
@@ -606,11 +636,23 @@ export class HostFolderUploadService {
     const end = async (outcome: Outcome) => {
       if (handedOff || ended) return;
       ended = true;
+      operation.withdraw = null;
       await discardPart();
       this.settle(operation, outcome);
     };
+    const withdraw = () => {
+      if (handedOff || ended || arrived || operation.phase !== "receiving") return false;
+      ended = true;
+      operation.onStop = null;
+      operation.withdraw = null;
+      operation.phase = "awaiting";
+      this.awaitArchive(operation);
+      void discardPart();
+      return true;
+    };
     const stopped = () => ended || operation.stopReason !== null;
     operation.onStop = () => void end(stoppedOutcome(operation.stopReason ?? "cancelled"));
+    operation.withdraw = withdraw;
     if (operation.stopReason !== null) {
       await end(stoppedOutcome(operation.stopReason));
       throw new Error("The folder upload was stopped");
@@ -619,6 +661,8 @@ export class HostFolderUploadService {
     return {
       write: async (chunk) => {
         if (stopped()) throw new Error("The folder upload was stopped");
+        arrived = true;
+        operation.withdraw = null;
         try {
           // A write may take fewer bytes than offered; count only what reached the file.
           for (let offset = 0; offset < chunk.byteLength;) {
@@ -634,7 +678,7 @@ export class HostFolderUploadService {
           }
         } catch (error) {
           failed ??= stopped() ? null : writeFailure(error);
-          throw new Error("The folder archive could not be written");
+          throw new Error("The folder archive could not be written", { cause: error });
         }
       },
       commit: async () => {
@@ -646,7 +690,7 @@ export class HostFolderUploadService {
           await part.handle.close();
         } catch (error) {
           failed ??= stopped() ? null : writeFailure(error);
-          throw new Error("The folder archive could not be saved");
+          throw new Error("The folder archive could not be saved", { cause: error });
         }
         if (size !== written || written !== operation.request.archiveBytes) {
           throw new Error("The saved archive is not the size that was sent");
@@ -666,6 +710,9 @@ export class HostFolderUploadService {
         return destination.path;
       },
       abort: async () => {
+        // Gone before any of the archive came (its link dropped, say): the
+        // admission stands, and a prepare asked again sends it afresh.
+        if (operation.stopReason === null && !this.disposed && withdraw()) return;
         await end(
           operation.stopReason !== null
             ? stoppedOutcome(operation.stopReason)
@@ -710,8 +757,9 @@ export class HostFolderUploadService {
         outcome = failure(result.reason, result.problem);
       } else {
         if (!this.leaseHeld(operation)) this.stop(operation, "not-driving");
-        const hostPath = await inbox.publishTree(staging, request.rootName, abort.signal);
-        outcome = { status: "done", hostPath };
+        const publishing = inbox.publishTree(staging, request.rootName, abort.signal);
+        operation.publishing = publishing;
+        outcome = { status: "done", hostPath: await publishing };
       }
     } catch (error) {
       if (operation.stopReason !== null) {

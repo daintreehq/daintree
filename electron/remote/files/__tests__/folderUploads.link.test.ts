@@ -42,7 +42,7 @@ import {
 } from "../HostFolderUploadService.js";
 import { HostInbox } from "../hostInbox.js";
 import { HostUploadService } from "../HostUploadService.js";
-import { UploadLinkMethod } from "../uploadLinkMethods.js";
+import { UPLOAD_SINK_PREFIX, UploadLinkMethod } from "../uploadLinkMethods.js";
 import { forgeFolderArchive, type ForgedEntry } from "./forgeFolderArchive.js";
 
 class FakeEndpoint implements HostFileEndpoint {
@@ -61,12 +61,18 @@ class FakeEndpoint implements HostFileEndpoint {
     this.listeners.add(cb);
     return { dispose: () => this.listeners.delete(cb) };
   }
+  close() {
+    this.closed = true;
+    for (const listener of [...this.listeners]) listener();
+  }
 }
 
 let socketDir: string;
 let inboxRoot: string;
 const sessions: LinkSession[] = [];
-const services: HostFolderUploadService[] = [];
+const services: Array<{ dispose(): void }> = [];
+/** Gates a test holds, let go at teardown even when an assertion failed first. */
+const gates: Array<() => void> = [];
 
 beforeEach(async () => {
   socketDir = await makeTempDir();
@@ -75,6 +81,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const release of gates.splice(0)) release();
+  vi.restoreAllMocks();
   for (const service of services.splice(0)) service.dispose();
   for (const session of sessions.splice(0)) session.close("test done");
   await removeTempDir(socketDir);
@@ -93,11 +101,21 @@ interface SetupOptions extends Partial<
   freeBytes?: number;
   /** Transfer options for both ends of the link. */
   transfers?: LinkTransfersOptions;
+  /** Bytes the host's sink has taken for each transfer. */
+  onHostReceived?: (bytes: number) => void;
 }
 
 async function setup(options: SetupOptions = {}) {
   const extra = options.transfers ? { transfers: options.transfers } : {};
-  const { host, client } = await openSessionPair(socketDir, extra, extra);
+  const hostExtra = options.onHostReceived
+    ? {
+        transfers: {
+          ...options.transfers,
+          onIncomingProgress: (_begin: unknown, bytes: number) => options.onHostReceived!(bytes),
+        },
+      }
+    : extra;
+  const { host, client } = await openSessionPair(socketDir, hostExtra, extra);
   sessions.push(host, client);
   const endpoint = new FakeEndpoint();
   const inbox = new HostInbox({
@@ -119,7 +137,7 @@ async function setup(options: SetupOptions = {}) {
   service.attach(host, endpoint);
   /** The link comes back: a new session, and the view's endpoint on it, for the same Shell. */
   const relink = async () => {
-    const next = await openSessionPair(socketDir, extra, extra);
+    const next = await openSessionPair(socketDir, hostExtra, extra);
     sessions.push(next.host, next.client);
     service.attach(next.host, new FakeEndpoint("session-2:view-7", "view-7", endpoint.clientId));
     return next.client;
@@ -256,8 +274,8 @@ async function publishedEntries(): Promise<string[]> {
   return fs.readdir(path.join(inboxRoot, "files")).catch(() => []);
 }
 
-/** A source that serves its first chunk, then waits for the test before the rest. */
-function heldSource(bytes: Uint8Array) {
+/** A source that serves `firstBytes` (a chunk by default), then waits for the test before the rest. */
+function heldSource(bytes: Uint8Array, firstBytes = BULK_CHUNK_BYTES) {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -266,11 +284,12 @@ function heldSource(bytes: Uint8Array) {
   const atGate = new Promise<void>((resolve) => {
     reached = resolve;
   });
+  gates.push(release);
   const source: TransferSource = {
     size: bytes.byteLength,
     sha256: sha256Hex(bytes),
     read: async (offset, length) => {
-      if (offset > 0) {
+      if (offset >= firstBytes) {
         reached();
         await gate;
       }
@@ -285,7 +304,16 @@ function deferred() {
   const promise = new Promise<void>((done) => {
     resolve = done;
   });
+  gates.push(resolve);
   return { promise, resolve };
+}
+
+/** How a promise ended, observed from the start so a rejection is never left unhandled. */
+function outcomeOf(promise: Promise<unknown>): Promise<"resolved" | "rejected"> {
+  return promise.then(
+    () => "resolved",
+    () => "rejected"
+  );
 }
 
 describe("a folder sent to the host inbox", () => {
@@ -310,11 +338,15 @@ describe("a folder sent to the host inbox", () => {
   });
 
   it("reports progress through the unpack, files done of the total declared", async () => {
-    const hold = deferred();
+    const start = deferred();
+    const finish = deferred();
     const { client } = await setup({
       unpack: async (options) => {
-        await hold.promise;
-        return unpackFolderArchive(options);
+        await start.promise;
+        const result = await unpackFolderArchive(options);
+        // Every file written, publication not yet begun.
+        await finish.promise;
+        return result;
       },
     });
     const folder = SMALL();
@@ -326,7 +358,12 @@ describe("a folder sent to the host inbox", () => {
       filesDone: 0,
       filesTotal: 3,
     });
-    hold.resolve();
+    start.resolve();
+    await until(async () => {
+      const current = await status(client, "op-progress");
+      return current.status === "unpacking" && current.filesDone === 3;
+    });
+    finish.resolve();
     expect((await settled(client, "op-progress")).status).toBe("done");
   });
 
@@ -420,7 +457,98 @@ describe("refusing a folder at prepare", () => {
       status: "refused",
       reason: "no-space",
     });
+    // Its room comes back when the service that held it goes.
     files.dispose();
+    expect((await prepare(client, folder, "op-folder")).status).toBe("ready");
+  });
+
+  describe("gives back the room a single-file upload held", () => {
+    const fileSetup = async (options: { pendingTtlMs?: number } = {}) => {
+      const folder = SMALL();
+      const need = folder.archive.length + folder.totalBytes;
+      const ctx = await setup({ freeBytes: need + 500 });
+      const files = new HostUploadService({
+        rootsFor: async () => [],
+        isDriving: () => true,
+        inbox: ctx.inbox,
+        pendingTtlMs: options.pendingTtlMs,
+      });
+      services.push(files);
+      files.attach(ctx.host, ctx.endpoint);
+      const file = bytesTransferSource(new Uint8Array(1000).fill(1));
+      const prepared = (await ctx.client.call(UploadLinkMethod.PREPARE, {
+        endpointId: "view-7",
+        name: "big.bin",
+        size: file.size,
+        sha256: file.sha256,
+        opId: "op-file",
+        destination: { kind: "inbox", bucket: "files" },
+      })) as { status: string; token: string };
+      expect(prepared.status).toBe("ready");
+      return { ...ctx, files, folder, file, token: prepared.token };
+    };
+
+    it("once the file is placed", async () => {
+      const { client, folder, file, token } = await fileSetup();
+      await client.transfers.send(file, {
+        name: "big.bin",
+        destination: { kind: "path", path: `${UPLOAD_SINK_PREFIX}${token}` },
+      });
+      expect((await prepare(client, folder, "op-folder")).status).toBe("ready");
+    });
+
+    it("once its transfer fails", async () => {
+      const { client, folder, file, token } = await fileSetup();
+      const lying: TransferSource = { ...file, read: async (_o, length) => new Uint8Array(length) };
+      await expect(
+        client.transfers.send(lying, {
+          name: "big.bin",
+          destination: { kind: "path", path: `${UPLOAD_SINK_PREFIX}${token}` },
+        })
+      ).rejects.toBeTruthy();
+      await until(async () => (await prepare(client, folder, "op-folder")).status === "ready");
+    });
+
+    it("once its unsent prepare expires, with nothing else asked of the file service", async () => {
+      const { client, folder } = await fileSetup({ pendingTtlMs: 30 });
+      await until(async () => (await prepare(client, folder, "op-folder")).status === "ready");
+    });
+
+    it("once its endpoint closes, on a link it was attached to again", async () => {
+      const folder = SMALL();
+      const need = folder.archive.length + folder.totalBytes;
+      const { client, host, endpoint, service, inbox } = await setup({ freeBytes: need + 500 });
+      const files = new HostUploadService({
+        rootsFor: async () => [],
+        isDriving: () => true,
+        inbox,
+      });
+      services.push(files);
+      files.attach(host, endpoint);
+      // The same view rides a resumed link too, and prepares a file there.
+      const next = await openSessionPair(socketDir);
+      sessions.push(next.host, next.client);
+      files.attach(next.host, endpoint);
+      const file = bytesTransferSource(new Uint8Array(1000).fill(2));
+      const prepared = (await next.client.call(UploadLinkMethod.PREPARE, {
+        endpointId: "view-7",
+        name: "late.bin",
+        size: file.size,
+        sha256: file.sha256,
+        opId: "op-late",
+        destination: { kind: "inbox", bucket: "files" },
+      })) as { status: string };
+      expect(prepared.status).toBe("ready");
+      // Another view of the same Shell asks for the folder once this one has gone.
+      service.attach(host, new FakeEndpoint("session-1:view-8", "view-8", endpoint.clientId));
+      expect((await prepare(client, folder, "op-folder", { endpointId: "view-8" })).status).toBe(
+        "refused"
+      );
+      endpoint.close();
+      expect((await prepare(client, folder, "op-folder", { endpointId: "view-8" })).status).toBe(
+        "ready"
+      );
+    });
   });
 
   it("refuses past the host's folder uploads under way, and admits again once one settles", async () => {
@@ -465,16 +593,34 @@ describe("receiving the archive", () => {
     expect(await publishedEntries()).toEqual([]);
   });
 
-  it("refuses a transfer announced with another size or digest than was prepared", async () => {
-    const { client } = await setup();
-    const folder = SMALL();
-    const other = SMALL();
-    other.archive = Buffer.concat([other.archive, Buffer.from("x")]);
-    const token = await readyToken(client, folder, "op-1");
-    await expect(send(client, token, bytesTransferSource(other.archive))).rejects.toBeTruthy();
-    expect(await status(client, "op-1")).toEqual({ status: "failed", reason: "transfer-failed" });
-    expect(await inFlightLeftovers()).toEqual([]);
-  });
+  it.each([
+    ["another digest", (archive: Buffer) => ({ size: archive.length, sha256: "a".repeat(64) })],
+    [
+      "another size",
+      (archive: Buffer) => ({ size: archive.length + 1, sha256: sha256Hex(archive) }),
+    ],
+  ])(
+    "refuses a transfer announced with %s than was prepared, before storing any of it",
+    async (_label, announce) => {
+      const { client, inbox } = await setup();
+      const createPart = vi.spyOn(inbox, "createPart");
+      const folder = SMALL();
+      const token = await readyToken(client, folder, "op-1");
+      const announced = announce(folder.archive);
+      const source: TransferSource = {
+        ...announced,
+        read: async (offset, length) =>
+          Buffer.alloc(announced.size, folder.archive).subarray(offset, offset + length),
+      };
+      await expect(send(client, token, source)).rejects.toBeTruthy();
+      expect(await status(client, "op-1")).toEqual({
+        status: "failed",
+        reason: "transfer-failed",
+      });
+      expect(createPart).not.toHaveBeenCalled();
+      expect(await inFlightLeftovers()).toEqual([]);
+    }
+  );
 
   it("refuses a token it never issued", async () => {
     const { client } = await setup();
@@ -532,6 +678,33 @@ describe("an archive the host refuses once it has arrived", () => {
   });
 });
 
+describe("a disk that fails the upload", () => {
+  it.each([
+    ["ENOSPC", "no-space"],
+    ["EDQUOT", "no-space"],
+    ["EIO", "write-failed"],
+  ] as const)("names %s while unpacking as %s, leaving nothing behind", async (code, reason) => {
+    const { client, inbox } = await setup();
+    vi.spyOn(inbox, "createStaging").mockRejectedValueOnce(
+      Object.assign(new Error("disk said no"), { code })
+    );
+    expect(await upload(client, SMALL(), "op-1")).toEqual({ status: "failed", reason });
+    expect(await inFlightLeftovers()).toEqual([]);
+    expect(await publishedEntries()).toEqual([]);
+  });
+
+  it("names a full disk while the archive is being stored", async () => {
+    const { client, inbox } = await setup();
+    vi.spyOn(inbox, "createPart").mockRejectedValueOnce(
+      Object.assign(new Error("disk said no"), { code: "ENOSPC" })
+    );
+    const folder = SMALL();
+    const token = await readyToken(client, folder, "op-1");
+    await expect(send(client, token, bytesTransferSource(folder.archive))).rejects.toBeTruthy();
+    expect(await status(client, "op-1")).toEqual({ status: "failed", reason: "no-space" });
+  });
+});
+
 describe("cancelling a folder upload", () => {
   it("before its archive is sent, refusing the archive after", async () => {
     const { client } = await setup();
@@ -545,19 +718,20 @@ describe("cancelling a folder upload", () => {
   });
 
   it("while the archive is arriving, leaving no part file behind", async () => {
-    const { client } = await setup();
+    let received = 0;
+    const { client } = await setup({ onHostReceived: (bytes) => (received = bytes) });
     const folder = packFolder("Audit", {
       files: { "big.bin": crypto.randomBytes(BULK_CHUNK_BYTES * 4) },
     });
     const token = await readyToken(client, folder, "op-1");
     const held = heldSource(folder.archive);
-    const sending = send(client, token, held.source);
+    const sending = outcomeOf(send(client, token, held.source));
     await held.atGate;
-    await until(async () => (await inFlightLeftovers()).length === 1);
+    await until(async () => received > 0);
     expect(await cancel(client, "op-1")).toEqual({ status: "cancelled" });
     expect(await inFlightLeftovers()).toEqual([]);
     held.release();
-    await expect(sending).rejects.toBeTruthy();
+    expect(await sending).toBe("rejected");
     expect(await status(client, "op-1")).toEqual({ status: "cancelled" });
     expect(await publishedEntries()).toEqual([]);
   });
@@ -586,6 +760,54 @@ describe("cancelling a folder upload", () => {
     expect(await publishedEntries()).toEqual([]);
   });
 
+  it("while publication waits its turn, so it never happens", async () => {
+    const { client, inbox } = await setup();
+    const queued = deferred();
+    const go = deferred();
+    const publishTree = inbox.publishTree.bind(inbox);
+    vi.spyOn(inbox, "publishTree").mockImplementation(async (...args) => {
+      queued.resolve();
+      await go.promise;
+      return publishTree(...args);
+    });
+    const folder = SMALL();
+    const token = await readyToken(client, folder, "op-1");
+    await send(client, token, bytesTransferSource(folder.archive));
+    await queued.promise;
+    const cancelling = cancel(client, "op-1");
+    await until(async () => (await status(client, "op-1")).status !== "receiving");
+    go.resolve();
+    expect(await cancelling).toEqual({ status: "cancelled" });
+    expect(await status(client, "op-1")).toEqual({ status: "cancelled" });
+    expect(await publishedEntries()).toEqual([]);
+    expect(await inFlightLeftovers()).toEqual([]);
+  });
+
+  it("answers done, with its path, when publication's rename had already begun", async () => {
+    // The cancel's own wait is short: it must still not answer before the rename settles.
+    const { client } = await setup({ cancelWaitMs: 10 });
+    const renaming = deferred();
+    const landed = deferred();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (!String(to).startsWith(path.join(inboxRoot, "files"))) return rename(from, to);
+      renaming.resolve();
+      await landed.promise;
+      return rename(from, to);
+    });
+    const folder = SMALL();
+    const token = await readyToken(client, folder, "op-1");
+    await send(client, token, bytesTransferSource(folder.archive));
+    await renaming.promise;
+    const cancelling = cancel(client, "op-1");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    landed.resolve();
+    const answer = await cancelling;
+    expect(answer.status).toBe("done");
+    expect(await settled(client, "op-1")).toEqual(answer);
+    expect(await publishedEntries()).toHaveLength(1);
+  });
+
   it("answers done when the folder was already published", async () => {
     const { client } = await setup();
     const done = await upload(client, SMALL(), "op-1");
@@ -605,6 +827,59 @@ describe("retries under the same operation id", () => {
     await expect(send(client, lost, bytesTransferSource(folder.archive))).rejects.toBeTruthy();
     await send(client, token, bytesTransferSource(folder.archive));
     expect((await settled(client, "op-1")).status).toBe("done");
+    expect(await publishedEntries()).toHaveLength(1);
+  });
+
+  it("answers a prepare asked again while the archive is arriving with where it is, never a second token", async () => {
+    let received = 0;
+    const { client } = await setup({ onHostReceived: (bytes) => (received = bytes) });
+    const folder = packFolder("Audit", {
+      files: { "big.bin": crypto.randomBytes(BULK_CHUNK_BYTES * 4) },
+    });
+    const token = await readyToken(client, folder, "op-1");
+    const held = heldSource(folder.archive);
+    const sending = outcomeOf(send(client, token, held.source));
+    await until(async () => received > 0);
+    expect(await prepare(client, folder, "op-1")).toEqual({ status: "receiving" });
+    expect(await status(client, "op-1")).toEqual({ status: "receiving" });
+    held.release();
+    expect(await sending).toBe("resolved");
+    const done = await settled(client, "op-1");
+    expect(done.status).toBe("done");
+    expect(await prepare(client, folder, "op-1")).toEqual(done);
+    expect(await publishedEntries()).toHaveLength(1);
+  });
+
+  it("hands a token again to a prepare asked while a transfer has begun with nothing in yet", async () => {
+    const { client, relink } = await setup();
+    const folder = SMALL();
+    const stalled = heldSource(folder.archive, 0);
+    const first = outcomeOf(send(client, await readyToken(client, folder, "op-1"), stalled.source));
+    await until(async () => (await inFlightLeftovers()).length === 1);
+    // The Shell gave up on that link without it closing, and asks again on a new one.
+    const again = await relink();
+    const token = await readyToken(again, folder, "op-1");
+    await send(again, token, bytesTransferSource(folder.archive));
+    expect((await settled(again, "op-1")).status).toBe("done");
+    // The transfer it replaced can no longer land anything.
+    stalled.release();
+    expect(await first).toBe("rejected");
+    expect(await publishedEntries()).toHaveLength(1);
+    expect(await inFlightLeftovers()).toEqual([]);
+  });
+
+  it("keeps an admission whose link dropped after its transfer began but before any of it came", async () => {
+    const { client, relink } = await setup();
+    const folder = SMALL();
+    const stalled = heldSource(folder.archive, 0);
+    const first = outcomeOf(send(client, await readyToken(client, folder, "op-1"), stalled.source));
+    await until(async () => (await inFlightLeftovers()).length === 1);
+    client.close("network went away");
+    expect(await first).toBe("rejected");
+    const again = await relink();
+    const token = await readyToken(again, folder, "op-1");
+    await send(again, token, bytesTransferSource(folder.archive));
+    expect((await settled(again, "op-1")).status).toBe("done");
     expect(await publishedEntries()).toHaveLength(1);
   });
 
@@ -662,18 +937,24 @@ describe("retries under the same operation id", () => {
     expect(other).toEqual({ status: "unknown" });
   });
 
-  it("forgets a settled operation after its time", async () => {
-    const { client } = await setup({ outcomeTtlMs: 20 });
-    expect((await upload(client, SMALL(), "op-1")).status).toBe("done");
-    await new Promise((resolve) => setTimeout(resolve, 40));
+  it("forgets a settled operation after its time, never the folder it published", async () => {
+    const { client } = await setup({ outcomeTtlMs: 60_000 });
+    const done = await upload(client, SMALL(), "op-1");
+    expect(done.status).toBe("done");
+    expect(await status(client, "op-1")).toEqual(done);
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 60_001);
     expect(await status(client, "op-1")).toEqual({ status: "unknown" });
+    expect(await publishedEntries()).toHaveLength(1);
   });
 });
 
 describe("a drive-lease takeover", () => {
   it("stops an upload mid-unpack and removes what it staged", async () => {
     let lease = 1;
-    let service!: HostFolderUploadService;
+    const ref: { service?: HostFolderUploadService } = {};
+    const seen: number[] = [];
+    let abortedAtTakeover: boolean | null = null;
     const ctx = await setup({
       leaseId: () => lease,
       unpack: (options) =>
@@ -681,17 +962,22 @@ describe("a drive-lease takeover", () => {
           ...options,
           onProgress: (progress) => {
             options.onProgress?.(progress);
+            seen.push(progress.filesDone);
             if (progress.filesDone !== 1) return;
             lease = 2;
-            service.onLeaseChanged("p1");
+            ref.service!.onLeaseChanged("p1");
+            abortedAtTakeover = options.signal!.aborted;
           },
         }),
     });
-    service = ctx.service;
+    ref.service = ctx.service;
     expect(await upload(ctx.client, SMALL(), "op-1")).toEqual({
       status: "failed",
       reason: "not-driving",
     });
+    // Stopped by the takeover itself, with files still to go, not at publication.
+    expect(abortedAtTakeover).toBe(true);
+    expect(seen).toEqual([1]);
     expect(await inFlightLeftovers()).toEqual([]);
     expect(await publishedEntries()).toEqual([]);
   });
@@ -719,10 +1005,13 @@ describe("a drive-lease takeover", () => {
 
 describe("the transfer's commit deadline", () => {
   it("doesn't bound the unpack: a folder that outlasts it still finishes", async () => {
+    const commitTimeoutMs = 300;
+    const entered = deferred();
     const hold = deferred();
     const { client } = await setup({
-      transfers: { commitTimeoutMs: 100 },
+      transfers: { commitTimeoutMs },
       unpack: async (options) => {
+        entered.resolve();
         await hold.promise;
         return unpackFolderArchive(options);
       },
@@ -730,7 +1019,8 @@ describe("the transfer's commit deadline", () => {
     const folder = SMALL();
     const token = await readyToken(client, folder, "op-1");
     await send(client, token, bytesTransferSource(folder.archive));
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await entered.promise;
+    await new Promise((resolve) => setTimeout(resolve, commitTimeoutMs * 2.5));
     expect(await status(client, "op-1")).toMatchObject({ status: "unpacking" });
     hold.resolve();
     const done = await settled(client, "op-1");
