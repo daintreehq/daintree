@@ -183,7 +183,8 @@ export function folderRefusal(
 
 interface ItemRowData {
   path: string;
-  kind: "file" | "folder";
+  /** Null for an entry that is neither, such as a link whose target is never read. */
+  kind: "file" | "folder" | null;
   detail: string | null;
   /** 0..1 of the folder's bytes, or null when the totals can't give an honest share. */
   share: number | null;
@@ -210,41 +211,39 @@ function ItemRows({ rows, label }: { rows: ItemRowData[]; label: string }) {
   return (
     <ul className="space-y-1.5 px-3 pb-2.5" aria-label={label}>
       {rows.map((row, index) => {
-        const Icon = row.kind === "folder" ? Folder : File;
+        const Icon = row.kind === "folder" ? Folder : row.kind === "file" ? File : null;
         return (
           // Wraps rather than truncates: at a narrow width the figures drop under
-          // the name instead of cutting it, so every name stays whole.
-          <li
-            key={`${index}:${row.path}`}
-            className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
-          >
-            <span className="flex min-w-0 flex-[1_1_10rem] items-baseline gap-1.5">
-              <Icon
-                aria-hidden="true"
-                className="size-3 shrink-0 self-center text-text-secondary"
-              />
+          // the name as one group instead of cutting it, so every name stays whole.
+          // Top-aligned, so a name that wraps keeps its glyph and figures on its
+          // first line.
+          <li key={`${index}:${row.path}`} className="flex flex-wrap items-start gap-x-2 gap-y-1">
+            <span className="flex min-w-0 flex-[1_1_8rem] items-start gap-1.5">
+              {Icon && (
+                <span aria-hidden="true" className="inline-flex h-[1lh] shrink-0 items-center">
+                  <Icon className="size-3 text-text-secondary" />
+                </span>
+              )}
               <PathText path={row.path} />
             </span>
-            {row.detail !== null && (
-              <span className="ml-auto shrink-0 tabular-nums text-text-secondary">
-                {row.detail}
+            {(row.detail !== null || row.share !== null) && (
+              <span className="ml-auto flex shrink-0 gap-2 tabular-nums">
+                {row.detail !== null && <span className="text-text-secondary">{row.detail}</span>}
+                {row.share !== null && (
+                  <span className="w-9 text-right text-text-primary">{shareText(row.share)}</span>
+                )}
               </span>
             )}
             {row.share !== null && (
-              <>
-                <span className="w-9 shrink-0 text-right tabular-nums text-text-primary">
-                  {shareText(row.share)}
-                </span>
+              <span
+                aria-hidden="true"
+                className="block h-0.5 basis-full overflow-hidden rounded-full bg-overlay-medium"
+              >
                 <span
-                  aria-hidden="true"
-                  className="block h-0.5 basis-full overflow-hidden rounded-full bg-overlay-medium"
-                >
-                  <span
-                    className="block h-full rounded-full bg-text-secondary"
-                    style={{ width: `${Math.min(1, row.share) * 100}%` }}
-                  />
-                </span>
-              </>
+                  className="block h-full rounded-full bg-text-secondary"
+                  style={{ width: `${Math.min(1, row.share) * 100}%` }}
+                />
+              </span>
             )}
           </li>
         );
@@ -308,8 +307,8 @@ function HiddenValue({ summary }: { summary: FolderUploadSummary }) {
         {capitalize(atLeast(lowerBound, counts))}, copied like the rest
       </span>
       {names.length > 0 && (
-        <span className="block break-words font-mono text-text-secondary">
-          {names.join(", ")}
+        <span className="block break-words text-text-secondary">
+          <span className="font-mono">{names.join(", ")}</span>
           {hidden.paths.length > HIDDEN_NAMES ? " and others" : ""}
         </span>
       )}
@@ -334,7 +333,7 @@ function NotCopiedSection({ summary }: { summary: FolderUploadSummary }) {
           label="Not copied"
           rows={shown.map((item) => ({
             path: insideFolder(item.path, rootName),
-            kind: item.path.endsWith("/") ? "folder" : "file",
+            kind: null,
             detail: NOT_COPIED_LABEL[item.reason],
             share: null,
           }))}
@@ -434,7 +433,11 @@ export function FolderUploadQuestion({
           )}
           <PreviewSummary testId="folder-upload-summary">
             <SummaryRow label="Folder">
-              <PathText path={summary.rootName} />
+              {/* One name with no folders to break between: plain text wraps
+                  anywhere and keeps the label level with its first line. */}
+              <span className="font-mono text-text-primary [overflow-wrap:anywhere]">
+                {summary.rootName}
+              </span>
             </SummaryRow>
             <SummaryRow label="Host">
               <span className="break-words text-text-primary">{hostLabel}</span>

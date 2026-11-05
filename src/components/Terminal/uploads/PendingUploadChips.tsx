@@ -49,9 +49,10 @@ export function PendingUploadChips({
         <span
           key={upload.id}
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-1 text-xs text-text-secondary",
+            "inline-flex min-w-0 items-center gap-1.5 rounded-full border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-1 text-xs text-text-secondary",
             // A folder's phase label runs longer than a file's, so it gets the room
-            // to keep some of the name beside "unpacking 1,204 of 3,000".
+            // to keep some of the name beside "unpacking 1,204 of 3,000". `min-w-0`
+            // lets a long name give way inside a row narrower than the chip.
             upload.folder ? "max-w-80" : "max-w-64"
           )}
         >
