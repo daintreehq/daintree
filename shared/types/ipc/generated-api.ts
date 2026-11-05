@@ -620,6 +620,9 @@ export interface GeneratedElectronAPI {
     uploadLocalFile(
       ...args: IpcInvokeMap["file-transfer:upload-local-file"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:upload-local-file"]["result"]>;
+    uploadLocalFolder(
+      ...args: IpcInvokeMap["file-transfer:upload-local-folder"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:upload-local-folder"]["result"]>;
   };
   fileWatch: {
     fingerprint(

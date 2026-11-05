@@ -10,6 +10,7 @@ export const FILE_TRANSFER_METHOD_CHANNELS = {
   getPreviewCapability: "file-transfer:get-preview-capability",
   statLocalFile: "file-transfer:stat-local-file",
   summarizeLocalFolder: "file-transfer:summarize-local-folder",
+  uploadLocalFolder: "file-transfer:upload-local-folder",
   getUploadPreferences: "file-transfer:get-upload-preferences",
   setUploadPreferences: "file-transfer:set-upload-preferences",
 } as const satisfies Record<string, keyof IpcInvokeMap>;

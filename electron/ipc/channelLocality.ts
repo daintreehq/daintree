@@ -390,6 +390,7 @@ export const CHANNEL_LOCALITY = {
   "file-transfer:summarize-local-folder": "shell",
   "file-transfer:upload-bytes": "shell",
   "file-transfer:upload-local-file": "shell",
+  "file-transfer:upload-local-folder": "shell",
   "file-watch:fingerprint": "host",
   "file-document:read": "host",
   "file-document:save": "host",
