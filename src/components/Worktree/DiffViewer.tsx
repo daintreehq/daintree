@@ -1790,7 +1790,7 @@ function FileDiff({
             <DiffFilePath path={relPath} />
             {langLoadFailed && (
               <span
-                className="text-xs text-text-muted"
+                className="text-xs text-text-secondary"
                 role="status"
                 data-testid="diff-plain-text-badge"
               >
@@ -1798,7 +1798,7 @@ function FileDiff({
               </span>
             )}
             {!langLoadFailed && isLargeRender && !isCollapsed && (
-              <span className="text-xs text-text-muted" data-testid="diff-highlight-off-badge">
+              <span className="text-xs text-text-secondary" data-testid="diff-highlight-off-badge">
                 {fullFile ? "Highlighting off for large file" : "Highlighting off for large diff"}
               </span>
             )}
