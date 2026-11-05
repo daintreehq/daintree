@@ -193,7 +193,19 @@ describe("startFirstAgentWhenReady", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it.each(["failed", "timed-out", "needs-approval", "unknown"])(
+  it.each(["failed", "timed-out"])(
+    "launches with its prompt when setup ends %s, without handing it back (#16242)",
+    async (state) => {
+      panelStore.set({ panelsById: { "t-1": { spawnStatus: "ready" } } });
+      scriptDispatch([readiness("running", true), readiness(state)]);
+      await startFirstAgentWhenReady(launch);
+      expect(launchCalls()).toHaveLength(1);
+      expect(launchCalls()[0]?.[1]).toMatchObject({ worktreeId: "wt-1", prompt: PROMPT });
+      expect(mockNotify).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["needs-approval", "unknown"])(
     "does not launch when setup settles as %s and hands the launch back",
     async (state) => {
       scriptDispatch([readiness(state)]);
@@ -279,10 +291,10 @@ describe("replaying a handed-back launch", () => {
     }
   );
 
-  it("starts straight away after a hard setup failure, as an explicit override", async () => {
+  it("starts straight away when setup's state couldn't be confirmed, as an explicit override", async () => {
     panelStore.set({ panelsById: { "t-1": { spawnStatus: "ready" } } });
     scriptDispatch([]);
-    notifyAgentNotStarted(launch, "failed");
+    notifyAgentNotStarted(launch, "error");
     lastNotifyPayload().action.onClick();
     await vi.waitFor(() => expect(launchCalls()).toHaveLength(1));
     expect(mockDispatch.mock.calls.map(([id]) => id)).toEqual(["agent.launch"]);
@@ -321,7 +333,24 @@ describe("runAgentLayoutWhenReady (#13807)", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it.each(["failed", "timed-out", "needs-approval"])(
+  it.each(["failed", "timed-out"])(
+    "runs the layout once, without a hand-back, when setup ends %s (#16242)",
+    async (state) => {
+      scriptDispatch([readiness("running", true), readiness(state)]);
+      const recipe = layout();
+
+      await runAgentLayoutWhenReady(recipe);
+
+      expect(recipe.run).toHaveBeenCalledTimes(1);
+      expect(mockNotify).not.toHaveBeenCalled();
+      // The wait is one-shot: a later Retry setup reaching ready has nothing
+      // left listening to spawn the layout a second time.
+      const waits = mockDispatch.mock.calls.filter(([id]) => id === "worktree.waitUntilReady");
+      expect(waits).toHaveLength(2);
+    }
+  );
+
+  it.each(["needs-approval", "unknown"])(
     "hands the layout back instead of starting its agent when setup is %s",
     async (state) => {
       scriptDispatch([readiness(state)]);
@@ -337,8 +366,20 @@ describe("runAgentLayoutWhenReady (#13807)", () => {
     }
   );
 
-  it("runs a handed-back layout at most once, straight away after a hard failure", async () => {
-    scriptDispatch([readiness("failed")]);
+  it("waits for setup again when a layout handed back for approval is run", async () => {
+    scriptDispatch([readiness("needs-approval"), readiness("ready")]);
+    const recipe = layout();
+    await runAgentLayoutWhenReady(recipe);
+    expect(recipe.run).not.toHaveBeenCalled();
+
+    lastNotifyPayload().action.onClick();
+    await vi.waitFor(() => expect(recipe.run).toHaveBeenCalledTimes(1));
+    const waits = mockDispatch.mock.calls.filter(([id]) => id === "worktree.waitUntilReady");
+    expect(waits).toHaveLength(2);
+  });
+
+  it("runs a handed-back layout at most once, straight away when setup couldn't be confirmed", async () => {
+    scriptDispatch([readiness("unknown")]);
     const recipe = layout();
     await runAgentLayoutWhenReady(recipe);
 

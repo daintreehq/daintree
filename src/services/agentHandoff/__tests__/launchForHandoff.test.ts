@@ -102,12 +102,34 @@ describe("launchAgentForHandoff", () => {
     expect(result.status).toBe("drafted");
   });
 
+  it.each(["failed", "timed-out"])(
+    "launches and drafts after setup ends %s, leaving the failure on the worktree card (#16242)",
+    async (setupState) => {
+      const { calls, deps } = depsWith({
+        "worktree.createWithRecipe": created,
+        "worktree.waitUntilReady": [
+          stillRunning,
+          () => ({ ok: true, result: { setupState, timedOut: false } }),
+        ],
+        "agent.launch": launchOk,
+      });
+
+      const result = await launchAgentForHandoff("claude", NEW_WORKTREE, content, deps);
+
+      expect(calls.map((call) => call.actionId)).toEqual([
+        "worktree.createWithRecipe",
+        "worktree.waitUntilReady",
+        "worktree.waitUntilReady",
+        "agent.launch",
+      ]);
+      expect(calls[3]!.args).toEqual({ agentId: "claude", location: "grid", worktreeId: "wt-new" });
+      expect(draftAgentContext).toHaveBeenCalledWith("new-term", content);
+      expect(reportDraftNotAdded).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: "drafted", terminalId: "new-term" });
+    }
+  );
+
   it.each<[string, Handler | Handler[], string]>([
-    [
-      "setup failed",
-      () => ({ ok: true, result: { setupState: "failed", timedOut: false } }),
-      "its setup failed",
-    ],
     [
       "setup needs approval",
       () => ({ ok: true, result: { setupState: "needs-approval", timedOut: false } }),
