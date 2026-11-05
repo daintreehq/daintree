@@ -481,8 +481,6 @@ export const CHANNEL_LOCALITY = {
   "forge:token-health-changed": "host",
   "forge:unassign-issue": "host",
   "forge:validate-token": "host",
-  "gemini:enable-alternate-buffer": "host",
-  "gemini:get-status": "host",
   "git:abort-repository-operation": "host",
   "git:checkout-ours-theirs": "host",
   "git:commit": "host",

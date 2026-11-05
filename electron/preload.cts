@@ -76,7 +76,6 @@ import { buildProjectGroupsPreloadBindings } from "./ipc/handlers/projectGroups.
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
 import { buildScheduledRunsPreloadBindings } from "./ipc/handlers/scheduledRuns.preload.js";
-import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
 import { buildTerminalSessionFilePreloadBindings } from "./ipc/handlers/terminalSessionFile.preload.js";
@@ -2689,8 +2688,6 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.STORE_UPDATE_SET_SETTINGS, enabled),
     },
 
-    // Gemini API
-    gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
     codex: buildCodexPreloadBindings(_unwrappingInvoke),
     claude: buildClaudePreloadBindings(_unwrappingInvoke),
     terminalSessionFile: buildTerminalSessionFilePreloadBindings(_unwrappingInvoke),
