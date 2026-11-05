@@ -51,6 +51,9 @@ const sendHolds = new Map<string, number>();
 const heldBack = new Map<string, readonly PreparedAttachment[]>();
 const listeners = new Set<() => void>();
 let nextId = 1;
+/** Bumped by the test reset, so an upload from before it can't touch what comes after. */
+let generation = 0;
+const timers = new Set<ReturnType<typeof setTimeout>>();
 
 function emit(): void {
   for (const listener of [...listeners]) listener();
@@ -90,10 +93,15 @@ function track<T>(
   bySurface.set(surface, [...(bySurface.get(surface) ?? EMPTY), entry]);
   emit();
   let settled = false;
-  const timer = setTimeout(() => update(surface, id, { visible: true }), UPLOAD_PROGRESS_DELAY_MS);
+  const born = generation;
+  const timer = setTimeout(() => {
+    timers.delete(timer);
+    update(surface, id, { visible: true });
+  }, UPLOAD_PROGRESS_DELAY_MS);
+  timers.add(timer);
   // A report that lands after the upload settled has no chip left to change.
   const patch = (next: Partial<PendingUpload>) => {
-    if (!settled) update(surface, id, next);
+    if (!settled && born === generation) update(surface, id, next);
   };
   let running: Promise<T>;
   try {
@@ -104,7 +112,8 @@ function track<T>(
   return running.finally(() => {
     settled = true;
     clearTimeout(timer);
-    update(surface, id, null);
+    timers.delete(timer);
+    if (born === generation) update(surface, id, null);
   });
 }
 
@@ -276,6 +285,9 @@ export const fileBrowserUploadSurface = (panelId: string) => `file-browser:${pan
 
 /** @internal Tests only. */
 export function _resetPendingUploadsForTests(): void {
+  generation++;
+  for (const timer of timers) clearTimeout(timer);
+  timers.clear();
   bySurface.clear();
   sendHolds.clear();
   heldBack.clear();

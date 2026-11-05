@@ -20,8 +20,28 @@ export function folderUploadChipLabel(stage: FolderUploadStage): string {
   }
 }
 
-function chipLabel(upload: PendingUpload): string {
-  return upload.folder ? folderUploadChipLabel(upload.folder) : uploadChipLabel(upload.fraction);
+/**
+ * What the status region says for a folder's phase. Unpacking can count
+ * thousands of files one by one, and each change would be spoken, so speech
+ * follows it in tenths while the chip shows the exact count.
+ */
+export function folderUploadSpokenLabel(stage: FolderUploadStage): string {
+  if (stage.phase !== "unpacking" || stage.filesDone === null || stage.filesTotal <= 0) {
+    return folderUploadChipLabel(stage);
+  }
+  return `unpacking ${Math.floor((stage.filesDone / stage.filesTotal) * 10) * 10}%`;
+}
+
+function ChipProgress({ upload }: { upload: PendingUpload }) {
+  if (!upload.folder) {
+    return <span className="shrink-0 tabular-nums">{uploadChipLabel(upload.fraction)}</span>;
+  }
+  return (
+    <span className="shrink-0 tabular-nums">
+      <span aria-hidden="true">{folderUploadChipLabel(upload.folder)}</span>
+      <span className="sr-only">{folderUploadSpokenLabel(upload.folder)}</span>
+    </span>
+  );
 }
 
 /**
@@ -59,7 +79,7 @@ export function PendingUploadChips({
           <span className="min-w-0 truncate text-text-primary" title={upload.name}>
             {upload.name}
           </span>
-          <span className="shrink-0 tabular-nums">{chipLabel(upload)}</span>
+          <ChipProgress upload={upload} />
           <button
             type="button"
             onClick={(event) => {

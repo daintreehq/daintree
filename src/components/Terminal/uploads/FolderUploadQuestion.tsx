@@ -76,26 +76,26 @@ function notCopiedReasons(reasons: ReadonlySet<FolderNotCopiedReason>): string {
   return sentences.join(" ");
 }
 
-const PATH_PROBLEM: Record<FolderUploadPathProblem, { sentence: string; isName: boolean }> = {
-  "empty-name": { sentence: "An item in it has an empty name.", isName: true },
-  "dot-name": { sentence: "An item in it is named '.' or '..'.", isName: true },
-  separator: { sentence: "An item's name has a slash or backslash in it.", isName: true },
-  "control-character": {
-    sentence: "An item's name has a control character in it.",
-    isName: true,
-  },
-  "malformed-unicode": { sentence: "An item's name isn't valid Unicode.", isName: true },
-  absolute: { sentence: "An item's path leads outside the folder.", isName: false },
-  "drive-letter": { sentence: "An item's path leads outside the folder.", isName: false },
-  "outside-root": { sentence: "An item's path leads outside the folder.", isName: false },
-  "entry-form": {
-    sentence: "An item's path doesn't match whether it's a file or a folder.",
-    isName: false,
-  },
+/**
+ * What is wrong with a name or a path, said after its subject. A name problem
+ * is fixed by renaming; a path problem is the walk's own, with nothing to rename.
+ */
+const PATH_PROBLEM: Record<FolderUploadPathProblem, { what: string; isName: boolean }> = {
+  "empty-name": { what: "is empty", isName: true },
+  "dot-name": { what: "is '.' or '..'", isName: true },
+  separator: { what: "has a slash or backslash in it", isName: true },
+  "control-character": { what: "has a control character in it", isName: true },
+  "malformed-unicode": { what: "isn't valid Unicode", isName: true },
+  // Only a name can start this way: every entry's path starts with the folder's.
+  "drive-letter": { what: "starts like a Windows drive, such as 'C:'", isName: true },
+  absolute: { what: "leads outside the folder", isName: false },
+  "outside-root": { what: "leads outside the folder", isName: false },
+  "entry-form": { what: "doesn't match whether it's a file or a folder", isName: false },
 };
 
 const SEND_LESS = "Send a smaller folder, or the folders inside it one at a time.";
 const RENAME = "Rename it, then drop the folder again.";
+const RENAME_FOLDER = "Rename the folder, then drop it again.";
 
 export interface FolderRefusal {
   title: string;
@@ -120,11 +120,14 @@ export function folderRefusal(
     };
   }
   if (problem.kind === "path") {
-    const { sentence, isName } = PATH_PROBLEM[problem.problem];
+    const { what, isName } = PATH_PROBLEM[problem.problem];
+    // The dropped folder's own name is checked on its own and named bare.
+    const isRoot = problem.path === summary.rootName;
+    const subject = isRoot ? "The folder's name" : isName ? "An item's name" : "An item's path";
     return {
       title: isName ? "A name the host can't take" : "A path the host can't take",
-      detail: isName ? `${sentence} ${RENAME}` : sentence,
-      pathsLabel: "Item",
+      detail: `${subject} ${what}.${isName ? ` ${isRoot ? RENAME_FOLDER : RENAME}` : ""}`,
+      pathsLabel: isRoot ? "Folder" : "Item",
       paths: [problem.path],
     };
   }
@@ -167,7 +170,10 @@ export function folderRefusal(
     case "name-bytes":
       return {
         title: `A name longer than ${pluralize(maximum, "byte")}`,
-        detail: `One name in it takes ${pluralize(actual, "byte")}. ${RENAME}`,
+        detail:
+          paths[0] === summary.rootName
+            ? `The folder's name takes ${pluralize(actual, "byte")}. ${RENAME_FOLDER}`
+            : `One name in it takes ${pluralize(actual, "byte")}. ${RENAME}`,
         pathsLabel: "Name too long",
         paths,
       };
@@ -282,8 +288,8 @@ function contributionText(
     case "folders":
       return atLeast(lowerBound, pluralize(item.folderCount, "folder"));
     case "bytes":
-    case "archive-bytes":
       return atLeast(lowerBound, formatBytes(item.totalBytes));
+    // An item's bytes are its files' content, not what it adds to the archive.
     default:
       return null;
   }
@@ -448,7 +454,7 @@ export function FolderUploadQuestion({
                   A temporary inbox folder, outside the project
                 </span>
                 <span className="block text-text-secondary">
-                  {`Removed after ${INBOX_TTL}, or sooner if the inbox fills up`}
+                  {`Removed after ${INBOX_TTL} without changes, or sooner if the inbox fills up`}
                 </span>
               </SummaryRow>
             )}
