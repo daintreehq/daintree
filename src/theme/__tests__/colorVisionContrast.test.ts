@@ -170,7 +170,9 @@ describe("colour-vision modes hold the theme's contrast floors (#15580)", () => 
       const root = paint(scheme, mode);
       const theme = getTerminalThemeFromAppScheme(scheme, mode);
       for (const [slot, token] of slots) {
-        expect(theme[slot], `${mode} ${slot}`).toBe(root.style.getPropertyValue(`--theme-${token}`));
+        expect(theme[slot], `${mode} ${slot}`).toBe(
+          root.style.getPropertyValue(`--theme-${token}`)
+        );
       }
     }
   });
