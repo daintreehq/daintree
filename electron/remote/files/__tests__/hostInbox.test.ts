@@ -21,6 +21,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(base, { recursive: true, force: true });
 });
 
@@ -278,7 +279,8 @@ const exists = async (p: string) => !!(await fs.lstat(p).catch(() => null));
 
 describe("entries holding a tree", () => {
   it("counts every file of a nested tree against the size cap", async () => {
-    const inbox = new HostInbox({ root, maxTotalBytes: 25 });
+    // 30 bytes in all: leaving out any one file of the tree keeps it under.
+    const inbox = new HostInbox({ root, maxTotalBytes: 29 });
     await inbox.ensure();
     // The tree's direct children hold nothing; its 20 bytes are all nested.
     const tree = await addTree(
@@ -401,11 +403,36 @@ function gateRename() {
   return { rename, release };
 }
 
-describe("staging and publishing a tree", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+function gateMade(prefix: string) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
   });
+  const made: string[] = [];
+  const holds = (target: unknown) => path.basename(String(target)).startsWith(prefix);
+  const realMkdir = fs.mkdir.bind(fs);
+  const realOpen = fs.open.bind(fs);
+  // Made on disk, but its maker hasn't heard back yet.
+  vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+    const result = await realMkdir(target, options as never);
+    if (holds(target)) {
+      made.push(target);
+      await gate;
+    }
+    return result;
+  }) as typeof fs.mkdir);
+  vi.spyOn(fs, "open").mockImplementation((async (target: string, flags?: never, mode?: never) => {
+    const handle = await realOpen(target, flags, mode);
+    if (holds(target)) {
+      made.push(target);
+      await gate;
+    }
+    return handle;
+  }) as typeof fs.open);
+  return { made, release };
+}
 
+describe("staging and publishing a tree", () => {
   it("builds a tree in owner-only staging and shows it only once publication completes", async () => {
     const inbox = new HostInbox({ root });
     const staging = await inbox.createStaging();
@@ -444,17 +471,93 @@ describe("staging and publishing a tree", () => {
     await part.handle.close();
     const staging = await inbox.createStaging();
     await buildTree(staging.treePath, { "a.txt": "a" });
+    const passes = vi.spyOn(inbox as unknown as { cleanupOnce(): Promise<void> }, "cleanupOnce");
 
     const { rename, release } = gateRename();
     const publishing = inbox.publishTree(staging, "project");
-    await vi.waitFor(() => expect(rename).toHaveBeenCalled());
-    const cleaning = inbox.cleanup();
-    // Time for a pass that didn't wait its turn to finish and sweep the empty entry folder.
-    await Promise.race([cleaning, new Promise((resolve) => setTimeout(resolve, 100))]);
-    release();
-    const published = await publishing;
-    expect(await fs.readFile(path.join(published, "a.txt"), "utf8")).toBe("a");
-    await cleaning;
+    try {
+      await vi.waitFor(() => expect(rename).toHaveBeenCalled());
+      const cleaning = inbox.cleanup();
+      // Time for a pass that didn't wait its turn to finish and sweep the empty entry folder.
+      await Promise.race([cleaning, new Promise((resolve) => setTimeout(resolve, 100))]);
+      expect(passes).not.toHaveBeenCalled();
+      release();
+      // It resolves: the entry folder was still there to rename into.
+      expect(path.basename(await publishing)).toBe("project");
+      await cleaning;
+      expect(passes).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await publishing.catch(() => {});
+    }
+  });
+
+  it("never lets a discard delete part of a tree mid-publication", async () => {
+    const inbox = new HostInbox({ root });
+    const staging = await inbox.createStaging();
+    await buildTree(staging.treePath, { "a.txt": "a", "b/c.txt": "c" });
+    const { rename, release } = gateRename();
+    const publishing = inbox.publishTree(staging, "project");
+    try {
+      await vi.waitFor(() => expect(rename).toHaveBeenCalled());
+      const discarding = inbox.discardStaging(staging);
+      await Promise.race([discarding, new Promise((resolve) => setTimeout(resolve, 100))]);
+      release();
+      const published = await publishing;
+      // Publication won: the discard finds nothing left to remove.
+      await discarding;
+      expect(await fs.readFile(path.join(published, "a.txt"), "utf8")).toBe("a");
+      expect(await fs.readFile(path.join(published, "b", "c.txt"), "utf8")).toBe("c");
+    } finally {
+      release();
+      await publishing.catch(() => {});
+    }
+  });
+
+  it("treats a staging folder or part file as live from before it exists", async () => {
+    const inbox = new HostInbox({ root, stalePartMs: 0, maxTotalBytes: 0 });
+    await inbox.ensure();
+    const { made, release } = gateMade(".");
+    const staging = inbox.createStaging();
+    const part = inbox.createPart();
+    try {
+      await vi.waitFor(() => expect(made).toHaveLength(2));
+      for (const target of made) await age(target, 2 * HOUR);
+      await inbox.cleanup();
+      for (const target of made) expect(await exists(target)).toBe(true);
+    } finally {
+      release();
+      await (await part).handle.close();
+      await staging;
+    }
+  });
+
+  it("rolls back a staging folder it couldn't finish making", async () => {
+    const inbox = new HostInbox({ root });
+    await inbox.ensure();
+    const realMkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation((async (target: string, options?: unknown) => {
+      if (path.basename(target) === "tree") {
+        throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+      }
+      return realMkdir(target, options as never);
+    }) as typeof fs.mkdir);
+    await expect(inbox.createStaging()).rejects.toThrow("no space");
+    expect((await fs.readdir(root)).filter((name) => name.startsWith(".stage-"))).toEqual([]);
+  });
+
+  it("refuses to publish a staged tree replaced by a symlink", async () => {
+    const inbox = new HostInbox({ root });
+    const staging = await inbox.createStaging();
+    const outside = await fs.mkdtemp(path.join(base, "outside-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "s");
+    await fs.rm(staging.treePath, { recursive: true });
+    await fs.symlink(outside, staging.treePath);
+    await expect(inbox.publishTree(staging, "project")).rejects.toThrow(/not a folder/);
+    expect(await fs.readdir(path.join(root, "files"))).toEqual([]);
+    await inbox.discardStaging(staging);
+    expect(await exists(path.dirname(staging.treePath))).toBe(false);
+    expect(await fs.readdir(outside)).toEqual(["secret.txt"]);
   });
 
   it("gives a published tree a safe name inside its own entry folder", async () => {
@@ -527,56 +630,120 @@ describe("staging and publishing a tree", () => {
   });
 
   it("counts a live staging's bytes toward the cap, but never sweeps it", async () => {
-    const inbox = new HostInbox({ root, maxTotalBytes: 25 });
+    // The staging alone is over the cap: everything else goes, and it stays.
+    const inbox = new HostInbox({ root, maxTotalBytes: 15 });
     const staging = await inbox.createStaging();
     await buildTree(staging.treePath, { "a/b.bin": "x".repeat(10), "c.bin": "y".repeat(10) });
     const older = await addFile("files", "20200101-000000-aaaaaaaaaaaa", 10, 1000);
     await inbox.cleanup();
     expect(await exists(older)).toBe(false);
     expect(await exists(path.join(staging.treePath, "a", "b.bin"))).toBe(true);
+    expect(await exists(path.join(staging.treePath, "c.bin"))).toBe(true);
+  });
+
+  it("keeps an entry it couldn't read to the bottom rather than judge it on part of it", async () => {
+    const inbox = new HostInbox({ root });
+    await inbox.ensure();
+    const tree = await addTree(
+      "20200101-000000-aaaaaaaaaaaa",
+      "project",
+      { "a.txt": 4, "deep/b.txt": 4 },
+      25 * HOUR
+    );
+    const deep = path.join(tree, "project", "deep");
+    const realReaddir = fs.readdir.bind(fs);
+    const readdir = vi.spyOn(fs, "readdir").mockImplementation((async (
+      target: string,
+      options?: unknown
+    ) => {
+      if (target === deep) throw Object.assign(new Error("too many files"), { code: "EMFILE" });
+      return realReaddir(target, options as never);
+    }) as typeof fs.readdir);
+    await inbox.cleanup();
+    expect(await exists(path.join(tree, "project", "deep", "b.txt"))).toBe(true);
+    // Read whole on the next pass, it is judged by its age again.
+    readdir.mockRestore();
+    await inbox.cleanup();
+    expect(await exists(tree)).toBe(false);
   });
 });
 
 describe("reserving room for a tree", () => {
-  const slowly = (free: number | null) => async () => {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    return free;
-  };
+  /** A disk whose free space is read only once `together` reservations are all asking. */
+  function disk(free: number) {
+    let waiting: Array<() => void> = [];
+    const state = {
+      together: 1,
+      freeBytes: async () => {
+        await new Promise<void>((resolve) => {
+          waiting.push(resolve);
+          if (waiting.length < state.together) return;
+          const ready = waiting;
+          waiting = [];
+          for (const go of ready) go();
+        });
+        return free;
+      },
+    };
+    return state;
+  }
+  const granted = (reservations: Array<unknown>) =>
+    reservations.filter((reservation) => reservation !== null);
 
   it("refuses the second of two reservations that only fit one at a time", async () => {
-    const inbox = new HostInbox({ root, freeBytes: slowly(100), freeSpaceMarginBytes: 0 });
-    const granted = await Promise.all([inbox.reserve(60), inbox.reserve(60)]);
-    expect(granted.filter((reservation) => reservation !== null)).toHaveLength(1);
-    const held = granted.find((reservation) => reservation !== null)!;
+    const free = disk(100);
+    const inbox = new HostInbox({ root, freeBytes: free.freeBytes, freeSpaceMarginBytes: 0 });
+    free.together = 2;
+    const first = await Promise.all([inbox.reserve(60), inbox.reserve(60)]);
+    expect(granted(first)).toHaveLength(1);
+    free.together = 1;
+    const held = first.find((reservation) => reservation !== null)!;
     expect(await inbox.reserve(41)).toBeNull();
     const rest = await inbox.reserve(40);
     expect(rest).not.toBeNull();
 
     held.release();
     held.release();
+    // Only `held` went, however often released: the 40 still held leaves 60, not 61.
+    expect(await inbox.reserve(61)).toBeNull();
     rest!.release();
-    // Released once each, however often: exactly one 60 fits again.
-    const again = await Promise.all([inbox.reserve(60), inbox.reserve(60)]);
-    expect(again.filter((reservation) => reservation !== null)).toHaveLength(1);
+    const whole = await inbox.reserve(100);
+    expect(whole).not.toBeNull();
+    whole!.release();
+
+    free.together = 2;
+    expect(granted(await Promise.all([inbox.reserve(60), inbox.reserve(60)]))).toHaveLength(1);
   });
 
   it("keeps the margin free beyond every reservation", async () => {
-    const inbox = new HostInbox({ root, freeBytes: slowly(100), freeSpaceMarginBytes: 10 });
+    const inbox = new HostInbox({
+      root,
+      freeBytes: disk(100).freeBytes,
+      freeSpaceMarginBytes: 10,
+    });
     expect(await inbox.reserve(91)).toBeNull();
     expect(await inbox.reserve(90)).not.toBeNull();
   });
 
   it("admits when the disk's free space can't be read, as single files do", async () => {
-    const inbox = new HostInbox({ root, freeBytes: slowly(null) });
+    const inbox = new HostInbox({ root, freeBytes: async () => null });
     expect(await inbox.reserve(10 * 1024 * 1024 * 1024)).not.toBeNull();
     await expect(inbox.reserve(-1)).rejects.toThrow(RangeError);
     await expect(inbox.reserve(1.5)).rejects.toThrow(RangeError);
   });
 
-  it("measures the real disk by default", async () => {
-    const inbox = new HostInbox({ root });
-    expect(await inbox.reserve(1)).not.toBeNull();
-    expect(await inbox.reserve(Number.MAX_SAFE_INTEGER)).toBeNull();
+  it("reads the disk's free space by default", async () => {
+    const statfs = vi.spyOn(fs, "statfs").mockResolvedValue({ bavail: 10, bsize: 4096 } as never);
+    const inbox = new HostInbox({ root, freeSpaceMarginBytes: 0 });
+    const whole = await inbox.reserve(10 * 4096);
+    expect(whole).not.toBeNull();
+    expect(await inbox.reserve(1)).toBeNull();
+    whole!.release();
+    expect(await inbox.reserve(10 * 4096 + 1)).toBeNull();
+    expect(statfs).toHaveBeenCalledWith(root);
+
+    statfs.mockRejectedValue(new Error("unsupported"));
+    expect(await inbox.reserve(10 * 4096 + 1)).not.toBeNull();
   });
 });
 

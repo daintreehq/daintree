@@ -253,6 +253,8 @@ interface InboxEntry {
   kind: "clipboard" | "files" | "part" | "stage";
   mtimeMs: number;
   bytes: number;
+  /** False when part of it couldn't be read, so its size and age are only a floor. */
+  complete: boolean;
 }
 
 /** Runs tasks one at a time; a failed task never holds up the ones after it. */
@@ -269,27 +271,33 @@ class SerialQueue {
 /**
  * The bytes of every regular file under `target` and the newest mtime of
  * anything in it, `target` included. Symlinks are counted as themselves and
- * never followed, so nothing outside the inbox is measured.
+ * never followed, so nothing outside the inbox is measured. A path that
+ * vanished mid-walk is simply gone; any other failure leaves it incomplete.
  */
 async function measureTree(
   target: string,
   stat: { mtimeMs: number; size: number; isFile(): boolean; isDirectory(): boolean }
-): Promise<{ bytes: number; mtimeMs: number }> {
+): Promise<{ bytes: number; mtimeMs: number; complete: boolean }> {
   let bytes = stat.isFile() ? stat.size : 0;
   let mtimeMs = stat.mtimeMs;
-  if (!stat.isDirectory()) return { bytes, mtimeMs };
+  let complete = true;
+  const failed = (error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") complete = false;
+    return null;
+  };
+  if (!stat.isDirectory()) return { bytes, mtimeMs, complete };
   const pending = [target];
   for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
-    for (const inner of await fs.readdir(dir).catch(() => [] as string[])) {
+    for (const inner of (await fs.readdir(dir).catch(failed)) ?? []) {
       const innerPath = path.join(dir, inner);
-      const innerStat = await fs.lstat(innerPath).catch(() => null);
+      const innerStat = await fs.lstat(innerPath).catch(failed);
       if (!innerStat) continue;
       if (innerStat.isFile()) bytes += innerStat.size;
       mtimeMs = Math.max(mtimeMs, innerStat.mtimeMs);
       if (innerStat.isDirectory()) pending.push(innerPath);
     }
   }
-  return { bytes, mtimeMs };
+  return { bytes, mtimeMs, complete };
 }
 
 export class HostInbox {
@@ -495,6 +503,10 @@ export class HostInbox {
     const safeName = sanitizeInboxName(name);
     await this.ensure();
     const target = await this.mutations.run(async () => {
+      // Discarded while this waited its turn.
+      if (this.stagings.get(staging) !== stagePath) {
+        throw new Error("Not a live staging folder of this inbox");
+      }
       const tree = await fs.lstat(staging.treePath);
       if (!tree.isDirectory()) throw new Error("The staged tree is not a folder");
       const stamp = inboxTimestamp(this.now());
@@ -509,26 +521,29 @@ export class HostInbox {
           await fs.rmdir(dir).catch(() => {});
           throw error;
         }
+        // Spent in the same turn, so a discard queued behind this finds nothing to remove.
+        this.stagings.delete(staging);
         return published;
       }
       throw new Error("No free folder in the inbox");
     });
-    // Published: the handle is spent even if its empty shell can't be removed now.
-    this.stagings.delete(staging);
     await fs.rm(stagePath, { recursive: true, force: true }).catch(() => {});
     return target;
   }
 
   /**
    * Remove a staging folder that will never be published. Idempotent, and a
-   * no-op for one already published. Stop every writer into it first.
+   * no-op for one already published. Stop every writer into it first. Queued
+   * with publication, so a cancel never deletes part of a tree mid-rename.
    */
-  async discardStaging(staging: InboxStaging): Promise<void> {
-    const stagePath = this.stagings.get(staging);
-    if (stagePath === undefined) return;
-    // Whatever survives this is swept by cleanup once it is stale.
-    await fs.rm(stagePath, { recursive: true, force: true }).catch(() => {});
-    this.stagings.delete(staging);
+  discardStaging(staging: InboxStaging): Promise<void> {
+    return this.mutations.run(async () => {
+      const stagePath = this.stagings.get(staging);
+      if (stagePath === undefined) return;
+      // Whatever survives this is swept by cleanup once it is stale.
+      await fs.rm(stagePath, { recursive: true, force: true }).catch(() => {});
+      this.stagings.delete(staging);
+    });
   }
 
   /**
@@ -590,7 +605,9 @@ export class HostInbox {
       const entries = await this.listEntries();
       // Read after listing: every staging folder listed was registered before it existed.
       const activeStages = new Set(this.stagings.values());
-      const isLive = (entry: InboxEntry) =>
+      // Kept this pass too: an entry not fully read may be bigger or newer than it looks.
+      const isKept = (entry: InboxEntry) =>
+        !entry.complete ||
         (entry.kind === "part" && this.activeParts.has(entry.path)) ||
         (entry.kind === "stage" && activeStages.has(entry.path));
       const now = this.now();
@@ -600,22 +617,24 @@ export class HostInbox {
       for (const entry of entries) {
         const age = now - entry.mtimeMs;
         if (entry.kind === "part" || entry.kind === "stage") {
-          if (!isLive(entry) && age > stalePart) doomed.add(entry);
-        } else if (age > ttl) {
+          if (!isKept(entry) && age > stalePart) doomed.add(entry);
+        } else if (!isKept(entry) && age > ttl) {
           doomed.add(entry);
         }
       }
 
       const byAge = (a: InboxEntry, b: InboxEntry) =>
         a.mtimeMs - b.mtimeMs || a.path.localeCompare(b.path);
-      const images = entries.filter((e) => e.kind === "clipboard" && !doomed.has(e)).sort(byAge);
+      const images = entries
+        .filter((e) => e.kind === "clipboard" && !doomed.has(e) && !isKept(e))
+        .sort(byAge);
       const maxImages = this.options.maxClipboardImages ?? DEFAULT_MAX_CLIPBOARD_IMAGES;
       for (const entry of images.slice(0, Math.max(0, images.length - maxImages))) {
         doomed.add(entry);
       }
 
       const maxBytes = this.options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
-      const survivors = entries.filter((e) => !doomed.has(e) && !isLive(e)).sort(byAge);
+      const survivors = entries.filter((e) => !doomed.has(e) && !isKept(e)).sort(byAge);
       let total = entries
         .filter((e) => !doomed.has(e))
         .reduce((sum, entry) => sum + entry.bytes, 0);
