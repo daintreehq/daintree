@@ -132,8 +132,11 @@ describe("PROJECTS", () => {
       const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, host);
       const label = path.relative(ROOT, config);
       expect(parsed?.options.outDir, `${label} has no outDir`).toBeTruthy();
+      // An outDir on another Windows drive comes back absolute, not as `..`.
       const outDir = path.relative(typecheckDir, parsed.options.outDir);
-      expect(outDir.startsWith(".."), `${label} emits to ${parsed.options.outDir}`).toBe(false);
+      const inside =
+        !path.isAbsolute(outDir) && outDir !== ".." && !outDir.startsWith(`..${path.sep}`);
+      expect(inside, `${label} emits to ${parsed.options.outDir}`).toBe(true);
       for (const ref of parsed.projectReferences ?? []) {
         pending.push(ts.resolveProjectReferencePath(ref));
       }
