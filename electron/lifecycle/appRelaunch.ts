@@ -45,13 +45,15 @@ export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset" 
  * to install without one — and carries an absolute deadline, so a wedged chain
  * still reaches the exit rather than leaving the app half-restarted.
  *
- * `app.relaunch()` is armed before the chain runs and only takes effect at
- * process exit, so arming early costs nothing and guarantees the deadline-forced
- * exit still comes back up.
+ * `app.relaunch()` is armed once the chain is claimed, before it settles, and
+ * only takes effect at process exit, so arming early costs nothing and
+ * guarantees the deadline-forced exit still comes back up.
  *
- * A refused request means something else already owns the shutdown — an
- * in-flight quit or update install. That process is ending anyway, so the
- * relaunch stays armed and rides it out rather than racing it.
+ * A refused request is dropped without arming a relaunch: an armed one cannot be
+ * cancelled, and would bring a deliberate Quit back up. `"already-shutting-down"`
+ * means an in-flight quit or update install owns the exit, and that process is
+ * ending anyway. `"unavailable"` means no shutdown handler is registered yet, so
+ * nothing exits at all.
  */
 export function relaunchApp(reason: AppRelaunchReason): void {
   // Claim the shutdown BEFORE arming the relaunch. Electron offers no way to

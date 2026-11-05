@@ -70,6 +70,14 @@ vi.mock("../../services/CrashLoopGuardService.js", () => ({
   getCrashLoopGuard: vi.fn(() => crashLoopGuardMock),
 }));
 
+const panelSuspectLedgerMock = vi.hoisted(() => ({
+  markCleanLaunch: vi.fn(),
+}));
+
+vi.mock("../../services/PanelSuspectLedgerService.js", () => ({
+  getPanelSuspectLedger: vi.fn(() => panelSuspectLedgerMock),
+}));
+
 const quitWarningMock = vi.hoisted(() => ({
   getActiveAgentCount: vi.fn(() => 0),
   showQuitWarning: vi.fn(() => Promise.resolve(true)),
@@ -240,6 +248,13 @@ const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../services/TelemetryService.js", () => ({
   closeTelemetry: closeTelemetryMock,
+}));
+
+// relaunchApp arms a real waiter process; the relaunch tests only need to see it armed.
+const armRelaunchMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../armRelaunch.js", () => ({
+  armRelaunch: armRelaunchMock,
 }));
 
 const isSmokeTestMock = vi.hoisted(() => ({ value: false }));
@@ -2776,6 +2791,93 @@ describe("registerShutdownHandler", () => {
       expect(onReadyToInstall).not.toHaveBeenCalled();
       expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
       expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+    });
+  });
+
+  // An app-initiated relaunch (GPU mitigation, hardware-acceleration toggle,
+  // state reset) runs this same chain, so only its real outcome may mark the
+  // exit clean (#16273).
+  describe("app-initiated relaunch", () => {
+    beforeEach(() => {
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+      performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(Promise.resolve());
+    });
+
+    async function setupRelaunch() {
+      const { registerShutdownHandler } = await import("../shutdown.js");
+      registerShutdownHandler(makeDeps());
+      const { relaunchApp } = await import("../appRelaunch.js");
+      return relaunchApp;
+    }
+
+    it("records a clean exit once the chain settles clean, before exiting into the relaunch", async () => {
+      const relaunchApp = await setupRelaunch();
+
+      relaunchApp("gpu-mitigation");
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+
+      expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+      // Not idempotent: a second call would advance suspect-panel decay twice.
+      expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+      expect(panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0]).toBeLessThan(
+        appMock.exit.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("writes no clean-exit marker until the relaunch's chain settles", async () => {
+      let releaseCleanup: () => void = () => {};
+      mcpServerMock.stop.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseCleanup = resolve;
+        })
+      );
+      const relaunchApp = await setupRelaunch();
+
+      relaunchApp("gpu-mitigation");
+      await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+      expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+      expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      releaseCleanup();
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves running.lock in place when the chain times out, and still relaunches", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+
+      try {
+        const relaunchApp = await setupRelaunch();
+        relaunchApp("gpu-mitigation");
+
+        await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+        // Only the chain's own cleanup budget, short of the coordinator's
+        // SHUTDOWN_DEADLINE_MS, so the exit comes from the timeout this test
+        // names rather than the outer backstop.
+        await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS);
+
+        expect(consoleSpy).toHaveBeenCalledWith(
+          "[MAIN] Error during cleanup:",
+          expect.objectContaining({ message: expect.stringContaining("Hard shutdown timeout") })
+        );
+        expect(
+          consoleSpy.mock.calls.some(([message]) => String(message).includes("deadline"))
+        ).toBe(false);
+        expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      } finally {
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
     });
   });
 
