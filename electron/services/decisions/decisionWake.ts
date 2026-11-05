@@ -1,5 +1,13 @@
 import type { TerminalTarget } from "@daintreehq/decisions-client";
-import { EXACT_PROMPT_GATE, evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
+import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
+import {
+  decisionGateOptionsFor,
+  evaluateWakeGate,
+  wakeGateOptionsFor,
+  type WakeBlockReason,
+  type WakeGateSnapshot,
+  type WakeHoldReason,
+} from "../../../shared/utils/terminalWakeGate.js";
 import type {
   LaneWake,
   LaneWakeCheck,
@@ -21,6 +29,38 @@ export interface DecisionIdentitySources {
   /** The pane's current ownership principal; null while it holds no bearer. */
   principalFor(paneId: string): string | null;
   getPtyClient(): DecisionGenerationReader | null;
+}
+
+/** What a decision wake reads beside the run's identity. */
+export interface DecisionWakeSources extends DecisionIdentitySources {
+  /** Whether a view's hybrid input holds text for the pane (#16282). */
+  hasComposerDraft?(paneId: string): boolean;
+  now?: () => number;
+}
+
+/** Why an answer can't be typed into the pane as it is now, or null when it can. */
+export type DecisionHold = WakeHoldReason | WakeBlockReason | "settling";
+
+/**
+ * Whether an answer or follow-up may be typed into the pane now (#16282): an
+ * empty composer, mid-turn when its CLI queues input, at its prompt or at a
+ * question it asked in prose. A CLI that can't take a line mid-turn gets it
+ * only once the prompt has held past the settle grace, so a prompt read for a
+ * moment inside a turn never takes it.
+ */
+export function decisionHold(
+  info: WakeGateSnapshot,
+  hasComposerDraft: boolean,
+  now: number
+): DecisionHold | null {
+  const verdict = evaluateWakeGate(
+    { ...info, hasComposerDraft },
+    decisionGateOptionsFor(info.detectedAgentId)
+  );
+  if (verdict.kind !== "ready") return verdict.reason;
+  if (wakeGateOptionsFor(info.detectedAgentId).acceptWorking === true) return null;
+  const settledFor = info.lastStateChange === undefined ? 0 : now - info.lastStateChange;
+  return settledFor >= NOTIFY_SETTLE_GRACE_MS ? null : "settling";
 }
 
 /** Why a pane is not the run an answer is for, as the library names it. */
@@ -103,12 +143,11 @@ export function identityMismatch(
  * approval wake. The id is stable for the same answers (see
  * `decisionWakeId`), so a second attempt queued before the first goes out
  * joins it. Right before typing, with the record the attempt just read, it
- * checks the run is the one that asked and that the agent waits at its own
- * prompt; the engine's gate alone would let a CLI that queues input take it
- * mid-turn.
+ * checks the run is the one that asked and that the composer is empty
+ * (`decisionHold`), which the engine's own gate doesn't know about.
  */
 export function createDecisionWake(
-  sources: DecisionIdentitySources,
+  sources: DecisionWakeSources,
   target: TerminalTarget,
   section: { id: string; text: string },
   report: (outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence) => void
@@ -118,8 +157,12 @@ export function createDecisionWake(
     if (mismatch === "unreadable") return { kind: "held", reason: "unreadable" };
     if (mismatch !== null) return { kind: "unavailable", reason: mismatch };
     if (info === undefined) return { kind: "ready" };
-    const verdict = evaluateWakeGate(info, EXACT_PROMPT_GATE);
-    return verdict.kind === "ready" ? verdict : { kind: "held", reason: verdict.reason };
+    const hold = decisionHold(
+      info,
+      sources.hasComposerDraft?.(target.paneId) === true,
+      sources.now?.() ?? Date.now()
+    );
+    return hold === null ? { kind: "ready" } : { kind: "held", reason: hold };
   };
   return {
     id: section.id,

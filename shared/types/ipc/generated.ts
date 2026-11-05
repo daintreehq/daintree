@@ -728,6 +728,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsAttention.js").ReassignDecisionsAnswerPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
   };
+  "decisions:report-composer-drafts": {
+    args: [keys: string[]];
+    result: void;
+  };
   "decisions:restore-identity": {
     args: [payload: import("../decisions.js").RestoreDecisionsIdentityPayload];
     result: import("../decisions.js").DecisionsConnectResult;

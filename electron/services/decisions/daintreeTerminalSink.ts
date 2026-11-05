@@ -9,9 +9,7 @@ import {
   type TerminalTarget,
   type UnavailableReason,
 } from "@daintreehq/decisions-client";
-import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
-import { EXACT_PROMPT_GATE, evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
 import {
   paneNotifyKey,
   type LaneWake,
@@ -28,9 +26,10 @@ import {
 } from "./answerNotice.js";
 import {
   createDecisionWake,
+  decisionHold,
   identityMismatch,
   type DecisionGenerationReader,
-  type DecisionIdentitySources,
+  type DecisionWakeSources,
 } from "./decisionWake.js";
 
 /** The pty client calls the sink makes. */
@@ -46,11 +45,10 @@ export interface DecisionSinkPtyClient extends DecisionGenerationReader {
   ): Promise<{ data: string; partial?: true } | null>;
 }
 
-export interface DaintreeTerminalSinkDeps extends DecisionIdentitySources {
+export interface DaintreeTerminalSinkDeps extends DecisionWakeSources {
   getPtyClient(): DecisionSinkPtyClient | null;
   /** The listener hold's wake queue (#15999), which takes wakes with the MCP server off. */
   queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
-  now?: () => number;
 }
 
 type Observed =
@@ -106,14 +104,12 @@ export class DaintreeTerminalSink implements TerminalSink {
       : { state: observed.state };
   }
 
-  /** At its own prompt, settled past the grace, with nothing typed since: what the wake waits for too. */
+  /** The composer is empty and the pane can take a line now (`decisionHold`): what the wake waits for too. */
   async isIdle(target: TerminalTarget): Promise<boolean> {
     const observed = await this.observe(target);
     if (observed.state !== "alive") return false;
-    const { info } = observed;
-    if (evaluateWakeGate(info, EXACT_PROMPT_GATE).kind !== "ready") return false;
-    const settledFor = info.lastStateChange === undefined ? 0 : this.now() - info.lastStateChange;
-    return settledFor >= NOTIFY_SETTLE_GRACE_MS;
+    const hasDraft = this.deps.hasComposerDraft?.(target.paneId) === true;
+    return decisionHold(observed.info, hasDraft, this.now()) === null;
   }
 
   async inject(target: TerminalTarget, text: string, injectionId: string): Promise<InjectResult> {

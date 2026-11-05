@@ -134,6 +134,7 @@ import { RelayRemovals, type RemovedRelayRecord } from "./relayRemoval.js";
 import { takeRelayRemovalLaunch } from "../pty/relayRemovalLaunches.js";
 import { SetupCheck } from "./setupCheck.js";
 import { SetupDiagnostics } from "./setupDiagnostic.js";
+import { composerDrafts } from "./composerDrafts.js";
 import { decisionsPolicyOf, type PolicySettings } from "./workflowGates.js";
 import {
   checkRecoveryKit,
@@ -429,6 +430,7 @@ function watchPanes(onPane: (signal: PaneSignal) => void): () => void {
     events.on("agent-session:attributed", () => onPane("session")),
     events.on("agent:spawned", () => onPane("appeared")),
     events.on("terminal:restored", () => onPane("appeared")),
+    composerDrafts.onCleared(() => onPane("composer")),
   ];
   return () => {
     for (const off of offs) off();
@@ -443,6 +445,7 @@ const deliveryDeps: DecisionsDeliveryDeps = {
   // The principal the pane's questions were asked under, which a tier-off pane holds too (#16012).
   principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
   getPtyClient: () => getPtyClient(),
+  hasComposerDraft: (paneId) => composerDrafts.hasDraft(paneId),
   diagnostics: setupDiagnostics,
   holdWakes: async () => {
     const { mcpServerService } = await import("../McpServerService.js");

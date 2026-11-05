@@ -25,6 +25,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   setDefaultQuestionExpiry: "decisions:set-default-question-expiry",
   setAgentAskHuman: "decisions:set-agent-ask-human",
   setTerminalSnapshots: "decisions:set-terminal-snapshots",
+  reportComposerDrafts: "decisions:report-composer-drafts",
   exportRecoveryKit: "decisions:export-recovery-kit",
   verifyRecoveryKit: "decisions:verify-recovery-kit",
   revokeDevice: "decisions:revoke-device",

@@ -56,6 +56,10 @@ export const decisionsClient = {
   markAnswerHandled: (questionId: string): Promise<DecisionsAnswerOutcome> =>
     window.electron.decisions.markAnswerHandled({ questionId }),
 
+  /** This view's whole set of hybrid-input draft keys; an answer waits behind a draft (#16282). */
+  reportComposerDrafts: (keys: string[]): Promise<void> =>
+    window.electron.decisions.reportComposerDrafts(keys),
+
   /** A pane's current state; null while Decisions is off or the pane has nothing outstanding. */
   getPaneState: (terminalId: string): Promise<PaneDecisionState | null> =>
     window.electron.decisions.getPaneState(terminalId),

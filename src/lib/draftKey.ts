@@ -10,6 +10,15 @@ export function makeDraftKey(terminalId: string, projectId?: string): string {
   return projectId ? `${projectId}:${terminalId}` : terminalId;
 }
 
+/** Whether any draft key for `terminalId` holds more than whitespace, whatever its scope. */
+export function hasDraftText(drafts: ReadonlyMap<string, string>, terminalId: string): boolean {
+  const suffix = `:${terminalId}`;
+  for (const [key, value] of drafts) {
+    if ((key === terminalId || key.endsWith(suffix)) && value.trim().length > 0) return true;
+  }
+  return false;
+}
+
 const ISOLATED_COMPOSER_SCOPE = "isolated-composer";
 
 /**

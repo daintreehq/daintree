@@ -139,8 +139,9 @@ export interface MarkDecisionsAnswerHandledPayload {
  * delivery had a go:
  *
  * - `delivered`: typed into `terminalId`.
- * - `waiting`: it has a pane again (`terminalId`), and is typed in once that
- *   pane is idle, or its host is back (`waitsFor`).
+ * - `waiting`: it has a pane again (`terminalId`), and is typed in once its
+ *   composer is empty (for an agent that takes a line mid-turn), at the
+ *   agent's next prompt, or once its host is back (`waitsFor`).
  * - `needs-attention`: it still needs a person, for `reason`.
  * - `handled`: marked handled; it leaves the list, and is never typed in.
  * - `resolved`: it no longer needed a person by the time this ran.
@@ -148,7 +149,12 @@ export interface MarkDecisionsAnswerHandledPayload {
  */
 export type DecisionsAnswerOutcome =
   | { result: "delivered"; terminalId: string; title: string | null }
-  | { result: "waiting"; terminalId: string; title: string | null; waitsFor: "idle" | "host" }
+  | {
+      result: "waiting";
+      terminalId: string;
+      title: string | null;
+      waitsFor: "composer" | "prompt" | "host";
+    }
   | {
       result: "needs-attention";
       status: "needs-attention" | "delivery-uncertain";

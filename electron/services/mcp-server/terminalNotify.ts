@@ -2308,6 +2308,10 @@ export class TerminalNotifyService {
   private schedule(owner: PaneOwner): void {
     if (owner.disposed) return;
     const status = owner.delivery.status;
+    if (status === "outstanding" && this.decisionsMayFollow(owner)) {
+      this.armTimer(owner, NOTIFY_COALESCE_MS);
+      return;
+    }
     if (status === "outstanding" || status === "failed") return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
@@ -2345,8 +2349,11 @@ export class TerminalNotifyService {
 
   private async attempt(owner: PaneOwner): Promise<void> {
     if (owner.disposed || owner.attempting) return;
+    // A line confirmed written, still waiting on the pane's turn, holds back
+    // every notice; only answers may follow it (#16282).
+    const following = this.decisionsMayFollow(owner);
     const status = owner.delivery.status;
-    if (status === "outstanding" || status === "failed") return;
+    if ((status === "outstanding" && !following) || status === "failed") return;
     if (!this.mayType(owner)) return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
@@ -2356,7 +2363,7 @@ export class TerminalNotifyService {
     // The pane is on the relayed call's Shell, whose own notice line types it
     // under that pane's gate; nothing here can read or wait on it.
     if (owner.relay !== undefined) {
-      this.handOff(owner, owner.relay);
+      if (!following) this.handOff(owner, owner.relay);
       return;
     }
 
@@ -2364,7 +2371,7 @@ export class TerminalNotifyService {
     if (lastDeliveredAt !== undefined) {
       const wait = lastDeliveredAt + MIN_NOTIFY_INTERVAL_MS - this.now();
       if (wait > 0) {
-        this.setDelivery(owner, { status: "held", reason: "interval" });
+        if (!following) this.setDelivery(owner, { status: "held", reason: "interval" });
         this.armTimer(owner, wait);
         return;
       }
@@ -2392,7 +2399,10 @@ export class TerminalNotifyService {
       owner.attempting = false;
     }
     if (owner.disposed || !this.mayType(owner)) return;
-    if (owner.delivery.status === "outstanding" || owner.delivery.status === "failed") return;
+    const followsLine = owner.delivery.status === "outstanding";
+    if ((followsLine && !this.decisionsMayFollow(owner)) || owner.delivery.status === "failed") {
+      return;
+    }
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
       this.setDelivery(owner, { status: "idle" });
@@ -2400,6 +2410,7 @@ export class TerminalNotifyService {
     }
     // No reading is not a safe reading.
     if (info === null) {
+      if (followsLine) return;
       this.setDelivery(owner, { status: "blocked", reason: "unreadable" });
       this.armRecheck(owner);
       return;
@@ -2414,6 +2425,15 @@ export class TerminalNotifyService {
       info,
       holdsSteer(owner) ? { ...gate, acceptWorking: false } : gate
     );
+    const settledFor = info.lastStateChange === undefined ? 0 : this.now() - info.lastStateChange;
+    if (!followsLine && verdict.kind === "ready" && settledFor >= NOTIFY_SETTLE_GRACE_MS) {
+      this.deliver(owner, client, info);
+      return;
+    }
+    // An answer waits only on its own check (#16282): mid-turn, at a question
+    // asked in prose, or before the notices' grace is up, it goes on a line
+    // of its own.
+    if (this.deliver(owner, client, info, true) || followsLine) return;
     if (verdict.kind === "hold") {
       this.holdWakes(owner, verdict.reason);
       this.setDelivery(owner, { status: "held", reason: verdict.reason }, info);
@@ -2426,27 +2446,31 @@ export class TerminalNotifyService {
       this.armRecheck(owner);
       return;
     }
-    const settledFor = info.lastStateChange === undefined ? 0 : this.now() - info.lastStateChange;
-    if (settledFor < NOTIFY_SETTLE_GRACE_MS) {
-      this.setDelivery(owner, { status: "scheduled" });
-      this.armTimer(owner, NOTIFY_SETTLE_GRACE_MS - settledFor);
-      return;
-    }
-
-    this.deliver(owner, client, info);
+    this.setDelivery(owner, { status: "scheduled" });
+    this.armTimer(owner, NOTIFY_SETTLE_GRACE_MS - settledFor);
   }
 
+  /**
+   * Type the pane's line. `decisionsOnly` puts only the Decisions answers whose
+   * own check passes on it, leaving notices and held prompts for the pane's
+   * line, and does nothing at all when none passes. True when it did more
+   * than look.
+   */
   private deliver(
     owner: PaneOwner,
     client: TerminalNotifyPtyClient,
-    info: NotifyTerminalInfo
-  ): void {
+    info: NotifyTerminalInfo,
+    decisionsOnly = false
+  ): boolean {
+    const onLine = (entry: WakeEntry) => !decisionsOnly || entry.wake.kind === "decision";
+    if (decisionsOnly && !this.sweepWakes(owner, info).some(onLine)) return owner.disposed;
     // An earlier line the host never finished with would land beside this one;
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     // The last word on each wake: nothing is awaited between this and the submit.
     let steerTaken = false;
     const reserved = this.sweepWakes(owner, info).filter((entry) => {
+      if (!onLine(entry)) return false;
       if (owner.wakes.get(entry.key) !== entry) return false;
       // One held prompt to a line: another waits for the turn after this one's.
       const steer = entry.wake.kind === "steer";
@@ -2456,18 +2480,21 @@ export class TerminalNotifyService {
       return true;
     });
     // A wake's own hooks may have stopped the pane or ended a scope meanwhile.
-    if (owner.disposed) return;
+    if (owner.disposed) return true;
     const wakes = reserved.filter((entry) => owner.wakes.get(entry.key) === entry);
     // With the server off only a scope's wakes may go; notices wait for nothing.
-    const entries = this.deps.isEnabled()
-      ? owner.fired.filter((entry) => isDeliverable(entry))
-      : [];
+    const entries =
+      !decisionsOnly && this.deps.isEnabled()
+        ? owner.fired.filter((entry) => isDeliverable(entry))
+        : [];
     if (entries.length === 0 && wakes.length === 0) {
       // Only wakes, all waiting on the lane: the wake timer comes back for them.
-      this.setDelivery(owner, { status: owner.wakes.size > 0 ? "scheduled" : "idle" });
+      if (owner.delivery.status !== "outstanding") {
+        this.setDelivery(owner, { status: owner.wakes.size > 0 ? "scheduled" : "idle" });
+      }
       this.publish(owner);
       this.maybeDispose(owner);
-      return;
+      return true;
     }
     const token = randomUUID();
     owner.recheckMs = undefined;
@@ -2523,20 +2550,25 @@ export class TerminalNotifyService {
     owner.inHost = { token };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
-    // A decision answer or a held prompt is never typed into a working pane,
-    // even one whose CLI queues mid-turn input, nor into any run but the one
-    // just checked: the host holds the whole line to that.
-    const guard: TerminalSubmitGuard = wakes.some(
-      ({ wake }) => wake.kind === "decision" || wake.kind === "steer"
-    )
-      ? {
-          kind: "settled-prompt-exact",
-          ...(info.agentIncarnation !== undefined
-            ? { agentIncarnation: info.agentIncarnation }
-            : {}),
-          ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
-        }
-      : "settled-prompt";
+    // A held prompt is never typed into a working pane, even one whose CLI
+    // queues mid-turn input, and a decision answer only into one that queues
+    // it (#16282), taking a question in prose only on a line of its own; both
+    // only into the run just checked. The host holds the whole line to that.
+    const steerOnLine = wakes.some(({ wake }) => wake.kind === "steer");
+    const guard: TerminalSubmitGuard =
+      steerOnLine || wakes.some(({ wake }) => wake.kind === "decision")
+        ? {
+            kind: "settled-prompt-exact",
+            ...(info.agentIncarnation !== undefined
+              ? { agentIncarnation: info.agentIncarnation }
+              : {}),
+            ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
+            ...(steerOnLine || (!decisionsOnly && holdsSteer(owner))
+              ? {}
+              : { acceptWorking: true as const }),
+            ...(decisionsOnly ? { acceptQuestion: true as const } : {}),
+          }
+        : "settled-prompt";
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.
     try {
@@ -2561,7 +2593,7 @@ export class TerminalNotifyService {
       this.requeue(owner, token);
       owner.droppedCount += dropped;
       this.failDelivery(owner, "unknown");
-      return;
+      return true;
     }
     logger.info("Notice line submitted", {
       pane: owner.terminalId,
@@ -2572,6 +2604,20 @@ export class TerminalNotifyService {
     this.confirmDelivery(owner, client, token, dropped).catch((err: unknown) => {
       console.error("[MCP] terminal notify: confirming a line failed:", err);
     });
+    return true;
+  }
+
+  /**
+   * The last line is written and only waits on the pane's turn, and an answer
+   * is waiting: it may go now, since its own check is an empty composer.
+   */
+  private decisionsMayFollow(owner: PaneOwner): boolean {
+    if (owner.delivery.status !== "outstanding" || owner.delivery.confirmed !== true) return false;
+    if (owner.inHost !== undefined) return false;
+    for (const entry of owner.wakes.values()) {
+      if (entry.wake.kind === "decision" && entry.token === undefined) return true;
+    }
+    return false;
   }
 
   /**
