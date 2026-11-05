@@ -222,11 +222,13 @@ describe("unpackFolderArchive: forged archives", () => {
   });
 
   it("refuses a symlink entry", async () => {
-    const result = await unpack([
-      ROOT,
-      { name: "Root/link", data: "/etc/passwd", mode: 0o120777 },
-    ]);
-    expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "link", entry: "Root/link" });
+    const result = await unpack([ROOT, { name: "Root/link", data: "/etc/passwd", mode: 0o120777 }]);
+    expect(result).toEqual({
+      ok: false,
+      reason: "unsafe-archive",
+      rule: "link",
+      entry: "Root/link",
+    });
     await stagingIsEmpty();
   });
 
@@ -238,8 +240,16 @@ describe("unpackFolderArchive: forged archives", () => {
     ["an entry not made by Unix", { name: "Root/a.txt", data: "x", madeBy: 20 }, "mode"],
     ["a compressed entry", { name: "Root/a.txt", data: "x", method: 8 }, "method"],
     ["an encrypted entry", { name: "Root/a.txt", data: "x", flags: 0x0801 }, "flags"],
-    ["a non-ASCII name without the UTF-8 flag", { name: "Root/é.txt", data: "x", flags: 0 }, "name-encoding"],
-    ["a name that isn't UTF-8", { name: Buffer.from([0x52, 0x6f, 0x6f, 0x74, 0x2f, 0xff]), data: "x" }, "name-encoding"],
+    [
+      "a non-ASCII name without the UTF-8 flag",
+      { name: "Root/é.txt", data: "x", flags: 0 },
+      "name-encoding",
+    ],
+    [
+      "a name that isn't UTF-8",
+      { name: Buffer.from([0x52, 0x6f, 0x6f, 0x74, 0x2f, 0xff]), data: "x" },
+      "name-encoding",
+    ],
     ["a folder with data", { name: "Root/d/", data: "hidden" }, "size"],
   ] satisfies Array<[string, ForgedEntry, string]>)("refuses %s", async (_label, entry, rule) => {
     const result = await unpack([ROOT, { name: "Root/before.txt", data: "b" }, entry]);
@@ -275,10 +285,7 @@ describe("unpackFolderArchive: forged archives", () => {
     });
 
     it("refuses stored sizes that differ", async () => {
-      const result = await unpack([
-        ROOT,
-        { name: "Root/a.txt", data: content, compressedSize: 4 },
-      ]);
+      const result = await unpack([ROOT, { name: "Root/a.txt", data: content, compressedSize: 4 }]);
       expect(result).toMatchObject({ ok: false, rule: "size", entry: "Root/a.txt" });
     });
 
@@ -425,9 +432,16 @@ describe("unpackFolderArchive: forged archives", () => {
   });
 
   it("refuses a folder with no entry of its own, the root included", async () => {
-    expect(await unpack([ROOT, { name: "Root/a/b.txt", data: "b" }], {
-      declared: { folderCount: 1 },
-    })).toEqual({ ok: false, reason: "unsafe-archive", rule: "missing-folder", entry: "Root/a/b.txt" });
+    expect(
+      await unpack([ROOT, { name: "Root/a/b.txt", data: "b" }], {
+        declared: { folderCount: 1 },
+      })
+    ).toEqual({
+      ok: false,
+      reason: "unsafe-archive",
+      rule: "missing-folder",
+      entry: "Root/a/b.txt",
+    });
     expect(await unpack([{ name: "Root/a.txt", data: "a" }])).toEqual({
       ok: false,
       reason: "unsafe-archive",
@@ -467,7 +481,10 @@ describe("unpackFolderArchive: forged archives", () => {
   it("refuses bytes after the end record", async () => {
     await fs.writeFile(
       archivePath,
-      Buffer.concat([forgeFolderArchive([ROOT, { name: "Root/a.txt", data: "a" }]), Buffer.from("tail")])
+      Buffer.concat([
+        forgeFolderArchive([ROOT, { name: "Root/a.txt", data: "a" }]),
+        Buffer.from("tail"),
+      ])
     );
     const result = await unpackFolderArchive({
       archivePath,
@@ -540,7 +557,10 @@ describe("unpackFolderArchive: cancelling and rolling back", () => {
   it("stops partway through a file and removes it", async () => {
     const controller = new AbortController();
     const big = Buffer.alloc(BULK_CHUNK_BYTES * 3, 7);
-    await fs.writeFile(archivePath, forgeFolderArchive([ROOT, { name: "Root/big.bin", data: big }]));
+    await fs.writeFile(
+      archivePath,
+      forgeFolderArchive([ROOT, { name: "Root/big.bin", data: big }])
+    );
     const crc32 = zlib.crc32;
     let chunks = 0;
     vi.spyOn(zlib, "crc32").mockImplementation((data, value) => {

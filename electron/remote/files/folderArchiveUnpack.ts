@@ -7,7 +7,10 @@ import {
   type FolderUploadProblem,
   type FolderUploadTotals,
 } from "../../../shared/types/folderUpload.js";
-import { checkFolderUploadRootName, FolderUploadTally } from "../../../shared/utils/folderUpload.js";
+import {
+  checkFolderUploadRootName,
+  FolderUploadTally,
+} from "../../../shared/utils/folderUpload.js";
 import { OWNER_RWX_DIR_MODE } from "../../utils/fs.js";
 import { BULK_CHUNK_BYTES } from "../link/frames.js";
 import { NEW_FILE_FLAGS } from "./exclusiveCopy.js";
@@ -82,8 +85,7 @@ export interface FolderArchiveRefusal {
 }
 
 export type FolderArchiveUnpackResult =
-  | { ok: true; totals: FolderUploadTotals }
-  | ({ ok: false } & FolderArchiveRefusal);
+  { ok: true; totals: FolderUploadTotals } | ({ ok: false } & FolderArchiveRefusal);
 
 export interface UnpackFolderArchiveOptions {
   /** The received archive, already verified against its digest and never written again. */
@@ -140,14 +142,24 @@ class Refused extends Error {
 }
 
 function refuse(rule: Exclude<FolderArchiveRule, "content">, entry?: string): Refused {
-  return new Refused(entry === undefined ? { reason: "unsafe-archive", rule } : { reason: "unsafe-archive", rule, entry });
+  return new Refused(
+    entry === undefined
+      ? { reason: "unsafe-archive", rule }
+      : { reason: "unsafe-archive", rule, entry }
+  );
 }
 
 function refuseContent(problem: FolderUploadProblem, entry?: string): Refused {
   const reason =
-    problem.kind === "limit" ? "over-limits" : problem.kind === "clash" ? "name-clash" : "unsafe-archive";
+    problem.kind === "limit"
+      ? "over-limits"
+      : problem.kind === "clash"
+        ? "name-clash"
+        : "unsafe-archive";
   return new Refused(
-    entry === undefined ? { reason, rule: "content", problem } : { reason, rule: "content", entry, problem }
+    entry === undefined
+      ? { reason, rule: "content", problem }
+      : { reason, rule: "content", entry, problem }
   );
 }
 
@@ -504,7 +516,7 @@ async function writeTree(
         // only on what the headers said in pass one.
         if (bytesWritten + bytesRead > declared.totalBytes) throw refuse("declared", file.path);
         crc = zlib.crc32(buffer.subarray(0, bytesRead), crc);
-        for (let offset = 0; offset < bytesRead; ) {
+        for (let offset = 0; offset < bytesRead;) {
           const { bytesWritten: wrote } = await out.write(
             buffer,
             offset,
