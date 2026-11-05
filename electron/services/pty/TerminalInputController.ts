@@ -676,10 +676,26 @@ export class TerminalInputController {
       }
     }
 
+    // A body left in the composer without its Enter is a draft from here on
+    // (#16282): a line the gate admits mid-turn would otherwise be submitted
+    // with it. Only while the run it was written to still holds the pty: a run
+    // that replaced it starts with an empty composer, and a stamp would hold
+    // that run until its next state change.
+    const leaveDraft = () => {
+      const t = this.host.terminalInfo;
+      if (!t.ptyProcess || t.isExited) return;
+      if (t.detectedAgentId !== owner.agentId || t.agentIncarnation !== owner.incarnation) return;
+      stampTypedInput(t, Date.now());
+    };
+
     let bodyWritten: boolean;
     if (imageSegments) {
       const outcome = await this.writeImageSegments(imageSegments, generation, owner);
-      if (outcome === "abandoned") return;
+      // Abandoned only after a paste went in.
+      if (outcome === "abandoned") {
+        leaveDraft();
+        return;
+      }
       bodyWritten = outcome === "written";
     } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       // See `stage`: an unsanitised body could close the paste itself, and
@@ -701,17 +717,6 @@ export class TerminalInputController {
       return;
     }
     const typedAtBodyWrite = carriesImages ? typedBeforeBody : terminal.lastTypedInputAt;
-    // A body left in the composer without its Enter is a draft from here on
-    // (#16282): a line the gate admits mid-turn would otherwise be submitted
-    // with it. Only while the run it was written to still holds the pty: a run
-    // that replaced it starts with an empty composer, and a stamp would hold
-    // that run until its next state change.
-    const leaveDraft = () => {
-      const t = this.host.terminalInfo;
-      if (!t.ptyProcess || t.isExited) return;
-      if (t.detectedAgentId !== owner.agentId || t.agentIncarnation !== owner.incarnation) return;
-      stampTypedInput(t, Date.now());
-    };
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
       leaveDraft();
