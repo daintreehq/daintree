@@ -54,6 +54,9 @@ describe("resolveLaunchClaudeConfigDir", () => {
       expect(
         resolveLaunchClaudeConfigDir({ CLAUDE_CONFIG_DIR: "\\accounts\\work" })
       ).toBeUndefined();
+      // A server with no share is rooted the same way.
+      expect(resolveLaunchClaudeConfigDir({ CLAUDE_CONFIG_DIR: "\\\\work" })).toBeUndefined();
+      expect(resolveLaunchClaudeConfigDir({ CLAUDE_CONFIG_DIR: "//work" })).toBeUndefined();
       expect(resolveLaunchClaudeConfigDir({ CLAUDE_CONFIG_DIR: "\\\\server\\share\\work" })).toBe(
         "\\\\server\\share\\work"
       );

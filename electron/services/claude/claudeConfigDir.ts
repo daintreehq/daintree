@@ -26,9 +26,14 @@ export function resolveLaunchClaudeConfigDir(env: EnvLike): string | undefined {
 /**
  * Windows calls `\work` absolute, but it takes the drive of whichever cwd
  * resolves it: the CLI's, in the pane's folder, not this process's. Only a
- * drive-qualified or UNC path names one folder for both.
+ * drive-qualified path or a UNC share names one folder for both, the same rule
+ * an account folder is checked against when it is added.
  */
 function isFullyQualified(value: string): boolean {
   if (!path.isAbsolute(value)) return false;
-  return process.platform !== "win32" || /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(value);
+  return (
+    process.platform !== "win32" ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(value)
+  );
 }
