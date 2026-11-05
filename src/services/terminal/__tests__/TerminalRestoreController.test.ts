@@ -1876,13 +1876,20 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     it("acks IPC chunks the snapshot covers without repainting them, as on the port (#16259)", async () => {
       const chunks = ["one\r\n", "twö 😀\r\n", "three\r\n", "four\r\n"];
       const expected = await uninterrupted(chunks);
+      // Without the fence the same IPC delivery repeats the covered chunks.
+      const unfenced = await restoreMidStream(chunks, 0, 3, {
+        via: "ipc",
+        withContinuation: false,
+      });
+      expect(unfenced.result).not.toEqual(expected);
+
       const viaPort = await restoreMidStream(chunks, 0, 3, { via: "port" });
       const viaIpc = await restoreMidStream(chunks, 0, 3, { via: "ipc" });
       expect(viaPort.result).toEqual(expected);
       expect(viaIpc.result).toEqual(expected);
-      // Dropped or painted, every chunk settles the renderer's queue and the
-      // host's UTF-8 IPC ledger.
-      expect(viaPort.acks.port).toBe(chunks.length);
+      // Dropped or painted, every chunk is acked: by chunk count on both
+      // transports, and in UTF-8 bytes on the host's IPC ledger for IPC alone.
+      expect(viaPort.acks).toEqual({ port: chunks.length, ipcBytes: 0 });
       expect(viaIpc.acks).toEqual({ port: chunks.length, ipcBytes: utf8Length(chunks.join("")) });
     });
 
