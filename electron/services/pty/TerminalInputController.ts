@@ -701,8 +701,13 @@ export class TerminalInputController {
       return;
     }
     const typedAtBodyWrite = carriesImages ? typedBeforeBody : terminal.lastTypedInputAt;
+    // A body left in the composer without its Enter is a draft from here on
+    // (#16282): a line the gate admits mid-turn would otherwise be submitted
+    // with it.
+    const leaveDraft = () => stampTypedInput(this.host.terminalInfo, Date.now());
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
+      leaveDraft();
       return;
     }
 
@@ -721,6 +726,7 @@ export class TerminalInputController {
     }
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
+      leaveDraft();
       return;
     }
 
@@ -738,7 +744,7 @@ export class TerminalInputController {
     // body stays in the composer unsent, which is a draft from here on, as a
     // staged line is.
     if (ctx?.isWithdrawn?.() === true) {
-      stampTypedInput(this.host.terminalInfo, Date.now());
+      leaveDraft();
       return;
     }
 
@@ -746,6 +752,7 @@ export class TerminalInputController {
     // relaunched, so the checks above miss both; the Enter would then submit
     // to a recipient that never received the body (#15553).
     if (!this.isStillOwnedBy(generation, owner)) {
+      leaveDraft();
       return;
     }
 

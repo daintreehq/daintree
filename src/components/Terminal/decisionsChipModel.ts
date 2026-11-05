@@ -25,6 +25,8 @@ export function paneWaitOf(pane: { hasDraft: boolean; queuesInput: boolean }): P
   return pane.queuesInput ? "composer" : "prompt";
 }
 
+const PANE_WAITS: readonly PaneWait[] = ["draft", "composer", "prompt"];
+
 /** How each wait finishes a sentence: "…typing it in {once the composer is empty}". */
 const WAIT_PHRASES: Record<PaneWait, string> = {
   draft: "once the draft here is sent or cleared",
@@ -263,7 +265,7 @@ const SUMMARY_GROUPS: Array<{
   many: string;
 }> = [
   { matches: isAttention, one: "needs attention", many: "need attention" },
-  ...(Object.keys(WAIT_PHRASES) as PaneWait[]).map((wait) => ({
+  ...PANE_WAITS.map((wait) => ({
     matches: (item: DecisionItem) => item.kind === "answer" && item.waitsFor === wait,
     one: `answered, typing in ${WAIT_PHRASES[wait]}`,
     many: `answered, typing in ${WAIT_PHRASES[wait]}`,

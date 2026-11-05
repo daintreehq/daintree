@@ -25,6 +25,12 @@ const ISOLATED_COMPOSER_SCOPE = "isolated-composer";
  * The draft and history scope of an isolated composer, apart from every
  * project's; a terminal on another host keeps that host's apart from this one's.
  */
+/** A draft kept for a terminal on another host (`isolated-composer:{hostId}:{terminalId}`). */
+export function isOtherHostDraftKey(key: string): boolean {
+  const prefix = `${ISOLATED_COMPOSER_SCOPE}:`;
+  return key.startsWith(prefix) && key.slice(prefix.length).includes(":");
+}
+
 export function isolatedComposerScope(otherHostId?: string): string {
   return otherHostId !== undefined
     ? `${ISOLATED_COMPOSER_SCOPE}:${otherHostId}`

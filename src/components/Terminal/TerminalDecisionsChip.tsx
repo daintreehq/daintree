@@ -11,6 +11,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { hasDraftText } from "@/lib/draftKey";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { useDecisionsOn } from "@/hooks/useDecisionsOn";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
@@ -109,7 +110,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const openAttention = useDecisionsAttentionStore((s) => s.open);
   const hasDraft = useTerminalInputStore((s) => hasDraftText(s.draftInputs, terminalId));
   const queuesInput = usePanelStore((s) => {
-    const agentId = getRuntimeOrBootAgentId(s.panelsById[terminalId]);
+    const panel = s.panelsById[terminalId];
+    const agentId = panel && isPtyPanel(panel) ? getRuntimeOrBootAgentId(panel) : undefined;
     return (
       agentId !== undefined &&
       getEffectiveAgentConfig(agentId)?.capabilities?.queuesInputWhileWorking === true

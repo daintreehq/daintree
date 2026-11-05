@@ -10,7 +10,12 @@ vi.mock("@/clients/decisionsClient", () => ({
 }));
 
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { draftKeysWithText, setupComposerDraftListeners } from "../composerDrafts";
+import {
+  COMPOSER_DRAFT_REFRESH_MS,
+  COMPOSER_DRAFT_RETRY_MS,
+  draftKeysWithText,
+  setupComposerDraftListeners,
+} from "../composerDrafts";
 
 describe("composer draft reports (#16282)", () => {
   let stop: (() => void) | null = null;
@@ -57,12 +62,52 @@ describe("composer draft reports (#16282)", () => {
     expect(sent()).toEqual([[], ["p1:t1"], []]);
   });
 
-  it("sends the set again with the next change after a report fails", async () => {
-    reportComposerDrafts.mockRejectedValueOnce(new Error("gone"));
-    start();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    useTerminalInputStore.getState().setDraftInput("t1", " ", "p1");
-    // Only whitespace: the same empty set, sent again since the first failed.
-    expect(sent()).toEqual([[], []]);
+  it("leaves out a draft for another host's terminal", () => {
+    expect(
+      draftKeysWithText(
+        new Map([
+          ["isolated-composer:host-b:t1", "reply"],
+          ["isolated-composer:t2", "reply"],
+        ])
+      )
+    ).toEqual(["isolated-composer:t2"]);
+  });
+
+  describe("on a timer", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("sends a report that failed again, without waiting for another edit", async () => {
+      reportComposerDrafts.mockRejectedValueOnce(new Error("gone"));
+      useTerminalInputStore.getState().setDraftInput("t1", "half a thought", "p1");
+      start();
+      await vi.advanceTimersByTimeAsync(COMPOSER_DRAFT_RETRY_MS - 1);
+      expect(sent()).toEqual([["p1:t1"]]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sent()).toEqual([["p1:t1"], ["p1:t1"]]);
+    });
+
+    it("repeats a view's drafts now and then, and says nothing more while it holds none", async () => {
+      start();
+      await vi.advanceTimersByTimeAsync(COMPOSER_DRAFT_REFRESH_MS * 2);
+      expect(sent()).toEqual([[]]);
+
+      useTerminalInputStore.getState().setDraftInput("t1", "half a thought", "p1");
+      await vi.advanceTimersByTimeAsync(COMPOSER_DRAFT_REFRESH_MS);
+      expect(sent()).toEqual([[], ["p1:t1"], ["p1:t1"]]);
+    });
+
+    it("stops repeating once disposed", async () => {
+      useTerminalInputStore.getState().setDraftInput("t1", "half a thought", "p1");
+      start();
+      stop?.();
+      stop = null;
+      await vi.advanceTimersByTimeAsync(COMPOSER_DRAFT_REFRESH_MS * 2);
+      expect(sent()).toEqual([["p1:t1"]]);
+    });
   });
 });

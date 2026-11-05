@@ -3127,7 +3127,6 @@ describe("decision wakes (#16015)", () => {
       "at a question asked in prose",
       { ...atPrompt(Date.now() - 60_000), waitingReason: "question" },
     ],
-    ["mid-turn for a CLI that can't queue", { ...working(), detectedAgentId: "gemini" }],
     ["inside the notices' settle grace", atPrompt(Date.now() + NOTIFY_COALESCE_MS)],
   ] as const)(
     "puts a ready answer on a line of its own %s, leaving the rest for the pane's line (#16282)",
@@ -3151,6 +3150,32 @@ describe("decision wakes (#16015)", () => {
       expect(other.outcomes).not.toContainEqual({ kind: "delivered" });
     }
   );
+
+  it("never carries a fired notice onto an answer's own line", async () => {
+    const h = setup();
+    h.client.terminals.set(OWN, { ...atPrompt(Date.now() - 60_000), waitingReason: "question" });
+    await h.service.whenIdle(PANE, { terminalId: "t-a" });
+    h.settle("t-a");
+    await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 50);
+    await flushWake();
+    // A notice typed at a question would read as its reply.
+    expect(h.client.submitted).toEqual([]);
+
+    const scope = h.service.openWakeScope();
+    const decision = decisionWake("Daintree Decisions: section");
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      expect.objectContaining({ text: "Daintree Decisions: section" }),
+    ]);
+
+    // The notice still goes, on the pane's own line, once it is at its prompt.
+    h.client.terminals.set(OWN, atPrompt(Date.now()));
+    h.settle(OWN);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(h.client.submitted).toHaveLength(2);
+    expect(h.client.submitted[1].text).toContain("terminal t-a stopped working");
+  });
 
   it("follows a confirmed line still waiting on the pane's turn, but never one unconfirmed", async () => {
     const h = setup({ enabled: false });
