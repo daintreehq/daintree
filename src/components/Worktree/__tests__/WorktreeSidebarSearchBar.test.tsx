@@ -49,6 +49,15 @@ describe("WorktreeSidebarSearchBar", () => {
     resetWorktreeFilterStore();
   });
 
+  it("preserves a live query awaiting persistence when another search bar mounts", () => {
+    useWorktreeFilterStore.getState().setLiveQuery("test-branch");
+    renderBar();
+    expect(getInput().value).toBe("test-branch");
+    expect(useWorktreeFilterStore.getState().query).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(getInput().value).toBe("");
+  });
+
   it("hands Enter to the host so a typed query can act on its top result", () => {
     const onSubmit = vi.fn();
     render(<WorktreeSidebarSearchBar variant="palette" onSubmit={onSubmit} />, {

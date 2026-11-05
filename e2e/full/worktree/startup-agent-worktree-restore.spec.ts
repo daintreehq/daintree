@@ -93,11 +93,9 @@ fs.appendFileSync(
 );
 const idFlag = argv.findIndex((a) => a === "--session-id" || a === "--resume");
 const sessionId = idFlag >= 0 ? argv[idFlag + 1] : undefined;
-// Daintree never looks for a transcript on Windows, and a drive-letter cwd is
-// no valid directory name there.
-if (sessionId && process.platform !== "win32") {
+if (sessionId) {
   const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  const projectDir = path.join(configDir, "projects", process.cwd().replace(/[\\/]/g, "-"));
+  const projectDir = path.join(configDir, "projects", process.cwd().replace(/[:\\/]/g, "-"));
   fs.mkdirSync(projectDir, { recursive: true });
   fs.appendFileSync(path.join(projectDir, sessionId + ".jsonl"), "");
 }

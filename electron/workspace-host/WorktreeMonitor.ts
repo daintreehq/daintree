@@ -235,6 +235,7 @@ export class WorktreeMonitor {
   // monitor falls back to adaptive polling. Always true for the focused
   // worktree (which is never counted against the cap).
   private gitWatchBudgetAllowed: boolean = true;
+  private pendingDeletions = 0;
   // Second budget gate, for agent-active worktrees past WorkspaceService's
   // recursive cap: they keep a watcher but only on `.git/`. Never consulted
   // for the focused worktree, which has its own recursive entitlement.
@@ -496,7 +497,9 @@ export class WorktreeMonitor {
         // for an evicted background worktree without touching the user/config
         // `gitWatchEnabled` flag. The controller observes only this single
         // signal, so budget enforcement stays transparent to it.
-        return monitor.gitWatchEnabled && monitor.gitWatchBudgetAllowed;
+        return (
+          monitor.gitWatchEnabled && monitor.gitWatchBudgetAllowed && monitor.pendingDeletions === 0
+        );
       },
       get gitWatchDebounceMs() {
         return monitor.gitWatchDebounceMs;
@@ -1819,6 +1822,18 @@ export class WorktreeMonitor {
     this.watcherController.stop();
     // A parked automatic pass would run against a stopped monitor.
     this.statusAdmission?.cancel(this.id);
+  }
+
+  pauseFileWatchingForDeletion(): () => void {
+    this.pendingDeletions++;
+    this.watcherController.stop(false);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.pendingDeletions--;
+      if (this.pendingDeletions === 0) this.watcherController.ensureState();
+    };
   }
 
   /**

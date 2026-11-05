@@ -35,6 +35,7 @@ import {
   getGitRecoveryHint,
 } from "../../shared/utils/gitOperationErrors.js";
 import { logError, logWarn } from "../utils/logger.js";
+import { settleParcelWatcherLifecycle } from "../utils/parcelWatcherBackend.js";
 import { newFileDiff, type NewFileMode } from "../utils/newFileDiff.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
@@ -4558,6 +4559,8 @@ export class WorkspaceService {
     // Set once the attachment detaches have run, so a failure releases the
     // hold they took on the worktree — and only then.
     let attachmentsReserved = false;
+    let deletingMonitor: WorktreeMonitor | undefined;
+    let restoreFileWatching: (() => void) | undefined;
     try {
       markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
@@ -4656,6 +4659,11 @@ export class WorkspaceService {
       this.topologyWatcher.markPendingDelete(pendingDeleteKey);
 
       if (this.git) {
+        // FSEvents root-deletion delivery can race Parcel's native unsubscribe.
+        // Drain teardown before Git removes the watched directory or its .git.
+        deletingMonitor = monitor;
+        restoreFileWatching = monitor.pauseFileWatchingForDeletion();
+        await settleParcelWatcherLifecycle();
         // #6669: if the directory is already gone (deleted externally), skip
         // `git worktree remove` (which fails with `is not a working tree`)
         // and sweep the registry instead to clean up the leftover metadata. This is the only UI recovery path for a phantom entry.
@@ -4807,6 +4815,9 @@ export class WorkspaceService {
       // The worktree is still here, so attaching to it is allowed again — but
       // only this delete's hold is released; a concurrent one keeps its own.
       if (attachmentsReserved) this.attachmentService.endDelete(worktreeId);
+      if (deletingMonitor && this.monitors.get(worktreeId) === deletingMonitor) {
+        restoreFileWatching?.();
+      }
       // The only durable record of a delete failure. The renderer surfaces it
       // on the card, but a branch-delete failure arrives after the card is
       // already gone — so without this the error survives nowhere on disk.

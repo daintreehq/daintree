@@ -197,6 +197,7 @@ const baseConfig: KnipConfig = {
     // why: Host OS commands invoked directly by platform-specific runtime,
     // installer, and E2E paths. They are not npm-provided binaries and must
     // not be declared as package dependencies.
+    "attrib",
     // The native supervisor tests compile their fixture with the host C compiler.
     "cc",
     // Real-agent E2E fixtures invoke the separately installed agent CLI.

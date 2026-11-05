@@ -103,6 +103,7 @@ export function WorktreeSidebarSearchBar({
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const internalRef = useRef<HTMLInputElement | null>(null);
   const prevHasActiveFiltersRef = useRef(hasActiveFiltersValue);
+  const previousQueryRef = useRef(query);
 
   // Sync the instant `liveQuery` and cancel any pending persistence write when
   // the persisted `query` changes from outside this input (hydration,
@@ -110,6 +111,9 @@ export function WorktreeSidebarSearchBar({
   // changes when the debounce commits, at which point `liveQuery` already
   // matches, so this is a no-op.
   useEffect(() => {
+    // Mounting another search surface must preserve text awaiting persistence.
+    if (previousQueryRef.current === query) return;
+    previousQueryRef.current = query;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
