@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { BUILT_IN_THEME_SOURCES } from "@shared/theme/builtInThemes";
+import { getColorVisionWrites } from "@shared/theme/colorVisionOverrides";
 import {
   flushPendingTheme,
   injectSchemeToDOM,
@@ -103,22 +104,6 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
     expect(painted("status-success")).toBe(dark.tokens["status-success"].trim());
   });
 
-  it("paints the whole new theme and its colour vision CSS before publishing the mode", () => {
-    const seen: Array<[string | undefined, string]> = [];
-    const unsubscribe = useAppThemeStore.subscribe((state, prev) => {
-      if (state.colorVisionMode === prev.colorVisionMode) return;
-      // What a terminal recolouring from the mode reads off the root.
-      seen.push([root.dataset.colorblind, painted("surface-canvas")]);
-    });
-    try {
-      reconcile({ colorSchemeId: light.id, colorVisionMode: "blue-yellow" }, { crossfade: true });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(seen).toEqual([["blue-yellow", canvasOf(light)]]);
-  });
-
   it("puts a pushed colour vision mode on an open preview, which keeps the DOM", () => {
     useAppThemeStore.setState({ previewSchemeId: otherDark.id });
     useAppThemeStore.getState().injectTheme(otherDark);
@@ -128,6 +113,12 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
 
     expect(root.dataset.colorblind).toBe("red-green");
     expect(painted("surface-canvas")).toBe(canvasOf(otherDark));
+    // Fitted to the preview on screen, not to the light theme now committed.
+    const committedWrites = getColorVisionWrites("red-green", light);
+    const [token, value] = Object.entries(getColorVisionWrites("red-green", otherDark)).find(
+      ([name, fitted]) => committedWrites[name] !== fitted
+    )!;
+    expect(root.style.getPropertyValue(token).trim()).toBe(value.trim());
     expect(useAppThemeStore.getState().colorVisionMode).toBe("red-green");
   });
 
@@ -167,6 +158,10 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
       Object.assign(document, { startViewTransition });
     });
 
+    afterEach(() => {
+      Reflect.deleteProperty(window, "matchMedia");
+    });
+
     it("fades to a visible change, painting it inside the transition", () => {
       reconcile({ colorSchemeId: light.id }, { crossfade: true });
 
@@ -174,6 +169,26 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
       expect(root.style.getPropertyValue("--theme-surface-canvas").trim()).toBe(canvasOf(dark));
       deferred[0]!();
       expect(root.style.getPropertyValue("--theme-surface-canvas").trim()).toBe(canvasOf(light));
+    });
+
+    it("paints the whole new theme and its colour vision CSS before publishing the mode", () => {
+      const seen: Array<[string | undefined, string]> = [];
+      const unsubscribe = useAppThemeStore.subscribe((state, prev) => {
+        if (state.colorVisionMode === prev.colorVisionMode) return;
+        // What a terminal recolouring from the mode reads off the root, as it stands.
+        seen.push([
+          root.dataset.colorblind,
+          root.style.getPropertyValue("--theme-surface-canvas").trim(),
+        ]);
+      });
+      try {
+        reconcile({ colorSchemeId: light.id, colorVisionMode: "blue-yellow" }, { crossfade: true });
+      } finally {
+        unsubscribe();
+      }
+
+      expect(seen).toEqual([["blue-yellow", canvasOf(light)]]);
+      expect(startViewTransition).not.toHaveBeenCalled();
     });
 
     it("starts no transition when nothing visible changed", () => {

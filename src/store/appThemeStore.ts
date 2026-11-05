@@ -492,9 +492,10 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     const paint = () =>
       injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
     if (modeChanged) {
-      // The whole scheme first, so nothing that recolours from the mode reads
-      // the outgoing one, and no fade: it would show the mode half-applied.
-      if (schemeChanged) paint();
+      // The whole scheme first, superseding a fade still pending, so nothing that
+      // recolours from the mode reads the outgoing one; no fade of its own, which
+      // would show the mode half-applied.
+      paint();
       publishMode();
       return;
     }
