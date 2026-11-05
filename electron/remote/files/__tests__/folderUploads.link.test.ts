@@ -302,9 +302,7 @@ describe("a folder sent to the host inbox", () => {
     const [entry] = await publishedEntries();
     expect(done.hostPath).toBe(path.join(inboxRoot, "files", entry!, "Audit"));
     expect(await fs.readFile(path.join(done.hostPath, "README.md"), "utf8")).toBe("# Audit");
-    expect(await fs.readFile(path.join(done.hostPath, "src", "app.ts"), "utf8")).toBe(
-      "export {};"
-    );
+    expect(await fs.readFile(path.join(done.hostPath, "src", "app.ts"), "utf8")).toBe("export {};");
     expect((await fs.readdir(path.join(done.hostPath, "src", "empty"))).length).toBe(0);
     expect((await fs.stat(path.join(done.hostPath, "README.md"))).mode & 0o777).toBe(0o600);
     expect((await fs.stat(path.join(done.hostPath, "run.sh"))).mode & 0o777).toBe(0o700);

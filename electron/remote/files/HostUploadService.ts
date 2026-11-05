@@ -9,12 +9,7 @@ import type { TransferSink } from "../link/transfer.js";
 import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import { componentsBelow, openDirectoryBeneath, type HeldDirectory } from "./hostContainment.js";
 import type { HostFileEndpoint } from "./HostFileService.js";
-import {
-  HostInbox,
-  sanitizeInboxName,
-  truncateName,
-  type InboxReservation,
-} from "./hostInbox.js";
+import { HostInbox, sanitizeInboxName, truncateName, type InboxReservation } from "./hostInbox.js";
 import {
   UPLOAD_SINK_PREFIX,
   UploadLinkMethod,

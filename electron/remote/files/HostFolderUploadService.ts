@@ -333,7 +333,10 @@ export class HostFolderUploadService {
     }
   }
 
-  private status(folders: SessionFolders, payload: FolderUploadOperationPayload): FolderUploadStatus {
+  private status(
+    folders: SessionFolders,
+    payload: FolderUploadOperationPayload
+  ): FolderUploadStatus {
     if (this.disposed) throw notInProject();
     const endpoint = this.endpointFor(folders, payload.endpointId);
     this.expireOperations();
@@ -565,7 +568,10 @@ export class HostFolderUploadService {
     this.revokeToken(operation);
     this.clearAwaitTimer(operation);
     operation.phase = "receiving";
-    if (begin.size !== operation.request.archiveBytes || begin.sha256 !== operation.request.sha256) {
+    if (
+      begin.size !== operation.request.archiveBytes ||
+      begin.sha256 !== operation.request.sha256
+    ) {
       this.settle(operation, TRANSFER_FAILED);
       throw new Error("The transfer does not match the prepared folder upload");
     }
