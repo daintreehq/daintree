@@ -14,6 +14,13 @@ const debuggerMock = vi.hoisted(() => ({
   off: vi.fn(),
 }));
 
+// The project view whose renderer embeds the guest: every guest push goes here.
+const embedderMock = vi.hoisted(() => ({
+  id: 7,
+  send: vi.fn(),
+  isDestroyed: vi.fn(() => false),
+}));
+
 const mockWebContents = vi.hoisted(() => ({
   id: 42,
   isDestroyed: vi.fn(() => false),
@@ -21,7 +28,7 @@ const mockWebContents = vi.hoisted(() => ({
   executeJavaScript: vi.fn().mockResolvedValue([]),
   getURL: vi.fn(() => "http://localhost:5173/"),
   once: vi.fn(),
-  hostWebContents: null as unknown,
+  hostWebContents: embedderMock as unknown,
 }));
 
 const webContentsMock = vi.hoisted(() => ({
@@ -70,7 +77,7 @@ vi.mock("../../utils.js", () => ({
     }
   ),
   broadcastToRenderer: vi.fn((channel: string, ...args: unknown[]) => {
-    mainWindowMock.webContents.send(channel, ...args);
+    embedderMock.send(channel, ...args);
   }),
   sendToWebContents: vi.fn(
     (
@@ -134,7 +141,7 @@ async function emitObjectRow(paneId: string, objectId: string, timestamp = 1000)
     args: [{ type: "object", objectId, className: "Object" }],
     timestamp,
   });
-  const sent = mainWindowMock.webContents.send.mock.calls.filter(
+  const sent = embedderMock.send.mock.calls.filter(
     ([channel]: string[]) => channel === "webview:console-message"
   );
   return (sent[sent.length - 1][1] as { id: number }).id;
@@ -171,6 +178,8 @@ describe("registerWebviewHandlers", () => {
     debuggerMock.sendCommand.mockResolvedValue(undefined);
     webContentsMock.fromId.mockReturnValue(mockWebContents);
     mockWebContents.isDestroyed.mockReturnValue(false);
+    mockWebContents.hostWebContents = embedderMock;
+    embedderMock.isDestroyed.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -255,7 +264,7 @@ describe("registerWebviewHandlers", () => {
         timestamp: 1000,
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({
           paneId: "pane-1",
@@ -436,7 +445,7 @@ describe("registerWebviewHandlers", () => {
         timestamp: 1003,
       });
 
-      const calls = mainWindowMock.webContents.send.mock.calls.filter(
+      const calls = embedderMock.send.mock.calls.filter(
         ([ch]: string[]) => ch === "webview:console-message"
       );
       // endGroup doesn't produce a row, so 3 messages
@@ -446,69 +455,38 @@ describe("registerWebviewHandlers", () => {
       expect(calls[2][1].groupDepth).toBe(0); // after endGroup, back to depth 0
     });
 
-    it("sends console messages to owner window when hostWebContents resolves", async () => {
-      const ownerWindowMock = {
-        webContents: { send: vi.fn(), isDestroyed: vi.fn(() => false) },
-        isDestroyed: vi.fn(() => false),
-      };
-      mockWebContents.hostWebContents = { id: 99 };
-      browserWindowMock.fromWebContents.mockReturnValue(ownerWindowMock);
+    it("sends a row nowhere when the guest has no embedder", async () => {
+      // Broadcasting would hand the row to every project view, so a guest with
+      // no embedder has nobody its rows belong to.
+      mockWebContents.hostWebContents = null;
 
       cleanup = registerWebviewHandlers(deps);
-      const handler = getHandler("webview:start-console-capture");
-      await handler(null, 42, "pane-1");
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
 
-      const messageListener = debuggerMock.on.mock.calls.find(
-        ([event]: string[]) => event === "message"
-      )![1];
-
-      vi.mocked(sendToRenderer).mockClear();
-      vi.mocked(broadcastToRenderer).mockClear();
-
-      messageListener({}, "Runtime.consoleAPICalled", {
+      getMessageListener()({}, "Runtime.consoleAPICalled", {
         type: "log",
-        args: [{ type: "string", value: "targeted" }],
-        timestamp: 2000,
-      });
-
-      expect(sendToRenderer).toHaveBeenCalledWith(
-        ownerWindowMock,
-        "webview:console-message",
-        expect.objectContaining({ paneId: "pane-1", summaryText: "targeted" })
-      );
-      expect(broadcastToRenderer).not.toHaveBeenCalled();
-
-      // Reset for other tests
-      mockWebContents.hostWebContents = null;
-      browserWindowMock.fromWebContents.mockReturnValue(null);
-    });
-
-    it("falls back to broadcast when hostWebContents is null", async () => {
-      mockWebContents.hostWebContents = null;
-      browserWindowMock.fromWebContents.mockReturnValue(null);
-
-      cleanup = registerWebviewHandlers(deps);
-      const handler = getHandler("webview:start-console-capture");
-      await handler(null, 42, "pane-1");
-
-      const messageListener = debuggerMock.on.mock.calls.find(
-        ([event]: string[]) => event === "message"
-      )![1];
-
-      vi.mocked(sendToRenderer).mockClear();
-      vi.mocked(broadcastToRenderer).mockClear();
-
-      messageListener({}, "Runtime.consoleAPICalled", {
-        type: "log",
-        args: [{ type: "string", value: "fallback" }],
+        args: [{ type: "string", value: "orphan" }],
         timestamp: 3000,
       });
 
-      expect(broadcastToRenderer).toHaveBeenCalledWith(
-        "webview:console-message",
-        expect.objectContaining({ paneId: "pane-1", summaryText: "fallback" })
-      );
+      expect(embedderMock.send).not.toHaveBeenCalled();
       expect(sendToRenderer).not.toHaveBeenCalled();
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("sends nothing once the embedder is destroyed", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      embedderMock.isDestroyed.mockReturnValue(true);
+
+      getMessageListener()({}, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "late" }],
+        timestamp: 3001,
+      });
+
+      expect(embedderMock.send).not.toHaveBeenCalled();
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
     });
 
     it("routes rows and context resets to the guest's embedder while another project's view is active", async () => {
@@ -537,7 +515,9 @@ describe("registerWebviewHandlers", () => {
           exceptionDetails: { text: "Uncaught", exception: { type: "string", value: "boom" } },
         });
         messageListener({}, "Runtime.executionContextsCleared", {});
-        const detachCall = debuggerMock.on.mock.calls.find(([event]: string[]) => event === "detach");
+        const detachCall = debuggerMock.on.mock.calls.find(
+          ([event]: string[]) => event === "detach"
+        );
         (detachCall![1] as (event: unknown, reason: string) => void)({}, "target closed");
 
         const channelsTo = (target: { send: ReturnType<typeof vi.fn> }) =>
@@ -553,9 +533,10 @@ describe("registerWebviewHandlers", () => {
           expect.objectContaining({ paneId: "pane-a", summaryText: "[vite] hmr failed" })
         );
         expect(activeB.send).not.toHaveBeenCalled();
-        expect(mainWindowMock.webContents.send).not.toHaveBeenCalled();
+        expect(embedderMock.send).not.toHaveBeenCalled();
+        expect(sendToRenderer).not.toHaveBeenCalled();
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
       } finally {
-        mockWebContents.hostWebContents = null;
         browserWindowMock.fromWebContents.mockReturnValue(null);
       }
     });
@@ -611,7 +592,7 @@ describe("registerWebviewHandlers", () => {
         },
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({
           paneId: "pane-1",
@@ -637,7 +618,7 @@ describe("registerWebviewHandlers", () => {
         exceptionDetails: { text: "Uncaught (in promise) plain string" },
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({
           level: "error",
@@ -667,7 +648,7 @@ describe("registerWebviewHandlers", () => {
         },
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({
           paneId: "pane-1",
@@ -692,7 +673,7 @@ describe("registerWebviewHandlers", () => {
         entry: { source: "appcache", level: "verbose", text: "v", timestamp: 1 },
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({ level: "log", cdpType: "log-entry", category: "other" })
       );
@@ -719,7 +700,7 @@ describe("registerWebviewHandlers", () => {
         timestamp: 1000,
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({ paneId: "pane-1", summaryText: "still works" })
       );
@@ -744,7 +725,7 @@ describe("registerWebviewHandlers", () => {
         entry: { source: "network", level: "error", text: "failed", timestamp: 2 },
       });
 
-      const rows = mainWindowMock.webContents.send.mock.calls
+      const rows = embedderMock.send.mock.calls
         .filter((call): call is [string, any] => call[0] === "webview:console-message")
         .map((call) => call[1] as { paneId: string; cdpType: string });
       const exceptionPanes = rows.filter((r) => r.cdpType === "error").map((r) => r.paneId);
@@ -775,7 +756,7 @@ describe("registerWebviewHandlers", () => {
           },
         };
         for (let i = 0; i < 6; i++) messageListener({}, "Log.entryAdded", evt);
-        const countAfterFlood = mainWindowMock.webContents.send.mock.calls.filter(
+        const countAfterFlood = embedderMock.send.mock.calls.filter(
           (call): call is [string, { cdpType?: string }] =>
             call[0] === "webview:console-message" && (call[1] as any).cdpType === "log-entry"
         ).length;
@@ -784,7 +765,7 @@ describe("registerWebviewHandlers", () => {
         vi.advanceTimersByTime(5_001);
         messageListener({}, "Log.entryAdded", evt);
 
-        const totalAfterReset = mainWindowMock.webContents.send.mock.calls.filter(
+        const totalAfterReset = embedderMock.send.mock.calls.filter(
           (call): call is [string, { cdpType?: string }] =>
             call[0] === "webview:console-message" && (call[1] as any).cdpType === "log-entry"
         ).length;
@@ -809,7 +790,7 @@ describe("registerWebviewHandlers", () => {
         exceptionDetails: { exception: { type: "object" } },
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({
           level: "error",
@@ -887,7 +868,7 @@ describe("registerWebviewHandlers", () => {
     }
 
     function consoleRows() {
-      return mainWindowMock.webContents.send.mock.calls
+      return embedderMock.send.mock.calls
         .filter(([channel]: string[]) => channel === "webview:console-message")
         .map((call) => call[1] as { summaryText: string });
     }
@@ -1496,7 +1477,7 @@ describe("registerWebviewHandlers", () => {
         },
       });
 
-      expect(mainWindowMock.webContents.send).toHaveBeenCalledWith(
+      expect(embedderMock.send).toHaveBeenCalledWith(
         "webview:console-message",
         expect.objectContaining({
           stackTrace: {
@@ -1525,7 +1506,7 @@ describe("webview:register-panel ownership", () => {
   });
 
   afterEach(() => {
-    mockWebContents.hostWebContents = null;
+    mockWebContents.hostWebContents = embedderMock;
     if (cleanup) {
       cleanup();
       cleanup = null;

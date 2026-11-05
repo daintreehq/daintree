@@ -1,6 +1,5 @@
 // eager-import-allow: reads the import-map hash sidecar synchronously while the session CSP is set up on startup
 import { app, session } from "electron";
-import { getWindowForWebContents, getAppWebContents } from "../../window/webContentsRegistry.js";
 import path from "path";
 import { readFileSync } from "node:fs";
 import {
@@ -21,6 +20,7 @@ import {
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { sendToWebContents } from "../../ipc/utils.js";
 import { claimPageDictationKey } from "../../services/voice/pageDictationKey.js";
 import { getDistPath } from "./app.js";
 import { isHtmlPreviewContents } from "../htmlPreviewSession.js";
@@ -194,6 +194,20 @@ export function setupWebviewCSP(): void {
 
   // Monitor for dynamic dev-preview partitions
   app.on("web-contents-created", (_event, contents) => {
+    // Every push about a guest goes to the renderer embedding it, never to its
+    // window's active app view: a cached project view keeps its guests running
+    // while another project is on screen, and only the embedder has the panel.
+    // Cached because hostWebContents is unreachable once the guest is
+    // destroyed, and dismiss-on-destroy still has to reach the embedder.
+    let cachedEmbedder: Electron.WebContents | null = null;
+    const resolveEmbedder = (): Electron.WebContents | null => {
+      if (!contents.isDestroyed()) {
+        const live = contents.hostWebContents;
+        if (live) cachedEmbedder = live;
+      }
+      return cachedEmbedder && !cachedEmbedder.isDestroyed() ? cachedEmbedder : null;
+    };
+
     const notifyBlockedNavigation = (url: string) => {
       const dialogService = getWebviewDialogService();
       const panelId = dialogService.getPanelId(contents.id);
@@ -231,14 +245,11 @@ export function setupWebviewCSP(): void {
         );
       }
 
-      const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-      if (parentWindow && !parentWindow.isDestroyed()) {
-        getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
-          panelId,
-          url,
-          canOpenExternal: canOpenExternalUrl(url),
-        });
-      }
+      sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+        panelId,
+        url,
+        canOpenExternal: canOpenExternalUrl(url),
+      });
     };
 
     contents.on("will-attach-webview", (_event, _webPreferences, params) => {
@@ -332,19 +343,6 @@ export function setupWebviewCSP(): void {
         }
       });
 
-      // Resolve and cache the guest's parent window. On the `destroyed` event the
-      // guest's hostWebContents is no longer reachable, so dismiss-on-destroy falls
-      // back to the reference captured while the guest was alive — populated when a
-      // dialog is first intercepted below (a dialog can only be pending if this ran).
-      let cachedParentWindow: Electron.BrowserWindow | null = null;
-      const resolveParentWindow = (): Electron.BrowserWindow | null => {
-        if (!contents.isDestroyed()) {
-          const live = getWindowForWebContents(contents.hostWebContents ?? contents);
-          if (live) cachedParentWindow = live;
-        }
-        return cachedParentWindow && !cachedParentWindow.isDestroyed() ? cachedParentWindow : null;
-      };
-
       // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests.
       // Electron 40+ emits "js-dialog" but its TS types omit it from the overload union.
       (contents as { on: (event: string, listener: (...args: unknown[]) => void) => void }).on(
@@ -377,19 +375,15 @@ export function setupWebviewCSP(): void {
             return;
           }
 
-          const parentWindow = resolveParentWindow();
-          if (parentWindow) {
-            getAppWebContents(parentWindow).send("webview:dialog-request", {
-              dialogId,
-              panelId,
-              type,
-              message: msg,
-              defaultValue: defVal,
-              origin,
-            });
-          } else {
-            dialogService.resolveDialog(dialogId, type === "alert");
-          }
+          const delivered = sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_DIALOG_REQUEST, {
+            dialogId,
+            panelId,
+            type,
+            message: msg,
+            defaultValue: defVal,
+            origin,
+          });
+          if (!delivered) dialogService.resolveDialog(dialogId, type === "alert");
         }
       );
 
@@ -399,20 +393,14 @@ export function setupWebviewCSP(): void {
         if (contents.isDestroyed()) return;
         const panelId = getWebviewDialogService().getPanelId(contents.id);
         if (!panelId) return;
-        const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-        if (parentWindow && !parentWindow.isDestroyed()) {
-          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_UNRESPONSIVE, { panelId });
-        }
+        sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_UNRESPONSIVE, { panelId });
       };
 
       const notifyResponsive = () => {
         if (contents.isDestroyed()) return;
         const panelId = getWebviewDialogService().getPanelId(contents.id);
         if (!panelId) return;
-        const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-        if (parentWindow && !parentWindow.isDestroyed()) {
-          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_RESPONSIVE, { panelId });
-        }
+        sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_RESPONSIVE, { panelId });
       };
 
       contents.on("unresponsive", notifyUnresponsive);
@@ -425,16 +413,13 @@ export function setupWebviewCSP(): void {
       // would survive a page that no longer exists. did-navigate fires only for
       // cross-document main-frame navigations (same-document hash/pushState changes
       // emit did-navigate-in-page and are correctly ignored). The destroyed path
-      // relies on the cached parent window since hostWebContents is gone by then.
+      // relies on the cached embedder since hostWebContents is gone by then.
       const dismissPendingDialogs = () => {
         const dialogService = getWebviewDialogService();
         const panelId = dialogService.getPanelId(contents.id);
         dialogService.cancelPendingForGuest(contents.id);
         if (!panelId) return;
-        const parentWindow = resolveParentWindow();
-        if (parentWindow) {
-          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_DIALOG_DISMISS, { panelId });
-        }
+        sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_DIALOG_DISMISS, { panelId });
       };
 
       contents.on("did-navigate", dismissPendingDialogs);
@@ -489,7 +474,7 @@ export function setupWebviewCSP(): void {
         const panelId = dialogService.getPanelId(contents.id);
         if (!panelId) return;
 
-        const findParentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+        const embedder = resolveEmbedder();
 
         if (isReload) {
           // Only dev-preview guests get Cmd/Ctrl+R reload — claiming the key for
@@ -498,11 +483,8 @@ export function setupWebviewCSP(): void {
           if (dialogService.getPanelKind(contents.id) !== "dev-preview") return;
           // preventDefault only when the signal can actually be delivered, so a
           // window teardown race doesn't eat the key with no reload to show for it.
-          if (findParentWindow && !findParentWindow.isDestroyed()) {
+          if (sendToWebContents(embedder, CHANNELS.WEBVIEW_RELOAD_SHORTCUT, { panelId })) {
             event.preventDefault();
-            getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, {
-              panelId,
-            });
           }
           return;
         }
@@ -512,23 +494,14 @@ export function setupWebviewCSP(): void {
           // — unlike reload, all of them need Cmd/Ctrl+W to close the panel
           // instead of falling through to the native role:"close" accelerator,
           // which would otherwise close the whole window (#10859).
-          if (findParentWindow && !findParentWindow.isDestroyed()) {
-            getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_CLOSE_SHORTCUT, {
-              panelId,
-            });
-          }
+          sendToWebContents(embedder, CHANNELS.WEBVIEW_CLOSE_SHORTCUT, { panelId });
           return;
         }
 
         if (shortcut !== "close") {
           event.preventDefault();
         }
-        if (findParentWindow && !findParentWindow.isDestroyed()) {
-          getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_FIND_SHORTCUT, {
-            panelId,
-            shortcut,
-          });
-        }
+        sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
       });
     }
   });

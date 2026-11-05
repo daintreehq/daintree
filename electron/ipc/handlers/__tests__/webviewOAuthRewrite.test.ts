@@ -17,6 +17,9 @@ const debuggerMock = vi.hoisted(() => ({
   removeListener: vi.fn(),
 }));
 
+// The project view embedding the guest, which every status push must reach.
+const embedder = vi.hoisted(() => ({ id: 7, send: vi.fn(), isDestroyed: () => false }));
+
 const mockWebContents = vi.hoisted(() => ({
   id: 42,
   isDestroyed: vi.fn(() => false),
@@ -25,7 +28,7 @@ const mockWebContents = vi.hoisted(() => ({
   getURL: vi.fn(() => "http://localhost:5173/"),
   loadURL: vi.fn<(url: string) => Promise<void>>(),
   once: vi.fn(),
-  hostWebContents: null as unknown,
+  hostWebContents: embedder as unknown,
 }));
 
 vi.mock("electron", () => ({
@@ -46,12 +49,6 @@ vi.mock("../../../services/WebviewDialogService.js", () => ({
   getWebviewDialogService: () => mockDialogService,
 }));
 
-const ownerWindow = vi.hoisted(() => ({ id: "owner-window" }));
-
-vi.mock("../../../window/webContentsRegistry.js", () => ({
-  getWindowForWebContents: vi.fn(() => ownerWindow),
-}));
-
 const startOAuthLoopbackMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../services/OAuthLoopbackService.js", () => ({
@@ -62,6 +59,7 @@ vi.mock("../../../services/OAuthLoopbackService.js", () => ({
 vi.mock("../../utils.js", () => ({
   sendToRenderer: vi.fn(),
   broadcastToRenderer: vi.fn(),
+  sendToWebContents: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -77,7 +75,7 @@ vi.mock("../../utils.js", () => ({
 }));
 
 import { registerWebviewHandlers } from "../webview.js";
-import { sendToRenderer } from "../../utils.js";
+import { sendToRenderer, sendToWebContents } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";
 
 const deps = { mainWindow: {} } as unknown as HandlerDependencies;
@@ -224,14 +222,16 @@ describe("webview OAuth loopback CDP token-exchange rewrite", () => {
         `&client_id=daintree`
     );
 
-    expect(sendToRenderer).toHaveBeenCalledWith(ownerWindow, "webview:oauth-loopback-status", {
+    expect(sendToWebContents).toHaveBeenCalledWith(embedder, "webview:oauth-loopback-status", {
       panelId: "oauth-panel",
       phase: "token-exchange-intercepted",
     });
-    expect(sendToRenderer).toHaveBeenLastCalledWith(ownerWindow, "webview:oauth-loopback-status", {
+    expect(sendToWebContents).toHaveBeenLastCalledWith(embedder, "webview:oauth-loopback-status", {
       panelId: "oauth-panel",
       phase: "completed",
     });
+    // A window-level send reaches whichever project is on screen by then.
+    expect(sendToRenderer).not.toHaveBeenCalled();
   });
 
   it("passes a token-exchange body through unchanged when it carries no matching redirect_uri", async () => {
@@ -314,5 +314,27 @@ describe("webview OAuth loopback CDP token-exchange rewrite", () => {
       "Page.removeScriptToEvaluateOnNewDocument",
       { identifier: "restore-1" }
     );
+  });
+
+  it("reports a timed-out sign-in to the embedder captured when the flow began", async () => {
+    // The sign-in waits on the system browser; whatever happens to the guest
+    // meanwhile, its status still belongs to the view that started it.
+    startOAuthLoopbackMock.mockImplementation(async () => {
+      mockWebContents.hostWebContents = null;
+      return { success: false, cause: "timed-out" };
+    });
+
+    try {
+      await getOAuthHandler()(null, "https://idp.example.com/authorize", "oauth-panel", 42);
+    } finally {
+      mockWebContents.hostWebContents = embedder;
+    }
+
+    expect(sendToWebContents).toHaveBeenCalledWith(embedder, "webview:oauth-loopback-status", {
+      panelId: "oauth-panel",
+      phase: "timed-out",
+      message: "Sign-in timed out",
+    });
+    expect(sendToRenderer).not.toHaveBeenCalled();
   });
 });
