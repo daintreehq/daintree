@@ -349,8 +349,8 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
   // Indicator stays visible for the lifetime of the agent chrome — idle/missing
   // state coerces to waiting so it never disappears mid-flight.
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
-  // The run's fleet band decides the glyph, as on the pane's own chip: only an
-  // unread Canopy ask is a wait, takes the amber ring and edges the chip.
+  // The run's fleet band decides the glyph, as on the pane's own chip: only a
+  // run in Needs you is a wait, takes the amber ring and edges the chip.
   const shownAgentState = useRunSessionPresentation(terminal.id, displayAgentState);
   const isReinterpreted = shownAgentState !== displayAgentState;
   const isWorking = agentState === "working";

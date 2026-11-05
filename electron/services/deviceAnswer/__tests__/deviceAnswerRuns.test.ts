@@ -275,6 +275,58 @@ describe("listWaitingRuns past the screens it reads", () => {
     expect(omitted.map((run) => run.runId)).toEqual([`idle-${MAX_LISTED_RUNS - 1}`]);
   });
 
+  it("reads a newer run whose agent said it needs the person ahead of twenty hand-backs, and names it so", async () => {
+    screens.set("needs-you", DIALOG);
+    const rows = [
+      ...idleRuns(MAX_LISTED_RUNS),
+      row({
+        runId: "needs-you",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        since: 1_000,
+        handbackReport: "needs-you",
+      }),
+    ];
+    const { runs, omitted } = await listWaitingRuns({
+      fleet: () => snapshot(rows),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs[0]).toMatchObject({ runId: "needs-you", handbackReport: "needs-you" });
+    expect(runs.slice(1).every((run) => !("handbackReport" in run))).toBe(true);
+    expect(omitted.map((run) => run.runId)).toEqual([`idle-${MAX_LISTED_RUNS - 1}`]);
+  });
+
+  it("ranks a reported need with the questions and approvals, by how long each has waited", async () => {
+    const waiting = (runId: string, extra: Partial<FleetRunRow>) =>
+      row({ runId, agentState: "waiting", ...extra });
+    const rows = [
+      waiting("hand-back", { waitingReason: "prompt", since: 10 }),
+      waiting("approval", { waitingReason: "approval", since: 40 }),
+      waiting("needs-you", { waitingReason: "prompt", since: 30, handbackReport: "needs-you" }),
+      waiting("needs-you-parked", {
+        waitingReason: "prompt",
+        since: 5,
+        handbackReport: "needs-you",
+        park: {} as never,
+      }),
+      waiting("question", { waitingReason: "question", since: 20 }),
+    ];
+    const { runs } = await listWaitingRuns({
+      fleet: () => snapshot(rows),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs.map((run) => run.runId)).toEqual([
+      "question",
+      "needs-you",
+      "approval",
+      // Set aside, it still comes before every hand-back left in front.
+      "needs-you-parked",
+      "hand-back",
+    ]);
+  });
+
   it("reads what asks something before what's set aside, and both before hand-backs", async () => {
     const asks = (runId: string, extra: Partial<FleetRunRow>) =>
       row({ runId, agentState: "waiting", since: 50, ...extra });

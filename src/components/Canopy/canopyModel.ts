@@ -15,6 +15,7 @@ import {
 import type { PilotAgentRow, PilotProjectGroup } from "@/components/Pilot/pilotRows";
 import { getAgentConfig } from "@/config/agents";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
+import { isAgentReportedNeed } from "@/lib/fleetAttention";
 
 export interface CanopyItem {
   runId: string;
@@ -190,6 +191,21 @@ function answerAttentionHolds(item: CanopyItem): boolean {
 }
 
 /**
+ * The agent printed that it needs the user (#16190): the agent's own claim,
+ * which Daintree saw printed and needs no reading. Like an answer needing
+ * attention it puts the run in the needs-you tier whatever its screen says,
+ * unless the user put the run aside, archived it or answered it here.
+ */
+export function itemAgentNeedHolds(item: CanopyItem): boolean {
+  return (
+    isAgentReportedNeed(item.row.run) &&
+    !itemPutAside(item) &&
+    !itemHandled(item) &&
+    !itemArchived(item)
+  );
+}
+
+/**
  * Where a run sits before either model has read it, on the same 0–100 scale as
  * a card's priority: what Daintree itself saw, ranked by how blocked it is.
  */
@@ -270,7 +286,8 @@ export function itemPriority(item: CanopyItem, nowMs: number): number {
   const read = readPriority(item);
   if (itemPutAside(item)) return Math.min(read, PUT_ASIDE_PRIORITY);
   if (itemAwaitsPermission(item)) return Math.max(read, PERMISSION_FLOOR);
-  const floor = answerAttentionHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : 0;
+  const floor =
+    answerAttentionHolds(item) || itemAgentNeedHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : 0;
   if (!itemIsBusy(item)) return Math.max(read, floor);
   return Math.max(read, checkInPriority(item, nowMs), floor);
 }
@@ -291,7 +308,8 @@ export function shownPriority(item: CanopyItem, nowMs: number): number | null {
   if (itemPutAside(item)) return read === null ? null : Math.min(read, PUT_ASIDE_PRIORITY);
   // Daintree's own observation needs no reading behind it.
   if (itemAwaitsPermission(item)) return Math.max(read ?? 0, PERMISSION_FLOOR);
-  const floor = answerAttentionHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : null;
+  const floor =
+    answerAttentionHolds(item) || itemAgentNeedHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : null;
   if (!itemIsBusy(item) || itemHandled(item)) {
     return floor === null ? read : Math.max(read ?? 0, floor);
   }
@@ -514,6 +532,9 @@ export function itemLooksDone(item: CanopyItem): boolean {
   // rest on a screen that has since moved.
   if (card === null || item.stale || card.priorityFromEarlierRead) return false;
   if (card.category !== "finished") return false;
+  // The agent itself said it needs the user, so the work isn't done whatever
+  // the screen reads like.
+  if (isAgentReportedNeed(item.row.run)) return false;
   // Stopped is not done: an interrupted turn, or one that left tests failing.
   if (card.progress !== null && card.progress < 100) return false;
   if (card.tests === "failing") return false;
@@ -544,6 +565,8 @@ export function itemNeedsAttention(item: CanopyItem): boolean {
   // Decisions saw an answer for it stop on its way in: a person decides what
   // happens to it, whatever the screen says.
   if (answerAttentionHolds(item)) return true;
+  // The agent printed that it needs the user: its own word, not a reading.
+  if (itemAgentNeedHolds(item)) return true;
   // Every layer answers on one scale, the score's own bands: 55 and up is
   // something left to check, decide or answer. A finished turn with nothing
   // left (40), an idle session (20) or work going normally (5) stays in the

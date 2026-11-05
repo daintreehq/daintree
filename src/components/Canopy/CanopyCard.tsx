@@ -677,7 +677,7 @@ export function CanopyCard({
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid pane's own glyph: its display state through the run's fleet band.
-  // Amber is an unread Canopy ask, a hand-back is unread or finished, and a
+  // Amber is a run in Needs you, a hand-back is unread or finished, and a
   // prompt that asks nothing draws nothing. The pane's newer observation
   // speaks for the run when this view holds it, as on the pane, and the row's
   // otherwise: another project's or host's terminal id names no pane here.

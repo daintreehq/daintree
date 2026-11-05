@@ -18,7 +18,13 @@ import type {
   RunHandBackRecord,
   RunWaitRecord,
 } from "../../../shared/types/ipc/fleet.js";
-import { bandForRun, FLEET_BANDS, type FleetBand } from "../../../shared/utils/fleetBands.js";
+import {
+  bandForRun,
+  FLEET_BANDS,
+  isAgentReportedNeed,
+  type FleetBand,
+} from "../../../shared/utils/fleetBands.js";
+import type { HandbackReport } from "../../../shared/types/handback.js";
 import { isObservedAskWait } from "../../../shared/utils/runHandBack.js";
 
 const agent = (over: Partial<CountableTerminal> = {}): CountableTerminal => ({
@@ -1259,6 +1265,7 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
     wait?: RunWaitRecord;
     canopy?: RunCanopyRefinement;
     shelf: Shelf;
+    report?: HandbackReport;
   }
 
   const states: Array<Pick<CountableTerminal, "agentState" | "waitingReason">> = [
@@ -1293,6 +1300,8 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
     { kind: "stalled", quote: "Compiling…", readAt: 900, stalledSince: 800 },
   ];
   const shelves: Shelf[] = ["none", "parked", "snoozed"];
+  // The marker the agent last printed: none, done, or needs-you (#16190).
+  const reports: Array<HandbackReport | undefined> = [undefined, "done", "needs-you"];
 
   const fixtures: Fixture[] = [];
   for (const state of states)
@@ -1300,19 +1309,22 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
       for (const wait of waits)
         for (const canopy of readings)
           for (const shelf of shelves)
-            fixtures.push({
-              terminal: agent({
-                id: `t${fixtures.length}`,
-                detectedAgentId: "claude",
-                spawnedAt: 1,
-                lastStateChange: 1_000,
-                ...state,
-              }),
-              handBack,
-              wait,
-              canopy,
-              shelf,
-            });
+            for (const report of reports)
+              fixtures.push({
+                terminal: agent({
+                  id: `t${fixtures.length}`,
+                  detectedAgentId: "claude",
+                  spawnedAt: 1,
+                  lastStateChange: 1_000,
+                  ...state,
+                  ...(report !== undefined ? { lastHandback: { report } } : {}),
+                }),
+                handBack,
+                wait,
+                canopy,
+                shelf,
+                report,
+              });
 
   /** The row the fleet builds for the same run, as `FleetSnapshotService` decorates it. */
   const bandOf = (fixture: Fixture): FleetBand => {
@@ -1325,6 +1337,7 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
         agentState !== undefined && isObservedAskWait(agentState, waitingReason)
           ? fixture.wait
           : undefined,
+      handbackReport: fixture.report === "needs-you" ? "needs-you" : undefined,
       canopy: fixture.canopy,
       park: fixture.shelf === "parked" ? { parkedAt: 1 } : undefined,
       snooze: fixture.shelf === "snoozed" ? { snoozedAt: 1 } : undefined,
@@ -1375,6 +1388,24 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
       }
     }
     expect(mismatches).toEqual([]);
+  });
+
+  it("never counts a run its agent said needs the user as a hand-back", () => {
+    const counted: string[] = [];
+    let reportedRuns = 0;
+    for (const fixture of fixtures) {
+      const { agentState, waitingReason } = fixture.terminal;
+      const reported = isAgentReportedNeed({
+        agentState,
+        waitingReason,
+        handbackReport: fixture.report === "needs-you" ? "needs-you" : undefined,
+      });
+      if (!reported) continue;
+      reportedRuns += 1;
+      if (countOf([fixture]).completed !== 0) counted.push(JSON.stringify(fixture));
+    }
+    expect(counted).toEqual([]);
+    expect(reportedRuns).toBeGreaterThan(0);
   });
 
   it("sums a project of every kind of run to the fleet's band tallies", () => {

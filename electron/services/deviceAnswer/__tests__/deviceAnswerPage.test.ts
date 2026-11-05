@@ -144,6 +144,36 @@ describe("the paired device's page", () => {
     });
   });
 
+  it("says a run's agent said it needs the person, unless the wait is an error, on cards and unread runs alike", async () => {
+    const {
+      screen: _screen,
+      choices: _choices,
+      questionId: _questionId,
+      ...left
+    } = run({
+      runId: "run-4",
+      project: "docs",
+      waitingReason: "prompt",
+      handbackReport: "needs-you",
+    });
+    await openPage({
+      runs: [
+        run({ waitingReason: "prompt", handbackReport: "needs-you" }),
+        run({ runId: "run-2", waitingReason: "prompt" }),
+        run({ runId: "run-3", waitingReason: "error", handbackReport: "needs-you" }),
+      ],
+      omitted: [left],
+      hosts: [],
+    });
+    const cards = [...document.querySelectorAll(".run")];
+    expect(cards.map((card) => card.querySelector(".meta")?.textContent)).toEqual([
+      "Says it needs you",
+      "Waiting for input",
+      "Blocked by an error",
+    ]);
+    expect(document.querySelector("#more .other .meta")!.textContent).toBe("Says it needs you");
+  });
+
   it("names no machine when only this one's runs are listed, as an older Daintree sends them", async () => {
     await openPage({ runs: [run({})] });
     const card = document.querySelector(".run")!;

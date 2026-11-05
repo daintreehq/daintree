@@ -329,7 +329,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   );
 
   // The run's fleet band decides the glyph, as on the pane's own chip: amber
-  // only for an unread Canopy ask.
+  // only for a run in Needs you.
   const displayAgentState = useRunSessionPresentation(
     id,
     getTerminalAgentDisplayState(chrome, agentState)

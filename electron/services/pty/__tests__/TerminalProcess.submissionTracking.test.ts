@@ -5,6 +5,7 @@ import { TerminalProcess } from "../TerminalProcess.js";
 import { events } from "../../events.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { TerminalInputController } from "../TerminalInputController.js";
+import type { AnalysisBackend } from "../analysis/AnalysisBackend.js";
 import { OUTPUT_PROGRESS_SAMPLE_MS } from "../OutputProgressTracker.js";
 
 /**
@@ -386,6 +387,145 @@ describe("TerminalProcess handback requests (#12488)", () => {
     expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
     expect(terminal.getInfo().lastHandback).toBeUndefined();
     vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("drops the last handback once a typed Enter submits at the agent's prompt, and not for keys that don't (#16190)", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: "Approve the deploy",
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+
+    info.lastHandback = handback;
+    info.lastHandbackUnpublished = true;
+    // Typing the reply, a soft newline inside it, and a paste submit nothing.
+    terminal.write("approved");
+    terminal.write("\x1b\r");
+    terminal.write("\x1b[200~line one\rline two\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+
+    // Keys on an approval dialog pick an option; they never reach the prompt.
+    info.waitingReason = "approval";
+    terminal.write("\r");
+    expect(info.lastHandback).toBe(handback);
+
+    info.waitingReason = "prompt";
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+    expect(info.lastHandbackUnpublished).toBe(false);
+
+    // A broadcast keystroke takes the same path to the agent.
+    info.lastHandback = handback;
+    terminal.tryWrite("go on\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback through a paste broadcast whole or streamed across writes, until an Enter after it", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+    info.lastHandback = handback;
+
+    terminal.tryWrite("\x1b[200~one\rtwo\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+
+    // CopyTree writes the markers apart from the body it streams between them.
+    terminal.write("\x1b[200~");
+    terminal.write("first\rsecond\r");
+    terminal.write("third\r");
+    terminal.write("\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+
+    info.lastHandback = handback;
+    terminal.write("\x1b[200~pasted\rtext\x1b[201~\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("closes a paste left open once its agent has gone, and follows the submit lane's markers too", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+    info.agentIncarnation = 0;
+
+    // CopyTree lost the agent mid-paste and left the end marker off.
+    terminal.write("\x1b[200~context");
+    info.lastHandback = handback;
+    terminal.write("\r");
+    expect(info.lastHandback).toBe(handback);
+    // A new agent session in the same PTY starts with no paste open.
+    info.agentIncarnation = 1;
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+
+    // A paste end the submit lane writes closes one raw input opened.
+    terminal.write("\x1b[200~context");
+    info.lastHandback = handback;
+    const controller = (
+      terminal as unknown as { inputController: { writeStrict(d: string): boolean } }
+    ).inputController;
+    controller.writeStrict("\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback when keys answer an approval the analysis moves on as they arrive", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    info.lastHandback = handback;
+    const analysis = (
+      terminal as unknown as {
+        inputController: { host: { analysis: AnalysisBackend } };
+      }
+    ).inputController.host.analysis;
+    // In-thread, the input observation sets the agent working before the write returns.
+    vi.spyOn(analysis, "hasMonitor").mockReturnValue(true);
+    vi.spyOn(analysis, "notifyInput").mockImplementation(() => {
+      info.agentState = "working";
+      info.waitingReason = undefined;
+    });
+
+    terminal.write("y\r");
+    expect(info.agentState).toBe("working");
+    expect(info.lastHandback).toBe(handback);
+
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    terminal.tryWrite("y\r");
+    expect(info.lastHandback).toBe(handback);
     terminal.dispose();
   });
 

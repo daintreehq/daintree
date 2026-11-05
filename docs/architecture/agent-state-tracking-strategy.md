@@ -95,13 +95,22 @@ Before accepting a new agent-state source, the proposal must answer yes to all o
 
 If the proposal fails any of these, it does not belong in the state-tracking layer. Either reshape it as a Daintree-side UX feature that surfaces data the PTY layer already produces, or file it as a vendor feature request.
 
+## Needs you
+
+The `needs-you` attention band (`bandForRun` in `shared/utils/fleetBands.ts`) has two sources, and the pattern layer's guesses are neither: an approval or question wait the patterns filed is unread news until looked at, never a demand.
+
+- **The agent's own needs-you marker** (#16190). Every handback request offers a `DAINTREE-NEEDS-YOU` line beside the done line, and the observed `lastHandback` carries which one the agent printed as `report`. The fleet row carries only that report (`FleetRunRow.handbackReport`), never the summary. It is an observation of what the agent printed, and the agent's own claim, so it is attributed to the agent wherever it shows: the pane edge's `runUnseenAsk` names it `agent`, Pilot's row says "Says it needs you", and the paired-device page says the same. It places the run only while the run is still stopped (finished, or waiting on anything but an error), it outranks Canopy's reading of the same stop, and it holds once the user has seen the run: it leaves when `lastHandback` clears, on the next prompt or a respawn. A park or snooze sets it aside like every other state, and the Canopy toolbar badge never counts it.
+- **A Canopy reading** that the run's current turn asks the user something they haven't had in front of them since (#16055). Seen, it lands where an idle run does.
+
+The project counts (`computeProjectAgentCounts`) read the same report off the terminal record and pass it to `bandForRun`, so the project switcher, host summaries and the fleet agree (#16058); a reported need counts as waiting, never as a hand-back. Each host bands its own runs, so a host from before #16190 places by Canopy alone. The paired-device inbox ranks a reported need with the questions and approvals rather than with plain hand-backs, and `WaitingRunView.handbackReport` crosses the link as an optional field, so an older host sends none and an older Shell drops it.
+
 ## Canopy
 
 Canopy is the one sanctioned interpretation layer: a reader the user opted into, reading agent screens with a local model it downloaded. It may suggest where a run lands in the existing attention buckets (`FleetRunRow.canopy`, placed by `canopyPlacement` in `shared/utils/canopyRefinement.ts`), within these limits:
 
 - It sits alongside the observed `agentState`/`waitingReason` and never rewrites them.
 - It never clears an approval or error Daintree observed.
-- It never changes a park, snooze or read mark, and never places a run against a park or snooze. A read mark never hides an ask Canopy read, just as it never hides an observed question.
+- It never changes a park, snooze or read mark, and never places a run against a park, a snooze or the agent's own needs-you report. A read mark never hides an ask Canopy read, just as it never hides an observed question.
 - It holds one verdict per agent turn.
 - It disappears entirely when the reader is turned off or its model is removed or replaced.
 

@@ -11,6 +11,7 @@ import {
   buildCanopyInbox,
   CHECK_IN_CEILING,
   CHECK_IN_FLOOR,
+  itemAgentNeedHolds,
   itemAnswerAttention,
   itemContextWarning,
   itemFacts,
@@ -1004,5 +1005,62 @@ describe("answers needing attention", () => {
       [card("a", { category: "question", priority: 90 })]
     );
     expect(itemPriority(item!, NOW)).toBe(90);
+  });
+});
+
+describe("runs whose agent said it needs the user", () => {
+  const prompt = {
+    agentState: "waiting",
+    waitingReason: "prompt",
+    since: NOW - 5_000,
+    handBack: { stoppedAt: NOW - 5_000, seenAt: NOW - 1_000 },
+  } as const;
+
+  it("puts the run in the needs-you tier at the tier's floor, even after it was seen", () => {
+    const items = inbox([
+      run("plain", prompt),
+      run("reported", { ...prompt, handbackReport: "needs-you" }),
+    ]);
+    const plain = items.find((item) => item.runId === "plain")!;
+    const reported = items.find((item) => item.runId === "reported")!;
+    expect(items.map((item) => item.runId)).toEqual(["reported", "plain"]);
+    expect(itemNeedsAttention(plain)).toBe(false);
+    expect(itemAgentNeedHolds(reported)).toBe(true);
+    expect(itemNeedsAttention(reported)).toBe(true);
+    expect(itemPriority(reported, NOW)).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
+    expect(shownPriority(reported, NOW)).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
+  });
+
+  it("keeps a parked or snoozed run put aside, and lets a run back at work go", () => {
+    const items = inbox([
+      run("parked", {
+        ...prompt,
+        handbackReport: "needs-you",
+        park: { parkedAt: NOW - 1_000, note: "" },
+      }),
+      run("snoozed", { ...prompt, handbackReport: "needs-you", snooze: { snoozedAt: NOW } }),
+      run("working", { agentState: "working", since: NOW, handbackReport: "needs-you" }),
+    ]);
+    for (const item of items) {
+      expect(itemAgentNeedHolds(item), item.runId).toBe(false);
+    }
+    for (const item of items.filter((i) => i.runId !== "working")) {
+      expect(itemNeedsAttention(item), item.runId).toBe(false);
+      expect(itemPriority(item, NOW)).toBeLessThanOrEqual(PUT_ASIDE_PRIORITY);
+    }
+  });
+
+  it("never reads as looking done, whatever the reading says", () => {
+    const finished = { agentState: "completed", since: NOW - 60_000 } as const;
+    const items = inbox(
+      [run("done", finished), run("reported", { ...finished, handbackReport: "needs-you" })],
+      [
+        card("done", { category: "finished", observedAt: NOW }),
+        card("reported", { category: "finished", observedAt: NOW }),
+      ]
+    );
+    const byId = (id: string) => items.find((item) => item.runId === id)!;
+    expect(itemLooksDone(byId("done"))).toBe(true);
+    expect(itemLooksDone(byId("reported"))).toBe(false);
   });
 });

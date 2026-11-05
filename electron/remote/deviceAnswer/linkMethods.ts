@@ -78,6 +78,9 @@ export const WaitingRunViewSchema = z.object({
   since: z.number().finite().nullable(),
   parked: z.boolean(),
   snoozed: z.boolean(),
+  // Optional both ways: a host from before it sends none, and a Shell from
+  // before it strips it and ranks the run by its wait.
+  handbackReport: z.literal("needs-you").optional(),
   screen: nullableText(MAX_SCREEN_LENGTH),
   choices: z.array(z.string().refine(isAnswerLabel)).max(MAX_CHOICES),
   questionId: z.string().refine(isQuestionId).nullable(),

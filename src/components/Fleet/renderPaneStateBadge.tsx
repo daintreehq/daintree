@@ -21,8 +21,9 @@ const BAND_NAMED_WAITS: ReadonlySet<FleetBand> = new Set<FleetBand>([
 /**
  * A waiting pane's badge, by its fleet band.
  *
- * Amber is the fleet's `needs-you` alone — Canopy read an ask on this turn the
- * user hasn't seen — and only while the pane itself still shows the wait: the
+ * Amber is the fleet's `needs-you` alone — the agent printed that it needs the
+ * user, or Canopy read an ask on this turn the user hasn't seen — and only
+ * while the pane itself still shows the wait: the
  * band is polled and the pane's state is pushed, so an error wait or a reply
  * that has since landed must not keep a stale ask's hue. The words are the
  * band's own, so "Waiting" never names a run that isn't asking. With no band

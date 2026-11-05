@@ -309,7 +309,7 @@ export function AgentButton({
   // bucket so per-terminal ticks in unrelated worktrees do not re-evaluate this
   // selector body. When `activeWorktreeId` is null, fall back to scanning all
   // panel ids (rare, only during project switch hydration). See issue #7451.
-  // Only an unread Canopy ask earns the amber pip.
+  // Only a run in Needs you earns the amber pip.
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const activeSession = usePanelStore(
     useShallow((state) => {

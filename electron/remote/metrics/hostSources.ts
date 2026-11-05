@@ -141,8 +141,8 @@ export async function observeAgents(
     blocked += entry.blocked;
   }
   // Every run counted as asking or blocked is an idle, finished or waiting one,
-  // so the rest of those are the host's settled runs: a prompt with no reading
-  // among them.
+  // so the rest of those are the host's settled runs: a prompt nothing puts in
+  // Needs you among them.
   const settled = Math.max(0, idle + waiting - asking - blocked);
   return { working, waiting, idle, attention: { waiting: asking, blocked, idle: settled } };
 }

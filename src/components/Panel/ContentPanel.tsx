@@ -485,11 +485,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     paneSignals.waitingReason === "error" &&
     !paneSignals.isRestarting &&
     !isExited;
-  // The amber edge marks a moment: the run stopped to ask and the user hasn't
-  // had it in front of them yet. Canopy's unread ask, or with no reading an
-  // observed approval or question wait; the look that marks it seen takes the
-  // edge away while the header glyph keeps to the band. A prompt that asks
-  // nothing, a hand-back, and any pane the fleet hasn't reported draw no amber.
+  // The amber edge marks an outstanding ask. The agent's own needs-you report
+  // holds it until the next prompt; Canopy's unread ask, or with neither an
+  // observed approval or question wait, holds it until the user has had it in
+  // front of them, when the look takes the edge away while the header glyph
+  // keeps to the band. A prompt that asks nothing, a hand-back, and any pane
+  // the fleet hasn't reported draw no amber.
   // Only a live pane can ask. An error wait is never asking: it is failed
   // while the run is alive and nothing once a restart or exit replaces it.
   const ownCanAsk = paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;

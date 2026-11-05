@@ -285,10 +285,11 @@ function worktreeKey(projectId: string, worktreeId: string): string {
 
 /**
  * Every agent in each worktree as this host's fleet placed it, most urgent
- * first, keyed by project and worktree. Placed by this host's own Canopy
- * reading when it reads, since only a reading puts a run in Needs you, and by
- * what this host observed when it doesn't. The observed state rides beside the
- * band unchanged. Equal bands settle on the lowest run id, so the order is stable.
+ * first, keyed by project and worktree. Placed by this host's own fleet rules:
+ * what it observed, the needs-you markers its agents printed, and its own
+ * Canopy reading when it reads, so a host from before a rule places by the ones
+ * it has. The observed state rides beside the band unchanged. Equal bands
+ * settle on the lowest run id, so the order is stable.
  */
 export function observeWorktreeRuns(runs: readonly FleetRunRow[]): Map<string, HostWorktreeRun[]> {
   const out = new Map<string, HostWorktreeRun[]>();

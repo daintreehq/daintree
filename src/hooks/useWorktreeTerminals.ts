@@ -46,7 +46,7 @@ const NO_BAND = (): FleetBand | undefined => undefined;
  * state (active states credited during the identity boot window, a live
  * agent's idle, missing or completed state shown as waiting, exited and
  * plain-shell terminals idle) through the run's fleet band, as the pane does.
- * Only an unread Canopy ask counts as waiting; a hand-back is `unread` or
+ * Only a run in Needs you counts as waiting; a hand-back is `unread` or
  * completed, an error wait `blocked`, and a prompt that asks nothing — or a
  * run the fleet hasn't reported — idle. `agentStates` stays on the display
  * state: reading a stop must not change the worktree's dominant state.

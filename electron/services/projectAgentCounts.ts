@@ -1,5 +1,6 @@
 import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind } from "../../shared/types/panel.js";
+import type { HandbackReport } from "../../shared/types/handback.js";
 import type {
   RunCanopyRefinement,
   RunHandBackRecord,
@@ -7,7 +8,7 @@ import type {
 } from "../../shared/types/ipc/fleet.js";
 import { isHandBackStop, isObservedAskWait } from "../../shared/utils/runHandBack.js";
 import { canopyPlacement } from "../../shared/utils/canopyRefinement.js";
-import { bandForRun } from "../../shared/utils/fleetBands.js";
+import { bandForRun, isAgentReportedNeed } from "../../shared/utils/fleetBands.js";
 import { isHostThrowawayWorkspaceId } from "../../shared/config/hostThrowaway.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 
@@ -15,9 +16,10 @@ import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 export interface ProjectAgentCounts {
   active: number;
   /**
-   * Agents the fleet bands as needing the user: an ask Canopy read that the
-   * user hasn't seen yet (`needs-you`), plus the error waits in {@link blocked}
-   * (#16058). A stop with no reading is never one, whatever its wait reason.
+   * Agents the fleet bands as needing the user (`needs-you`): a stopped run
+   * whose agent printed that it needs them, or an ask Canopy read that the
+   * user hasn't seen yet — plus the error waits in {@link blocked} (#16058). A
+   * stop with neither is never one, whatever its wait reason.
    */
   waiting: number;
   /** Agents blocked on an error (the `blocked` band) — a subset of {@link waiting}. */
@@ -26,7 +28,8 @@ export interface ProjectAgentCounts {
   oldestWaitingSince: number | null;
   /**
    * Agents that handed work back: settled in `completed`, or stopped at a plain
-   * prompt after work main watched, seen or not — plus any wait while it is
+   * prompt after work main watched, seen or not, unless the agent said it needs
+   * the user instead — plus any wait while it is
    * unread, so {@link unacknowledgedCompleted}, the part that asks for
    * attention, stays a subset of this presence.
    */
@@ -141,6 +144,13 @@ export interface CountableTerminal {
    * rather than stored on the panel, so it tracks displacement synchronously.
    */
   assistantSlot?: number;
+  /**
+   * The latest handback marker observed for this terminal's request. Only its
+   * report is read, as the fleet row carries it: a needs-you report places the
+   * run in Needs you while it is stopped, and its summary never leaves the
+   * record.
+   */
+  lastHandback?: { report?: HandbackReport };
 }
 
 /**
@@ -473,10 +483,10 @@ export function computeProjectAgentCounts(
   parkedRuns?: ReadonlyMap<string, unknown>,
   /**
    * Canopy's refinement for a run's incarnation, when it has one —
-   * `canopyRefinementFor` is the intended source. An unseen ask it read is the
-   * only thing that counts as waiting short of an error, and a question it read
-   * as asking nothing is a hand-back of its own, as the fleet bands them; a
-   * stall changes no tally here. Omitted, the free rules alone.
+   * `canopyRefinementFor` is the intended source. An unseen ask it read counts
+   * as waiting, as does the agent's own needs-you report, which outranks it; a
+   * question it read as asking nothing is a hand-back of its own, as the fleet
+   * bands them; a stall changes no tally here. Omitted, the free rules alone.
    */
   canopyFor?: (terminalId: string, spawnedAt: number) => RunCanopyRefinement | undefined,
   /**
@@ -562,14 +572,22 @@ export function computeProjectAgentCounts(
       id !== undefined && terminal.spawnedAt !== undefined
         ? canopyFor?.(id, terminal.spawnedAt)
         : undefined;
+    const handbackReport =
+      terminal.lastHandback?.report === "needs-you" ? ("needs-you" as const) : undefined;
     const band = bandForRun({
       agentState: state,
       waitingReason: terminal.waitingReason,
       handBack,
       wait,
+      handbackReport,
       canopy: refinement,
       park: isParked ? true : undefined,
       snooze,
+    });
+    const agentNeed = isAgentReportedNeed({
+      agentState: state,
+      waitingReason: terminal.waitingReason,
+      handbackReport,
     });
     const canopy = canopyPlacement(state, terminal.waitingReason, refinement);
     const unread = band === "review";
@@ -593,7 +611,11 @@ export function computeProjectAgentCounts(
       }
     }
 
-    if (canopy?.kind === "not-asking") {
+    if (agentNeed) {
+      // The agent said it needs the user, so it hasn't handed the work back,
+      // whatever Canopy read or the hand-back record says. Counted above until
+      // the next prompt clears it, and nowhere while the run is set aside.
+    } else if (canopy?.kind === "not-asking") {
       // A question wait is never recorded as a hand-back, so a record the run
       // carries is from an earlier stop. The wait is the stop, unseen until
       // Canopy's read mark covers its turn, as the fleet bands it.

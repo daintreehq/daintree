@@ -279,6 +279,48 @@ describe("createDeviceAnswerService and connected hosts", () => {
     ]);
   });
 
+  it("ranks a host's run whose agent said it needs the person ahead of this machine's hand-backs", async () => {
+    state.fleetRuns = [
+      {
+        runId: "local-1",
+        spawnedAt: 100,
+        agentState: "waiting",
+        waitingReason: "prompt",
+        since: 1,
+      },
+    ];
+    const reported = { ...HOST_RUN, waitingReason: "prompt" as const, since: 50 };
+    state.remote!.listWaiting = vi.fn(async () => [
+      {
+        hostId: "studio-03",
+        host: "studio-03",
+        status: "ok",
+        runs: [
+          { ...reported, runId: "plain", since: 0 },
+          { ...reported, handbackReport: "needs-you" },
+        ],
+        omitted: [
+          { ...HOST_SUMMARY, runId: "plain-left", waitingReason: "prompt", since: 0 },
+          {
+            ...HOST_SUMMARY,
+            runId: "needs-left",
+            waitingReason: "prompt",
+            since: 60,
+            handbackReport: "needs-you",
+          },
+        ],
+        waiting: 4,
+      },
+    ]) as never;
+    const { runs, omitted } = await wiredDeps().listWaiting({ hosts: true, read: null });
+    expect(runs.map((run) => [run.hostId, run.runId])).toEqual([
+      ["studio-03", "run-1"],
+      ["studio-03", "plain"],
+      [LOCAL_HOST_ID, "local-1"],
+    ]);
+    expect(omitted!.map((run) => run.runId)).toEqual(["needs-left", "plain-left"]);
+  });
+
   it("lists only this machine's runs where remote hosts aren't running", async () => {
     state.remote = undefined;
     const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({

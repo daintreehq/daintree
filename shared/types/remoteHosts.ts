@@ -448,10 +448,12 @@ export interface HostDriverObservation extends DriveLeaseObservation {
 export const MAX_HOST_SUMMARY_DRIVERS = 32;
 
 /**
- * A Host's agents by attention band. `waiting` is the runs a Canopy reading
- * found asking the user that the user hasn't seen (`needs-you`) — a stop with
- * no reading is never one; `blocked` the error waits; `idle` every other idle,
- * finished or waiting run.
+ * A Host's agents by attention band. `waiting` is the runs in `needs-you`:
+ * stopped runs whose agent printed that it needs the user, and asks a Canopy
+ * reading found that the user hasn't seen — a stop with neither is never one;
+ * `blocked` the error waits; `idle` every other idle, finished or waiting run.
+ * Each host counts by its own build's rules, so an older one counts Canopy's
+ * readings alone.
  */
 export interface HostAgentAttention {
   waiting: number;

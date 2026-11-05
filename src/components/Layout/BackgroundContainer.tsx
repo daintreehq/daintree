@@ -103,7 +103,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   );
   const worktreeNames = useWorktreeNames();
 
-  // Only an unread Canopy ask is waiting: a prompt that asks nothing and a
+  // Only a run in Needs you is waiting: a prompt that asks nothing and a
   // hand-back are not counted.
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const waitingCount = useMemo(
@@ -449,7 +449,7 @@ function BackgroundSingleItem({
   compact = false,
 }: BackgroundSingleItemProps) {
   // The pane's display state through the run's fleet band, as on the pane's
-  // own chip: amber only for an unread Canopy ask.
+  // own chip: amber only for a run in Needs you.
   const chrome = deriveTerminalChrome(terminal);
   const agentState = useRunSessionPresentation(
     terminal.id,

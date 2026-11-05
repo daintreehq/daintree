@@ -12,6 +12,7 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import { pluralize } from "@/lib/pluralize";
 import {
   answerOptions,
+  itemAgentNeedHolds,
   itemAnswerAttention,
   itemContextWarning,
   itemFacts,
@@ -49,7 +50,12 @@ export const KIND_LABEL: Record<CanopyCategory, string> = {
  * it is doing rather than what it last stopped on.
  */
 export function rowStatus(item: CanopyItem): string {
-  return glanceStatus(item) ?? KIND_LABEL[item.kind];
+  return glanceStatus(item) ?? agentNeedWords(item) ?? KIND_LABEL[item.kind];
+}
+
+/** What a run whose agent said it needs the user says of it, or null for any other run. */
+function agentNeedWords(item: CanopyItem): string | null {
+  return itemAgentNeedHolds(item) ? item.row.agentReport : null;
 }
 
 /**
@@ -409,8 +415,9 @@ export function CanopyRow({
   // A first read in flight, with no words yet: in the ask's place, or under a
   // verbatim question that is already on screen. A re-read keeps the words it
   // has until the new ones land.
-  // Words the screen gave at a glance stand in meanwhile, so only a row with
-  // none of its own shows the reading placeholder.
+  // Words the screen gave at a glance stand in meanwhile, as does the agent's
+  // own word that it needs the user, so only a row with neither shows the
+  // reading placeholder.
   const reading = item.pending && !item.stale && card?.headline == null;
   const caution = card?.risk === "caution" && wordsShown && !item.stale;
   const WarningGlyph = SEVERITY_GLYPH.warning;
@@ -420,7 +427,8 @@ export function CanopyRow({
   const progress = detail?.progress ?? null;
   const facts = detail?.facts ?? [];
   const hasAction = action !== null;
-  const readingInAsk = reading && glanceStatus(item) === null && !hasAction;
+  const readingInAsk =
+    reading && glanceStatus(item) === null && agentNeedWords(item) === null && !hasAction;
 
   // Waiting on the user, and the screen shows it asking something: the
   // waiting ring takes a question mark. Only on a reading of the screen as it
@@ -485,6 +493,10 @@ export function CanopyRow({
   // Decisions saw an answer for this run stop on its way in. Daintree's own
   // observation, and the reason the run sits with what needs the user, so it
   // leads the tail.
+  // The agent printed that it needs the user, said wherever the ask line
+  // doesn't already say so: the reason the run sits with what needs the user.
+  const agentWords = agentNeedWords(item);
+  const agentNote = agentWords !== null && agentWords !== status ? agentWords : null;
   const answers = itemAnswerAttention(item);
   const answerNote =
     answers === 0
@@ -493,6 +505,7 @@ export function CanopyRow({
         ? "Answer needs attention"
         : `${pluralize(answers, "answer")} need attention`;
   const statusTail = [
+    agentNote,
     answerNote,
     stalled,
     row.band === "quiet" && !quietLead ? "Quiet" : null,
@@ -521,6 +534,7 @@ export function CanopyRow({
       ? `screen unchanged for ${formatWaitAge(card.stalledSince, nowMs)}`
       : null,
     overdue ? "waiting a while" : null,
+    agentNote !== null ? agentNote.toLowerCase() : null,
     answerNote !== null ? answerNote.toLowerCase() : null,
     progress?.spoken ?? null,
     facts.length > 0 ? `reported ${facts.map((fact) => fact.toLowerCase()).join(", ")}` : null,

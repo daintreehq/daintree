@@ -137,6 +137,39 @@ describe("answering a connected host's agents from a device paired with the Shel
     expect(touch).not.toHaveBeenCalledWith("studio-04");
   });
 
+  it("carries a run's needs-you report across the link, read and unread, and still reads a host that sends none", async () => {
+    const reported: WaitingRunView = {
+      ...RUN,
+      waitingReason: "prompt",
+      handbackReport: "needs-you",
+    };
+    const { screen: _screen, choices: _choices, questionId: _questionId, ...left } = reported;
+    hostDeps.list = vi.fn(async () => ({
+      runs: [reported, { ...RUN, runId: "run-2" }],
+      omitted: [{ ...left, runId: "run-3" }],
+      waiting: 3,
+    }));
+    const [host] = await client.listWaiting();
+    expect(host).toMatchObject({ status: "ok", waiting: 3 });
+    expect(host!.runs.map((run) => [run.runId, run.handbackReport])).toEqual([
+      ["run-1", "needs-you"],
+      ["run-2", undefined],
+    ]);
+    expect(host!.omitted.map((run) => [run.runId, run.handbackReport])).toEqual([
+      ["run-3", "needs-you"],
+    ]);
+  });
+
+  it("shows nothing of a list whose report is one it doesn't know", async () => {
+    hostDeps.list = vi.fn(async () => ({
+      runs: [{ ...RUN, handbackReport: "done" as never }],
+      omitted: [],
+      waiting: 1,
+    }));
+    const [host] = await client.listWaiting();
+    expect(host).toMatchObject({ status: "unreachable", runs: [] });
+  });
+
   it("lists every host it knows, saying which aren't connected, and reaches only the connected", async () => {
     const closedCall = vi.fn(async () => ({ runs: [RUN] }));
     const failing = vi.fn(async () => {

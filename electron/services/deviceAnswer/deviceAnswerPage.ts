@@ -96,7 +96,11 @@ const SCRIPT = String.raw`
     question: "Asked a question",
     error: "Blocked by an error",
   };
-  const headline = (run) => HEADLINES[run.waitingReason] || "Waiting for input";
+  // The agent's own word that it needs the person, unless the wait is an error.
+  const headline = (run) =>
+    run.handbackReport === "needs-you" && run.waitingReason !== "error"
+      ? "Says it needs you"
+      : HEADLINES[run.waitingReason] || "Waiting for input";
 
   const agentName = (run) => {
     if (run.agentName) return run.agentName;
