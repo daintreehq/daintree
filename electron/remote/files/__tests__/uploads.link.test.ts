@@ -929,6 +929,7 @@ describe("operation ids", () => {
       hostLabel: () => "studio-01",
       sendToView: () => {},
       localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
     });
     const send = (destination: TransferDestination, opId: string) =>
       uploads.uploadBytes(7, {
@@ -1040,6 +1041,7 @@ describe("a remote window's drop", () => {
       hostLabel: () => "studio-01",
       sendToView,
       localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
       // Short retry waits that still let the receiver free up between them.
       random: () => 0.1,
     });

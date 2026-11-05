@@ -9,6 +9,7 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
 }));
 
+import { LocalFolderPackError } from "../localFolderPack.js";
 import type { LocalFolderWalkFs } from "../localFolderWalk.js";
 import { createHostUploadClient } from "../uploadClient.js";
 
@@ -40,6 +41,7 @@ function setup(options: { walkFs?: LocalFolderWalkFs } = {}) {
       return () => unwatched.push(webContentsId);
     },
     walkOptions: options.walkFs ? { fs: options.walkFs } : undefined,
+    packDir: path.join(dir, "packs"),
   });
   return { client, destroyView: (webContentsId: number) => gone.get(webContentsId)?.(), unwatched };
 }
@@ -310,5 +312,112 @@ describe("summarizing a dropped folder", () => {
       const [a, b] = await Promise.all([first, again]);
       expect(a).toBe(b);
     });
+  });
+});
+
+describe("packing a summarized folder", () => {
+  const signal = () => new AbortController().signal;
+  const archivesLeft = () => fs.readdir(path.join(dir, "packs")).catch(() => [] as string[]);
+
+  async function packed(client: ReturnType<typeof setup>["client"], handle: string) {
+    const result = await client.packFolder(7, handle, { signal: signal() });
+    if (result.status !== "packed") throw new Error("expected a packed folder");
+    return result.archive;
+  }
+
+  it("packs what the handle summarized into the private folder, until it is removed", async () => {
+    const { client } = setup();
+    const handle = await readyHandle(client, await droppedFolder(client));
+
+    const archive = await packed(client, handle);
+
+    expect(path.dirname(archive.path)).toBe(path.join(dir, "packs"));
+    expect(archive.totals).toEqual({ fileCount: 1, folderCount: 1, totalBytes: 10 });
+    expect(await archivesLeft()).toEqual([path.basename(archive.path)]);
+    await archive.remove();
+    expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("refuses a handle from another view without packing anything", async () => {
+    const { client } = setup();
+    const folder = await droppedFolder(client);
+    client.grantLocalSources(8, [folder]);
+    const handle = await readyHandle(client, folder);
+
+    await expect(client.packFolder(8, handle, { signal: signal() })).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+    expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("names what changed since the summary, and keeps nothing", async () => {
+    const { client } = setup();
+    const folder = await droppedFolder(client);
+    const handle = await readyHandle(client, folder);
+    await fs.writeFile(path.join(folder, "src", "app.ts"), "export const changed = true;");
+
+    expect(await client.packFolder(7, handle, { signal: signal() })).toEqual({
+      status: "changed",
+      path: "Project/src/app.ts",
+      change: "modified",
+    });
+    expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("packs two folders per view at once, counting archives not yet removed", async () => {
+    const { client } = setup();
+    const handle = await readyHandle(client, await droppedFolder(client));
+    const first = await packed(client, handle);
+    await packed(client, handle);
+
+    await expect(client.packFolder(7, handle, { signal: signal() })).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+    });
+
+    await first.remove();
+    await expect(packed(client, handle)).resolves.toBeTruthy();
+  });
+
+  it("stops a pack when its caller cancels, leaving nothing", async () => {
+    const { client } = setup();
+    const handle = await readyHandle(client, await droppedFolder(client));
+    const controller = new AbortController();
+
+    const packing = client.packFolder(7, handle, {
+      signal: controller.signal,
+      onProgress: () => controller.abort(),
+    });
+
+    await expect(packing).rejects.toBeInstanceOf(LocalFolderPackError);
+    await expect(packing).rejects.toMatchObject({ reason: "cancelled" });
+    expect(await archivesLeft()).toEqual([]);
+    // The place it held is free again.
+    await packed(client, handle);
+    await packed(client, handle);
+  });
+
+  it("stops a running pack and removes a held archive when the view is destroyed", async () => {
+    const { client, destroyView } = setup();
+    const handle = await readyHandle(client, await droppedFolder(client));
+    const held = await packed(client, handle);
+
+    const running = client.packFolder(7, handle, {
+      signal: signal(),
+      onProgress: () => destroyView(7),
+    });
+
+    await expect(running).rejects.toMatchObject({ reason: "cancelled" });
+    await vi.waitFor(async () => expect(await archivesLeft()).toEqual([]));
+    await expect(fs.stat(held.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes every archive still held when it is disposed", async () => {
+    const { client } = setup();
+    const handle = await readyHandle(client, await droppedFolder(client));
+    await packed(client, handle);
+
+    client.dispose();
+
+    await vi.waitFor(async () => expect(await archivesLeft()).toEqual([]));
   });
 });

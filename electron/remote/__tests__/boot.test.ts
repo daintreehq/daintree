@@ -130,6 +130,7 @@ const m = vi.hoisted(() => {
     installHostFileClient: vi.fn(),
     installHostUploadClient: vi.fn(),
     uninstallHostUploadClient: vi.fn(() => record("uninstall host upload client")),
+    sweepFolderPacks: vi.fn(async () => 0),
     installClipboardSplits: vi.fn(() => record("install clipboard splits")),
     uninstallClipboardSplits: vi.fn(() => record("uninstall clipboard splits")),
     installHostUploadService: vi.fn(),
@@ -340,10 +341,14 @@ vi.mock("../files/clientInstall.js", () => ({
   }),
 }));
 vi.mock("../files/uploadClient.js", () => ({
-  installHostUploadClient: vi.fn((feed: unknown, hostForView: unknown) => {
-    m.installHostUploadClient(feed, hostForView);
+  installHostUploadClient: vi.fn((feed: unknown, hostForView: unknown, packDir: unknown) => {
+    m.installHostUploadClient(feed, hostForView, packDir);
     return m.uninstallHostUploadClient;
   }),
+}));
+vi.mock("../files/localFolderPack.js", () => ({
+  folderPackDir: (userData: string) => `packs-of:${userData}`,
+  sweepFolderPacks: m.sweepFolderPacks,
 }));
 vi.mock("../hybrid/clipboard.js", () => ({
   installClipboardSplits: vi.fn(() => {
@@ -867,13 +872,17 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.installHostUploadClient).not.toHaveBeenCalled();
     expect(m.installClipboardSplits).not.toHaveBeenCalled();
+    // Archives a crashed launch left go at start, whether or not a host is used.
+    expect(m.sweepFolderPacks).toHaveBeenCalledExactlyOnceWith("packs-of:/tmp/daintree-user-data");
 
     m.clientHooks.current.onFirstUse?.();
     expect(m.installHostUploadClient).toHaveBeenCalledTimes(1);
-    const [feed, hostForView] = m.installHostUploadClient.mock.calls[0] as [
+    const [feed, hostForView, packDir] = m.installHostUploadClient.mock.calls[0] as [
       { onEndpointOpened: unknown; onEndpointClosed: unknown },
       (id: number) => unknown,
+      string,
     ];
+    expect(packDir).toBe("packs-of:/tmp/daintree-user-data");
     expect(feed.onEndpointOpened).toBe(m.client.onEndpointOpened);
     expect(feed.onEndpointClosed).toBe(m.client.onEndpointClosed);
     m.viewHosts.set(11, "studio-01");

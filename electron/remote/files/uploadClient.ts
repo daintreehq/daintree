@@ -25,6 +25,13 @@ import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { ClientUploadTransport } from "./ClientUploadTransport.js";
 import type { EndpointFeed } from "./clientInstall.js";
 import {
+  LocalFolderPackError,
+  packLocalFolder,
+  type FolderPackProgress,
+  type LocalFolderPackResult,
+  type PackedFolderArchive,
+} from "./localFolderPack.js";
+import {
   LocalFolderWalkError,
   walkLocalFolder,
   type FolderSnapshot,
@@ -81,7 +88,20 @@ export interface HostUploadClient {
    * folder has expired, and after the view is gone.
    */
   resolveFolderHandle(webContentsId: number, handle: unknown): Readonly<FolderSnapshot>;
-  /** Stops every folder walk and lets go of every view it watches. */
+  /**
+   * Packs exactly what a handle this view was issued summarized into the
+   * archive a folder upload sends, refused as `resolveFolderHandle` refuses.
+   * A folder that changed since is a `changed` result naming the path; a
+   * cancel, a view that went or an archive that can't be written rejects
+   * with `LocalFolderPackError`. The caller removes a packed archive once it
+   * is sent or given up on; one still held when its view goes is removed.
+   */
+  packFolder(
+    webContentsId: number,
+    handle: unknown,
+    options: { signal: AbortSignal; onProgress?: (progress: FolderPackProgress) => void }
+  ): Promise<LocalFolderPackResult>;
+  /** Stops every folder walk and pack, removes every archive held, and lets go of every view it watches. */
   dispose(): void;
 }
 
@@ -112,6 +132,8 @@ export interface HostUploadClientDeps {
   watchView?(webContentsId: number, onGone: () => void): () => void;
   /** Stands in for the filesystem and platform a folder walk sees. */
   walkOptions?: Omit<LocalFolderWalkOptions, "signal">;
+  /** The owner-only folder archives are packed in (`folderPackDir`). */
+  packDir: string;
 }
 
 const PROGRESS_INTERVAL_MS = 100;
@@ -151,6 +173,20 @@ const MAX_WALKS = 4;
 const MAX_FOLDER_HANDLES_PER_VIEW = 8;
 const MAX_FOLDER_HANDLES = 16;
 const FOLDER_HANDLE = /^[0-9a-f]{32}$/;
+/**
+ * Folders being packed or packed and not yet removed, per view and in all.
+ * Each archive can be over 500 MB on this machine's disk, so one held is
+ * counted until it is gone, not only while it is written.
+ */
+const MAX_PACKS_PER_VIEW = 2;
+const MAX_PACKS = 4;
+
+interface HeldPack {
+  webContentsId: number;
+  controller: AbortController;
+  /** Set once packed, until the archive is removed. */
+  archive: PackedFolderArchive | null;
+}
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
@@ -359,6 +395,9 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
   >();
   /** One per folder walk still running, cancelled or not. */
   const walkingViews = new Set<{ webContentsId: number }>();
+  /** One per pack running or archive held, until the archive is removed. */
+  const packs = new Set<HeldPack>();
+  let disposed = false;
   /** Per view holding grants, handles or walks: stops watching for its end. */
   const viewWatchers = new Map<number, () => void>();
 
@@ -372,6 +411,19 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     }
     for (const walk of walks.values()) {
       if (walk.webContentsId === webContentsId) walk.controller.abort();
+    }
+    for (const pack of packs) {
+      if (pack.webContentsId === webContentsId) releasePack(pack);
+    }
+  };
+  // A running pack stops and removes its own archive; a held one is removed here.
+  const releasePack = (pack: HeldPack): void => {
+    pack.controller.abort();
+    if (pack.archive) {
+      void pack.archive
+        .remove()
+        .catch(() => {})
+        .finally(() => packs.delete(pack));
     }
   };
   // What a view was granted, and what it summarized, goes with it.
@@ -409,6 +461,9 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       if (oldest === undefined) break;
       folderHandles.delete(oldest);
     }
+    // Deeply, since the packer copies exactly what each record says.
+    for (const entry of snapshot.entries) Object.freeze(entry);
+    for (const item of snapshot.notCopied) Object.freeze(item);
     Object.freeze(snapshot.entries);
     Object.freeze(snapshot.notCopied);
     const handle = crypto.randomBytes(16).toString("hex");
@@ -558,7 +613,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     return promise;
   };
 
-  return {
+  const client: HostUploadClient = {
     async uploadLocalFile(webContentsId, payload) {
       const destination = validateCommon(payload ?? {});
       const localPath = payload.localPath;
@@ -763,6 +818,58 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       return promise;
     },
 
+    async packFolder(webContentsId, handle, options) {
+      const snapshot = client.resolveFolderHandle(webContentsId, handle);
+      if (disposed) throw new LocalFolderPackError("cancelled");
+      let viewPacks = 0;
+      for (const pack of packs) if (pack.webContentsId === webContentsId) viewPacks++;
+      if (viewPacks >= MAX_PACKS_PER_VIEW || packs.size >= MAX_PACKS) {
+        throw new AppError({
+          code: "RATE_LIMITED",
+          message: "Too many folders packed at once",
+          userMessage: "Other folders are still being sent. Try again in a moment.",
+        });
+      }
+      const controller = new AbortController();
+      const forward = () => controller.abort();
+      options.signal.addEventListener("abort", forward, { once: true });
+      if (options.signal.aborted) controller.abort();
+      const pack: HeldPack = { webContentsId, controller, archive: null };
+      packs.add(pack);
+      watchViewState(webContentsId);
+      try {
+        const result = await packLocalFolder(snapshot, {
+          signal: controller.signal,
+          dir: deps.packDir,
+          onProgress: options.onProgress,
+        });
+        if (result.status !== "packed") {
+          packs.delete(pack);
+          return result;
+        }
+        // The view went, or the client stopped, as the last bytes were written.
+        if (controller.signal.aborted) {
+          await result.archive.remove().catch(() => {});
+          packs.delete(pack);
+          throw new LocalFolderPackError("cancelled");
+        }
+        const archive = result.archive;
+        pack.archive = archive;
+        return {
+          status: "packed",
+          archive: {
+            ...archive,
+            remove: () => archive.remove().finally(() => packs.delete(pack)),
+          },
+        };
+      } catch (error) {
+        if (!pack.archive) packs.delete(pack);
+        throw error;
+      } finally {
+        options.signal.removeEventListener("abort", forward);
+      }
+    },
+
     resolveFolderHandle(webContentsId, handle) {
       if (typeof handle !== "string" || !FOLDER_HANDLE.test(handle)) {
         throw invalid("Invalid folder handle");
@@ -779,12 +886,15 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     },
 
     dispose() {
+      disposed = true;
       for (const walk of walks.values()) walk.controller.abort();
+      for (const pack of packs) releasePack(pack);
       for (const unwatch of viewWatchers.values()) unwatch();
       viewWatchers.clear();
       folderHandles.clear();
     },
   };
+  return client;
 }
 
 function walkCancelled(): AppError {
@@ -866,7 +976,8 @@ function hostLabelFor(hostId: HostId): string {
  */
 export function installHostUploadClient(
   feed: EndpointFeed,
-  hostForView: (webContentsId: number) => HostId | null
+  hostForView: (webContentsId: number) => HostId | null,
+  packDir: string
 ): () => void {
   const transport = new ClientUploadTransport();
   const client = createHostUploadClient({
@@ -874,6 +985,7 @@ export function installHostUploadClient(
     hostForView,
     hostLabel: hostLabelFor,
     localLabel: process.platform === "darwin" ? "This Mac" : "this computer",
+    packDir,
     sendToView(webContentsId, event) {
       try {
         resolveLiveWebContents(webContentsId)?.send(CHANNELS.FILE_TRANSFER_EVENT, event);

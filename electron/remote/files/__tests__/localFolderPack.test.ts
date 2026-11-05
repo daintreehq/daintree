@@ -1,15 +1,18 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  folderPackDir,
   LocalFolderPackError,
   packLocalFolder,
   sweepFolderPacks,
   type FolderPackProgress,
+  type LocalFolderPackResult,
 } from "../localFolderPack.js";
 import { walkLocalFolder, type FolderSnapshot } from "../localFolderWalk.js";
 
@@ -49,15 +52,27 @@ async function summarize(localPath: string): Promise<FolderSnapshot> {
   return walked.snapshot;
 }
 
-function pack(
+function packResult(
   snapshot: FolderSnapshot,
   options: { signal?: AbortSignal; onProgress?: (progress: FolderPackProgress) => void } = {}
-) {
+): Promise<LocalFolderPackResult> {
   return packLocalFolder(snapshot, {
     signal: options.signal ?? new AbortController().signal,
     onProgress: options.onProgress,
     dir: packs,
   });
+}
+
+async function pack(snapshot: FolderSnapshot, options: Parameters<typeof packResult>[1] = {}) {
+  const result = await packResult(snapshot, options);
+  if (result.status !== "packed") throw new Error(`expected a packed folder, got ${result.status}`);
+  return result.archive;
+}
+
+async function changedBy(promise: Promise<LocalFolderPackResult>) {
+  const result = await promise;
+  if (result.status !== "changed") throw new Error("expected the pack to find a change");
+  return result;
 }
 
 async function packFailure(promise: Promise<unknown>): Promise<LocalFolderPackError> {
@@ -149,6 +164,7 @@ describe("packing a summarized folder", () => {
       "src/app.ts": "export const app = 1;\n",
       "src/lib/deep/util.ts": "export {};\n",
       "empty/": null,
+      "zero.txt": "",
       ".env": "SECRET=1\n",
       ".git/HEAD": "ref: refs/heads/main\n",
       "bin/run.sh": "#!/bin/sh\necho hi\n",
@@ -193,6 +209,17 @@ describe("packing a summarized folder", () => {
     });
   });
 
+  it("carries no time, so the same folder packs to the same bytes", async () => {
+    const root = await fixture("Project", { "a.txt": "a", "b/c.txt": "c" });
+    const first = await pack(await summarize(root));
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(path.join(root, "a.txt"), later, later);
+
+    const second = await pack(await summarize(root));
+
+    expect(second.sha256).toBe(first.sha256);
+  });
+
   it("keeps the archive and its folder owner-only", async () => {
     if (!posix) return;
     const snapshot = await summarize(await fixture("Project", { "a.txt": "a" }));
@@ -231,20 +258,25 @@ describe("packing a summarized folder", () => {
     }
   });
 
-  it("serves the archive as a transfer source and removes it once", async () => {
+  it("serves the archive as a transfer source per attempt, and removes it once", async () => {
     const snapshot = await summarize(await fixture("Project", { "a.txt": "hello" }));
     const packed = await pack(snapshot);
 
-    const source = await packed.openSource();
-    expect(source.size).toBe(packed.archiveBytes);
-    expect(source.sha256).toBe(packed.sha256);
-    const bytes = Buffer.from(await source.read(0, source.size));
+    const first = await packed.openSource();
+    expect(first.size).toBe(packed.archiveBytes);
+    expect(first.sha256).toBe(packed.sha256);
+    const bytes = Buffer.from(await first.read(0, first.size));
     expect(bytes.equals(await fs.readFile(packed.path))).toBe(true);
-    await source.close?.();
+    await first.close?.();
+    const second = await packed.openSource();
 
     await Promise.all([packed.remove(), packed.remove()]);
     await packed.remove();
+
     expect(await archivesLeft()).toEqual([]);
+    // Removing closed the source still open.
+    await expect(second.read(0, 1)).rejects.toThrow();
+    await expect(packed.openSource()).rejects.toThrow();
   });
 });
 
@@ -254,13 +286,22 @@ describe("a folder that changed after its summary", () => {
     const snapshot = await summarize(root);
     await fs.appendFile(path.join(root, "src/grows.ts"), " and longer");
 
-    const error = await packFailure(pack(snapshot));
-
-    expect(error.reason).toBe("changed");
-    expect(error.path).toBe("Project/src/grows.ts");
-    expect(error.change).toBe("modified");
-    expect(error.message).not.toContain("grows");
+    expect(await packResult(snapshot)).toEqual({
+      status: "changed",
+      path: "Project/src/grows.ts",
+      change: "modified",
+    });
     expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("stops when a file shrank", async () => {
+    const root = await fixture("Project", { "a.txt": "a long line" });
+    const snapshot = await summarize(root);
+    await fs.truncate(path.join(root, "a.txt"), 2);
+
+    const result = await changedBy(packResult(snapshot));
+
+    expect(result).toMatchObject({ path: "Project/a.txt", change: "modified" });
   });
 
   it("stops when a file was deleted, naming it", async () => {
@@ -268,11 +309,11 @@ describe("a folder that changed after its summary", () => {
     const snapshot = await summarize(root);
     await fs.rm(path.join(root, "src/gone.ts"));
 
-    const error = await packFailure(pack(snapshot));
-
-    expect(error.reason).toBe("changed");
-    expect(error.path).toBe("Project/src/gone.ts");
-    expect(error.change).toBe("gone");
+    expect(await packResult(snapshot)).toEqual({
+      status: "changed",
+      path: "Project/src/gone.ts",
+      change: "gone",
+    });
     expect(await archivesLeft()).toEqual([]);
   });
 
@@ -281,10 +322,28 @@ describe("a folder that changed after its summary", () => {
     const snapshot = await summarize(root);
     await fs.writeFile(path.join(root, "src/new.ts"), "y");
 
-    const error = await packFailure(pack(snapshot));
+    const result = await changedBy(packResult(snapshot));
 
-    expect(error.path).toBe("Project/src/new.ts");
-    expect(error.change).toBe("new");
+    expect(result).toMatchObject({ path: "Project/src/new.ts", change: "new" });
+    expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("stops when a file arrives in a folder after the folder was listed", async () => {
+    const root = await fixture("Project", { "a.txt": "a", "b.txt": "b", "c.txt": "c" });
+    const snapshot = await summarize(root);
+    let added = false;
+
+    const result = await changedBy(
+      packResult(snapshot, {
+        onProgress: (progress) => {
+          if (progress.filesDone !== 1 || added) return;
+          added = true;
+          fsSync.writeFileSync(path.join(root, "late.txt"), "late");
+        },
+      })
+    );
+
+    expect(result).toMatchObject({ path: "Project/late.txt", change: "new" });
     expect(await archivesLeft()).toEqual([]);
   });
 
@@ -293,10 +352,9 @@ describe("a folder that changed after its summary", () => {
     const snapshot = await summarize(root);
     await fs.rm(path.join(root, "empty"), { recursive: true });
 
-    const error = await packFailure(pack(snapshot));
+    const result = await changedBy(packResult(snapshot));
 
-    expect(error.path).toBe("Project/empty/");
-    expect(error.change).toBe("gone");
+    expect(result).toMatchObject({ path: "Project/empty/", change: "gone" });
   });
 
   it("stops when a file of the same size was written to", async () => {
@@ -306,10 +364,20 @@ describe("a folder that changed after its summary", () => {
     const later = new Date(snapshot.entries[1]!.mtimeMs + 5_000);
     await fs.utimes(path.join(root, "a.txt"), later, later);
 
-    const error = await packFailure(pack(snapshot));
+    const result = await changedBy(packResult(snapshot));
 
-    expect(error.path).toBe("Project/a.txt");
-    expect(error.change).toBe("modified");
+    expect(result).toMatchObject({ path: "Project/a.txt", change: "modified" });
+  });
+
+  it("stops when a file became executable, the one mode bit carried", async () => {
+    if (!posix) return;
+    const root = await fixture("Project", { "run.sh": "#!/bin/sh\n" });
+    const snapshot = await summarize(root);
+    await fs.chmod(path.join(root, "run.sh"), 0o755);
+
+    const result = await changedBy(packResult(snapshot));
+
+    expect(result).toMatchObject({ path: "Project/run.sh", change: "modified" });
   });
 
   it("stops when a file was swapped for a link, without following it", async () => {
@@ -321,24 +389,35 @@ describe("a folder that changed after its summary", () => {
     await fs.rm(path.join(root, "a.txt"));
     await fs.symlink(outside, path.join(root, "a.txt"));
 
-    const error = await packFailure(pack(snapshot));
+    const result = await changedBy(packResult(snapshot));
 
-    expect(error.path).toBe("Project/a.txt");
+    expect(result).toMatchObject({ path: "Project/a.txt", change: "type" });
     expect(await archivesLeft()).toEqual([]);
+  });
+
+  it("stops when a folder was swapped for a link to one just like it", async () => {
+    if (!posix) return;
+    const root = await fixture("Project", { "src/a.txt": "a" });
+    const snapshot = await summarize(root);
+    await fixture("elsewhere", { "a.txt": "a" });
+    await fs.rename(path.join(root, "src"), path.join(dir, "moved"));
+    await fs.symlink(path.join(dir, "elsewhere"), path.join(root, "src"));
+
+    const result = await changedBy(packResult(snapshot));
+
+    expect(result).toMatchObject({ path: "Project/src/", change: "type" });
   });
 
   it("stops when a file was swapped for a FIFO, without waiting on it", async () => {
     if (!posix) return;
     const root = await fixture("Project", { "src/a.txt": "a" });
     const snapshot = await summarize(root);
-    // The folder listing is checked first, so the FIFO takes a known name.
     await fs.rm(path.join(root, "src/a.txt"));
     execFileSync("mkfifo", [path.join(root, "src/a.txt")]);
 
-    const error = await packFailure(pack(snapshot));
+    const result = await changedBy(packResult(snapshot));
 
-    expect(error.path).toBe("Project/src/a.txt");
-    expect(error.change).toBe("type");
+    expect(result).toMatchObject({ path: "Project/src/a.txt", change: "type" });
   });
 
   it("stops when a left-out link was replaced by a file", async () => {
@@ -349,10 +428,9 @@ describe("a folder that changed after its summary", () => {
     await fs.rm(path.join(root, "link.txt"));
     await fs.writeFile(path.join(root, "link.txt"), "now a file");
 
-    const error = await packFailure(pack(snapshot));
+    const result = await changedBy(packResult(snapshot));
 
-    expect(error.path).toBe("Project/link.txt");
-    expect(error.change).toBe("type");
+    expect(result).toMatchObject({ path: "Project/link.txt", change: "type" });
   });
 });
 
@@ -362,17 +440,20 @@ describe("cancelling a pack", () => {
     for (let i = 0; i < 20; i++) files[`f${String(i).padStart(2, "0")}.txt`] = "x".repeat(1000);
     const snapshot = await summarize(await fixture("Project", files));
     const controller = new AbortController();
+    let lastProgress: FolderPackProgress | null = null;
 
     const error = await packFailure(
-      pack(snapshot, {
+      packResult(snapshot, {
         signal: controller.signal,
         onProgress: (progress) => {
+          lastProgress = progress;
           if (progress.filesDone === 5) controller.abort();
         },
       })
     );
 
     expect(error.reason).toBe("cancelled");
+    expect(lastProgress).toMatchObject({ filesDone: 5 });
     expect(await archivesLeft()).toEqual([]);
   });
 
@@ -381,7 +462,7 @@ describe("cancelling a pack", () => {
     const controller = new AbortController();
     controller.abort();
 
-    expect((await packFailure(pack(snapshot, { signal: controller.signal }))).reason).toBe(
+    expect((await packFailure(packResult(snapshot, { signal: controller.signal }))).reason).toBe(
       "cancelled"
     );
     expect(await archivesLeft()).toEqual([]);
@@ -389,48 +470,36 @@ describe("cancelling a pack", () => {
 });
 
 describe("the startup sweep", () => {
-  const hex = () => crypto.randomBytes(16).toString("hex");
-
-  function deadPid(): number {
-    const child = spawnSync(process.execPath, ["-e", ""]);
-    return child.pid!;
-  }
+  const archiveName = () => `${crypto.randomBytes(16).toString("hex")}.zip`;
 
   it("removes a stale archive and leaves everything else alone", async () => {
     await fs.mkdir(packs, { recursive: true, mode: 0o700 });
-    const stale = `${deadPid()}-${hex()}.zip`;
-    const ownLeftover = `${process.pid}-${hex()}.zip`;
-    const otherRunning = `${process.ppid}-${hex()}.zip`;
-    const oldRunning = `${process.ppid}-${hex()}.zip`;
-    const unrelated = ["notes.txt", `${deadPid()}-${hex()}.zip.bak`, "123-abc.zip"];
-    for (const name of [stale, ownLeftover, otherRunning, oldRunning, ...unrelated]) {
-      await fs.writeFile(path.join(packs, name), "x");
-    }
-    await fs.mkdir(path.join(packs, `${deadPid()}-${hex()}.zip`));
-    const dayAgo = new Date(Date.now() - 25 * 60 * 60_000);
-    await fs.utimes(path.join(packs, oldRunning), dayAgo, dayAgo);
-    const outside = path.join(dir, `${deadPid()}-${hex()}.zip`);
+    const stale = [archiveName(), archiveName()];
+    const unrelated = ["notes.txt", `${archiveName()}.bak`, "123-abc.zip", archiveName().toUpperCase()];
+    for (const name of [...stale, ...unrelated]) await fs.writeFile(path.join(packs, name), "x");
+    const folderNamedLikeOne = archiveName();
+    await fs.mkdir(path.join(packs, folderNamedLikeOne));
+    const outside = path.join(dir, archiveName());
     await fs.writeFile(outside, "x");
+    const linkNamedLikeOne = archiveName();
+    if (posix) await fs.symlink(outside, path.join(packs, linkNamedLikeOne));
 
-    const removed = await sweepFolderPacks(packs);
+    expect(await sweepFolderPacks(packs)).toBe(stale.length);
 
-    expect(removed).toBe(3);
     const left = await fs.readdir(packs);
-    expect(left).toEqual(expect.arrayContaining([otherRunning, ...unrelated]));
-    expect(left).not.toContain(stale);
-    expect(left).not.toContain(ownLeftover);
-    expect(left).not.toContain(oldRunning);
-    expect(left).toHaveLength(unrelated.length + 2);
+    expect(left.sort()).toEqual(
+      [...unrelated, folderNamedLikeOne, ...(posix ? [linkNamedLikeOne] : [])].sort()
+    );
     await expect(fs.stat(outside)).resolves.toBeTruthy();
   });
 
-  it("never removes an archive this process is still packing or holding", async () => {
+  it("never removes an archive this process is still holding", async () => {
     const snapshot = await summarize(await fixture("Project", { "a.txt": "a" }));
     const packed = await pack(snapshot);
 
-    await sweepFolderPacks(packs);
-
+    expect(await sweepFolderPacks(packs)).toBe(0);
     await expect(fs.stat(packed.path)).resolves.toBeTruthy();
+
     await packed.remove();
     await fs.writeFile(packed.path, "left behind");
     expect(await sweepFolderPacks(packs)).toBe(1);
@@ -440,7 +509,7 @@ describe("the startup sweep", () => {
     if (!posix) return;
     const real = path.join(dir, "real");
     await fs.mkdir(real);
-    const stale = path.join(real, `${deadPid()}-${hex()}.zip`);
+    const stale = path.join(real, archiveName());
     await fs.writeFile(stale, "x");
     await fs.symlink(real, packs);
 
@@ -450,5 +519,16 @@ describe("the startup sweep", () => {
 
   it("does nothing when there is no folder yet", async () => {
     expect(await sweepFolderPacks(packs)).toBe(0);
+  });
+});
+
+describe("where archives are packed", () => {
+  it("is one folder per user data folder, so two Daintrees never sweep each other's", () => {
+    const packaged = folderPackDir("/Users/a/Library/Application Support/Daintree");
+    const dev = folderPackDir("/Users/a/Library/Application Support/daintree-dev");
+
+    expect(path.dirname(packaged)).toBe(os.tmpdir());
+    expect(dev).not.toBe(packaged);
+    expect(folderPackDir("/Users/a/Library/Application Support/Daintree")).toBe(packaged);
   });
 });
