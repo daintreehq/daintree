@@ -95,6 +95,28 @@ describe("summarizing a dropped folder", () => {
     ).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
+  it("keeps the folder's name out of every error, since packaged builds log them", async () => {
+    const { client } = setup();
+    const secret = path.join(dir, "ConfidentialAcquisition");
+    await fs.mkdir(secret);
+    const named = (error: unknown) => JSON.stringify(error, Object.getOwnPropertyNames(error));
+
+    const ungranted = await client
+      .summarizeLocalFolder(7, { localPath: secret, opId: "op-a" })
+      .catch((error: unknown) => error);
+    await fs.rm(secret, { recursive: true });
+    client.grantLocalSources(7, [secret]);
+    const vanished = await client
+      .summarizeLocalFolder(7, { localPath: secret, opId: "op-b" })
+      .catch((error: unknown) => error);
+
+    expect(ungranted).toMatchObject({ code: "PERMISSION" });
+    expect(vanished).toMatchObject({ code: "INVALID_PATH" });
+    for (const error of [ungranted, vanished]) {
+      expect(named(error)).not.toContain("ConfidentialAcquisition");
+    }
+  });
+
   it("names a dropped file as not a folder", async () => {
     const { client } = setup();
     const file = path.join(dir, "notes.txt");

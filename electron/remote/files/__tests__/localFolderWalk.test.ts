@@ -393,7 +393,7 @@ describe("walking a dropped folder", () => {
       ...base,
       lstat: async (target) => {
         const stat = await base.lstat(target);
-        if (target !== "/x/Root/a") return stat;
+        if (target.split(path.sep).join("/") !== "/x/Root/a") return stat;
         seen += 1;
         return seen === 1 ? stat : ({ ...stat, ino: stat.ino + 1000 } as Stats);
       },
@@ -414,7 +414,7 @@ describe("walking a dropped folder", () => {
       ...base,
       lstat: async (target) => {
         const stat = await base.lstat(target);
-        if (target !== "/x/Root/a") return stat;
+        if (target.split(path.sep).join("/") !== "/x/Root/a") return stat;
         seen += 1;
         // Found and checked before listing as itself, then gone by the end.
         return seen <= 2 ? stat : ({ ...stat, ino: stat.ino + 1000 } as Stats);
@@ -428,6 +428,7 @@ describe("walking a dropped folder", () => {
 describe("walking on Windows", () => {
   it("tells symlinks and junctions from other reparse points, and follows neither", async () => {
     const walkFs = fakeFs({
+      "C:/Users/me": { listed: "dir" },
       "C:/Users/me/Proj": { listed: "dir" },
       "C:/Users/me/Proj/app.exe": { listed: "file", size: 4, mode: 0o100777 },
       // A junction or symlink: listed as a link, and lstat agrees.
@@ -467,6 +468,48 @@ describe("walking on Windows", () => {
       walk("C:/Users/me/Synced", { fs: walkFs, platform: "win32" })
     ).rejects.toMatchObject({ reason: "link" });
     expect(walkFs.lstated).toEqual([]);
+  });
+
+  it("matches the dropped folder's exact name before a case-folded one", async () => {
+    // A case-sensitive directory (WSL can make them) holding a link and a
+    // plain folder whose names differ only by case.
+    const walkFs = fakeFs({
+      "C:/src": { listed: "dir" },
+      "C:/src/Proj": { listed: "link", actual: "dir" },
+      "C:/src/proj": { listed: "dir" },
+      "C:/src/proj/a.txt": { listed: "file", size: 1 },
+    });
+
+    const { summary } = ready(await walk("C:/src/proj", { fs: walkFs, platform: "win32" }));
+
+    expect(summary.totals.fileCount).toBe(1);
+  });
+
+  it("fails rather than guess when the dropped folder's parent can't settle what it is", async () => {
+    const unlisted = fakeFs({
+      "C:/Users/me/Proj": { listed: "dir" },
+      "C:/Users/me/Proj/a.txt": { listed: "file", size: 1 },
+    });
+    const missing = fakeFs({
+      "C:/Users/me": { listed: "dir" },
+      "C:/Users/me/Other": { listed: "dir" },
+    });
+    const ambiguous = fakeFs({
+      "C:/src": { listed: "dir" },
+      "C:/src/PROJ": { listed: "dir" },
+      "C:/src/Proj": { listed: "link", actual: "dir" },
+    });
+
+    for (const [walkFs, root] of [
+      [unlisted, "C:/Users/me/Proj"],
+      [missing, "C:/Users/me/Proj"],
+      [ambiguous, "C:/src/proj"],
+    ] as const) {
+      await expect(walk(root, { fs: walkFs, platform: "win32" })).rejects.toMatchObject({
+        reason: "unreadable",
+      });
+      expect(walkFs.lstated).toEqual([]);
+    }
   });
 });
 

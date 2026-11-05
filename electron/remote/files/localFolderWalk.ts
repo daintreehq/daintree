@@ -198,11 +198,15 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new LocalFolderWalkError("cancelled");
 }
 
+/** Names read from the dropped folder's parent before giving up on finding it. */
+const PARENT_SCAN_MAX = 100_000;
+
 /**
  * Whether the dropped folder is itself a Windows reparse point. Only its
- * parent's listing can say: lstat would follow one it can't read as a link.
- * A parent that can't be listed leaves it to lstat, which still catches
- * symlinks and junctions.
+ * parent's listing can say, since lstat follows one it can't read as a link,
+ * so a listing that can't settle it fails the walk rather than guess: the
+ * person dragged the folder from a view of that parent, so it lists. The
+ * exact spelling wins; a case-folded one counts only when it is the only one.
  */
 async function isListedAsReparsePoint(
   walkFs: LocalFolderWalkFs,
@@ -210,23 +214,31 @@ async function isListedAsReparsePoint(
   signal: AbortSignal
 ): Promise<boolean> {
   const parent = path.dirname(localPath);
+  // A drive or share root has no parent to list, and no name to send by.
   if (parent === localPath) return false;
-  const name = path.basename(localPath).toLowerCase();
+  const name = path.basename(localPath);
+  const folded = name.toLowerCase();
   let dir: Awaited<ReturnType<LocalFolderWalkFs["opendir"]>>;
   try {
     dir = await walkFs.opendir(parent, { bufferSize: DIRECTORY_BUFFER });
   } catch {
-    return false;
+    throw new LocalFolderWalkError("unreadable");
   }
+  const foldedMatches: boolean[] = [];
+  let scanned = 0;
   try {
     for await (const dirent of dir) {
       throwIfAborted(signal);
-      if (dirent.name.toLowerCase() === name) return dirent.isSymbolicLink();
+      if (dirent.name === name) return dirent.isSymbolicLink();
+      if (dirent.name.toLowerCase() === folded) foldedMatches.push(dirent.isSymbolicLink());
+      if (++scanned >= PARENT_SCAN_MAX) throw new LocalFolderWalkError("unreadable");
     }
   } catch (error) {
     if (error instanceof LocalFolderWalkError) throw error;
+    throw new LocalFolderWalkError("unreadable");
   }
-  return false;
+  if (foldedMatches.length !== 1) throw new LocalFolderWalkError("unreadable");
+  return foldedMatches[0]!;
 }
 
 /**
