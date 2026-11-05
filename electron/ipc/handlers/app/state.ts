@@ -251,6 +251,25 @@ function withoutUndrivenHostFields(
 }
 
 /** Whether `projectId` has yet to have its first-open layout seed decided (#13782). */
+/**
+ * Give back the plugin launch records an earlier run left for the panes this
+ * hydrate restores (#16240). The ledger lives with the plugin host, off the
+ * startup graph, so it loads only once a record exists for it to restore.
+ */
+function admitRestoredPluginLaunchesFor(
+  terminals: ReadonlyArray<{ id?: unknown; launchedByPluginId?: unknown }>
+): void {
+  if (terminals.length === 0) return;
+  const stored = store.get("pluginLaunchedAgents");
+  if (stored === null || typeof stored !== "object" || Object.keys(stored).length === 0) return;
+  const panes = terminals.map(({ id, launchedByPluginId }) => ({ id, launchedByPluginId }));
+  void import("../../../services/plugin/pluginLaunchStore.js")
+    .then(({ admitRestoredPluginLaunchesFromStore }) => admitRestoredPluginLaunchesFromStore(panes))
+    .catch((error: unknown) => {
+      console.error("[AppHydrate] Failed to restore plugin launch records:", error);
+    });
+}
+
 function isLayoutSeedUndecided(projectId: string): boolean {
   try {
     return getProjectLayoutSeed(projectId) === null;
@@ -373,6 +392,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
                   : "miss",
     });
     if (cached) {
+      admitRestoredPluginLaunchesFor(cached.appState.terminals ?? []);
       // One leaf, not the whole appState the cached payload already carries.
       const panelGridConfig = store.get("appState.panelGridConfig");
       return {
@@ -839,6 +859,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         workspaceId ?? undefined
       ).terminals;
     }
+
+    admitRestoredPluginLaunchesFor(terminalsToUse);
 
     const appState: StoreSchema["appState"] = {
       ...globalAppState,

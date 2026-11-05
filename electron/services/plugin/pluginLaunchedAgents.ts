@@ -26,10 +26,19 @@ import { SEND_TO_AGENT_MAX_ID_LENGTH } from "./sendToAgentLimits.js";
  * the launch's own result, never from anything the plugin says about itself,
  * so an agent the user, an MCP client or another plugin started has none.
  *
- * Keyed by terminal id, like the MCP ownership ledger: a restart or a
+ * Keyed by terminal id, like the MCP ownership ledger: a pane restart or a
  * terminal-host recovery brings the same pane back under the same id, and it
  * stays the plugin's. An exited terminal's record is inert, since nothing can
- * be written to it, and goes when the plugin unloads.
+ * be written to it.
+ *
+ * The ledger is also kept on disk (#16240), so it survives an app restart. A
+ * stored record comes back only for a pane that main's own hydrate hands back
+ * to restore under the id it was launched with, and only while that pane still
+ * names the same launching plugin: a pane restored under a fresh id, or one
+ * that never comes back, regains nothing, and a later spawn reusing the id
+ * inherits nothing. Every forget below reaches the disk too, so an unload that
+ * ends a plugin's reach also ends it across a restart; the one exception is
+ * the service's own teardown, which detaches the disk first and leaves it.
  */
 interface PluginLaunchRecord {
   readonly pluginId: string;
@@ -37,7 +46,129 @@ interface PluginLaunchRecord {
   readonly projectId: string | null;
 }
 
+/** A record as kept on disk. */
+export interface StoredPluginLaunch extends PluginLaunchRecord {
+  /** When main last recorded the launch or handed its pane back to restore. */
+  readonly seenAt: number;
+}
+
+/** Where the ledger is kept between runs: the `pluginLaunchedAgents` store key in production. */
+export interface PluginLaunchPersistence {
+  load(): unknown;
+  save(records: Record<string, StoredPluginLaunch>): void;
+}
+
+/**
+ * A stored record whose pane hasn't come back in this long is dropped: its
+ * project went unopened for a month, or the pane is gone and nothing said so.
+ */
+export const STORED_PLUGIN_LAUNCH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** At most this many stored records, the oldest dropped first. */
+export const MAX_STORED_PLUGIN_LAUNCHES = 200;
+
+/** A loaded `seenAt` this far past "now" is corrupt, not early. */
+const FUTURE_SKEW_MS = 60_000;
+
 const launches = new Map<string, PluginLaunchRecord>();
+
+let persistence: PluginLaunchPersistence | null = null;
+/** The disk's copy, loaded on attach. Holds records restore hasn't handed back yet. */
+const stored = new Map<string, StoredPluginLaunch>();
+
+function readStoredRecord(terminalId: string, raw: unknown, now: number): StoredPluginLaunch | null {
+  if (terminalId.length === 0 || terminalId.length > SEND_TO_AGENT_MAX_ID_LENGTH) return null;
+  if (raw === null || typeof raw !== "object") return null;
+  const { pluginId, projectId, seenAt } = raw as Record<string, unknown>;
+  if (typeof pluginId !== "string" || pluginId.length === 0) return null;
+  if (projectId !== null && (typeof projectId !== "string" || projectId.length === 0)) return null;
+  if (typeof seenAt !== "number" || !Number.isFinite(seenAt)) return null;
+  if (seenAt < now - STORED_PLUGIN_LAUNCH_TTL_MS || seenAt > now + FUTURE_SKEW_MS) return null;
+  return { pluginId, projectId, seenAt };
+}
+
+/** Drop the oldest records past the cap. Reports whether any went. */
+function capStored(): boolean {
+  if (stored.size <= MAX_STORED_PLUGIN_LAUNCHES) return false;
+  const oldestFirst = [...stored].sort(([, a], [, b]) => a.seenAt - b.seenAt);
+  for (const [terminalId] of oldestFirst.slice(0, stored.size - MAX_STORED_PLUGIN_LAUNCHES)) {
+    stored.delete(terminalId);
+  }
+  return true;
+}
+
+function persist(): void {
+  if (persistence === null) return;
+  try {
+    persistence.save(Object.fromEntries(stored));
+  } catch (error) {
+    console.error("[pluginLaunchedAgents] Failed to save the plugin launch ledger:", error);
+  }
+}
+
+/**
+ * Keep the ledger on disk from here on, loading what an earlier run left. The
+ * first caller wins: both the plugin host's start and a hydrate that needs the
+ * records attach the same store, in whichever order they run.
+ */
+export function attachPluginLaunchPersistence(target: PluginLaunchPersistence): void {
+  if (persistence !== null) return;
+  persistence = target;
+  let raw: unknown;
+  try {
+    raw = target.load();
+  } catch (error) {
+    console.error("[pluginLaunchedAgents] Failed to load the plugin launch ledger:", error);
+    raw = undefined;
+  }
+  const entries = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const now = Date.now();
+  let pruned = false;
+  for (const [terminalId, value] of Object.entries(entries as Record<string, unknown>)) {
+    const record = readStoredRecord(terminalId, value, now);
+    if (record === null) pruned = true;
+    else stored.set(terminalId, record);
+  }
+  if (capStored() || pruned) persist();
+}
+
+/**
+ * Stop writing to disk and forget its copy, leaving what is there for the next
+ * run. Called by the service's teardown before anything it unloads forgets.
+ */
+export function detachPluginLaunchPersistence(): void {
+  persistence = null;
+  stored.clear();
+}
+
+/**
+ * Bring back the stored records of the panes main's hydrate is handing to
+ * restore. A record comes back only under the saved id it was launched with,
+ * and only while the saved pane still names the plugin it holds: a pane under
+ * that id that names another, or none, means the id now belongs to someone
+ * else, and the record goes.
+ */
+export function admitRestoredPluginLaunches(
+  panes: ReadonlyArray<{ id?: unknown; launchedByPluginId?: unknown }>
+): void {
+  if (stored.size === 0) return;
+  const now = Date.now();
+  let changed = false;
+  for (const pane of panes) {
+    if (typeof pane.id !== "string") continue;
+    const record = stored.get(pane.id);
+    if (record === undefined) continue;
+    changed = true;
+    if (pane.launchedByPluginId !== record.pluginId) {
+      stored.delete(pane.id);
+      if (launches.get(pane.id)?.pluginId === record.pluginId) launches.delete(pane.id);
+      continue;
+    }
+    launches.set(pane.id, { pluginId: record.pluginId, projectId: record.projectId });
+    stored.set(pane.id, { ...record, seenAt: now });
+  }
+  if (changed) persist();
+}
 
 /**
  * Record the agent a successful `agent.launch` result says it started.
@@ -62,6 +193,10 @@ export function recordPluginLaunch(
   const terminalId = launched.terminalId;
   if (typeof terminalId !== "string" || terminalId.length === 0) return;
   launches.set(terminalId, { pluginId, projectId });
+  if (persistence === null) return;
+  stored.set(terminalId, { pluginId, projectId, seenAt: Date.now() });
+  capStored();
+  persist();
 }
 
 /**
@@ -85,11 +220,22 @@ export function launchedAgentProject(
   return projectId;
 }
 
-/** Drop every agent the matching plugin instances launched: they no longer reach them. */
+/**
+ * Drop every agent the matching plugin instances launched, on disk as well, so
+ * they reach none of them after a restart either. A stored record restore
+ * hasn't handed back yet goes too, whether or not its plugin is loaded.
+ */
 export function forgetPluginLaunchesWhere(matches: (pluginId: string) => boolean): void {
   for (const [terminalId, record] of launches) {
     if (matches(record.pluginId)) launches.delete(terminalId);
   }
+  let changed = false;
+  for (const [terminalId, record] of stored) {
+    if (!matches(record.pluginId)) continue;
+    stored.delete(terminalId);
+    changed = true;
+  }
+  if (changed) persist();
 }
 
 export function forgetPluginLaunches(pluginId: string): void {
@@ -98,6 +244,7 @@ export function forgetPluginLaunches(pluginId: string): void {
 
 export function _resetPluginLaunchesForTests(): void {
   launches.clear();
+  detachPluginLaunchPersistence();
 }
 
 /** Check a terminal id passed to a `host.agents` input method. */
