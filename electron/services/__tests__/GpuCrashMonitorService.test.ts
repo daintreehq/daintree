@@ -826,9 +826,11 @@ describe("GpuCrashMonitorService", () => {
         const cleanupOrder = crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0];
         const markExitOrder = crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0];
         const markLaunchOrder = panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0];
+        const telemetryOrder = telemetryServiceMock.closeTelemetry.mock.invocationCallOrder[0];
         const exitOrder = appMock.exit.mock.invocationCallOrder[0];
         expect(cleanupOrder).toBeLessThan(markExitOrder);
         expect(markExitOrder).toBeLessThan(markLaunchOrder);
+        expect(markLaunchOrder).toBeLessThan(telemetryOrder);
         expect(markLaunchOrder).toBeLessThan(exitOrder);
       });
 

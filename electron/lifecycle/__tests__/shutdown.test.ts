@@ -2856,9 +2856,19 @@ describe("registerShutdownHandler", () => {
         const relaunchApp = await setupRelaunch();
         relaunchApp("gpu-mitigation");
 
+        await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+        // Only the chain's own cleanup budget, short of the coordinator's
+        // SHUTDOWN_DEADLINE_MS, so the exit comes from the timeout this test
+        // names rather than the outer backstop.
         await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS);
-        await vi.runAllTimersAsync();
 
+        expect(consoleSpy).toHaveBeenCalledWith(
+          "[MAIN] Error during cleanup:",
+          expect.objectContaining({ message: expect.stringContaining("Hard shutdown timeout") })
+        );
+        expect(
+          consoleSpy.mock.calls.some(([message]) => String(message).includes("deadline"))
+        ).toBe(false);
         expect(armRelaunchMock).toHaveBeenCalledTimes(1);
         expect(appMock.exit).toHaveBeenCalledWith(0);
         expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
