@@ -393,20 +393,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // dialog close by a frame and lose the perceived-responsiveness win.
   const pendingCreations = useWorktreeSelectionStore((s) => s.pendingCreations);
   const deletedWorktrees = useWorktreeSelectionStore((s) => s.deletedWorktrees);
-  const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
   const dismissPendingCreation = useWorktreeSelectionStore((s) => s.dismissPendingCreation);
+  const retryPendingCreation = useWorktreeSelectionStore((s) => s.retryPendingCreation);
 
   const handleRetryPendingCreation = useCallback(
-    (pendingCreation: PendingCreation) => {
-      dismissPendingCreation(pendingCreation.path);
-      openCreateDialog(null, {
-        initialBranchInput: pendingCreation.branch,
-        initialRecipeId: pendingCreation.recipeId,
-        initialAgentId: pendingCreation.agentId,
-        initialPrompt: pendingCreation.prompt,
-      });
-    },
-    [dismissPendingCreation, openCreateDialog]
+    (pendingCreation: PendingCreation) => retryPendingCreation(pendingCreation.path),
+    [retryPendingCreation]
   );
 
   const pendingCreationRows = useMemo(() => {

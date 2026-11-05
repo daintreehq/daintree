@@ -669,18 +669,71 @@ describe("worktreeStore", () => {
       expect(entry?.prompt).toBe("fix the login bug");
     });
 
-    it("openCreateDialog carries the agent draft and closing clears it", () => {
-      useWorktreeSelectionStore.getState().openCreateDialog(null, {
-        initialAgentId: "claude",
-        initialPrompt: "fix the login bug",
-      });
+    it("openCreateDialog carries a restore draft and closing clears it", () => {
+      const restoreDraft = {
+        path: "/abs/path",
+        branch: "feature/foo",
+        agentId: "claude",
+        prompt: "fix the login bug",
+      };
+      useWorktreeSelectionStore.getState().openCreateDialog(null, { restoreDraft });
       let dialog = useWorktreeSelectionStore.getState().createDialog;
-      expect(dialog.initialAgentId).toBe("claude");
-      expect(dialog.initialPrompt).toBe("fix the login bug");
+      expect(dialog.restoreDraft).toEqual(restoreDraft);
       useWorktreeSelectionStore.getState().closeCreateDialog();
       dialog = useWorktreeSelectionStore.getState().createDialog;
-      expect(dialog.initialAgentId).toBeNull();
-      expect(dialog.initialPrompt).toBeNull();
+      expect(dialog.restoreDraft).toBeNull();
+    });
+
+    it("retryPendingCreation reopens the dialog with the whole failed request", () => {
+      const issue = makeIssue({ number: 42 });
+      const pr = makePR({ number: 7, headRef: "feature/pr-head" });
+      const request = {
+        branch: "feature/foo",
+        issue,
+        pr,
+        baseBranch: "origin/release",
+        branchMode: "existing" as const,
+        fromRemote: true,
+        worktreeMode: "docker",
+        recipeId: null,
+        agentId: "claude",
+        prompt: "fix the login bug",
+      };
+      const store = useWorktreeSelectionStore.getState();
+      store.addPendingCreation("/abs/path", request);
+      store.failPendingCreation("/abs/path", "fatal: boom");
+
+      useWorktreeSelectionStore.getState().retryPendingCreation("/abs/path");
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.pendingCreations.has("/abs/path")).toBe(false);
+      expect(state.createDialog.isOpen).toBe(true);
+      expect(state.createDialog.initialIssue).toBe(issue);
+      expect(state.createDialog.initialPR).toBe(pr);
+      // Row bookkeeping stays behind: the dialog gets the request and nothing else.
+      expect(state.createDialog.restoreDraft).toEqual({ path: "/abs/path", ...request });
+    });
+
+    it("retryPendingCreation leaves an unknown row and a closed dialog alone", () => {
+      useWorktreeSelectionStore.getState().retryPendingCreation("/unknown");
+      expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(false);
+    });
+
+    it("an ordinary opening after a Retry starts without its draft", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addPendingCreation("/abs/path", { branch: "feature/foo", issue: makeIssue() });
+      store.failPendingCreation("/abs/path", "boom");
+      useWorktreeSelectionStore.getState().retryPendingCreation("/abs/path");
+      useWorktreeSelectionStore.getState().closeCreateDialog();
+
+      useWorktreeSelectionStore.getState().openCreateDialog(null);
+      let dialog = useWorktreeSelectionStore.getState().createDialog;
+      expect(dialog.restoreDraft).toBeNull();
+      expect(dialog.initialIssue).toBeNull();
+
+      useWorktreeSelectionStore.getState().openCreateDialogForPR(makePR());
+      dialog = useWorktreeSelectionStore.getState().createDialog;
+      expect(dialog.restoreDraft).toBeNull();
     });
 
     it("resolvePendingCreation removes the entry", () => {

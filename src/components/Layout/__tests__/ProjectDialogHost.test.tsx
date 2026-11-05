@@ -314,7 +314,7 @@ describe("ProjectDialogHost", () => {
       act(() =>
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
           surfacePanelKindId: PLUGIN_KIND,
-          initialBranchInput: "feature/x",
+          initialRecipeId: "recipe-x",
           onCreated,
         })
       );
@@ -324,7 +324,7 @@ describe("ProjectDialogHost", () => {
       expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
       expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
       const { createDialog } = useWorktreeSelectionStore.getState();
-      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.initialRecipeId).toBe("recipe-x");
       expect(createDialog.onCreated).toBe(onCreated);
 
       act(() => useWorktreeSelectionStore.getState().closeCreateDialog());
@@ -363,7 +363,7 @@ describe("ProjectDialogHost", () => {
       act(() =>
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
           surfacePanelKindId: PLUGIN_KIND,
-          initialBranchInput: "feature/x",
+          initialRecipeId: "recipe-x",
           onCreated,
         })
       );
@@ -388,7 +388,7 @@ describe("ProjectDialogHost", () => {
       expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
       expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
       const { createDialog } = useWorktreeSelectionStore.getState();
-      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.initialRecipeId).toBe("recipe-x");
       expect(createDialog.onCreated).toBe(onCreated);
     });
 

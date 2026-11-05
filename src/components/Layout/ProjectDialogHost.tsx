@@ -221,9 +221,7 @@ function ProjectDialogHost() {
               initialIssue={createDialog.initialIssue}
               initialPR={createDialog.initialPR}
               initialRecipeId={createDialog.initialRecipeId}
-              initialBranchInput={createDialog.initialBranchInput}
-              initialAgentId={createDialog.initialAgentId}
-              initialPrompt={createDialog.initialPrompt}
+              restoreDraft={createDialog.restoreDraft}
             />
           </Suspense>
         </ErrorBoundary>

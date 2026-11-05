@@ -428,6 +428,7 @@ import {
   _resetForTests as resetForgeResourceCache,
 } from "@/lib/forgeResourceCache";
 import type { Issue } from "@shared/types/forge";
+import type { PendingCreationDraft } from "@/store/worktreeStore";
 
 beforeEach(() => {
   clearBranchListCache();
@@ -448,6 +449,11 @@ async function advanceTimersGradually(totalMs: number, stepMs = 100) {
       await vi.advanceTimersByTimeAsync(stepMs);
     });
   }
+}
+
+/** A failed creation's request, as the sidebar's Retry hands it back. */
+function retryDraft(overrides: Partial<PendingCreationDraft> = {}): PendingCreationDraft {
+  return { path: "/test/root-worktrees/feature/test", branch: "feature/test", ...overrides };
 }
 
 function renderDialog(props: Partial<React.ComponentProps<typeof NewWorktreeDialog>> = {}) {
@@ -2165,14 +2171,14 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
   });
 
   it("restores a Retry's agent and prompt", async () => {
-    renderDialog({ initialAgentId: "claude", initialPrompt: PROMPT });
+    renderDialog({ restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT }) });
     await advanceTimersGradually(500);
     expect(screen.getByDisplayValue(PROMPT).getAttribute("data-testid")).toBe("first-agent-prompt");
   });
 
   it("keeps a Retry's explicit No agent over the remembered agent", async () => {
     firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
-    renderDialog({ initialAgentId: null, initialPrompt: "" });
+    renderDialog({ restoreDraft: retryDraft({ agentId: null, prompt: "" }) });
     await advanceTimersGradually(500);
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
   });
@@ -2970,7 +2976,10 @@ describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
   });
 
   it("restores a Retry's agent over an issue create's remembered No agent", async () => {
-    renderDialog({ initialIssue: ISSUE, initialAgentId: "claude", initialPrompt: "" });
+    renderDialog({
+      initialIssue: ISSUE,
+      restoreDraft: retryDraft({ issue: ISSUE, agentId: "claude", prompt: "" }),
+    });
     await advanceTimersGradually(500);
 
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
@@ -3000,7 +3009,10 @@ describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
 
   it("keeps a Retry's agent over an issue create's remembered agent", async () => {
     firstAgentFixtures.lastIssueAgentByProject = { "test-project": "claude" };
-    renderDialog({ initialIssue: ISSUE, initialAgentId: null, initialPrompt: "" });
+    renderDialog({
+      initialIssue: ISSUE,
+      restoreDraft: retryDraft({ issue: ISSUE, agentId: null, prompt: "" }),
+    });
     await advanceTimersGradually(500);
 
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");

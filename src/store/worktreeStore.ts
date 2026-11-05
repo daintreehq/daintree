@@ -35,9 +35,8 @@ interface CreateDialogState {
   initialIssue: Issue | null;
   initialPR: PR | null;
   initialRecipeId: string | null;
-  initialBranchInput: string | null;
-  initialAgentId: string | null;
-  initialPrompt: string | null;
+  /** A failed creation's request, when this opening is its Retry. */
+  restoreDraft: PendingCreationDraft | null;
   onCreated?: (worktreeId: string) => void;
   /**
    * The panel kind of the project plugin's `worktreeCreate` view this opening
@@ -50,16 +49,26 @@ interface CreateDialogState {
   openingId?: number;
 }
 
-/** What a failed creation's Retry reopens the dialog with. The prompt stays in memory only. */
+/**
+ * The request a creation was submitted with, so its Retry reopens the dialog
+ * as it was rather than at the defaults. In memory only, like the prompt it
+ * carries.
+ */
 export interface PendingCreationDraft {
+  path: string;
+  branch: string;
+  issue?: Issue | null;
+  pr?: PR | null;
+  baseBranch?: string;
+  branchMode?: "new" | "existing";
+  fromRemote?: boolean;
+  worktreeMode?: string;
   recipeId?: string | null;
   agentId?: string | null;
   prompt?: string;
 }
 
 export interface PendingCreation extends PendingCreationDraft {
-  path: string;
-  branch: string;
   startedAt: number;
   status: "creating" | "error";
   error?: string;
@@ -376,10 +385,12 @@ interface WorktreeSelectionState {
   ) => void;
   setPendingWorktree: (id: string | null) => void;
   applyPendingWorktreeSelection: (worktreeId: string) => void;
-  addPendingCreation: (path: string, meta: { branch: string } & PendingCreationDraft) => void;
+  addPendingCreation: (path: string, meta: Omit<PendingCreationDraft, "path">) => void;
   resolvePendingCreation: (path: string) => void;
   failPendingCreation: (path: string, error: string) => void;
   dismissPendingCreation: (path: string) => void;
+  /** Takes the failed row down and reopens the create dialog with its request. */
+  retryPendingCreation: (path: string) => void;
   addDeletedWorktree: (worktree: DeletedWorktree) => void;
   dismissDeletedWorktree: (worktreeId: string) => void;
   setDeletedWorktreeCleanupState: (
@@ -407,9 +418,7 @@ interface WorktreeSelectionState {
     initialIssue?: Issue | null,
     options?: {
       initialRecipeId?: string | null;
-      initialBranchInput?: string | null;
-      initialAgentId?: string | null;
-      initialPrompt?: string | null;
+      restoreDraft?: PendingCreationDraft | null;
       onCreated?: (worktreeId: string) => void;
       surfacePanelKindId?: string;
     }
@@ -809,9 +818,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     initialIssue: null,
     initialPR: null,
     initialRecipeId: null,
-    initialBranchInput: null,
-    initialAgentId: null,
-    initialPrompt: null,
+    restoreDraft: null,
     onCreated: undefined,
   },
   bulkCreateDialog: {
@@ -1095,6 +1102,15 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     });
   },
 
+  retryPendingCreation: (path) => {
+    const key = findPendingCreationKey(get().pendingCreations, path);
+    const entry = key === undefined ? undefined : get().pendingCreations.get(key);
+    if (!entry) return;
+    const { startedAt: _startedAt, status: _status, error: _error, ...draft } = entry;
+    get().dismissPendingCreation(entry.path);
+    get().openCreateDialog(draft.issue ?? null, { restoreDraft: draft });
+  },
+
   addDeletedWorktree: (worktree) => {
     set((state) => {
       // Re-recording an id already present would reset `deletedAt` and reorder
@@ -1254,11 +1270,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       createDialog: {
         isOpen: true,
         initialIssue,
-        initialPR: null,
+        initialPR: options?.restoreDraft?.pr ?? null,
         initialRecipeId: options?.initialRecipeId ?? null,
-        initialBranchInput: options?.initialBranchInput ?? null,
-        initialAgentId: options?.initialAgentId ?? null,
-        initialPrompt: options?.initialPrompt ?? null,
+        restoreDraft: options?.restoreDraft ?? null,
         onCreated: options?.onCreated,
         surfacePanelKindId: options?.surfacePanelKindId,
         openingId: ++createDialogOpenings,
@@ -1302,9 +1316,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialIssue: null,
         initialPR: pr,
         initialRecipeId: null,
-        initialBranchInput: null,
-        initialAgentId: null,
-        initialPrompt: null,
+        restoreDraft: null,
         onCreated: undefined,
       },
     });
@@ -1317,9 +1329,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialIssue: null,
         initialPR: null,
         initialRecipeId: null,
-        initialBranchInput: null,
-        initialAgentId: null,
-        initialPrompt: null,
+        restoreDraft: null,
         onCreated: undefined,
       },
     }),
@@ -1570,9 +1580,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialIssue: null,
         initialPR: null,
         initialRecipeId: null,
-        initialBranchInput: null,
-        initialAgentId: null,
-        initialPrompt: null,
+        restoreDraft: null,
         onCreated: undefined,
       },
       bulkCreateDialog: {
