@@ -2038,14 +2038,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: import("../forge.js").ForgeUser[];
   };
-  "gemini:enable-alternate-buffer": {
-    args: [];
-    result: { success: boolean };
-  };
-  "gemini:get-status": {
-    args: [];
-    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
-  };
   "git:discard-file-changes": {
     args: [
       payload: { worktreePath: string; relativePath: string; expectedToken?: string | undefined },

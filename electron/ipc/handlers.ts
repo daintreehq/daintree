@@ -44,7 +44,6 @@ import { registerDiffMediaHandlers } from "./handlers/diffMedia.js";
 import { registerFileBrowserHandlers } from "./handlers/fileBrowser.js";
 import { registerFileWatchHandlers } from "./handlers/fileWatch.js";
 import { registerSlashCommandHandlers } from "./handlers/slashCommands.js";
-import { registerGeminiHandlers } from "./handlers/gemini.js";
 import { registerCodexHandlers } from "./handlers/codex.js";
 import { registerClaudeHandlers } from "./handlers/claude.js";
 import { registerTerminalSessionFileHandlers } from "./handlers/terminalSessionFile.js";
@@ -229,7 +228,6 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWorktreeConfigHandlers(deps));
     register(() => registerConfigBundleHandlers(deps));
     register(() => registerNotificationHandlers(deps));
-    register(() => registerGeminiHandlers());
     register(() => registerCodexHandlers());
     register(() => registerClaudeHandlers());
     register(() => registerTerminalSessionFileHandlers());

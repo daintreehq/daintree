@@ -297,8 +297,6 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:token-health-changed": "free",
   "forge:unassign-issue": "free",
   "forge:validate-token": "free",
-  "gemini:enable-alternate-buffer": "free",
-  "gemini:get-status": "free",
   "git:abort-repository-operation": "driver",
   "git:checkout-ours-theirs": "driver",
   "git:commit": "driver",

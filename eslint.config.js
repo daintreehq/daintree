@@ -1027,7 +1027,6 @@ export default tseslint.config(
       "electron/ipc/handlers/forge.ts",
       "electron/ipc/handlers/forgeData.ts",
       "electron/ipc/handlers/forgeSettings.ts",
-      "electron/ipc/handlers/gemini.ts",
       "electron/ipc/handlers/git-read.ts",
       "electron/ipc/handlers/git-write.ts",
       "electron/ipc/handlers/globalRecipes.ts",

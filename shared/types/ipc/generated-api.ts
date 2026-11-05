@@ -685,14 +685,6 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["forge-recommendation:mark-dismissed"]["args"]
     ): Promise<IpcInvokeMap["forge-recommendation:mark-dismissed"]["result"]>;
   };
-  gemini: {
-    enableAlternateBuffer(
-      ...args: IpcInvokeMap["gemini:enable-alternate-buffer"]["args"]
-    ): Promise<IpcInvokeMap["gemini:enable-alternate-buffer"]["result"]>;
-    getStatus(
-      ...args: IpcInvokeMap["gemini:get-status"]["args"]
-    ): Promise<IpcInvokeMap["gemini:get-status"]["result"]>;
-  };
   git: {
     discardFileChanges(
       ...args: IpcInvokeMap["git:discard-file-changes"]["args"]

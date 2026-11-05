@@ -15,7 +15,6 @@ import { buildShortcutHintsPreloadBindings } from "../handlers/shortcutHints.pre
 import { buildForgeRecommendationPreloadBindings } from "../handlers/forgeRecommendation.preload.js";
 import { buildForgeCredentialImportPreloadBindings } from "../handlers/forgeCredentialImport.preload.js";
 import { buildCliPreloadBindings } from "../handlers/cli.preload.js";
-import { buildGeminiPreloadBindings } from "../handlers/gemini.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "../handlers/agentCapabilities.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "../handlers/globalRecipes.preload.js";
 import { buildConnectivityPreloadBindings } from "../handlers/connectivity.preload.js";
@@ -271,18 +270,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("cli:install");
-    });
-  });
-
-  describe("gemini", () => {
-    it("routes getStatus() to gemini:get-status with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue({ exists: true, alternateBufferEnabled: false });
-      const bindings = buildGeminiPreloadBindings(invoke);
-
-      await bindings.getStatus();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("gemini:get-status");
     });
   });
 
