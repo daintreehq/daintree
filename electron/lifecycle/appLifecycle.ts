@@ -291,6 +291,12 @@ export interface AppLifecycleOptions {
    * none is, so the run isn't ended with the window, and a relaunch meanwhile
    * opens a window on it.
    */
+  /**
+   * Off macOS, asked when the last window is about to close and closing it
+   * would quit. True takes the close over (it is cancelled and becomes a quit
+   * that can still warn); false lets it go ahead.
+   */
+  onLastWindowClose?: () => boolean;
   scheduledRuns?: {
     hasOpen: () => boolean;
     /** Calls back as runs end or are deleted, until the returned function is called. */
@@ -633,6 +639,17 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     onWindowTitlesChanged(refreshOpenWindowMenu);
   }
 
+  // Whether closing `win` ends the process: it is the last window, and nothing
+  // the window-all-closed handler honours keeps the process up without one.
+  const closingQuits = (win: BrowserWindow): boolean => {
+    if (getActiveShutdown() !== null || isWindowRecreating()) return false;
+    if (opts.keepsRunningWithoutWindows?.() || opts.scheduledRuns?.hasOpen()) return false;
+    const others = opts.windowRegistry
+      ? opts.windowRegistry.all().map((ctx) => ctx.browserWindow)
+      : BrowserWindow.getAllWindows();
+    return others.every((other) => other === win || other.isDestroyed());
+  };
+
   app.on("browser-window-created", (_event, win) => {
     // Before the hidden stand-in goes, so no moment is left unheard.
     registerWindowSessionEndHandler(win);
@@ -640,7 +657,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // A window is on screen again: closing it decides afresh.
     endWaitOnRuns();
     if (process.platform !== "darwin") {
-      win.on("close", (event) => noteWindowClosing(win, event));
+      win.on("close", (event) => {
+        if (closingQuits(win) && opts.onLastWindowClose?.()) event.preventDefault();
+        noteWindowClosing(win, event);
+      });
     }
     win.once("closed", () => {
       // Closing the focused window promotes a survivor that may never take focus

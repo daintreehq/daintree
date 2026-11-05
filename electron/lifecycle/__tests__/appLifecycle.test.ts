@@ -946,6 +946,137 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(windowMenuStateMock.refreshOpenWindowMenu).toHaveBeenCalled();
   });
 
+  describe("closing the last window off macOS", () => {
+    const closeEvent = () => {
+      const event = { defaultPrevented: false, preventDefault: vi.fn() };
+      event.preventDefault.mockImplementation(() => {
+        event.defaultPrevented = true;
+      });
+      return event;
+    };
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      browserWindowMock.getAllWindows.mockReturnValue([]);
+    });
+
+    it("hands the close to the quit when the quit has something to warn about", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { winListeners } = createWindow();
+      const event = closeEvent();
+      winListeners.close(event);
+
+      expect(onLastWindowClose).toHaveBeenCalledOnce();
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    });
+
+    it("lets the close go ahead when there is nothing to warn about", async () => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose: () => false }));
+
+      const { winListeners } = createWindow();
+      const event = closeEvent();
+      winListeners.close(event);
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("leaves a window alone while another stays open", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { fakeWin, winListeners } = createWindow();
+      browserWindowMock.getAllWindows.mockReturnValue([fakeWin, { isDestroyed: () => false }]);
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("leaves the close alone while the process keeps running without windows", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(
+        makeOpts({ onLastWindowClose, keepsRunningWithoutWindows: () => true })
+      );
+
+      const { winListeners } = createWindow();
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("leaves the close alone while a scheduled run keeps the process up", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(
+        makeOpts({
+          onLastWindowClose,
+          scheduledRuns: {
+            hasOpen: () => true,
+            onClosed: () => () => {},
+            notified: () => Promise.resolve(),
+          },
+        })
+      );
+
+      const { winListeners } = createWindow();
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("leaves the close alone while a window is being recreated", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { winListeners } = createWindow();
+      isWindowRecreatingMock.mockReturnValue(true);
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("counts the registry's windows when it has one", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const registryWindows: unknown[] = [];
+      const windowRegistry = {
+        all: () => registryWindows.map((browserWindow) => ({ browserWindow })),
+      } as unknown as AppLifecycleOptions["windowRegistry"];
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose, windowRegistry }));
+
+      const { fakeWin, winListeners } = createWindow();
+      registryWindows.push(fakeWin, { isDestroyed: () => false });
+      winListeners.close(closeEvent());
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+
+      registryWindows.splice(1, 1, { isDestroyed: () => true });
+      winListeners.close(closeEvent());
+      expect(onLastWindowClose).toHaveBeenCalledOnce();
+    });
+
+    it("leaves the close alone once a shutdown owns the process", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { winListeners } = createWindow();
+      getActiveShutdownMock.mockReturnValue({ phase: "cleaning" });
+      try {
+        winListeners.close(closeEvent());
+      } finally {
+        getActiveShutdownMock.mockReturnValue(null);
+      }
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["win32", "linux"] as const)(
     "on %s takes a window off the Window menu's list as soon as it starts closing",
     async (platform) => {
