@@ -36,6 +36,7 @@ vi.mock("@/clients/appThemeClient", () => ({
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import { appThemeClient } from "@/clients/appThemeClient";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { useAppThemeConfig } from "../useAppThemeConfig";
 
 /** Captures the listener the hook registers, so tests can push a global theme change. */
@@ -122,6 +123,12 @@ describe("useAppThemeConfig", () => {
           result: {
             appTheme: {
               colorSchemeId: "daintree",
+              customSchemes: [{ id: "custom-stale", name: "Stale", type: "dark", tokens: {} }],
+              accentColorOverride: "#123456",
+              colorVisionMode: "red-green",
+              recentSchemeIds: ["daintree"],
+              followSystem: true,
+              preferredDarkSchemeId: "namib",
               projectThemes: { p1: { colorSchemeId: "namib" } },
             },
           },
@@ -131,7 +138,18 @@ describe("useAppThemeConfig", () => {
         await waitFor(() =>
           expect(setProjectTheme).toHaveBeenCalledWith({ colorSchemeId: "namib" })
         );
-        expect(setSelectedSchemeIdSilent).not.toHaveBeenCalled();
+        for (const action of [
+          setSelectedSchemeIdSilent,
+          storeActions.addCustomScheme,
+          storeActions.setColorVisionMode,
+          storeActions.setRecentSchemeIds,
+          storeActions.setFollowSystem,
+          storeActions.setPreferredDarkSchemeId,
+        ]) {
+          expect(action).not.toHaveBeenCalled();
+        }
+        // No accent or plugin snapshot seeded from the stale payload either.
+        expect(useAppThemeStore.setState).not.toHaveBeenCalled();
         expect(reconcileAppThemeConfig).toHaveBeenCalledTimes(1);
       } finally {
         Reflect.deleteProperty(window, "__DAINTREE_INITIAL_PROJECT__");
@@ -151,6 +169,25 @@ describe("useAppThemeConfig", () => {
       expect(setSelectedSchemeIdSilent.mock.invocationCallOrder[0]).toBeLessThan(
         reconcileAppThemeConfig.mock.invocationCallOrder[0]!
       );
+      expect(appThemeClient.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops that read when a push lands while it is in flight", async () => {
+      let resolveRead!: (config: AppThemeConfig) => void;
+      vi.mocked(appThemeClient.get).mockReturnValueOnce(
+        new Promise((resolve) => (resolveRead = resolve))
+      );
+      bootWith({ colorSchemeId: "daintree" });
+      renderHook(() => useAppThemeConfig());
+      await waitFor(() => expect(appThemeClient.get).toHaveBeenCalled());
+
+      const pushed = { colorSchemeId: "bondi" };
+      changeListener!(pushed);
+      resolveRead({ colorSchemeId: "daintree" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(reconcileAppThemeConfig).toHaveBeenCalledTimes(1);
+      expect(reconcileAppThemeConfig).toHaveBeenCalledWith(pushed, { crossfade: true });
     });
   });
 

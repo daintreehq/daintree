@@ -44,7 +44,7 @@ import {
   typedBroadcastToLocalViews,
   typedSend,
 } from "../utils.js";
-import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { getAppWebContents, isCachedViewWebContents } from "../../window/webContentsRegistry.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
 import type { ClientEndpoint, EndpointGroup, HostFrame } from "../endpoint.js";
 import type { IpcContext } from "../types.js";
@@ -85,6 +85,7 @@ beforeEach(() => {
   hasProjectViewsMock.mockReset().mockReturnValue(false);
   projectViewsMock.mockReset().mockReturnValue([]);
   registeredViewsMock.mockReset().mockReturnValue([]);
+  vi.mocked(isCachedViewWebContents).mockReset().mockReturnValue(false);
 });
 
 describe("broadcast helpers with no remote endpoints", () => {
@@ -343,6 +344,7 @@ describe("typedBroadcastToLocalViews", () => {
     const cached = localView(2);
     const otherWindow = localView(3);
     localViews.push(sender, cached, otherWindow);
+    vi.mocked(isCachedViewWebContents).mockImplementation((id) => id === cached.id);
     const remote = endpoint(-1, "proj-1");
     getEndpointRegistry().add(remote);
 

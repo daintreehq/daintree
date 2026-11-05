@@ -3,6 +3,7 @@ import { DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import {
   applyAccentOverrideToScheme,
   getAppThemeById,
+  getAppThemeCssVariables,
   getAppThemeFallbackType,
   isPluginThemeId,
   normalizeAccentHex,
@@ -154,13 +155,22 @@ export function resolveCommittedScheme(state: CommittedSchemeSources): AppColorS
   );
 }
 
-/** What a view paints for `state`, so a change that leaves it alone neither repaints nor fades. */
+/**
+ * What a view paints for `state` — the root's variables and attributes — so a
+ * change that leaves it alone, such as renaming the shown theme, neither
+ * repaints nor fades.
+ */
 function paintSignature(state: AppThemeState): string {
   const effective = applyAccentOverrideToScheme(
     resolveCommittedScheme(state),
     state.accentColorOverride
   );
-  return JSON.stringify([effective, state.colorVisionMode]);
+  return JSON.stringify([
+    effective.id,
+    effective.type,
+    getAppThemeCssVariables(effective),
+    state.colorVisionMode,
+  ]);
 }
 
 function trimmedIdOr(value: unknown, fallback: string): string {
@@ -185,9 +195,12 @@ function claimThemeIntent(): number {
 function applySchemeToDOMNow(scheme: AppColorScheme): void {
   const { colorVisionMode, accentColorOverride } = useAppThemeStore.getState();
   const effective = applyAccentOverrideToScheme(scheme, accentColorOverride);
-  applyAppThemeToRoot(document.documentElement, effective);
-  if (colorVisionMode !== "default") {
-    applyColorVisionMode(document.documentElement, colorVisionMode, effective);
+  const root = document.documentElement;
+  applyAppThemeToRoot(root, effective);
+  // Also clears a mode the store has since left, which the root keeps until a
+  // paint drops it: a pushed return to the default lands under an open preview.
+  if (colorVisionMode !== "default" || root.dataset.colorblind !== undefined) {
+    applyColorVisionMode(root, colorVisionMode, effective);
   }
 }
 
@@ -472,21 +485,9 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     }
     if (!previewEnded && paintSignature(next) === painted) return;
 
-    const paint = () => {
-      // Resolved when it paints, so a project theme pushed meanwhile wins.
-      const state = useAppThemeStore.getState();
-      const scheme = resolveCommittedScheme(state);
-      injectSchemeToDOM(scheme, { immediate: true });
-      // The injection layers on a mode other than the default only, so going
-      // back to the default has to clear the last one itself.
-      if (state.colorVisionMode === "default") {
-        applyColorVisionMode(
-          document.documentElement,
-          "default",
-          applyAccentOverrideToScheme(scheme, state.accentColorOverride)
-        );
-      }
-    };
+    // Resolved when it paints, so a project theme pushed meanwhile wins.
+    const paint = () =>
+      injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
     if (opts?.crossfade) {
       const intent = claimThemeIntent();
       runThemeCrossfade(() => {

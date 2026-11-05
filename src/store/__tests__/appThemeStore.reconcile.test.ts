@@ -72,13 +72,13 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
   });
 
   it("paints a scheme another view picked, without adding it to this view's recents", () => {
-    reconcile({ colorSchemeId: light.id, recentSchemeIds: [light.id, dark.id] });
+    reconcile({ colorSchemeId: light.id, recentSchemeIds: [otherDark.id] });
 
     expect(painted("surface-canvas")).toBe(canvasOf(light));
     const state = useAppThemeStore.getState();
     expect(state.selectedSchemeId).toBe(light.id);
-    // The writer's own list, as persisted, not a pick this view recorded.
-    expect(state.recentSchemeIds).toEqual([light.id, dark.id]);
+    // The list as persisted: the pushed selection is not recorded as this view's pick.
+    expect(state.recentSchemeIds).toEqual([otherDark.id]);
   });
 
   it("applies an accent override, and its removal", () => {
@@ -120,28 +120,60 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
     expect(state.recentSchemeIds).toEqual([dark.id]);
   });
 
-  it("crossfades a visible change, and starts no transition when nothing visible changed", () => {
-    Object.defineProperty(window, "matchMedia", {
-      writable: true,
-      configurable: true,
-      value: vi.fn(() => ({ matches: false })),
-    });
-    const startViewTransition = vi.fn((callback: () => void) => {
-      callback();
-      return { ready: Promise.resolve(), finished: Promise.resolve() };
-    });
-    Object.assign(document, { startViewTransition });
+  describe("crossfading", () => {
+    let deferred: Array<() => void>;
+    let startViewTransition: ReturnType<typeof vi.fn>;
 
-    reconcile({ colorSchemeId: dark.id, recentSchemeIds: [dark.id] }, { crossfade: true });
-    expect(startViewTransition).not.toHaveBeenCalled();
+    beforeEach(() => {
+      // Without matchMedia the reduced-motion guard skips every transition.
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        configurable: true,
+        value: vi.fn(() => ({ matches: false })),
+      });
+      deferred = [];
+      startViewTransition = vi.fn((callback: () => void) => {
+        deferred.push(callback);
+        return { ready: Promise.resolve(), finished: Promise.resolve() };
+      });
+      Object.assign(document, { startViewTransition });
+    });
 
-    reconcile({ colorSchemeId: light.id }, { crossfade: true });
-    expect(startViewTransition).toHaveBeenCalledTimes(1);
-    expect(painted("surface-canvas")).toBe(canvasOf(light));
+    it("fades to a visible change, painting it inside the transition", () => {
+      reconcile({ colorSchemeId: light.id }, { crossfade: true });
+
+      expect(startViewTransition).toHaveBeenCalledTimes(1);
+      expect(root.style.getPropertyValue("--theme-surface-canvas").trim()).toBe(canvasOf(dark));
+      deferred[0]!();
+      expect(root.style.getPropertyValue("--theme-surface-canvas").trim()).toBe(canvasOf(light));
+    });
+
+    it("starts no transition when nothing visible changed", () => {
+      reconcile({ colorSchemeId: dark.id, recentSchemeIds: [dark.id] }, { crossfade: true });
+
+      expect(startViewTransition).not.toHaveBeenCalled();
+    });
+
+    it("drops a fade that a newer paint overtook before it ran", () => {
+      reconcile({ colorSchemeId: light.id }, { crossfade: true });
+      // A hover preview starts in this view before the transition's callback runs.
+      useAppThemeStore.getState().injectTheme(otherDark);
+      flushPendingTheme();
+
+      deferred[0]!();
+
+      expect(painted("surface-canvas")).toBe(canvasOf(otherDark));
+    });
   });
 
   it("replaces the imported themes, so one deleted elsewhere falls back by polarity", () => {
-    const paper: AppColorScheme = { ...light, id: "custom-paper", name: "Paper", builtin: false };
+    const paper: AppColorScheme = {
+      ...light,
+      id: "custom-paper",
+      name: "Paper",
+      builtin: false,
+      tokens: { ...light.tokens, "surface-canvas": "#fdf6e3" },
+    };
     useAppThemeStore.getState().addCustomScheme(paper);
     useAppThemeStore.getState().setSelectedSchemeIdSilent(paper.id);
     expect(painted("surface-canvas")).toBe(canvasOf(paper));
@@ -166,6 +198,19 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
     expect(painted("surface-canvas")).toBe("#fafafa");
   });
 
+  it("doesn't repaint for a rename of the imported theme on screen", () => {
+    const paper: AppColorScheme = { ...light, id: "custom-paper", name: "Paper", builtin: false };
+    useAppThemeStore.getState().addCustomScheme(paper);
+    useAppThemeStore.getState().setSelectedSchemeIdSilent(paper.id);
+    flushPendingTheme();
+    desyncDom();
+
+    reconcile({ colorSchemeId: paper.id, customSchemes: [{ ...paper, name: "Parchment" }] });
+
+    expect(painted("surface-canvas")).toBe("sentinel");
+    expect(useAppThemeStore.getState().customSchemes[0]!.name).toBe("Parchment");
+  });
+
   it("paints a plugin theme from the pushed snapshot before this view has the catalog", () => {
     const source: PluginThemeSource = {
       id: makePluginThemeId("acme.themes", "paper"),
@@ -180,6 +225,7 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
 
     expect(useAppThemeStore.getState().selectedSchemeId).toBe(source.id);
     expect(painted("surface-canvas")).toBe(canvasOf(compilePluginTheme(source)));
+    expect(root.dataset.theme).toBe(source.id);
   });
 
   it("keeps this view's project theme on screen while the global selection moves under it", () => {
@@ -207,6 +253,20 @@ describe("appThemeStore: settings another view or the OS changed (#16271)", () =
     useAppThemeStore.setState({ previewSchemeId: null });
     injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
     expect(painted("surface-canvas")).toBe(canvasOf(light));
+  });
+
+  it("clears a colour vision mode reset under an open preview once the preview ends", () => {
+    reconcile({ colorSchemeId: dark.id, colorVisionMode: "red-green" });
+    useAppThemeStore.setState({ previewSchemeId: otherDark.id });
+    useAppThemeStore.getState().injectTheme(otherDark);
+    flushPendingTheme();
+
+    reconcile({ colorSchemeId: dark.id });
+    expect(useAppThemeStore.getState().colorVisionMode).toBe("default");
+
+    useAppThemeStore.setState({ previewSchemeId: null });
+    injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
+    expect(root.dataset.colorblind).toBeUndefined();
   });
 
   it("ends a preview of an imported theme deleted elsewhere, and paints the committed one", () => {

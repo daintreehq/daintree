@@ -69,7 +69,7 @@ describe("refreshImportedConfig theme refresh", () => {
     getThemeConfig.mockResolvedValue({
       colorSchemeId: paper.id,
       customSchemes: [imported],
-      recentSchemeIds: [paper.id],
+      recentSchemeIds: ["bondi"],
     });
 
     await refreshImportedConfig();
@@ -78,6 +78,6 @@ describe("refreshImportedConfig theme refresh", () => {
     expect(document.documentElement.style.getPropertyValue("--theme-surface-canvas").trim()).toBe(
       "#fafafa"
     );
-    expect(useAppThemeStore.getState().recentSchemeIds).toEqual([paper.id]);
+    expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["bondi"]);
   });
 });

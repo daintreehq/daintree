@@ -691,7 +691,7 @@ describe("appTheme handlers", () => {
     it("an OS appearance change repaints every window, not only the main one", () => {
       const windows = makeWindows();
       storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
-      registerAppThemeHandlers(windows[0] as never);
+      registerAppThemeHandlers();
 
       getNativeThemeHandler()();
       vi.advanceTimersByTime(300);
@@ -701,6 +701,17 @@ describe("appTheme handlers", () => {
   });
 
   describe("publishing committed writes to every other view (#16271)", () => {
+    // Cloned when sent, as real IPC serializes it: the store mock hands out its
+    // live object, so a push made before the write would otherwise look right.
+    let sent: unknown[];
+
+    beforeEach(() => {
+      sent = [];
+      vi.mocked(typedBroadcastToLocalViews).mockImplementation((_channel, payload) => {
+        sent.push(structuredClone(payload));
+      });
+    });
+
     it.each([
       [CHANNELS.APP_THEME_SET_COLOR_SCHEME, "bondi", { colorSchemeId: "bondi" }],
       [CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, "red-green", { colorVisionMode: "red-green" }],
@@ -731,12 +742,12 @@ describe("appTheme handlers", () => {
         await getHandler(channel)({ sender: { id: 7 } }, value);
 
         expect(typedBroadcastToLocalViews).toHaveBeenCalledTimes(1);
-        const [pushed, config, except] = vi.mocked(typedBroadcastToLocalViews).mock.calls[0]!;
+        const [pushed, , except] = vi.mocked(typedBroadcastToLocalViews).mock.calls[0]!;
         expect(pushed).toBe("app-theme:changed");
-        // What every view reads at boot, so a pushed view ends where a fresh one would.
-        expect(config).toEqual(storeState.data.appTheme);
-        expect(config).toMatchObject(expected);
         expect(except).toBe(7);
+        // What every view reads at boot, so a pushed view ends where a fresh one would.
+        expect(sent[0]).toEqual(storeState.data.appTheme);
+        expect(sent[0]).toMatchObject(expected);
       }
     );
 
@@ -755,9 +766,10 @@ describe("appTheme handlers", () => {
 
       expect(typedBroadcastToLocalViews).toHaveBeenCalledWith(
         "app-theme:changed",
-        expect.objectContaining({ colorSchemeId: "custom-1", customSchemes: [scheme] }),
+        expect.anything(),
         3
       );
+      expect(sent[0]).toMatchObject({ colorSchemeId: "custom-1", customSchemes: [scheme] });
     });
 
     it.each([
@@ -775,6 +787,7 @@ describe("appTheme handlers", () => {
       await getHandler(channel)({ sender: { id: 7 } }, value);
 
       expect(typedBroadcastToLocalViews).not.toHaveBeenCalled();
+      expect(storeState.data.appTheme).toEqual({ colorSchemeId: "daintree" });
     });
   });
 
