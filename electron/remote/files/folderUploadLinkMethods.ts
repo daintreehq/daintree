@@ -61,8 +61,9 @@ export const FOLDER_UPLOAD_SINK_PREFIX = "daintree-folder-upload:";
  * data, as a streaming packer writes them; no other flag is set. The entries
  * tile the archive: the first starts at byte 0, each starts where the last
  * one's data (and descriptor) ended, and the central directory starts where
- * the last ended, so no byte is unaccounted for. Entries may come in any
- * order; a folder's entry need not precede what is inside it.
+ * the last ended, so no byte is unaccounted for. There is no archive
+ * comment, so the end record is the archive's last 22 bytes. Entries may
+ * come in any order; a folder's entry need not precede what is inside it.
  */
 export const FOLDER_ARCHIVE_METHOD_STORED = 0;
 export const FOLDER_ARCHIVE_FLAG_UTF8 = 0x0800;

@@ -1,4 +1,4 @@
-import { createWriteStream, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { createWriteStream, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -77,6 +77,15 @@ async function modeOf(relative: string): Promise<number> {
 }
 
 const ROOT: ForgedEntry = { name: "Root/" };
+
+type FileHandleMethods = { stat: () => Promise<unknown> };
+
+/** Every FileHandle shares this prototype, so a spy on it sees the unpacker's handles too. */
+async function fileHandlePrototype(): Promise<FileHandleMethods> {
+  const probe = await fs.open(path.join(base, "probe"), "w");
+  await probe.close();
+  return Object.getPrototypeOf(probe) as FileHandleMethods;
+}
 
 describe("unpackFolderArchive: a valid archive", () => {
   it("unpacks a nested tree with an empty folder and an executable file, with the right modes", async () => {
@@ -633,9 +642,9 @@ describe("unpackFolderArchive: forged archives", () => {
 
   it("refuses a central record past the central directory's end", async () => {
     const archive = forgeFolderArchive([ROOT, { name: "Root/a.txt", data: "a" }]);
-    // The end record's central size, one byte short of the records it holds.
-    const sizeAt = archive.length - 22 + 12;
-    archive.writeUInt32LE(archive.readUInt32LE(sizeAt) - 1, sizeAt);
+    // The last central record's comment length, claiming bytes past the end record's start.
+    const lastRecordAt = archive.length - 22 - (46 + "Root/a.txt".length);
+    archive.writeUInt16LE(10, lastRecordAt + 32);
     await fs.writeFile(archivePath, archive);
     const result = await unpackFolderArchive({
       archivePath,
@@ -678,18 +687,20 @@ describe("unpackFolderArchive: forged archives", () => {
     expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "format" });
   });
 
-  it("takes an archive comment, even one holding an end-record signature", async () => {
-    const comment = Buffer.alloc(30);
-    comment.writeUInt32LE(0x06054b50, 2);
+  it.each([
+    ["a plain comment", Buffer.from("packed by hand")],
+    [
+      "a comment holding a whole end record",
+      Buffer.from([0x50, 0x4b, 0x05, 0x06, ...Array(18).fill(0)]),
+    ],
+  ])("refuses an archive with %s", async (_label, comment) => {
     const result = await unpack([ROOT, { name: "Root/a.txt", data: "a" }], { forge: { comment } });
-    expect(result).toMatchObject({ ok: true });
+    expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "format" });
   });
 
-  it("looks past a comment that ends in what reads as a whole end record", async () => {
-    const comment = Buffer.alloc(22);
-    comment.writeUInt32LE(0x06054b50, 0);
-    const result = await unpack([ROOT, { name: "Root/a.txt", data: "a" }], { forge: { comment } });
-    expect(result).toMatchObject({ ok: true });
+  it("refuses a folder whose CRC isn't that of empty content", async () => {
+    const result = await unpack([ROOT, { name: "Root/d/", crc: 1 }]);
+    expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "crc", entry: "Root/d/" });
   });
 
   it("refuses an invalid root name before opening the archive", async () => {
@@ -842,23 +853,46 @@ describe("unpackFolderArchive: cancelling and rolling back", () => {
     await stagingIsEmpty();
   });
 
-  it("counts something already gone as removed", async () => {
+  it("still removes the tree when cancelled while the archive closes", async () => {
+    const open = fs.open;
+    const controller = new AbortController();
+    let archiveCloses = 0;
+    vi.spyOn(fs, "open").mockImplementation((async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      if (args[0] === archivePath) {
+        const close = handle.close.bind(handle);
+        handle.close = () => {
+          archiveCloses++;
+          controller.abort();
+          return close();
+        };
+      }
+      return handle;
+    }) as typeof fs.open);
+    await expect(
+      unpack([ROOT, { name: "Root/a.txt", data: "a" }], { signal: controller.signal })
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(archiveCloses).toBe(1);
+    await stagingIsEmpty();
+  });
+
+  it("counts an entry that vanishes as it is being removed as removed", async () => {
+    const unlink = fs.unlink;
+    vi.spyOn(fs, "unlink").mockImplementationOnce(async (target) => {
+      await unlink(target);
+      return unlink(target);
+    });
     const controller = new AbortController();
     const promise = unpack(files, {
       signal: controller.signal,
-      onProgress: () => {
-        unlinkSync(path.join(staging, "sub", "one.txt"));
-        controller.abort();
-      },
+      onProgress: () => controller.abort(),
     });
     await expect(promise).rejects.toMatchObject({ name: "AbortError" });
     await stagingIsEmpty();
   });
 
-  it("removes a file whose identity couldn't be read back after creating it", async () => {
-    const probe = await fs.open(path.join(base, "probe"), "w");
-    const handleProto = Object.getPrototypeOf(probe) as { stat: () => Promise<unknown> };
-    await probe.close();
+  it("reports a file whose identity couldn't be read back as left behind", async () => {
+    const handleProto = await fileHandlePrototype();
     const stat = handleProto.stat;
     let calls = 0;
     const failure = Object.assign(new Error("EIO"), { code: "EIO" });
@@ -867,11 +901,15 @@ describe("unpackFolderArchive: cancelling and rolling back", () => {
       if (++calls === 2) return Promise.reject(failure);
       return stat.call(this);
     });
-    await expect(unpack([ROOT, { name: "Root/a.txt", data: "a" }])).rejects.toBe(failure);
-    await stagingIsEmpty();
+    const error = await unpack([ROOT, { name: "Root/a.txt", data: "a" }]).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/couldn't remove everything/),
+      cause: failure,
+    });
+    expect(await fs.readdir(staging)).toEqual(["a.txt"]);
   });
 
-  it("removes a folder whose identity couldn't be read back after making it", async () => {
+  it("reports a folder whose identity couldn't be read back as left behind", async () => {
     const failure = Object.assign(new Error("EIO"), { code: "EIO" });
     const lstat = fs.lstat;
     const target = path.join(staging, "sub");
@@ -882,9 +920,13 @@ describe("unpackFolderArchive: cancelling and rolling back", () => {
             filePath,
             ...rest
           )) as typeof fs.lstat);
-    await expect(unpack([ROOT, { name: "Root/sub/" }])).rejects.toBe(failure);
+    const error = await unpack([ROOT, { name: "Root/sub/" }]).catch((e: unknown) => e);
     vi.restoreAllMocks();
-    await stagingIsEmpty();
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/couldn't remove everything/),
+      cause: failure,
+    });
+    expect(await fs.readdir(staging)).toEqual(["sub"]);
   });
 
   it("never writes through a link planted where a file is about to go", async () => {
@@ -913,6 +955,31 @@ describe("unpackFolderArchive: cancelling and rolling back", () => {
     await expect(promise).rejects.toThrow(/couldn't remove everything/);
     expect(await fs.readdir(elsewhere)).toEqual([]);
     expect(await fs.readdir(path.join(base, "moved"))).toEqual(["one.txt"]);
+  });
+
+  it("stops when a folder above the next file is moved away behind a link to it", async () => {
+    const nested: ForgedEntry[] = [
+      ROOT,
+      { name: "Root/a/" },
+      { name: "Root/a/b/" },
+      { name: "Root/a/b/one.txt", data: "one" },
+      { name: "Root/a/b/two.txt", data: "two" },
+    ];
+    const moved = path.join(base, "moved-a");
+    const error = await unpack(nested, {
+      onProgress: ({ filesDone }) => {
+        if (filesDone !== 1) return;
+        renameSync(path.join(staging, "a"), moved);
+        symlinkSync(moved, path.join(staging, "a"));
+      },
+    }).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/couldn't remove everything/),
+      cause: expect.objectContaining({ message: expect.stringMatching(/changed/) }),
+    });
+    await expect(fs.lstat(path.join(moved, "b", "two.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("refuses to start in a staging folder that isn't empty", async () => {

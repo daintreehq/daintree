@@ -39,7 +39,8 @@ import {
  * A refusal or a cancel removes everything this call created, so the staging
  * folder is left as empty as it was given. Node has no descriptor-relative
  * `mkdirat`/`openat`, so each folder a create lands in is first re-checked to
- * be the one this call made: a folder swapped for a link mid-unpack stops it,
+ * be the one this call made, still where it made it: a folder swapped for a
+ * link, or moved away behind one, stops the unpack,
  * but a process already running as this user and racing inside staging still
  * has a window between the check and the create.
  */
@@ -110,7 +111,6 @@ const LOCAL_HEADER_BYTES = 30;
 const CENTRAL_HEADER_BYTES = 46;
 const END_RECORD_BYTES = 22;
 const DESCRIPTOR_BYTES = 16;
-const MAX_COMMENT_BYTES = 0xffff;
 const MADE_BY_UNIX = 3;
 const ALLOWED_FLAGS = FOLDER_ARCHIVE_FLAG_UTF8 | FOLDER_ARCHIVE_FLAG_DATA_DESCRIPTOR;
 const S_IFMT = 0o170000;
@@ -184,44 +184,38 @@ async function readExactly(
   return buffer;
 }
 
-/** The end record's offset and fields, found the one way a comment allows. */
+/**
+ * The end record, which must be the archive's last 22 bytes. An archive
+ * comment is refused: one can hold a second record that parses as another
+ * whole archive, and the packer never writes one.
+ */
 async function readEndRecord(
   archive: ArchiveHandle,
   size: number
 ): Promise<{ offset: number; entries: number; centralSize: number; centralOffset: number }> {
-  const tailLength = Math.min(size, END_RECORD_BYTES + MAX_COMMENT_BYTES);
-  const tail = await readExactly(archive, tailLength, size - tailLength);
-  if (!tail) throw refuse("format");
-  for (let at = tailLength - END_RECORD_BYTES; at >= 0; at--) {
-    if (tail.readUInt32LE(at) !== END_SIGNATURE) continue;
-    // A comment can hold the signature, and even a whole record that seems to
-    // end the archive, so a candidate that fails any check below is passed
-    // over for one further back rather than refused.
-    if (at + END_RECORD_BYTES + tail.readUInt16LE(at + 20) !== tailLength) continue;
-    const disk = tail.readUInt16LE(at + 4);
-    const centralDisk = tail.readUInt16LE(at + 6);
-    const diskEntries = tail.readUInt16LE(at + 8);
-    const entries = tail.readUInt16LE(at + 10);
-    const centralSize = tail.readUInt32LE(at + 12);
-    const centralOffset = tail.readUInt32LE(at + 16);
-    const offset = size - tailLength + at;
-    // ZIP64 marks its end record with these sentinels and puts its own
-    // records between the central directory and this one, so the exact
-    // adjacency below refuses it whichever way it is spelled.
-    if (
-      disk !== 0 ||
-      centralDisk !== 0 ||
-      diskEntries !== entries ||
-      entries === 0xffff ||
-      centralSize === 0xffffffff ||
-      centralOffset === 0xffffffff ||
-      centralOffset + centralSize !== offset
-    ) {
-      continue;
-    }
-    return { offset, entries, centralSize, centralOffset };
+  if (size < END_RECORD_BYTES) throw refuse("format");
+  const offset = size - END_RECORD_BYTES;
+  const record = await readExactly(archive, END_RECORD_BYTES, offset);
+  if (!record || record.readUInt32LE(0) !== END_SIGNATURE) throw refuse("format");
+  const entries = record.readUInt16LE(10);
+  const centralSize = record.readUInt32LE(12);
+  const centralOffset = record.readUInt32LE(16);
+  // ZIP64 marks its end record with these sentinels and puts its own records
+  // between the central directory and this one, so the exact adjacency below
+  // refuses it whichever way it is spelled.
+  if (
+    record.readUInt16LE(4) !== 0 ||
+    record.readUInt16LE(6) !== 0 ||
+    record.readUInt16LE(8) !== entries ||
+    record.readUInt16LE(20) !== 0 ||
+    entries === 0xffff ||
+    centralSize === 0xffffffff ||
+    centralOffset === 0xffffffff ||
+    centralOffset + centralSize !== offset
+  ) {
+    throw refuse("format");
   }
-  throw refuse("format");
+  return { offset, entries, centralSize, centralOffset };
 }
 
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -306,6 +300,8 @@ async function planArchive(
     if (compressedSize !== size || size === 0xffffffff || (kind === "folder" && size !== 0)) {
       throw refuse("size", name);
     }
+    // Nothing is copied for a folder, so its CRC is held to empty content here.
+    if (kind === "folder" && crc !== 0) throw refuse("crc", name);
 
     const problem = tally.add({ path: name, kind, bytes: size });
     if (problem) throw refuseContent(problem, name);
@@ -425,7 +421,7 @@ function identityOf(stat: { dev: number; ino: number }): string {
 
 interface Created {
   absPath: string;
-  /** Null until it has been read back; such an entry is removed by name alone. */
+  /** Null until it has been read back; such an entry is never removed, since it can't be told from a replacement. */
   identity: string | null;
   isDir: boolean;
 }
@@ -454,19 +450,27 @@ async function writeTree(
   archive: ArchiveHandle,
   entries: PlannedEntry[],
   options: UnpackFolderArchiveOptions,
-  stagingIdentity: string,
+  staging: { identity: string; realPath: string },
   created: Created[]
 ): Promise<void> {
   const { stagingDir, rootName, declared, signal, onProgress } = options;
-  const folderIdentities = new Map<string, string>([[rootName, stagingIdentity]]);
-  const absolute = (entryPath: string) => {
+  const folderIdentities = new Map<string, string>([[rootName, staging.identity]]);
+  const below = (base: string, entryPath: string) => {
     const components = (entryPath.endsWith("/") ? entryPath.slice(0, -1) : entryPath).split("/");
-    return path.join(stagingDir, ...components.slice(1));
+    return path.join(base, ...components.slice(1));
   };
+  const absolute = (entryPath: string) => below(stagingDir, entryPath);
+  // The parent's identity says it is a folder this call made; its real path
+  // says it is still where it was made, so an ancestor moved away and
+  // replaced by a link to it can't carry the next create out of staging.
   const assertParentUnchanged = async (entryPath: string): Promise<void> => {
-    const parent = parentOf(entryPath)!;
-    const stat = await fs.lstat(absolute(`${parent}/`));
-    if (!stat.isDirectory() || identityOf(stat) !== folderIdentities.get(parent)) {
+    const parent = `${parentOf(entryPath)!}/`;
+    const stat = await fs.lstat(absolute(parent));
+    if (
+      !stat.isDirectory() ||
+      identityOf(stat) !== folderIdentities.get(parent.slice(0, -1)) ||
+      (await fs.realpath(absolute(parent))) !== below(staging.realPath, parent)
+    ) {
       throw new Error("The staging folder changed while the archive was being unpacked");
     }
   };
@@ -553,15 +557,14 @@ async function rollBack(created: Created[]): Promise<boolean> {
   let clean = true;
   for (const entry of [...created].reverse()) {
     try {
-      // An entry whose identity was never read back can only be removed by
-      // name; unlink and rmdir never follow a link, so nothing outside
-      // staging can be reached that way.
-      if (entry.identity !== null) {
-        const stat = await fs.lstat(entry.absPath);
-        if (stat.isSymbolicLink() || identityOf(stat) !== entry.identity) {
-          clean = false;
-          continue;
-        }
+      if (entry.identity === null) {
+        clean = false;
+        continue;
+      }
+      const stat = await fs.lstat(entry.absPath);
+      if (stat.isSymbolicLink() || identityOf(stat) !== entry.identity) {
+        clean = false;
+        continue;
       }
       await (entry.isDir ? fs.rmdir(entry.absPath) : fs.unlink(entry.absPath));
     } catch (error) {
@@ -613,7 +616,13 @@ export async function unpackFolderArchive(
       });
     }
     const entries = await planArchive(archive, stat.size, rootName, declared, signal);
-    await writeTree(archive, entries, options, identityOf(staging), created);
+    await writeTree(
+      archive,
+      entries,
+      options,
+      { identity: identityOf(staging), realPath: await fs.realpath(stagingDir) },
+      created
+    );
     // Closed before the last cancel check, so a cancel that lands while it
     // closes still removes the tree; handed off first so it closes once.
     const finished = archive;
