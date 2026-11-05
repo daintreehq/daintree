@@ -4319,7 +4319,13 @@ describe("recipeStore", () => {
         terminals: [{ type: "terminal" as const, command: "old", env: {} }],
         createdAt: 100,
       };
-      const mirror = { ...existingInRepo, projectId: "project-1" };
+      const mirror = {
+        ...existingInRepo,
+        projectId: "project-1",
+        worktreeId: "wt-1",
+        lastUsedAt: 50,
+        usageHistory: [40, 50],
+      };
       // Slugs to the same my-recipe.json as "My Recipe".
       const globalSource = {
         id: "global-variant",
@@ -4358,6 +4364,9 @@ describe("recipeStore", () => {
         expect(state.projectRecipes[0]).toMatchObject({
           id: existingInRepo.id,
           projectId: "project-1",
+          worktreeId: "wt-1",
+          lastUsedAt: 50,
+          usageHistory: [40, 50],
         });
         expect(commandOf(state.projectRecipes, existingInRepo.id)).toBe("new");
       });

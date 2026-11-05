@@ -1038,7 +1038,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // mirror, and would show the old content until the next reload.
     const withPromotedMirror = (list: TerminalRecipe[]) =>
       list.map((r) =>
-        r.id === promoted.id && isInRepoRecipeId(r) ? { ...promoted, projectId: r.projectId } : r
+        r.id === promoted.id && isInRepoRecipeId(r)
+          ? {
+              ...promoted,
+              // What reconciliation keeps from the mirror it rewrites.
+              projectId: r.projectId,
+              worktreeId: r.worktreeId,
+              lastUsedAt: r.lastUsedAt,
+              usageHistory: r.usageHistory,
+            }
+          : r
       );
     const nextInRepo = [...prevInRepo.filter((r) => r.id !== promoted.id), promoted];
     const nextGlobal =
