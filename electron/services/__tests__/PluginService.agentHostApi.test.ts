@@ -902,11 +902,28 @@ describe("Agents a plugin launched, across unload and reload (#14018)", () => {
       expect(stored()).toEqual([]);
     });
 
-    it("leaves it there when the service is torn down, as quitting does", async () => {
+    it("leaves it there when the service is torn down, project controller first", async () => {
       const service = await loadLauncher();
+      // The controller's teardown unloads its instances before the service's own sweep.
+      (service as unknown as { projectPluginController: unknown }).projectPluginController = {
+        dispose: () => service.unloadPlugin(PLUGIN),
+      };
       (service as unknown as { dispose: () => void }).dispose();
       expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBeNull();
       expect(stored()).toEqual(["t-launched"]);
+    });
+
+    it("keeps at startup the records of a dev plugin whose rebuild is swapping it", async () => {
+      storeMock._state.set("pluginLaunchedAgents", {
+        "t-dev": record("acme.dev"),
+        "t-gone": record("acme.gone"),
+      });
+      const service = new PluginService(tmpDir);
+      (
+        service as unknown as { devSessions: Map<string, { reloadCount: number; detail: null }> }
+      ).devSessions.set("acme.dev", { reloadCount: 0, detail: null });
+      await service.initialize();
+      expect(stored()).toEqual(["t-dev"]);
     });
 
     it("drops at startup the records of an installed plugin that didn't come back", async () => {

@@ -111,6 +111,17 @@ describe("plugin launch ledger across an app restart (#16240)", () => {
     expect(disk).toEqual({});
   });
 
+  it("revokes a live record when a later hydrate shows its id under another plugin", () => {
+    launch("t-1");
+    tracked.set("t-1", "p1");
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN }]);
+    expect(launchedAgentProject(pty, PLUGIN, "t-1", null)).toBe("p1");
+
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: OTHER }]);
+    expect(launchedAgentProject(pty, PLUGIN, "t-1", null)).toBeNull();
+    expect(disk).toEqual({});
+  });
+
   it("grants nothing from a saved pane's launching plugin alone", () => {
     restart();
     tracked.set("t-1", "p1");
@@ -197,6 +208,59 @@ describe("plugin launch ledger across an app restart (#16240)", () => {
     expect(Object.keys(disk ?? {})).toEqual(["t-1"]);
     expect(errors).toHaveBeenCalled();
     errors.mockRestore();
+  });
+
+  it("keeps working in memory when a save fails, and saves the current set next time", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let failing = true;
+    _resetPluginLaunchesForTests();
+    attachPluginLaunchPersistence({
+      load: () => disk,
+      save: (records) => {
+        if (failing) throw new Error("disk full");
+        persistence.save(records);
+      },
+    });
+    tracked.set("t-1", "p1");
+    expect(() => launch("t-1")).not.toThrow();
+    expect(launchedAgentProject(pty, PLUGIN, "t-1", null)).toBe("p1");
+    expect(() => forgetPluginLaunches(PLUGIN)).not.toThrow();
+    expect(launchedAgentProject(pty, PLUGIN, "t-1", null)).toBeNull();
+    expect(errors).toHaveBeenCalledTimes(2);
+
+    failing = false;
+    launch("t-2");
+    expect(Object.keys(disk ?? {})).toEqual(["t-2"]);
+    errors.mockRestore();
+  });
+
+  it("drops the oldest records past the cap on load, whatever order they were saved in", () => {
+    _resetPluginLaunchesForTests();
+    const records: Record<string, StoredPluginLaunch> = {};
+    // Saved newest first, so insertion order and age disagree.
+    for (let i = MAX_STORED_PLUGIN_LAUNCHES + 1; i >= 0; i -= 1) {
+      records[`t-${i}`] = { pluginId: PLUGIN, projectId: null, seenAt: NOW - 1000 + i };
+    }
+    disk = records;
+    attachPluginLaunchPersistence(persistence);
+    expect(Object.keys(disk ?? {})).toHaveLength(MAX_STORED_PLUGIN_LAUNCHES);
+    expect(disk?.["t-0"]).toBeUndefined();
+    expect(disk?.["t-1"]).toBeUndefined();
+    expect(disk?.["t-2"]).toBeDefined();
+  });
+
+  it("keeps a pane restore just handed back over an older one at the cap", () => {
+    launch("t-early");
+    for (let i = 1; i < MAX_STORED_PLUGIN_LAUNCHES; i += 1) {
+      vi.setSystemTime(NOW + i);
+      launch(`t-${i}`);
+    }
+    vi.setSystemTime(NOW + MAX_STORED_PLUGIN_LAUNCHES);
+    admitRestoredPluginLaunches([{ id: "t-early", launchedByPluginId: PLUGIN }]);
+    vi.setSystemTime(NOW + MAX_STORED_PLUGIN_LAUNCHES + 1);
+    launch("t-new");
+    expect(disk?.["t-early"]).toBeDefined();
+    expect(disk?.["t-1"]).toBeUndefined();
   });
 
   it("keeps the newest records past the cap", () => {

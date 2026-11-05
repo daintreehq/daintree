@@ -7158,22 +7158,30 @@ export class PluginService {
     if (opts.uninstall) {
       this.projectInstanceStore.removePackage(manifestId);
       this.projectInstancePackages.delete(manifestId);
-      // Including instances of a project that isn't open, which nothing above unloads.
-      forgetPluginLaunchesWhere(
-        (owner) =>
-          parseProjectPluginInstanceKey(owner)?.installed === true &&
-          pluginManifestIdFromInstanceKey(owner) === manifestId
-      );
+      this.forgetPackageInstanceLaunches(manifestId);
     }
   }
 
   /**
+   * End a package's reach on every agent its per-project instances launched,
+   * including instances of a project that isn't open, which no unload reaches.
+   */
+  private forgetPackageInstanceLaunches(manifestId: string): void {
+    forgetPluginLaunchesWhere(
+      (owner) =>
+        parseProjectPluginInstanceKey(owner)?.installed === true &&
+        pluginManifestIdFromInstanceKey(owner) === manifestId
+    );
+  }
+
+  /**
    * Whether a launch record's plugin is an installed one the startup scan didn't
-   * load. A repository plugin's records go when its project closes.
+   * load. A dev plugin mid-rebuild is out of `plugins` for the swap, and its own
+   * reload settles its records. A repository plugin's go when its project closes.
    */
   private isMissingInstalledOwner(owner: string): boolean {
     const parsed = parseProjectPluginInstanceKey(owner);
-    if (parsed === null) return !this.plugins.has(owner);
+    if (parsed === null) return !this.plugins.has(owner) && !this.devSessions.has(owner);
     return parsed.installed && !this.projectInstancePackages.has(parsed.manifestId);
   }
 
@@ -8425,6 +8433,7 @@ export class PluginService {
         const catalogued = this.projectInstancePackages.get(pluginId);
         if (!running && catalogued) {
           this.unloadPackageInstances(pluginId, { uninstall: false, purge: false });
+          this.forgetPackageInstanceLaunches(pluginId);
           this.projectInstancePackages.delete(pluginId);
           this.disabledPlugins.set(pluginId, {
             manifest: catalogued.manifest as PluginManifest,

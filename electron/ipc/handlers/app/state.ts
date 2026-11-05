@@ -392,7 +392,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
                   : "miss",
     });
     if (cached) {
-      admitRestoredPluginLaunchesFor(cached.appState.terminals ?? []);
       // One leaf, not the whole appState the cached payload already carries.
       const panelGridConfig = store.get("appState.panelGridConfig");
       return {
@@ -860,8 +859,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       ).terminals;
     }
 
-    admitRestoredPluginLaunchesFor(terminalsToUse);
-
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
       terminals: terminalsToUse,
@@ -903,9 +900,21 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       userAgentRegistry: loadSanitizedUserAgentRegistry(),
     };
   };
-  handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.APP_HYDRATE, async (ctx: IpcContext) => {
+      const hydrate = await handleAppHydrate(ctx);
+      admitRestoredPluginLaunchesFor(hydrate.appState.terminals);
+      return hydrate;
+    })
+  );
 
-  const handleAppBoot = async (ctx: IpcContext) => composeBootResult(await handleAppHydrate(ctx));
+  const handleAppBoot = async (ctx: IpcContext) => {
+    const boot = composeBootResult(await handleAppHydrate(ctx));
+    // A pending crash throws this payload away and restores from the hydrate
+    // that follows the user's choice, so only that one hands panes back.
+    if (boot.crashPending === null) admitRestoredPluginLaunchesFor(boot.appState.terminals);
+    return boot;
+  };
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
 
   const handleAppGetState = async () => {

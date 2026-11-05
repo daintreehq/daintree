@@ -1164,3 +1164,38 @@ describe("an instance stays bound to its own project while another is focused (#
     expect(unscoped).not.toContain(KEY_B);
   });
 });
+
+describe("launch records of a package's instances (#16240)", () => {
+  const stored = () =>
+    Object.keys(
+      (storeMock._state.get("pluginLaunchedAgents") as Record<string, unknown> | undefined) ?? {}
+    ).sort();
+  const record = (pluginId: string) => ({ pluginId, projectId: null, seenAt: Date.now() });
+
+  beforeEach(() => {
+    // Left by an earlier run: neither project is open in this one.
+    storeMock._state.set("pluginLaunchedAgents", {
+      "t-a": record(KEY_A),
+      "t-b": record(KEY_B),
+      "t-repo": record(REPO_KEY_A),
+      "t-gone": record(makeInstalledProjectInstanceKey(PROJECT_A, "acme.gone")),
+    });
+  });
+
+  it("keeps at startup an installed package's instances that haven't loaded yet", async () => {
+    await startService();
+    expect(stored()).toEqual(["t-a", "t-b", "t-repo"]);
+  });
+
+  it("drops every instance's records when the package is uninstalled", async () => {
+    const { service } = await startService();
+    await service.uninstallPlugin(PKG);
+    expect(stored()).toEqual(["t-repo"]);
+  });
+
+  it("drops every instance's records when the package is disabled", async () => {
+    const { service } = await startService();
+    await service.setEnabled(PKG, false);
+    expect(stored()).toEqual(["t-repo"]);
+  });
+});
