@@ -66,7 +66,9 @@ function directDeclaration(
   name: string
 ): ts.VariableDeclaration | undefined {
   for (const statement of statements) {
+    // Only a const holds the same value at the record and at the load.
     if (!ts.isVariableStatement(statement)) continue;
+    if (!(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
     const found = statement.declarationList.declarations.find((declaration) =>
       isIdentifierNamed(declaration.name, name)
     );
