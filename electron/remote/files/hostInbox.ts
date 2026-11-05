@@ -16,10 +16,15 @@ import { BULK_CHUNK_BYTES } from "../link/frames.js";
  *
  * Every directory is owner-only and lstat-checked (a planted symlink or a
  * directory owned by someone else is refused); every file is created 0600 with
- * O_EXCL|O_NOFOLLOW. `<id>` is the start of the content's sha256, so the same
- * bytes dropped again reuse the file already here. Entries expire after a day,
- * the newest 50 clipboard images are kept, and the whole inbox stays under a
- * size cap; cleanup runs at host start and after every write.
+ * O_EXCL|O_NOFOLLOW. For a file `<id>` is the start of the content's sha256,
+ * so the same bytes dropped again reuse the file already here. A folder is an
+ * entry whose `<original name>` is a whole tree, with a random `<id>` and no
+ * reuse: it is built in a staging folder (`.stage-<hex>/tree`) and renamed
+ * into a fresh entry folder only once it is complete. Entries expire after a
+ * day (an entry's age is that of the newest thing anywhere in it), the newest
+ * 50 clipboard images are kept, and the whole inbox, every file of every tree
+ * included, stays under a size cap; cleanup runs at host start and after every
+ * write.
  */
 
 export type InboxBucket = "clipboard" | "files";
@@ -31,20 +36,49 @@ export interface HostInboxOptions {
   ttlMs?: number;
   maxTotalBytes?: number;
   maxClipboardImages?: number;
-  /** A part file untouched this long belongs to no live upload. */
+  /** A part file or staging folder untouched this long belongs to no live upload. */
   stalePartMs?: number;
+  /** Free bytes on the disk holding `dir`, or null when it can't be read. */
+  freeBytes?: (dir: string) => Promise<number | null>;
+  /** Kept free on the disk beyond every reservation. */
+  freeSpaceMarginBytes?: number;
+}
+
+/** A tree being built in the inbox, out of sight until {@link HostInbox.publishTree}. */
+export interface InboxStaging {
+  /** The folder to build the tree in; it exists, empty and owner-only. */
+  readonly treePath: string;
+}
+
+/** Disk space held for a tree until {@link release} is called. */
+export interface InboxReservation {
+  readonly bytes: number;
+  /** Idempotent. */
+  release(): void;
 }
 
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_MAX_CLIPBOARD_IMAGES = 50;
 const DEFAULT_STALE_PART_MS = 60 * 60 * 1000;
+const DEFAULT_FREE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024;
 /** The longest name a filesystem holds, as {@link nameLength} counts it. */
 const MAX_NAME_LENGTH = 255;
 const MAX_EXTENSION_LENGTH = 20;
 const ID_LENGTH = 12;
 const PART_PREFIX = ".part-";
+const STAGE_PREFIX = ".stage-";
+const STAGE_TREE = "tree";
 const MAX_DIR_ATTEMPTS = 100;
+
+async function defaultFreeBytes(dir: string): Promise<number | null> {
+  try {
+    const stats = await fs.statfs(dir);
+    return Number(stats.bavail) * Number(stats.bsize);
+  } catch {
+    return null;
+  }
+}
 
 export function defaultInboxRoot(): string {
   return path.join(os.tmpdir(), HOST_INBOX_DIR_NAME);
@@ -216,9 +250,20 @@ async function readHead(filePath: string, length = 32): Promise<Uint8Array> {
 
 interface InboxEntry {
   path: string;
-  kind: "clipboard" | "files" | "part";
+  kind: "clipboard" | "files" | "part" | "stage";
   mtimeMs: number;
   bytes: number;
+}
+
+/** Runs tasks one at a time; a failed task never holds up the ones after it. */
+class SerialQueue {
+  private tail: Promise<unknown> = Promise.resolve();
+
+  run<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(task);
+    this.tail = result.catch(() => {});
+    return result;
+  }
 }
 
 /**
@@ -250,8 +295,17 @@ async function measureTree(
 export class HostInbox {
   readonly root: string;
   private readonly now: () => number;
-  private cleanupChain: Promise<void> = Promise.resolve();
+  /**
+   * Cleanup, and every step that leaves an entry folder briefly empty, run one
+   * at a time: a pass over a total held over the cap by live uploads would
+   * otherwise sweep a folder made a moment ago for the file or tree going in.
+   */
+  private readonly mutations = new SerialQueue();
+  private readonly admissions = new SerialQueue();
   private readonly activeParts = new Set<string>();
+  /** Each live staging handle and the `.stage-` folder it owns. */
+  private readonly stagings = new Map<InboxStaging, string>();
+  private readonly reservations = new Set<InboxReservation>();
 
   constructor(private readonly options: HostInboxOptions = {}) {
     this.root = options.root ?? defaultInboxRoot();
@@ -276,13 +330,22 @@ export class HostInbox {
       this.root,
       `${PART_PREFIX}${crypto.randomBytes(16).toString("hex")}`
     );
-    const handle = await fs.open(
-      partPath,
-      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
-      OWNER_RW_FILE_MODE
-    );
+    // Live before it exists, so no cleanup pass ever lists it as abandoned.
     this.activeParts.add(partPath);
-    return { path: partPath, handle };
+    try {
+      const handle = await fs.open(
+        partPath,
+        fs.constants.O_WRONLY |
+          fs.constants.O_CREAT |
+          fs.constants.O_EXCL |
+          fs.constants.O_NOFOLLOW,
+        OWNER_RW_FILE_MODE
+      );
+      return { path: partPath, handle };
+    } catch (error) {
+      this.activeParts.delete(partPath);
+      throw error;
+    }
   }
 
   /** The part file is gone or placed: cleanup may treat it as stale again. */
@@ -328,6 +391,7 @@ export class HostInbox {
         if (!inner) continue;
         candidate = path.join(entryDir, inner);
       }
+      // A folder's entry holds a tree, never a file: it is never reused.
       const stat = await fs.lstat(candidate).catch(() => null);
       if (!stat?.isFile() || stat.size !== size) continue;
       if ((await sha256OfFile(candidate)) !== sha256) continue;
@@ -368,20 +432,134 @@ export class HostInbox {
       }
       throw new Error("No free name in the inbox");
     }
-    for (let attempt = 0; attempt < MAX_DIR_ATTEMPTS; attempt++) {
-      const suffix = attempt === 0 ? "" : `-${attempt}`;
-      const dir = path.join(this.bucketDir("files"), `${stamp}-${id}${suffix}`);
-      try {
-        await fs.mkdir(dir, { mode: OWNER_RWX_DIR_MODE });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-        throw error;
+    return this.mutations.run(async () => {
+      for (let attempt = 0; attempt < MAX_DIR_ATTEMPTS; attempt++) {
+        const dir = await this.makeEntryDir(stamp, id, attempt);
+        if (dir === null) continue;
+        const target = path.join(dir, safeName);
+        if (await this.linkInto(partPath, target)) return target;
+        throw new Error("The inbox folder was taken while placing the file");
       }
-      const target = path.join(dir, safeName);
-      if (await this.linkInto(partPath, target)) return target;
-      throw new Error("The inbox folder was taken while placing the file");
+      throw new Error("No free folder in the inbox");
+    });
+  }
+
+  /** A new, empty entry folder under `files/`, or null when that name is taken. */
+  private async makeEntryDir(stamp: string, id: string, attempt: number): Promise<string | null> {
+    const suffix = attempt === 0 ? "" : `-${attempt}`;
+    const dir = path.join(this.bucketDir("files"), `${stamp}-${id}${suffix}`);
+    try {
+      await fs.mkdir(dir, { mode: OWNER_RWX_DIR_MODE });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
+      throw error;
     }
-    throw new Error("No free folder in the inbox");
+    return dir;
+  }
+
+  /**
+   * A new staging folder to build a tree in, inside the inbox and owner-only.
+   * Cleanup leaves it alone until it is published or discarded; one left by a
+   * host that stopped is swept once it has been untouched for `stalePartMs`.
+   */
+  async createStaging(): Promise<InboxStaging> {
+    await this.ensure();
+    const stagePath = path.join(
+      this.root,
+      `${STAGE_PREFIX}${crypto.randomBytes(16).toString("hex")}`
+    );
+    const staging: InboxStaging = Object.freeze({ treePath: path.join(stagePath, STAGE_TREE) });
+    this.stagings.set(staging, stagePath);
+    let created = false;
+    try {
+      await fs.mkdir(stagePath, { mode: OWNER_RWX_DIR_MODE });
+      created = true;
+      await fs.mkdir(staging.treePath, { mode: OWNER_RWX_DIR_MODE });
+    } catch (error) {
+      this.stagings.delete(staging);
+      if (created) await fs.rm(stagePath, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+    return staging;
+  }
+
+  /**
+   * Move a complete staged tree to `files/<stamp>-<id>/<name>` in a single
+   * rename and return that host path. The entry folder is made first and the
+   * tree renamed into it, never the staging folder renamed onto the entry: a
+   * rename onto an empty folder replaces it on macOS and Linux. On failure the
+   * staging is kept, to publish again or discard.
+   */
+  async publishTree(staging: InboxStaging, name: string): Promise<string> {
+    const stagePath = this.stagings.get(staging);
+    if (stagePath === undefined) throw new Error("Not a live staging folder of this inbox");
+    const safeName = sanitizeInboxName(name);
+    await this.ensure();
+    const target = await this.mutations.run(async () => {
+      const tree = await fs.lstat(staging.treePath);
+      if (!tree.isDirectory()) throw new Error("The staged tree is not a folder");
+      const stamp = inboxTimestamp(this.now());
+      const id = crypto.randomBytes(ID_LENGTH / 2).toString("hex");
+      for (let attempt = 0; attempt < MAX_DIR_ATTEMPTS; attempt++) {
+        const dir = await this.makeEntryDir(stamp, id, attempt);
+        if (dir === null) continue;
+        const published = path.join(dir, safeName);
+        try {
+          await fs.rename(staging.treePath, published);
+        } catch (error) {
+          await fs.rmdir(dir).catch(() => {});
+          throw error;
+        }
+        return published;
+      }
+      throw new Error("No free folder in the inbox");
+    });
+    // Published: the handle is spent even if its empty shell can't be removed now.
+    this.stagings.delete(staging);
+    await fs.rm(stagePath, { recursive: true, force: true }).catch(() => {});
+    return target;
+  }
+
+  /**
+   * Remove a staging folder that will never be published. Idempotent, and a
+   * no-op for one already published. Stop every writer into it first.
+   */
+  async discardStaging(staging: InboxStaging): Promise<void> {
+    const stagePath = this.stagings.get(staging);
+    if (stagePath === undefined) return;
+    // Whatever survives this is swept by cleanup once it is stale.
+    await fs.rm(stagePath, { recursive: true, force: true }).catch(() => {});
+    this.stagings.delete(staging);
+  }
+
+  /**
+   * Hold `bytes` of the inbox's disk for a tree about to be built, or null when
+   * the free space, less every reservation still held and a margin, can't
+   * cover it. Reservations are granted one at a time, so two that only fit
+   * one at a time are never both granted. A disk whose free space can't be
+   * read admits, as single-file uploads do. The space written into stays
+   * reserved until release, so the check errs toward refusing.
+   */
+  async reserve(bytes: number): Promise<InboxReservation | null> {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) {
+      throw new RangeError("A reservation is a whole, non-negative number of bytes");
+    }
+    await this.ensure();
+    return this.admissions.run(async () => {
+      const free = await (this.options.freeBytes ?? defaultFreeBytes)(this.root);
+      const margin = this.options.freeSpaceMarginBytes ?? DEFAULT_FREE_SPACE_MARGIN_BYTES;
+      let held = 0;
+      for (const reservation of this.reservations) held += reservation.bytes;
+      if (free !== null && free - held < bytes + margin) return null;
+      const reservation: InboxReservation = Object.freeze({
+        bytes,
+        release: () => {
+          this.reservations.delete(reservation);
+        },
+      });
+      this.reservations.add(reservation);
+      return reservation;
+    });
   }
 
   /** Hard-link the part file to `target` (which must not exist), then drop the part name. */
@@ -397,11 +575,9 @@ export class HostInbox {
     return true;
   }
 
-  /** Queue a cleanup pass; passes never overlap. */
+  /** Queue a cleanup pass; passes never overlap, nor overlap an entry being made. */
   cleanup(): Promise<void> {
-    const run = this.cleanupChain.then(() => this.cleanupOnce());
-    this.cleanupChain = run.catch(() => {});
-    return run;
+    return this.mutations.run(() => this.cleanupOnce());
   }
 
   private async cleanupOnce(): Promise<void> {
@@ -413,14 +589,19 @@ export class HostInbox {
       if (uid !== null && rootStat.uid !== uid) return;
 
       const entries = await this.listEntries();
+      // Read after listing: every staging folder listed was registered before it existed.
+      const activeStages = new Set(this.stagings.values());
+      const isLive = (entry: InboxEntry) =>
+        (entry.kind === "part" && this.activeParts.has(entry.path)) ||
+        (entry.kind === "stage" && activeStages.has(entry.path));
       const now = this.now();
       const ttl = this.options.ttlMs ?? DEFAULT_TTL_MS;
       const stalePart = this.options.stalePartMs ?? DEFAULT_STALE_PART_MS;
       const doomed = new Set<InboxEntry>();
       for (const entry of entries) {
         const age = now - entry.mtimeMs;
-        if (entry.kind === "part") {
-          if (!this.activeParts.has(entry.path) && age > stalePart) doomed.add(entry);
+        if (entry.kind === "part" || entry.kind === "stage") {
+          if (!isLive(entry) && age > stalePart) doomed.add(entry);
         } else if (age > ttl) {
           doomed.add(entry);
         }
@@ -435,9 +616,7 @@ export class HostInbox {
       }
 
       const maxBytes = this.options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
-      const survivors = entries
-        .filter((e) => !doomed.has(e) && !(e.kind === "part" && this.activeParts.has(e.path)))
-        .sort(byAge);
+      const survivors = entries.filter((e) => !doomed.has(e) && !isLive(e)).sort(byAge);
       let total = entries
         .filter((e) => !doomed.has(e))
         .reduce((sum, entry) => sum + entry.bytes, 0);
@@ -463,11 +642,15 @@ export class HostInbox {
     const entries: InboxEntry[] = [];
     const rootNames = await fs.readdir(this.root).catch(() => [] as string[]);
     for (const name of rootNames) {
-      if (!name.startsWith(PART_PREFIX)) continue;
+      const kind = name.startsWith(PART_PREFIX)
+        ? "part"
+        : name.startsWith(STAGE_PREFIX)
+          ? "stage"
+          : null;
+      if (kind === null) continue;
       const entryPath = path.join(this.root, name);
       const stat = await fs.lstat(entryPath).catch(() => null);
-      if (stat)
-        entries.push({ path: entryPath, kind: "part", mtimeMs: stat.mtimeMs, bytes: stat.size });
+      if (stat) entries.push({ path: entryPath, kind, ...(await measureTree(entryPath, stat)) });
     }
     for (const bucket of ["clipboard", "files"] as const) {
       const dir = this.bucketDir(bucket);
