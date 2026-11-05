@@ -57,9 +57,7 @@ describe("createTerminalDataMultiplexer", () => {
       ["z", undefined],
     ];
     expect(first.mock.calls).toStrictEqual(expected);
-    expect(second.mock.calls).toStrictEqual(
-      expected.flatMap((call) => [call, call])
-    );
+    expect(second.mock.calls).toStrictEqual(expected.flatMap((call) => [call, call]));
   });
 
   it("removes only the disposed registration when one callback subscribes twice", () => {
