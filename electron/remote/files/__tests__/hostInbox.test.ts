@@ -444,12 +444,16 @@ describe("staging and publishing a tree", () => {
 
     const { rename, release } = gateRename();
     const publishing = inbox.publishTree(staging, "project");
-    await vi.waitFor(() => expect(rename).toHaveBeenCalled());
-    // Mid-publication the entry folder may exist, but nothing of the tree is in it.
-    for (const entry of await fs.readdir(path.join(root, "files"))) {
-      expect(await fs.readdir(path.join(root, "files", entry))).toEqual([]);
+    try {
+      await vi.waitFor(() => expect(rename).toHaveBeenCalled());
+      // Mid-publication the entry folder may exist, but nothing of the tree is in it.
+      for (const entry of await fs.readdir(path.join(root, "files"))) {
+        expect(await fs.readdir(path.join(root, "files", entry))).toEqual([]);
+      }
+    } finally {
+      release();
+      await publishing.catch(() => {});
     }
-    release();
     const published = await publishing;
 
     const entry = path.dirname(published);
@@ -496,12 +500,15 @@ describe("staging and publishing a tree", () => {
     const inbox = new HostInbox({ root });
     const staging = await inbox.createStaging();
     await buildTree(staging.treePath, { "a.txt": "a", "b/c.txt": "c" });
+    const removals = vi.spyOn(fs, "rm");
     const { rename, release } = gateRename();
     const publishing = inbox.publishTree(staging, "project");
     try {
       await vi.waitFor(() => expect(rename).toHaveBeenCalled());
       const discarding = inbox.discardStaging(staging);
       await Promise.race([discarding, new Promise((resolve) => setTimeout(resolve, 100))]);
+      // Nothing of the staging folder is touched while the rename is under way.
+      expect(removals).not.toHaveBeenCalledWith(path.dirname(staging.treePath), expect.anything());
       release();
       const published = await publishing;
       // Publication won: the discard finds nothing left to remove.
