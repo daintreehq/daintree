@@ -109,8 +109,12 @@ function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
 export class TerminalInputController {
   private shutdownLockDepth = 0;
   private inputGeneration = 0;
-  /** A bracketed paste raw input opened and hasn't closed yet, so its CRs are text. */
-  private typedPasteOpen = false;
+  /**
+   * The agent incarnation a bracketed paste opened in and hasn't closed yet,
+   * so its CRs are text. A paste whose agent has since gone is closed: CopyTree
+   * leaves the end marker off when the agent it was pasting into is lost.
+   */
+  private pasteOpenIn: number | null = null;
   /**
    * When the submit lane last wrote to the prompt (#13496). A strict
    * submission waits for the agent's state to change after it, so a brief
@@ -374,7 +378,8 @@ export class TerminalInputController {
         this.host.logWriteError(error, { operation: "write(bracketed-paste)", traceId });
         return false;
       }
-      if (!rethrow) this.noteTypedSubmit(data, reachesPrompt);
+      if (rethrow) this.trackPaste(data);
+      else this.noteTypedSubmit(data, reachesPrompt);
       return true;
     }
 
@@ -392,7 +397,8 @@ export class TerminalInputController {
     }
     // The submit lane drops the handback once its own Enter lands; typed keys
     // are the other way a prompt reaches the agent.
-    if (!rethrow) this.noteTypedSubmit(data, reachesPrompt);
+    if (rethrow) this.trackPaste(data);
+    else this.noteTypedSubmit(data, reachesPrompt);
     return true;
   }
 
@@ -406,7 +412,7 @@ export class TerminalInputController {
    * prompt. `reachesPrompt` is read before the analysis heard the keys.
    */
   private noteTypedSubmit(data: string, reachesPrompt: boolean): void {
-    const submits = this.typedSubmit(data);
+    const submits = this.trackPaste(data);
     const terminal = this.host.terminalInfo;
     if (!submits || !reachesPrompt || terminal.lastHandback === undefined) return;
     terminal.lastHandback = undefined;
@@ -414,25 +420,28 @@ export class TerminalInputController {
   }
 
   /**
-   * Whether raw `data` holds a bare Enter outside any bracketed paste. A paste
-   * can arrive across writes (CopyTree streams its body between the markers),
-   * so one left open is carried to the next write.
+   * Follow the paste markers `data` carries, and say whether it holds a bare
+   * Enter outside any bracketed paste. A paste can arrive across writes
+   * (CopyTree streams its body between the markers), so one left open is
+   * carried to the next write, whichever lane wrote it.
    */
-  private typedSubmit(data: string): boolean {
+  private trackPaste(data: string): boolean {
+    const incarnation = this.host.terminalInfo.agentIncarnation ?? 0;
+    if (this.pasteOpenIn !== null && this.pasteOpenIn !== incarnation) this.pasteOpenIn = null;
     let submits = false;
     let at = 0;
     while (at < data.length) {
-      if (this.typedPasteOpen) {
+      if (this.pasteOpenIn !== null) {
         const end = data.indexOf(BRACKETED_PASTE_END, at);
         if (end === -1) return submits;
-        this.typedPasteOpen = false;
+        this.pasteOpenIn = null;
         at = end + BRACKETED_PASTE_END.length;
         continue;
       }
       const start = data.indexOf(BRACKETED_PASTE_START, at);
       if (hasBareEnter(data, at, start === -1 ? data.length : start)) submits = true;
       if (start === -1) return submits;
-      this.typedPasteOpen = true;
+      this.pasteOpenIn = incarnation;
       at = start + BRACKETED_PASTE_START.length;
     }
     return submits;

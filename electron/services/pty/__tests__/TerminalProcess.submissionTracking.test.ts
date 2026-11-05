@@ -449,8 +449,47 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.write("third\r");
     terminal.write("\x1b[201~");
     expect(info.lastHandback).toBe(handback);
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
 
-    terminal.write("\x1b[200~pasted\x1b[201~\r");
+    info.lastHandback = handback;
+    terminal.write("\x1b[200~pasted\rtext\x1b[201~\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("closes a paste left open once its agent has gone, and follows the submit lane's markers too", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+    info.agentIncarnation = 0;
+
+    // CopyTree lost the agent mid-paste and left the end marker off.
+    terminal.write("\x1b[200~context");
+    info.lastHandback = handback;
+    terminal.write("\r");
+    expect(info.lastHandback).toBe(handback);
+    // A new agent session in the same PTY starts with no paste open.
+    info.agentIncarnation = 1;
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+
+    // A paste end the submit lane writes closes one raw input opened.
+    terminal.write("\x1b[200~context");
+    info.lastHandback = handback;
+    const controller = (
+      terminal as unknown as { inputController: { writeStrict(d: string): boolean } }
+    ).inputController;
+    controller.writeStrict("\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+    terminal.write("\r");
     expect(info.lastHandback).toBeUndefined();
     terminal.dispose();
   });
