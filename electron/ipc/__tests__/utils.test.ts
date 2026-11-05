@@ -71,6 +71,8 @@ import {
   broadcastToProjectRenderers,
   broadcastToVisibleRenderers,
   sendToRendererContext,
+  sendToWebContents,
+  setRemoteBoundViewFilter,
   typedHandle,
   typedHandleWithContext,
   typedSend,
@@ -450,6 +452,56 @@ describe("sendToRendererContext", () => {
     sendToRendererContext(ctx as never, "channel:test", "data");
     sendToRendererContext({ ...ctx, senderWindow: null } as never, "channel:test", "data");
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendToWebContents", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends to the named renderer and reports it", () => {
+    const send = vi.fn();
+    const wc = { id: 7, isDestroyed: () => false, send };
+
+    expect(sendToWebContents(wc as never, "channel:test", "a", 1)).toBe(true);
+    expect(send).toHaveBeenCalledWith("channel:test", "a", 1);
+  });
+
+  it("sends nothing to a missing or destroyed renderer", () => {
+    const send = vi.fn();
+
+    expect(sendToWebContents(null, "channel:test")).toBe(false);
+    expect(sendToWebContents(undefined, "channel:test")).toBe(false);
+    expect(
+      sendToWebContents({ id: 7, isDestroyed: () => true, send } as never, "channel:test")
+    ).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("withholds what the remote-bound view filter refuses", () => {
+    const send = vi.fn();
+    const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 7);
+    try {
+      expect(
+        sendToWebContents({ id: 7, isDestroyed: () => false, send } as never, "channel:test")
+      ).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("reports a send that throws as not sent", () => {
+    const wc = {
+      id: 7,
+      isDestroyed: () => false,
+      send: vi.fn(() => {
+        throw new Error("closing");
+      }),
+    };
+
+    expect(sendToWebContents(wc as never, "channel:test")).toBe(false);
   });
 });
 

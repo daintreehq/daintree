@@ -72,6 +72,17 @@ vi.mock("../../utils.js", () => ({
   broadcastToRenderer: vi.fn((channel: string, ...args: unknown[]) => {
     mainWindowMock.webContents.send(channel, ...args);
   }),
+  sendToWebContents: vi.fn(
+    (
+      wc: { send: (...a: unknown[]) => void; isDestroyed: () => boolean } | null | undefined,
+      channel: string,
+      ...args: unknown[]
+    ) => {
+      if (!wc || wc.isDestroyed()) return false;
+      wc.send(channel, ...args);
+      return true;
+    }
+  ),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -498,6 +509,55 @@ describe("registerWebviewHandlers", () => {
         expect.objectContaining({ paneId: "pane-1", summaryText: "fallback" })
       );
       expect(sendToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("routes rows and context resets to the guest's embedder while another project's view is active", async () => {
+      // Project A's view embeds the guest; project B's view is the window's
+      // active app view, which is all a window-level send can reach.
+      const embedderA = { id: 101, send: vi.fn(), isDestroyed: vi.fn(() => false) };
+      const activeB = { id: 202, send: vi.fn(), isDestroyed: vi.fn(() => false) };
+      mockWebContents.hostWebContents = embedderA;
+      browserWindowMock.fromWebContents.mockReturnValue({
+        webContents: activeB,
+        isDestroyed: vi.fn(() => false),
+      });
+
+      try {
+        cleanup = registerWebviewHandlers(deps);
+        await getHandler("webview:start-console-capture")(null, 42, "pane-a");
+        const messageListener = getMessageListener();
+
+        messageListener({}, "Runtime.consoleAPICalled", {
+          type: "error",
+          args: [{ type: "string", value: "[vite] hmr failed" }],
+          timestamp: 4000,
+        });
+        messageListener({}, "Runtime.exceptionThrown", {
+          timestamp: 4001,
+          exceptionDetails: { text: "Uncaught", exception: { type: "string", value: "boom" } },
+        });
+        messageListener({}, "Runtime.executionContextsCleared", {});
+        const detachCall = debuggerMock.on.mock.calls.find(([event]: string[]) => event === "detach");
+        (detachCall![1] as (event: unknown, reason: string) => void)({}, "target closed");
+
+        const channelsTo = (target: { send: ReturnType<typeof vi.fn> }) =>
+          target.send.mock.calls.map(([channel]: string[]) => channel);
+        expect(channelsTo(embedderA)).toEqual([
+          "webview:console-message",
+          "webview:console-message",
+          "webview:console-context-cleared",
+          "webview:console-context-cleared",
+        ]);
+        expect(embedderA.send).toHaveBeenCalledWith(
+          "webview:console-message",
+          expect.objectContaining({ paneId: "pane-a", summaryText: "[vite] hmr failed" })
+        );
+        expect(activeB.send).not.toHaveBeenCalled();
+        expect(mainWindowMock.webContents.send).not.toHaveBeenCalled();
+      } finally {
+        mockWebContents.hostWebContents = null;
+        browserWindowMock.fromWebContents.mockReturnValue(null);
+      }
     });
 
     it("enables Runtime and Log only once across multiple panes", async () => {
