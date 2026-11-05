@@ -39,8 +39,8 @@ import {
  * A refusal or a cancel removes everything this call created, so the staging
  * folder is left as empty as it was given. Node has no descriptor-relative
  * `mkdirat`/`openat`, so each folder a create lands in is first re-checked to
- * be the one this call made, still where it made it: a folder swapped for a
- * link, or moved away behind one, stops the unpack,
+ * be the one this call made, as is every folder above it: a folder swapped
+ * for a link, or moved away behind one, stops the unpack,
  * but a process already running as this user and racing inside staging still
  * has a window between the check and the create.
  */
@@ -450,28 +450,27 @@ async function writeTree(
   archive: ArchiveHandle,
   entries: PlannedEntry[],
   options: UnpackFolderArchiveOptions,
-  staging: { identity: string; realPath: string },
+  stagingIdentity: string,
   created: Created[]
 ): Promise<void> {
   const { stagingDir, rootName, declared, signal, onProgress } = options;
-  const folderIdentities = new Map<string, string>([[rootName, staging.identity]]);
-  const below = (base: string, entryPath: string) => {
+  const folderIdentities = new Map<string, string>([[rootName, stagingIdentity]]);
+  const absolute = (entryPath: string) => {
     const components = (entryPath.endsWith("/") ? entryPath.slice(0, -1) : entryPath).split("/");
-    return path.join(base, ...components.slice(1));
+    return path.join(stagingDir, ...components.slice(1));
   };
-  const absolute = (entryPath: string) => below(stagingDir, entryPath);
-  // The parent's identity says it is a folder this call made; its real path
-  // says it is still where it was made, so an ancestor moved away and
-  // replaced by a link to it can't carry the next create out of staging.
+  // Every folder from the staging root down to the parent must still be one
+  // this call made, checked top down so each is reached through folders
+  // already checked: an ancestor moved away behind a link to it can't carry
+  // the next create out of staging.
   const assertParentUnchanged = async (entryPath: string): Promise<void> => {
-    const parent = `${parentOf(entryPath)!}/`;
-    const stat = await fs.lstat(absolute(parent));
-    if (
-      !stat.isDirectory() ||
-      identityOf(stat) !== folderIdentities.get(parent.slice(0, -1)) ||
-      (await fs.realpath(absolute(parent))) !== below(staging.realPath, parent)
-    ) {
-      throw new Error("The staging folder changed while the archive was being unpacked");
+    const components = parentOf(entryPath)!.split("/");
+    for (let depth = 1; depth <= components.length; depth++) {
+      const folder = components.slice(0, depth).join("/");
+      const stat = await fs.lstat(absolute(`${folder}/`));
+      if (!stat.isDirectory() || identityOf(stat) !== folderIdentities.get(folder)) {
+        throw new Error("The staging folder changed while the archive was being unpacked");
+      }
     }
   };
 
@@ -616,13 +615,7 @@ export async function unpackFolderArchive(
       });
     }
     const entries = await planArchive(archive, stat.size, rootName, declared, signal);
-    await writeTree(
-      archive,
-      entries,
-      options,
-      { identity: identityOf(staging), realPath: await fs.realpath(stagingDir) },
-      created
-    );
+    await writeTree(archive, entries, options, identityOf(staging), created);
     // Closed before the last cancel check, so a cancel that lands while it
     // closes still removes the tree; handed off first so it closes once.
     const finished = archive;

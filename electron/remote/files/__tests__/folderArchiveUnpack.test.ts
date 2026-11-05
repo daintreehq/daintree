@@ -148,6 +148,40 @@ describe("unpackFolderArchive: a valid archive", () => {
     expect(await modeOf("sub/tool")).toBe(0o700);
   });
 
+  it.each([
+    ["composed", "caf\u00e9"],
+    ["decomposed", "cafe\u0301"],
+    ["mixed-case", "Mixed Case"],
+  ])("writes into a %s folder name as spelled", async (_label, folder) => {
+    const result = await unpack([
+      ROOT,
+      { name: `Root/${folder}/` },
+      { name: `Root/${folder}/inner/` },
+      { name: `Root/${folder}/inner/file.txt`, data: "inside" },
+    ]);
+    expect(result).toMatchObject({ ok: true });
+    expect(await fs.readFile(path.join(staging, folder, "inner", "file.txt"), "utf8")).toBe(
+      "inside"
+    );
+  });
+
+  it("unpacks into a staging folder reached through a linked path", async () => {
+    const linkedBase = path.join(base, "linked-base");
+    await fs.symlink(base, linkedBase);
+    await fs.writeFile(
+      archivePath,
+      forgeFolderArchive([ROOT, { name: "Root/sub/" }, { name: "Root/sub/a.txt", data: "a" }])
+    );
+    const result = await unpackFolderArchive({
+      archivePath,
+      stagingDir: path.join(linkedBase, "staging"),
+      rootName: "Root",
+      declared: { fileCount: 1, folderCount: 1, totalBytes: 1 },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(await fs.readFile(path.join(staging, "sub", "a.txt"), "utf8")).toBe("a");
+  });
+
   it("takes entries in any order, data descriptors and unflagged ASCII names", async () => {
     const result = await unpack([
       { name: "Root/a/b/c.txt", data: "c", descriptor: true, flags: 0x0008 },
@@ -695,6 +729,19 @@ describe("unpackFolderArchive: forged archives", () => {
     ],
   ])("refuses an archive with %s", async (_label, comment) => {
     const result = await unpack([ROOT, { name: "Root/a.txt", data: "a" }], { forge: { comment } });
+    expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "format" });
+  });
+
+  it("refuses an end record declaring a comment the archive doesn't hold", async () => {
+    const archive = forgeFolderArchive([ROOT, { name: "Root/a.txt", data: "a" }]);
+    archive.writeUInt16LE(1, archive.length - 22 + 20);
+    await fs.writeFile(archivePath, archive);
+    const result = await unpackFolderArchive({
+      archivePath,
+      stagingDir: staging,
+      rootName: "Root",
+      declared: { fileCount: 1, folderCount: 0, totalBytes: 1 },
+    });
     expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "format" });
   });
 
