@@ -242,6 +242,18 @@ describe("upload questions", () => {
       expect(currentUploadQuestion()).toBeNull();
     });
 
+    it("lets go of the signal once answered", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const add = vi.spyOn(controller.signal, "addEventListener");
+      const remove = vi.spyOn(controller.signal, "removeEventListener");
+      const asked = askUploadQuestion(large("a"), { signal: controller.signal });
+      currentUploadQuestion()!.answer(true);
+      await asked;
+      const [type, listener] = add.mock.calls[0]!;
+      expect(remove).toHaveBeenCalledWith(type, listener);
+    });
+
     it("keeps the first answer when the signal aborts after it", async () => {
       registerUploadConfirmHost(Symbol("only"));
       const controller = new AbortController();

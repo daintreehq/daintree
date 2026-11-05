@@ -31,10 +31,12 @@ function setup(overrides: Partial<RemoteMaterializerDeps> = {}) {
     for (const listener of listeners) listener(event);
   };
   const fileTransfer = {
-    statLocalFile: vi.fn(async (): Promise<LocalFileStat | null> => ({
-      size: 10,
-      isDirectory: false,
-    })),
+    statLocalFile: vi.fn(
+      async (_payload: { localPath: string }): Promise<LocalFileStat | null> => ({
+        size: 10,
+        isDirectory: false,
+      })
+    ),
     uploadLocalFile: vi.fn(
       async (payload: {
         opId: string;
@@ -75,7 +77,7 @@ function setup(overrides: Partial<RemoteMaterializerDeps> = {}) {
         return {
           status: "sent",
           hostPath: "/tmp/daintree-inbox/files/x/designs",
-          totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
+          totals: { fileCount: 2, folderCount: 1, totalBytes: 32 },
         };
       }
     ),
@@ -547,7 +549,7 @@ describe("remote materialize", () => {
       expect(result).toEqual({
         hostPath: "/tmp/daintree-inbox/files/x/designs",
         displayName: "designs",
-        bytes: 30,
+        bytes: 32,
       });
       expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledWith({
         localPath: "/Users/me/designs",
@@ -574,7 +576,7 @@ describe("remote materialize", () => {
       expect(deps.reportFailure).not.toHaveBeenCalled();
     });
 
-    it("asks however large the folder, never with the file size questions", async () => {
+    it("asks the folder question, never the file size questions, whatever its stat size", async () => {
       const { materialize, fileTransfer, deps } = folderSetup();
       fileTransfer.statLocalFile.mockResolvedValue({
         size: UPLOAD_REFUSE_BYTES + 1,
@@ -808,6 +810,7 @@ describe("remote materialize", () => {
           },
         });
         await expect(materialize(FOLDER)).rejects.toThrow();
+        expect(deps.reportFailure).toHaveBeenCalledTimes(1);
         const [{ message }] = vi.mocked(deps.reportFailure).mock.calls[0]!;
         expect(message).toContain("(designs/a/, designs/b/, designs/c/ and 2 more)");
         expect(message).not.toContain("designs/d/");
@@ -862,14 +865,102 @@ describe("remote materialize", () => {
       });
     });
 
+    it("stays silent for an Add to project folder whose chip was cancelled during the stat", async () => {
+      const { materialize, fileTransfer, deps } = folderSetup();
+      const stat = held<LocalFileStat | null>();
+      fileTransfer.statLocalFile.mockImplementationOnce(() => stat.promise);
+      const controller = new AbortController();
+      const pending = materialize(FOLDER, {
+        signal: controller.signal,
+        destination: { kind: "worktree", directory: "/srv/proj" },
+      });
+      controller.abort();
+      stat.resolve({ size: 96, isDirectory: true });
+      await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.reportFailure).not.toHaveBeenCalled();
+    });
+
+    it("stays silent for a stat that fails after its chip was cancelled", async () => {
+      const { materialize, fileTransfer, deps } = folderSetup();
+      const stat = held<LocalFileStat | null>();
+      fileTransfer.statLocalFile.mockImplementationOnce(() => stat.promise);
+      const controller = new AbortController();
+      const pending = materialize(FOLDER, { signal: controller.signal });
+      controller.abort();
+      stat.reject(new Error("bridge closed"));
+      await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.reportFailure).not.toHaveBeenCalled();
+    });
+
+    describe("a read refused as busy", () => {
+      const busy = () =>
+        new Error(
+          `[AppError|RATE_LIMITED|${encodeURIComponent("Other folders are still being read. Try again in a moment.")}] too many walks`
+        );
+
+      // A walk cancelled in main keeps its place there until it has stopped.
+      it("is asked again, and goes on as usual once main has room", async () => {
+        const { materialize, fileTransfer, deps } = folderSetup();
+        fileTransfer.summarizeLocalFolder.mockRejectedValueOnce(busy());
+        await expect(materialize(FOLDER)).resolves.toMatchObject({ displayName: "designs" });
+        expect(
+          fileTransfer.summarizeLocalFolder.mock.calls.map(([payload]) => payload.opId)
+        ).toEqual(["op-1", "op-2"]);
+        expect(deps.reportFailure).not.toHaveBeenCalled();
+      });
+
+      it("stops asking when its chip is cancelled, saying nothing", async () => {
+        const { materialize, fileTransfer, deps } = folderSetup();
+        fileTransfer.summarizeLocalFolder.mockRejectedValueOnce(busy());
+        const controller = new AbortController();
+        const pending = materialize(FOLDER, { signal: controller.signal });
+        await vi.waitFor(() => expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(1));
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+        expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(1);
+        expect(deps.reportFailure).not.toHaveBeenCalled();
+      });
+
+      it("reports main's own words once it has stayed busy", async () => {
+        vi.useFakeTimers();
+        try {
+          const { materialize, fileTransfer, deps } = folderSetup();
+          fileTransfer.summarizeLocalFolder.mockRejectedValue(busy());
+          const pending = materialize(FOLDER);
+          pending.catch(() => {});
+          await vi.runAllTimersAsync();
+          await expect(pending).rejects.toMatchObject({ code: "RATE_LIMITED" });
+          expect(fileTransfer.summarizeLocalFolder.mock.calls.length).toBeGreaterThan(1);
+          expect(deps.reportFailure).toHaveBeenCalledTimes(1);
+          expect(deps.reportFailure).toHaveBeenCalledWith(
+            expect.objectContaining({
+              message: "Other folders are still being read. Try again in a moment.",
+            })
+          );
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("is reported at once for any other refusal", async () => {
+        const { materialize, fileTransfer, deps } = folderSetup();
+        fileTransfer.summarizeLocalFolder.mockRejectedValueOnce(
+          new Error(`[AppError|PERMISSION|${encodeURIComponent("Not granted.")}] no grant`)
+        );
+        await expect(materialize(FOLDER)).rejects.toThrow();
+        expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(1);
+        expect(deps.reportFailure).toHaveBeenCalledTimes(1);
+      });
+    });
+
     describe("several folders at once", () => {
-      const folders = ["a", "b", "c"].map((name) => ({
+      const folders = ["a", "b", "c", "d"].map((name) => ({
         kind: "local-file" as const,
         path: `/Users/me/${name}`,
       }));
 
       // Main refuses a view's third walk or pack outright; here it waits its turn.
-      it("reads two at a time while files go on as usual", async () => {
+      it("takes two at a time while files go on as usual", async () => {
         const { materialize, fileTransfer } = folderSetup();
         fileTransfer.statLocalFile.mockImplementation(async ({ localPath }) => ({
           size: 10,
@@ -900,7 +991,7 @@ describe("remote materialize", () => {
         await Promise.all(pending);
       });
 
-      it("lets a folder waiting its turn leave the line", async () => {
+      it("lets a folder waiting its turn leave the line without taking a turn", async () => {
         const { materialize, fileTransfer } = folderSetup();
         const reads = [held<LocalFolderSummaryResult>(), held<LocalFolderSummaryResult>()];
         fileTransfer.summarizeLocalFolder
@@ -910,30 +1001,60 @@ describe("remote materialize", () => {
         const first = materialize(folders[0]!);
         const second = materialize(folders[1]!);
         const third = materialize(folders[2]!, { signal: controller.signal });
+        const fourth = materialize(folders[3]!);
         await vi.waitFor(() => expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(2));
 
         controller.abort();
         await expect(third).rejects.toMatchObject({ code: "CANCELLED" });
+        // The turn the first gives up goes to the fourth, while the second still reads.
         reads[0]!.resolve({ status: "ready", summary: folderSummary("a"), handle: HANDLE });
+        await vi.waitFor(() => expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(3));
+        expect(fileTransfer.summarizeLocalFolder.mock.calls[2]![0].localPath).toBe("/Users/me/d");
         reads[1]!.resolve({ status: "ready", summary: folderSummary("b"), handle: HANDLE });
-        await Promise.all([first, second]);
-        expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(2);
+        await Promise.all([first, second, fourth]);
+        expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(3);
       });
 
-      it("sends two at a time, the next starting as one finishes", async () => {
+      // Main keeps only a view's newest summaries; one waiting on its
+      // question must never be the one it lets go.
+      it("reads no further folder while two wait on their questions", async () => {
+        const answers: Array<(yes: boolean) => void> = [];
+        const confirmFolder = vi.fn(() => new Promise<boolean>((resolve) => answers.push(resolve)));
+        const { materialize, fileTransfer } = folderSetup({ confirmFolder });
+        const settled = Promise.allSettled(
+          folders.slice(0, 3).map((folder) => materialize(folder))
+        );
+        await vi.waitFor(() => expect(confirmFolder).toHaveBeenCalledTimes(2));
+        expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(2);
+
+        answers[0]!(false);
+        await vi.waitFor(() => expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(3));
+        answers[1]!(true);
+        await vi.waitFor(() => expect(confirmFolder).toHaveBeenCalledTimes(3));
+        answers[2]!(true);
+        expect((await settled).map((outcome) => outcome.status)).toEqual([
+          "rejected",
+          "fulfilled",
+          "fulfilled",
+        ]);
+      });
+
+      it("holds a folder's turn until its send ends, however it ends", async () => {
         const { materialize, fileTransfer } = folderSetup();
         const sends = [held<UploadLocalFolderResult>(), held<UploadLocalFolderResult>()];
         fileTransfer.uploadLocalFolder
           .mockImplementationOnce(() => sends[0]!.promise)
           .mockImplementationOnce(() => sends[1]!.promise);
-        const settled = Promise.allSettled(folders.map((folder) => materialize(folder)));
+        const settled = Promise.allSettled(
+          folders.slice(0, 3).map((folder) => materialize(folder))
+        );
         await vi.waitFor(() => expect(fileTransfer.uploadLocalFolder).toHaveBeenCalledTimes(2));
-        await vi.waitFor(() => expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(3));
-        expect(fileTransfer.uploadLocalFolder).toHaveBeenCalledTimes(2);
+        expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(2);
 
         // A send that fails gives up its turn as one that succeeds does.
         sends[0]!.reject(new Error("link dropped"));
         await vi.waitFor(() => expect(fileTransfer.uploadLocalFolder).toHaveBeenCalledTimes(3));
+        expect(fileTransfer.summarizeLocalFolder).toHaveBeenCalledTimes(3);
         sends[1]!.resolve({
           status: "sent",
           hostPath: "/tmp/daintree-inbox/files/x/b",

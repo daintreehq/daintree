@@ -103,6 +103,8 @@ export function useUploadConfirmState(): { lead: symbol | null; head: QueuedQues
 
 /** @internal Tests only. */
 export function _resetUploadConfirmForTests(): void {
+  // Answered rather than dropped, so nothing waits on a question no one can see.
+  for (const entry of [...queue]) entry.answer(false);
   queue = [];
   hosts.length = 0;
   listeners.clear();

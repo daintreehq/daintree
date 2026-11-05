@@ -137,10 +137,38 @@ export function isCancelledMaterialize(error: unknown): boolean {
 }
 
 /**
- * Main reads and packs at most two folders at once for a view, and refuses a
- * third outright, so a drop of several folders takes turns here instead.
+ * Main reads and packs at most two folders at once for a view and refuses a
+ * third outright, and keeps only the newest eight summaries a view made. A
+ * folder holds its turn from being read until its send ends, so a drop of
+ * several folders takes turns here and a summary still waiting on its
+ * question is never the one main lets go.
  */
 const FOLDERS_AT_ONCE = 2;
+
+/**
+ * A cancelled walk keeps its place in main until it has actually stopped, and
+ * other views count against main's overall cap, so a read refused as busy is
+ * asked again a few times before the refusal stands.
+ */
+const BUSY_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 2_000, 2_000];
+
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(cancelled());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(cancelled());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /**
  * Up to `size` holders at once, admitted in the order they asked. A wait the
@@ -264,21 +292,7 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     }
   };
 
-  const walkTurns = createTurns(FOLDERS_AT_ONCE);
-  const sendTurns = createTurns(FOLDERS_AT_ONCE);
-
-  const inTurn = async <T>(
-    turns: (signal: AbortSignal | undefined) => Promise<() => void>,
-    signal: AbortSignal | undefined,
-    run: () => Promise<T>
-  ): Promise<T> => {
-    const release = await turns(signal);
-    try {
-      return await run();
-    } finally {
-      release();
-    }
-  };
+  const folderTurns = createTurns(FOLDERS_AT_ONCE);
 
   /**
    * Add to project met a file of the same name: replace it only if the user
@@ -315,6 +329,23 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     return replaced;
   };
 
+  const summarizeWhenFree = async (
+    localPath: string,
+    options: MaterializeOptions | undefined
+  ): Promise<LocalFolderSummaryResult> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await upload(options, (opId) =>
+          deps.fileTransfer.summarizeLocalFolder({ localPath, opId })
+        );
+      } catch (error) {
+        const delay = BUSY_RETRY_DELAYS_MS[attempt];
+        if (codeOf(error) !== "RATE_LIMITED" || delay === undefined) throw error;
+        await pause(delay, options?.signal);
+      }
+    }
+  };
+
   /**
    * A folder from this machine: read here, shown in the folder question, and
    * sent whole into the host inbox once the person confirms it. A refused
@@ -344,26 +375,32 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
       }
     };
     report({ phase: "waiting" });
-    const summarized = await inTurn(walkTurns, signal, () => {
+    const release = await folderTurns(signal);
+    let result: UploadLocalFolderResult;
+    let summary: FolderUploadSummary;
+    try {
       report({ phase: "reading" });
-      return upload(options, (opId) => deps.fileTransfer.summarizeLocalFolder({ localPath, opId }));
-    });
-    report({ phase: "waiting" });
-    const check: FolderUploadCheck =
-      summarized.status === "ready" ? { status: "ready", summary: summarized.summary } : summarized;
-    const confirmed = await deps.confirmFolder({ check, hostLabel: host }, signal);
-    if (!confirmed || summarized.status !== "ready" || signal?.aborted) throw cancelled();
-    const { handle, summary } = summarized;
-    const result = await inTurn(sendTurns, signal, () =>
-      upload(options, (opId) =>
+      const summarized = await summarizeWhenFree(localPath, options);
+      report({ phase: "waiting" });
+      const check: FolderUploadCheck =
+        summarized.status === "ready"
+          ? { status: "ready", summary: summarized.summary }
+          : summarized;
+      const confirmed = await deps.confirmFolder({ check, hostLabel: host }, signal);
+      if (!confirmed || summarized.status !== "ready" || signal?.aborted) throw cancelled();
+      summary = summarized.summary;
+      const { handle } = summarized;
+      result = await upload(options, (opId) =>
         deps.fileTransfer.uploadLocalFolder({
           hostId: deps.hostId,
           handle,
           destination: { kind: "inbox", bucket: "files" },
           opId,
         })
-      )
-    );
+      );
+    } finally {
+      release();
+    }
     switch (result.status) {
       case "sent":
         return { hostPath: result.hostPath, displayName: name, bytes: result.totals.totalBytes };
@@ -387,6 +424,7 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     const name = basename(localPath) || localPath;
     const host = deps.hostLabel();
     const stat = await deps.fileTransfer.statLocalFile({ localPath });
+    if (options?.signal?.aborted) throw cancelled();
     if (!stat) {
       throw new MaterializeError("INVALID_PATH", `Couldn't read ${name} on ${deps.localLabel}.`);
     }
@@ -483,6 +521,8 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     try {
       return await resolve(source, options);
     } catch (error) {
+      // Once cancelled from its chip, whatever a step answered late is not news.
+      if (options?.signal?.aborted) throw cancelled();
       const code = codeOf(error);
       // Nothing to say: the user cancelled, or pasted with no image to send.
       if (code !== "CANCELLED" && code !== "CLIPBOARD_EMPTY") {

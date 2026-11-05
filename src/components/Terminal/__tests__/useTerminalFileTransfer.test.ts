@@ -2603,7 +2603,8 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     describe("a folder dropped from this machine", () => {
-      const FOLDER_HOST_PATH = "/tmp/daintree-inbox/files/20261105-a1/designs";
+      // A name a shell would split, so a plain shell's spelling has to quote it.
+      const FOLDER_HOST_PATH = "/tmp/daintree-inbox/files/20261105-a1/Q3 designs";
 
       beforeEach(() => {
         _resetUploadConfirmForTests();
@@ -2619,7 +2620,7 @@ describe("useTerminalFileTransfer hook", () => {
           summarizeLocalFolder: vi.fn(async (): Promise<LocalFolderSummaryResult> => ({
             status: "ready",
             summary: {
-              rootName: "designs",
+              rootName: "Q3 designs",
               totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
               lowerBound: false,
               hidden: { fileCount: 0, folderCount: 0, totalBytes: 0, paths: [] },
@@ -2656,12 +2657,15 @@ describe("useTerminalFileTransfer hook", () => {
         return fileTransfer;
       }
 
+      /** Answers the folder question; a yes waits for the path to be typed. */
       async function answerFolderQuestion(yes: boolean) {
         await vi.waitFor(() => expect(currentUploadQuestion()?.question.kind).toBe("folder"));
         await act(async () => {
           currentUploadQuestion()!.answer(yes);
           await vi.waitFor(() =>
-            expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false)
+            yes
+              ? expect(terminalClient.write).toHaveBeenCalled()
+              : expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false)
           );
           await settle();
         });
@@ -2670,7 +2674,7 @@ describe("useTerminalFileTransfer hook", () => {
       it("types an agent the folder's host path as an @ token once it is sent", async () => {
         installFolderSends();
         renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/srv/proj" });
-        await dropFiles([fileAt("designs", "/Users/me/designs")]);
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
         expect(terminalClient.write).not.toHaveBeenCalled();
 
         await answerFolderQuestion(true);
@@ -2680,15 +2684,16 @@ describe("useTerminalFileTransfer hook", () => {
       it("types a plain shell the folder's shell-quoted host path", async () => {
         installFolderSends();
         renderFileTransferHook({});
-        await dropFiles([fileAt("designs", "/Users/me/designs")]);
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
         await answerFolderQuestion(true);
         expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(FOLDER_HOST_PATH)} `);
+        expect(lastWrittenPayload()).not.toBe(`${FOLDER_HOST_PATH} `);
       });
 
       it("types nothing when the question is closed", async () => {
         const fileTransfer = installFolderSends();
         renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/srv/proj" });
-        await dropFiles([fileAt("designs", "/Users/me/designs")]);
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
         await answerFolderQuestion(false);
         expect(fileTransfer.uploadLocalFolder).not.toHaveBeenCalled();
         expect(terminalClient.write).not.toHaveBeenCalled();
@@ -2697,7 +2702,7 @@ describe("useTerminalFileTransfer hook", () => {
       it("types nothing when its chip is cancelled while the question is open", async () => {
         const fileTransfer = installFolderSends();
         renderFileTransferHook({});
-        await dropFiles([fileAt("designs", "/Users/me/designs")]);
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
         await vi.waitFor(() => expect(currentUploadQuestion()?.question.kind).toBe("folder"));
         await act(async () => {
           getPendingUploads(terminalUploadSurface("term-1"))[0]!.cancel();

@@ -136,6 +136,8 @@ describe("folder send chips", () => {
           });
         })
     );
+    // Teardown cancels a send a failed assertion leaves running.
+    done.catch(() => {});
     advance(UPLOAD_PROGRESS_DELAY_MS);
     expect(screen.getByRole("status").textContent).toContain("uploading");
     const id = getPendingUploads(SURFACE)[0]!.id;

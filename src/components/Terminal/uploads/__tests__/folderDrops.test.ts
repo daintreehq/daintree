@@ -22,7 +22,8 @@ vi.mock("@/services/agentHandoff/agentDraft", () => ({
 
 const { useDragDrop } = await import("../../hooks/useDragDrop");
 const { setRemoteMaterializer } = await import("@/services/materialize");
-const { createRemoteMaterializer } = await import("@/services/remoteMaterializer");
+const { createRemoteMaterializer, createViewRemoteMaterializer } =
+  await import("@/services/remoteMaterializer");
 const { _resetPendingUploadsForTests, getPendingUploads, isComposerSendHeld } =
   await import("../pendingUploads");
 const {
@@ -79,8 +80,12 @@ function insertedText(dispatch: ReturnType<typeof vi.fn>): string {
   return (dispatch.mock.calls[0]?.[0]?.changes?.insert as string).trimEnd();
 }
 
-/** The remote materializer a view installs, over a fake bridge where a name without a dot is a folder. */
-function installRemote() {
+/**
+ * The remote materializer a view installs, over a fake bridge where a name
+ * without a dot is a folder. `view` installs the view's own adapter over the
+ * bridge rather than one wired here.
+ */
+function installRemote({ view = false }: { view?: boolean } = {}) {
   const listeners = new Set<(event: FileTransferEvent) => void>();
   let opIds = 0;
   let sendHeld: { resolve(result: UploadLocalFolderResult): void } | null = null;
@@ -114,21 +119,27 @@ function installRemote() {
     },
   };
   const reportFailure = vi.fn();
+  if (view) {
+    (window as unknown as { electron: Record<string, unknown> }).electron.fileTransfer =
+      fileTransfer;
+  }
   setRemoteMaterializer(
-    createRemoteMaterializer({
-      hostId: "studio-01",
-      hostLabel: () => "studio-01",
-      localLabel: "This Mac",
-      fileTransfer,
-      saveClipboardImage: vi.fn(),
-      confirmLargeUpload: vi.fn(async () => true),
-      confirmReplace: vi.fn(async () => true),
-      confirmFolder: (request, signal) =>
-        askUploadQuestion({ kind: "folder", ...request }, signal ? { signal } : {}),
-      addToProjectKey: "Option",
-      reportFailure,
-      mintOperationId: () => `op-${++opIds}`,
-    })
+    view
+      ? createViewRemoteMaterializer("studio-01")
+      : createRemoteMaterializer({
+          hostId: "studio-01",
+          hostLabel: () => "studio-01",
+          localLabel: "This Mac",
+          fileTransfer,
+          saveClipboardImage: vi.fn(),
+          confirmLargeUpload: vi.fn(async () => true),
+          confirmReplace: vi.fn(async () => true),
+          confirmFolder: (request, signal) =>
+            askUploadQuestion({ kind: "folder", ...request }, signal ? { signal } : {}),
+          addToProjectKey: "Option",
+          reportFailure,
+          mintOperationId: () => `op-${++opIds}`,
+        })
   );
   /** Holds the next folder send until the test lets it finish. */
   const holdSend = () => {
@@ -235,6 +246,11 @@ describe("a folder dropped on a remote window's composer", () => {
     const { fileTransfer, holdSend } = installRemote();
     const send = holdSend();
     const { result, dispatch } = renderBar();
+    // Still held as the folder goes in, after its chip is already gone.
+    let heldAtInsert: boolean | null = null;
+    dispatch.mockImplementation(() => {
+      heldAtInsert = isComposerSendHeld(SURFACE);
+    });
     const { landing } = await dropAndAwaitQuestion(result, ["designs"]);
     act(() => currentUploadQuestion()!.answer(true));
     await vi.waitFor(() => expect(fileTransfer.uploadLocalFolder).toHaveBeenCalled());
@@ -246,6 +262,7 @@ describe("a folder dropped on a remote window's composer", () => {
       await landing;
     });
     expect(insertedText(dispatch)).toBe(`@${FOLDER_HOST_PATH}`);
+    expect(heldAtInsert).toBe(true);
     expect(isComposerSendHeld(SURFACE)).toBe(false);
   });
 
@@ -275,6 +292,19 @@ describe("a folder dropped on a remote window's composer", () => {
     expect(fileTransfer.uploadLocalFolder).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
     expect(isComposerSendHeld(SURFACE)).toBe(false);
+  });
+
+  it("withdraws the question through the view's own materializer too", async () => {
+    const { fileTransfer } = installRemote({ view: true });
+    const { result, dispatch } = renderBar();
+    const { landing } = await dropAndAwaitQuestion(result, ["designs"]);
+    await act(async () => {
+      getPendingUploads(SURFACE)[0]!.cancel();
+      await landing;
+    });
+    expect(currentUploadQuestion()).toBeNull();
+    expect(fileTransfer.uploadLocalFolder).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("inserts nothing when its chip is cancelled mid-send", async () => {
