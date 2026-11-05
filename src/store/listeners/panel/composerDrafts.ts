@@ -43,7 +43,14 @@ export function setupComposerDraftListeners(): DisposableStore {
     sent = signature;
     if (retry !== null) clearTimeout(retry);
     retry = null;
-    decisionsClient.reportComposerDrafts(keys).catch(() => {
+    let request: Promise<void>;
+    try {
+      request = decisionsClient.reportComposerDrafts(keys);
+    } catch (error) {
+      // A call that throws before it is sent fails like one that was refused.
+      request = Promise.reject(error);
+    }
+    request.catch(() => {
       if (sent !== signature || stopped) return;
       sent = null;
       retry = setTimeout(() => {

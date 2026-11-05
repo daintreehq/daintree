@@ -73,6 +73,14 @@ describe("composer draft reports (#16282)", () => {
     ).toEqual(["isolated-composer:t2"]);
   });
 
+  it("never lets a client that throws break the listeners' setup", async () => {
+    reportComposerDrafts.mockImplementationOnce(() => {
+      throw new TypeError("no decisions namespace");
+    });
+    expect(() => start()).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
   describe("on a timer", () => {
     beforeEach(() => {
       vi.useFakeTimers();
