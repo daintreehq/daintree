@@ -3,10 +3,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { type ProcessEntry, type CopyTreeProgressCallback } from "./types.js";
 import type { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
 import type { CopyTreeOptions, CopyTreeResult, FileTreeNode } from "../../../shared/types/ipc.js";
-import type {
-  CopyTreeOperationOwner,
-  CopyTreeOwnerPredicate,
-} from "../copyTreeOperationOwner.js";
+import type { CopyTreeOperationOwner, CopyTreeOwnerPredicate } from "../copyTreeOperationOwner.js";
 
 export interface WorkspaceCopyTreeClientDeps {
   resolveHostForPath: (targetPath: string) => WorkspaceHostProcess | undefined;

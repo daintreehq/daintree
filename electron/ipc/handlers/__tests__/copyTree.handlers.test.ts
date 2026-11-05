@@ -2922,7 +2922,12 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
     return getIpcDispatcher().invokeForEndpoint(
       {
         endpoint,
-        client: { clientId: endpoint.clientId, clientName: "b", platform: "darwin", kind: "remote" },
+        client: {
+          clientId: endpoint.clientId,
+          clientName: "b",
+          platform: "darwin",
+          kind: "remote",
+        },
       },
       CHANNELS.COPYTREE_CANCEL,
       [payload]
@@ -3108,7 +3113,12 @@ describe("an id-less cancel stays within the caller's project (#16275)", () => {
       await getIpcDispatcher().invokeForEndpoint(
         {
           endpoint: watcher,
-          client: { clientId: watcher.clientId, clientName: "b", platform: "darwin", kind: "remote" },
+          client: {
+            clientId: watcher.clientId,
+            clientName: "b",
+            platform: "darwin",
+            kind: "remote",
+          },
         },
         CHANNELS.COPYTREE_GENERATE,
         [{ worktreeId: worktreeOf(PROJECT_A).id }]

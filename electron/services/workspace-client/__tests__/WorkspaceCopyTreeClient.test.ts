@@ -133,9 +133,7 @@ describe("WorkspaceCopyTreeClient", () => {
       void client.generateContext("/project/b", {}, vi.fn(), undefined, OWNER_B);
       void client.getContextFileTree("/project/a", undefined, undefined, undefined, OWNER_A);
       void client.generateContext("/project/a", {}, vi.fn());
-      const [aGenerate, bGenerate, aListing, unowned] = [
-        ...client.activeCopyTreeOperations.keys(),
-      ];
+      const [aGenerate, bGenerate, aListing, unowned] = [...client.activeCopyTreeOperations.keys()];
       return { aGenerate, bGenerate, aListing, unowned };
     }
 
