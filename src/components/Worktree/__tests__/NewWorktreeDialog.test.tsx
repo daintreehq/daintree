@@ -1229,6 +1229,14 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
     }
   );
 
+  it("records an issue create's opening, so its Retry reads the same setup", async () => {
+    renderDialog({ initialIssue: RETRY_ISSUE });
+    await advanceTimersGradually(800);
+    await submitAndSettle();
+
+    expect(resubmittedDraft()).toMatchObject({ issue: RETRY_ISSUE, openedForIssue: true });
+  });
+
   it("restores each Retry on a dialog kept mounted, then opens clean", async () => {
     const onClose = vi.fn();
     const dialog = (isOpen: boolean, restoreDraft: PendingCreationDraft | null) => (
