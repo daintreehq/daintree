@@ -89,9 +89,11 @@ export function useBranchValidation({
     const keepRestoredPath = restored !== null && restored.branch === trimmedInput;
     if (keepRestoredPath) setWorktreePath(restored.path);
     // Only a suggestion that lands writes the path, so an effect run cancelled
-    // by the next keystroke can't retire the restored one.
-    const applySuggestedPath = (path: string, autoResolved: boolean) => {
-      if (keepRestoredPath) {
+    // by the next keystroke can't retire the restored one. A restored branch
+    // that has since been taken will be submitted under another name, so its
+    // path goes with the old one.
+    const applySuggestedPath = (path: string, autoResolved: boolean, branchTaken = false) => {
+      if (keepRestoredPath && !branchTaken) {
         setPathWasAutoResolved(false);
         return;
       }
@@ -153,6 +155,8 @@ export function useBranchValidation({
 
           const branchResult = results[0];
           const pathResult = results[1];
+          const branchTaken =
+            branchResult.status === "fulfilled" && branchResult.value !== fullName;
 
           if (branchResult.status === "fulfilled") {
             const availableBranch = branchResult.value;
@@ -172,7 +176,7 @@ export function useBranchValidation({
             const pathBaseName = suggestedPath.split(/[/\\]/).pop() || "";
             const branchSlug = fullName.replace(/[^a-zA-Z0-9-_]/g, "-");
             const pathResolved = pathBaseName !== branchSlug && /-\d+$/.test(pathBaseName);
-            applySuggestedPath(suggestedPath, pathResolved);
+            applySuggestedPath(suggestedPath, pathResolved, branchTaken);
           } else {
             logError("Failed to get default path", pathResult.reason);
             const sanitizedBranch = fullName.replace(/[^a-zA-Z0-9-_]/g, "-");
@@ -180,7 +184,8 @@ export function useBranchValidation({
             const repoName = rootPath.split(/[/\\]/).pop() || "repo";
             applySuggestedPath(
               `${rootPath}${separator}..${separator}${repoName}-worktrees${separator}${sanitizedBranch}`,
-              false
+              false,
+              branchTaken
             );
           }
         });

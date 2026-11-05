@@ -176,8 +176,9 @@ export function NewWorktreeDialog({
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
   // Issue and bare creates each remember their own setup. The mode is how the
-  // dialog was opened, not whether an issue gets linked inside it.
-  const isIssueCreate = Boolean(initialIssue);
+  // dialog was opened, not whether an issue gets linked inside it — for a
+  // Retry, how the failed request's dialog was opened.
+  const isIssueCreate = restoreDraft ? restoreDraft.openedForIssue === true : Boolean(initialIssue);
   const lastSelectedWorktreeRecipeIdByProject = usePreferencesStore((s) =>
     isIssueCreate
       ? s.lastSelectedIssueWorktreeRecipeIdByProject
@@ -847,6 +848,7 @@ export function NewWorktreeDialog({
       selectionStore.addPendingCreation(placeholderPath, {
         branch: fullBranchName,
         issue: snapIssue,
+        openedForIssue: isIssueCreate,
         pr: snapInitialPR ?? null,
         baseBranch: snapBaseBranch,
         branchMode: snapBranchMode,

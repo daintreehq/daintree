@@ -1014,6 +1014,8 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
     cleanup();
     vi.clearAllMocks();
     projectSettingsFixture.value = null;
+    firstAgentFixtures.lastRecipeByProject = {};
+    firstAgentFixtures.lastIssueRecipeByProject = {};
   });
 
   async function submitAndSettle() {
@@ -1041,6 +1043,8 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
       path: "/custom/place/retry-me",
       branch: "feature/retry-me",
       issue: RETRY_ISSUE,
+      // A bare create that linked an issue inside the dialog.
+      openedForIssue: false,
       pr: null,
       baseBranch: "origin/develop",
       branchMode: "new",
@@ -1080,6 +1084,8 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
     const { unmount } = renderDialog();
     await advanceTimersGradually(500);
     unmount();
+    // The refresh never lands, so only the cached seed can supply the base.
+    mockListBranches.mockReturnValue(new Promise(() => {}));
     projectSettingsFixture.value = {
       resourceEnvironments: { staging: {} },
       defaultWorktreeMode: "staging",
@@ -1110,6 +1116,7 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
       path: "/test/root-worktrees/feature/existing-work",
       branch: "feature/existing-work",
       issue: null,
+      openedForIssue: false,
       pr: null,
       baseBranch: "main",
       branchMode: "existing",
@@ -1144,6 +1151,7 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
       path: "/test/root-worktrees/develop",
       branch: "develop",
       issue: null,
+      openedForIssue: false,
       pr: RETRY_PR,
       // What the PR's head resolved to when it was first submitted.
       baseBranch: "origin/develop",
@@ -1168,6 +1176,117 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
       sourcePrLinkedIssueNumber: 9,
     });
     expect(resubmittedDraft()).toEqual(draft);
+  });
+
+  it("resolves a PR checkout's head again rather than trusting the saved base", async () => {
+    renderDialog({
+      initialPR: RETRY_PR,
+      restoreDraft: retryDraft({
+        path: "/test/root-worktrees/develop",
+        branch: "develop",
+        pr: RETRY_PR,
+        baseBranch: "origin/stale",
+        fromRemote: false,
+      }),
+    });
+    await advanceTimersGradually(800);
+    await submitAndSettle();
+
+    expect(createOptions()).toMatchObject({ baseBranch: "origin/develop", sourcePrNumber: 42 });
+  });
+
+  it.each([
+    ["No recipe", null],
+    ["a cloned layout", CLONE_LAYOUT_ID],
+    ["a listed recipe", "recipe-2"],
+  ])("hands the recipe picker a Retry's %s", async (_label, recipeId) => {
+    renderDialog({ restoreDraft: retryDraft({ recipeId }) });
+    await advanceTimersGradually(100);
+    expect(recipePickerCalls.last).toMatchObject({ restoredRecipeId: recipeId });
+  });
+
+  it("hands the recipe picker no restored recipe outside a Retry", async () => {
+    renderDialog({ initialRecipeId: "recipe-2" });
+    await advanceTimersGradually(100);
+    expect(recipePickerCalls.last).toMatchObject({ restoredRecipeId: undefined });
+  });
+
+  it.each([
+    ["a bare create's", false, "bare-recipe"],
+    ["an issue create's", true, "issue-recipe"],
+  ])(
+    "reads %s remembered setup, whatever issue it linked",
+    async (_label, openedForIssue, expected) => {
+      firstAgentFixtures.lastRecipeByProject = { "test-project": "bare-recipe" };
+      firstAgentFixtures.lastIssueRecipeByProject = { "test-project": "issue-recipe" };
+      // The sidebar's Retry opens with the linked issue, if any, as the dialog's issue.
+      renderDialog({
+        initialIssue: openedForIssue ? null : RETRY_ISSUE,
+        restoreDraft: retryDraft({ issue: openedForIssue ? null : RETRY_ISSUE, openedForIssue }),
+      });
+      await advanceTimersGradually(100);
+      expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBe(expected);
+    }
+  );
+
+  it("restores each Retry on a dialog kept mounted, then opens clean", async () => {
+    const onClose = vi.fn();
+    const dialog = (isOpen: boolean, restoreDraft: PendingCreationDraft | null) => (
+      <NewWorktreeDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        rootPath="/test/root"
+        restoreDraft={restoreDraft}
+      />
+    );
+    const pathValue = () => (screen.getByTestId("worktree-path-input") as HTMLInputElement).value;
+    const { rerender } = render(
+      dialog(
+        true,
+        retryDraft({
+          path: "/custom/retry-a",
+          branch: "feature/retry-a",
+          branchMode: "new",
+          agentId: "claude",
+          prompt: "first draft",
+        })
+      )
+    );
+    await advanceTimersGradually(800);
+    expect((screen.getByTestId("branch-name-input") as HTMLInputElement).value).toBe(
+      "feature/retry-a"
+    );
+    expect(pathValue()).toBe("/custom/retry-a");
+
+    rerender(dialog(false, null));
+    rerender(
+      dialog(
+        true,
+        retryDraft({
+          path: "/custom/old-fix",
+          branch: "bugfix/old-fix",
+          branchMode: "existing",
+          agentId: null,
+          prompt: "",
+        })
+      )
+    );
+    await advanceTimersGradually(800);
+    expect(
+      screen.getByRole("radio", { name: /existing branch/i }).getAttribute("aria-checked")
+    ).toBe("true");
+    expect(screen.getByTestId("existing-branch-picker").textContent).toContain("bugfix/old-fix");
+    expect(pathValue()).toBe("/custom/old-fix");
+    expect(screen.queryByTestId("first-agent-prompt")).toBeNull();
+
+    rerender(dialog(false, null));
+    rerender(dialog(true, null));
+    await advanceTimersGradually(800);
+    expect(
+      screen.getByRole("radio", { name: /existing branch/i }).getAttribute("aria-checked")
+    ).toBe("false");
+    expect((screen.getByTestId("branch-name-input") as HTMLInputElement).value).toBe("");
+    expect(pathValue()).toBe("");
   });
 
   it("gives a Retry whose branch is renamed a path for the new name", async () => {

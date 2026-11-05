@@ -242,6 +242,8 @@ describe("useBranchValidation — a Retry's path", () => {
   }
 
   it("holds the submitted path over the suggestion for its own branch", async () => {
+    // An auto-incremented suggestion, so its "resolved" hint has to be dropped too.
+    mockGetDefaultPath.mockResolvedValue("/worktrees/feature-terrain-2");
     const { result } = renderRetry("feature/terrain");
     await settle();
 
@@ -258,13 +260,36 @@ describe("useBranchValidation — a Retry's path", () => {
     expect(result.current.worktreePath).toBe("/custom/terrain");
   });
 
-  it("survives a stale first run before the field shows the restored branch", async () => {
-    // A dialog kept mounted reopens on the previous opening's input for one render.
-    const { result, rerender } = renderRetry("feature/");
-    rerender({ branchInput: "feature/terrain" });
+  // A dialog kept mounted reopens on the previous opening's input for one
+  // render, whether that input was a valid name or not.
+  it.each(["feature/", "feature/old"])(
+    "survives a stale first run on %s before the field shows the restored branch",
+    async (stale) => {
+      const { result, rerender } = renderRetry(stale);
+      rerender({ branchInput: "feature/terrain" });
+      await settle();
+
+      expect(result.current.worktreePath).toBe("/custom/terrain");
+    }
+  );
+
+  it("gives up the path when the restored branch has since been taken", async () => {
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name === "feature/terrain" ? "feature/terrain-2" : name)
+    );
+    const { result, rerender } = renderRetry("feature/terrain");
     await settle();
 
-    expect(result.current.worktreePath).toBe("/custom/terrain");
+    // The path an ordinary opening would offer beside the auto-incremented name.
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
+    let accepted: string | null = null;
+    act(() => {
+      accepted = result.current.consumeBranchResolution("feature/terrain");
+    });
+    expect(accepted).toBe("feature/terrain-2");
+    rerender({ branchInput: "feature/terrain-2" });
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
   });
 
   it("follows a renamed branch, and doesn't come back for the old name", async () => {

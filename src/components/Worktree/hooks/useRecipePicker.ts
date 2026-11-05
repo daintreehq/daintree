@@ -126,7 +126,9 @@ export function useRecipePicker({
     if (!selectedRecipeId) return;
     if (selectedRecipeId === CLONE_LAYOUT_ID) return;
     if (startingLayoutRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
-    setSelectedRecipeId(null);
+    // The same list change can land a restored or initial pick in the
+    // auto-select effect first; that pick is not the stale one.
+    setSelectedRecipeId((current) => (current === selectedRecipeId ? null : current));
     if (projectId && selectedRecipeId === lastSelectedWorktreeRecipeId) {
       setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
     }

@@ -142,7 +142,10 @@ describe("WorktreeCardPlaceholder", () => {
     describe("when the branch is already open in another worktree", () => {
       const HOLDER = "/repo-worktrees/stream-upload-retry-elsewhere";
       beforeEach(() => {
-        viewWorktrees.current = new Map([["wt-holder", { id: "wt-holder", path: HOLDER }]]);
+        viewWorktrees.current = new Map([
+          ["wt-other", { id: "wt-other", path: "/repo-worktrees/unrelated" }],
+          ["wt-holder", { id: "wt-holder", path: HOLDER }],
+        ]);
         mockSelectWorktree.mockClear();
       });
 
@@ -207,8 +210,12 @@ describe("WorktreeCardPlaceholder", () => {
       fireEvent.click(toggle);
 
       expect(toggle.getAttribute("aria-expanded")).toBe("true");
-      const output = document.getElementById(toggle.getAttribute("aria-controls")!);
-      expect(output?.textContent).toBe(raw);
+      const outputId = toggle.getAttribute("aria-controls")!;
+      expect(document.getElementById(outputId)?.textContent).toBe(raw);
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(document.getElementById(outputId)).toBeNull();
     });
 
     it("shows an unrecognised failure as git wrote it, with nothing to expand", () => {

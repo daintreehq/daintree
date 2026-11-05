@@ -702,11 +702,13 @@ describe("worktreeStore", () => {
       const store = useWorktreeSelectionStore.getState();
       store.addPendingCreation("/abs/path", request);
       store.failPendingCreation("/abs/path", "fatal: boom");
+      store.addPendingCreation("/abs/other", { branch: "feature/other" });
 
       useWorktreeSelectionStore.getState().retryPendingCreation("/abs/path");
 
       const state = useWorktreeSelectionStore.getState();
       expect(state.pendingCreations.has("/abs/path")).toBe(false);
+      expect(state.pendingCreations.has("/abs/other")).toBe(true);
       expect(state.createDialog.isOpen).toBe(true);
       expect(state.createDialog.initialIssue).toBe(issue);
       expect(state.createDialog.initialPR).toBe(pr);
@@ -714,26 +716,41 @@ describe("worktreeStore", () => {
       expect(state.createDialog.restoreDraft).toEqual({ path: "/abs/path", ...request });
     });
 
-    it("retryPendingCreation leaves an unknown row and a closed dialog alone", () => {
+    it("retryPendingCreation leaves other rows and a closed dialog alone for an unknown path", () => {
+      useWorktreeSelectionStore
+        .getState()
+        .addPendingCreation("/abs/path", { branch: "feature/foo" });
       useWorktreeSelectionStore.getState().retryPendingCreation("/unknown");
-      expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(false);
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.createDialog.isOpen).toBe(false);
+      expect(state.pendingCreations.has("/abs/path")).toBe(true);
     });
 
-    it("an ordinary opening after a Retry starts without its draft", () => {
+    // Straight from the Retry, with no close between, so the opening itself has
+    // to drop the draft.
+    it.each([
+      ["an ordinary opening", () => useWorktreeSelectionStore.getState().openCreateDialog(null)],
+      [
+        "a PR opening",
+        () => useWorktreeSelectionStore.getState().openCreateDialogForPR(makePR({ number: 3 })),
+      ],
+    ])("%s after a Retry starts without its draft", (_label, open) => {
       const store = useWorktreeSelectionStore.getState();
-      store.addPendingCreation("/abs/path", { branch: "feature/foo", issue: makeIssue() });
+      store.addPendingCreation("/abs/path", {
+        branch: "feature/foo",
+        issue: makeIssue(),
+        pr: makePR({ number: 7 }),
+      });
       store.failPendingCreation("/abs/path", "boom");
       useWorktreeSelectionStore.getState().retryPendingCreation("/abs/path");
-      useWorktreeSelectionStore.getState().closeCreateDialog();
+      expect(useWorktreeSelectionStore.getState().createDialog.restoreDraft).not.toBeNull();
 
-      useWorktreeSelectionStore.getState().openCreateDialog(null);
-      let dialog = useWorktreeSelectionStore.getState().createDialog;
+      open();
+
+      const dialog = useWorktreeSelectionStore.getState().createDialog;
       expect(dialog.restoreDraft).toBeNull();
       expect(dialog.initialIssue).toBeNull();
-
-      useWorktreeSelectionStore.getState().openCreateDialogForPR(makePR());
-      dialog = useWorktreeSelectionStore.getState().createDialog;
-      expect(dialog.restoreDraft).toBeNull();
+      expect(dialog.initialPR?.number).not.toBe(7);
     });
 
     it("resolvePendingCreation removes the entry", () => {

@@ -58,6 +58,11 @@ export interface PendingCreationDraft {
   path: string;
   branch: string;
   issue?: Issue | null;
+  /**
+   * Whether the original dialog was opened for an issue, which picks the
+   * remembered setup it reads and writes — not whether an issue got linked.
+   */
+  openedForIssue?: boolean;
   pr?: PR | null;
   baseBranch?: string;
   branchMode?: "new" | "existing";
