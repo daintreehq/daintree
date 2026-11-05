@@ -449,6 +449,8 @@ describe("staging and publishing a tree", () => {
     const publishing = inbox.publishTree(staging, "project");
     await vi.waitFor(() => expect(rename).toHaveBeenCalled());
     const cleaning = inbox.cleanup();
+    // Time for a pass that didn't wait its turn to finish and sweep the empty entry folder.
+    await Promise.race([cleaning, new Promise((resolve) => setTimeout(resolve, 100))]);
     release();
     const published = await publishing;
     expect(await fs.readFile(path.join(published, "a.txt"), "utf8")).toBe("a");

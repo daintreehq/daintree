@@ -301,7 +301,6 @@ export class HostInbox {
    * otherwise sweep a folder made a moment ago for the file or tree going in.
    */
   private readonly mutations = new SerialQueue();
-  private readonly admissions = new SerialQueue();
   private readonly activeParts = new Set<string>();
   /** Each live staging handle and the `.stage-` folder it owns. */
   private readonly stagings = new Map<InboxStaging, string>();
@@ -535,31 +534,31 @@ export class HostInbox {
   /**
    * Hold `bytes` of the inbox's disk for a tree about to be built, or null when
    * the free space, less every reservation still held and a margin, can't
-   * cover it. Reservations are granted one at a time, so two that only fit
-   * one at a time are never both granted. A disk whose free space can't be
-   * read admits, as single-file uploads do. The space written into stays
-   * reserved until release, so the check errs toward refusing.
+   * cover it, so two that only fit one at a time are never both granted. A
+   * disk whose free space can't be read admits, as single-file uploads do.
+   * The space written into stays reserved until release, so the check errs
+   * toward refusing.
    */
   async reserve(bytes: number): Promise<InboxReservation | null> {
     if (!Number.isSafeInteger(bytes) || bytes < 0) {
       throw new RangeError("A reservation is a whole, non-negative number of bytes");
     }
     await this.ensure();
-    return this.admissions.run(async () => {
-      const free = await (this.options.freeBytes ?? defaultFreeBytes)(this.root);
-      const margin = this.options.freeSpaceMarginBytes ?? DEFAULT_FREE_SPACE_MARGIN_BYTES;
-      let held = 0;
-      for (const reservation of this.reservations) held += reservation.bytes;
-      if (free !== null && free - held < bytes + margin) return null;
-      const reservation: InboxReservation = Object.freeze({
-        bytes,
-        release: () => {
-          this.reservations.delete(reservation);
-        },
-      });
-      this.reservations.add(reservation);
-      return reservation;
+    const free = await (this.options.freeBytes ?? defaultFreeBytes)(this.root);
+    // Checked and held in one turn, after the last await: concurrent
+    // reservations each see every one granted before them.
+    const margin = this.options.freeSpaceMarginBytes ?? DEFAULT_FREE_SPACE_MARGIN_BYTES;
+    let held = 0;
+    for (const reservation of this.reservations) held += reservation.bytes;
+    if (free !== null && free - held < bytes + margin) return null;
+    const reservation: InboxReservation = Object.freeze({
+      bytes,
+      release: () => {
+        this.reservations.delete(reservation);
+      },
     });
+    this.reservations.add(reservation);
+    return reservation;
   }
 
   /** Hard-link the part file to `target` (which must not exist), then drop the part name. */
