@@ -8,6 +8,20 @@ import type { PendingCreation } from "@/store/worktreeStore";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
 import { WorktreeCardPlaceholder } from "../WorktreeCardPlaceholder";
 
+// The row maps its error with the real `mapCreationError`; only the stores its
+// "Open worktree" recovery reads are stood in for.
+const { viewWorktrees, mockSelectWorktree } = vi.hoisted(() => ({
+  viewWorktrees: { current: new Map<string, { id: string; path: string }>() },
+  mockSelectWorktree: vi.fn(),
+}));
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({ getState: () => ({ worktrees: viewWorktrees.current }) }),
+}));
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: { getState: () => ({ selectWorktree: mockSelectWorktree }) },
+}));
+vi.mock("@/hooks/useHostPlatform", () => ({ isHostWindows: () => false }));
+
 const NOW = 1_700_000_000_000;
 
 function pending(overrides: Partial<PendingCreation> = {}): PendingCreation {
@@ -123,6 +137,98 @@ describe("WorktreeCardPlaceholder", () => {
       expect(onRetry).toHaveBeenCalledWith(failed);
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
       expect(onDismiss).toHaveBeenCalledWith(failed.path);
+    });
+
+    describe("when the branch is already open in another worktree", () => {
+      const HOLDER = "/repo-worktrees/stream-upload-retry-elsewhere";
+      beforeEach(() => {
+        viewWorktrees.current = new Map([
+          ["wt-other", { id: "wt-other", path: "/repo-worktrees/unrelated" }],
+          ["wt-holder", { id: "wt-holder", path: HOLDER }],
+        ]);
+        mockSelectWorktree.mockClear();
+      });
+
+      // Git 2.42 reworded the first into the second; both reach users.
+      it.each([
+        `fatal: 'feature/stream-upload-retry' is already checked out at '${HOLDER}'`,
+        `fatal: 'feature/stream-upload-retry' is already used by worktree at '${HOLDER}'`,
+      ])("says so and opens that worktree, taking the row with it: %s", (raw) => {
+        const onDismiss = vi.fn();
+        const row = pending({ status: "error", error: raw });
+        renderRow(
+          <WorktreeCardPlaceholder pendingCreation={row} onRetry={vi.fn()} onDismiss={onDismiss} />
+        );
+        const alert = screen.getByRole("alert");
+        expect(alert.textContent).toContain("This branch is already open in another worktree.");
+        expect(alert.textContent).not.toContain(HOLDER);
+
+        fireEvent.click(screen.getByRole("button", { name: "Open worktree" }));
+
+        expect(mockSelectWorktree).toHaveBeenCalledWith("wt-holder");
+        expect(onDismiss).toHaveBeenCalledWith(row.path);
+      });
+
+      it("keeps the row when the worktree holding the branch isn't in the list", () => {
+        viewWorktrees.current = new Map();
+        const onDismiss = vi.fn();
+        renderRow(
+          <WorktreeCardPlaceholder
+            pendingCreation={pending({
+              status: "error",
+              error: `fatal: 'feature/stream-upload-retry' is already checked out at '${HOLDER}'`,
+            })}
+            onRetry={vi.fn()}
+            onDismiss={onDismiss}
+          />
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Open worktree" }));
+
+        expect(mockSelectWorktree).not.toHaveBeenCalled();
+        expect(onDismiss).not.toHaveBeenCalled();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      });
+    });
+
+    it("shows a classified failure's recovery hint, with git's own text a click away", () => {
+      const raw = "fatal: Authentication failed for 'https://github.com/acme/app.git/'";
+      renderRow(
+        <WorktreeCardPlaceholder
+          pendingCreation={pending({ status: "error", error: raw })}
+          onRetry={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      );
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain("Check your Git credentials");
+      expect(alert.textContent).not.toContain("Authentication failed");
+      expect(screen.queryByRole("button", { name: "Open worktree" })).toBeNull();
+
+      const toggle = screen.getByRole("button", { name: "Git output" });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(toggle);
+
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      const outputId = toggle.getAttribute("aria-controls")!;
+      expect(document.getElementById(outputId)?.textContent).toBe(raw);
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(document.getElementById(outputId)).toBeNull();
+    });
+
+    it("shows an unrecognised failure as git wrote it, with nothing to expand", () => {
+      const raw = "fatal: something nobody has seen before";
+      renderRow(
+        <WorktreeCardPlaceholder
+          pendingCreation={pending({ status: "error", error: raw })}
+          onRetry={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      );
+      expect(screen.getByRole("alert").textContent).toContain(raw);
+      expect(screen.queryByRole("button", { name: "Git output" })).toBeNull();
     });
 
     it("stays neutral: one red glyph, no tinted block and no red body copy", () => {

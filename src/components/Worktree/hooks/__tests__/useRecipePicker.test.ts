@@ -77,6 +77,50 @@ describe("useRecipePicker", () => {
     expect(result.current.selectedRecipeId).toBe("recipe-2");
   });
 
+  describe("a Retry's recipe", () => {
+    const recipes = [makeRecipe("recipe-1"), makeRecipe("recipe-2")];
+    const remembered = {
+      ...defaultArgs,
+      startingLayoutRecipes: recipes,
+      defaultRecipeId: "recipe-1",
+      lastSelectedWorktreeRecipeId: "recipe-1",
+      initialRecipeId: "recipe-1",
+    };
+
+    it.each([
+      ["No recipe", null],
+      ["a cloned layout", CLONE_LAYOUT_ID],
+      ["a listed recipe", "recipe-2"],
+    ])("keeps %s over the initial, remembered and default recipe", (_label, restoredRecipeId) => {
+      const { result } = renderHook(() => useRecipePicker({ ...remembered, restoredRecipeId }));
+      expect(result.current.selectedRecipeId).toBe(restoredRecipeId);
+    });
+
+    it("waits for its recipe to load rather than settling on the remembered one", () => {
+      const { result, rerender } = renderHook(
+        (props: { startingLayoutRecipes: TerminalRecipe[] }) =>
+          useRecipePicker({ ...remembered, ...props, restoredRecipeId: "recipe-2" }),
+        { initialProps: { startingLayoutRecipes: [makeRecipe("recipe-1")] } }
+      );
+      expect(result.current.selectedRecipeId).toBe("recipe-1");
+
+      rerender({ startingLayoutRecipes: recipes });
+      expect(result.current.selectedRecipeId).toBe("recipe-2");
+    });
+
+    it("lands on its recipe when the same refresh drops the one it was waiting on", () => {
+      const { result, rerender } = renderHook(
+        (props: { startingLayoutRecipes: TerminalRecipe[] }) =>
+          useRecipePicker({ ...remembered, ...props, restoredRecipeId: "recipe-2" }),
+        { initialProps: { startingLayoutRecipes: [makeRecipe("recipe-1")] } }
+      );
+      expect(result.current.selectedRecipeId).toBe("recipe-1");
+
+      rerender({ startingLayoutRecipes: [makeRecipe("recipe-2")] });
+      expect(result.current.selectedRecipeId).toBe("recipe-2");
+    });
+  });
+
   it("does not invalidate CLONE_LAYOUT_ID as stale", () => {
     const setter = vi.fn();
     const { result, rerender } = renderHook((props) => useRecipePicker(props), {

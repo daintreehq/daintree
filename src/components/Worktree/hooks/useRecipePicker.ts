@@ -43,6 +43,7 @@ export function useRecipePicker({
   lastSelectedWorktreeRecipeId,
   projectId,
   initialRecipeId,
+  restoredRecipeId,
   setLastSelectedWorktreeRecipeIdByProject,
 }: {
   isOpen: boolean;
@@ -51,6 +52,12 @@ export function useRecipePicker({
   lastSelectedWorktreeRecipeId: string | null | undefined;
   projectId: string;
   initialRecipeId?: string | null;
+  /**
+   * A Retry's recipe, `null` for "No recipe". Undefined when the opening isn't
+   * a Retry. Unlike `initialRecipeId`, an explicit none or a cloned layout
+   * counts, since it is what the failed request asked for.
+   */
+  restoredRecipeId?: string | null;
   setLastSelectedWorktreeRecipeIdByProject: (
     projectId: string,
     recipeId: string | null | undefined
@@ -66,13 +73,20 @@ export function useRecipePicker({
     recipeSelectionTouchedRef.current = false;
   }, [isOpen]);
 
-  // Auto-select recipe: initialRecipeId > lastSelected > default > clone layout
+  // Auto-select recipe: restored > initialRecipeId > lastSelected > default > clone layout
   useEffect(() => {
     if (!isOpen) return;
     if (!projectId) return;
     if (recipeSelectionTouchedRef.current) return;
 
-    if (initialRecipeId && startingLayoutRecipes.some((r) => r.id === initialRecipeId)) {
+    if (
+      restoredRecipeId !== undefined &&
+      (restoredRecipeId === null ||
+        restoredRecipeId === CLONE_LAYOUT_ID ||
+        startingLayoutRecipes.some((r) => r.id === restoredRecipeId))
+    ) {
+      setSelectedRecipeId(restoredRecipeId);
+    } else if (initialRecipeId && startingLayoutRecipes.some((r) => r.id === initialRecipeId)) {
       setSelectedRecipeId(initialRecipeId);
     } else if (lastSelectedWorktreeRecipeId !== undefined) {
       if (lastSelectedWorktreeRecipeId === null) {
@@ -101,6 +115,7 @@ export function useRecipePicker({
     defaultRecipeId,
     projectId,
     initialRecipeId,
+    restoredRecipeId,
     setLastSelectedWorktreeRecipeIdByProject,
   ]);
 
@@ -111,7 +126,9 @@ export function useRecipePicker({
     if (!selectedRecipeId) return;
     if (selectedRecipeId === CLONE_LAYOUT_ID) return;
     if (startingLayoutRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
-    setSelectedRecipeId(null);
+    // The same list change can land a restored or initial pick in the
+    // auto-select effect first; that pick is not the stale one.
+    setSelectedRecipeId((current) => (current === selectedRecipeId ? null : current));
     if (projectId && selectedRecipeId === lastSelectedWorktreeRecipeId) {
       setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
     }

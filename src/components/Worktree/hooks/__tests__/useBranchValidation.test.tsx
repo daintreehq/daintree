@@ -214,3 +214,104 @@ describe("useBranchValidation — deferred branch resolution", () => {
     expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
   });
 });
+
+describe("useBranchValidation — a Retry's path", () => {
+  const RESTORED = { restoredBranch: "feature/terrain", restoredPath: "/custom/terrain" };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/worktrees/${branch}`)
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function renderRetry(branchInput: string, extra: { skipAvailabilityCheck?: boolean } = {}) {
+    return renderHook(
+      (props: { branchInput: string; overrideBranchName?: string }) =>
+        useBranchValidation({ rootPath: ROOT, isOpen: true, ...RESTORED, ...extra, ...props }),
+      { initialProps: { branchInput } as { branchInput: string; overrideBranchName?: string } }
+    );
+  }
+
+  it("holds the submitted path over the suggestion for its own branch", async () => {
+    // An auto-incremented suggestion, so its "resolved" hint has to be dropped too.
+    mockGetDefaultPath.mockResolvedValue("/worktrees/feature-terrain-2");
+    const { result } = renderRetry("feature/terrain");
+    await settle();
+
+    expect(mockGetDefaultPath).toHaveBeenCalledWith(ROOT, "feature/terrain");
+    expect(result.current.worktreePath).toBe("/custom/terrain");
+    expect(result.current.pathWasAutoResolved).toBe(false);
+  });
+
+  it("holds it when the path lookup fails as well", async () => {
+    mockGetDefaultPath.mockRejectedValue(new Error("no path"));
+    const { result } = renderRetry("feature/terrain");
+    await settle();
+
+    expect(result.current.worktreePath).toBe("/custom/terrain");
+  });
+
+  // A dialog kept mounted reopens on the previous opening's input for one
+  // render, whether that input was a valid name or not.
+  it.each(["feature/", "feature/old"])(
+    "survives a stale first run on %s before the field shows the restored branch",
+    async (stale) => {
+      const { result, rerender } = renderRetry(stale);
+      rerender({ branchInput: "feature/terrain" });
+      await settle();
+
+      expect(result.current.worktreePath).toBe("/custom/terrain");
+    }
+  );
+
+  it("gives up the path when the restored branch has since been taken", async () => {
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name === "feature/terrain" ? "feature/terrain-2" : name)
+    );
+    const { result, rerender } = renderRetry("feature/terrain");
+    await settle();
+
+    // The path an ordinary opening would offer beside the auto-incremented name.
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
+    let accepted: string | null = null;
+    act(() => {
+      accepted = result.current.consumeBranchResolution("feature/terrain");
+    });
+    expect(accepted).toBe("feature/terrain-2");
+    rerender({ branchInput: "feature/terrain-2" });
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
+  });
+
+  it("follows a renamed branch, and doesn't come back for the old name", async () => {
+    const { result, rerender } = renderRetry("feature/terrain");
+    await settle();
+
+    rerender({ branchInput: "feature/canyon" });
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/canyon");
+
+    rerender({ branchInput: "feature/terrain" });
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
+  });
+
+  it("holds an existing-branch Retry's path the same way", async () => {
+    // The existing picker names the branch; the new-branch input stays empty.
+    const { result, rerender } = renderRetry("", { skipAvailabilityCheck: true });
+    rerender({ branchInput: "", overrideBranchName: "feature/terrain" });
+    await settle();
+
+    expect(mockGetDefaultPath).toHaveBeenCalledWith(ROOT, "feature/terrain");
+    expect(result.current.worktreePath).toBe("/custom/terrain");
+  });
+});

@@ -112,13 +112,24 @@ vi.mock("@/components/Worktree/NewWorktreeDialog", () => ({
     rootPath,
     onClose,
     onWorktreeCreated,
+    initialPR,
+    restoreDraft,
   }: {
     isOpen: boolean;
     rootPath: string;
     onClose: () => void;
     onWorktreeCreated: (id: string) => void;
+    initialPR?: { number: number } | null;
+    restoreDraft?: { branch: string; path: string } | null;
   }) => (
-    <div data-testid="new-worktree-dialog" data-open={String(isOpen)} data-root={rootPath}>
+    <div
+      data-testid="new-worktree-dialog"
+      data-open={String(isOpen)}
+      data-root={rootPath}
+      data-pr={initialPR?.number ?? ""}
+      data-restore-branch={restoreDraft?.branch ?? ""}
+      data-restore-path={restoreDraft?.path ?? ""}
+    >
       <button onClick={() => onWorktreeCreated("wt-new")}>create</button>
       <button onClick={onClose}>close</button>
     </div>
@@ -186,7 +197,7 @@ vi.mock("@/components/TerminalRecipe/RecipeManager", () => ({
   ),
 }));
 
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeSelectionStore, type PendingCreationDraft } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
@@ -239,6 +250,25 @@ describe("ProjectDialogHost", () => {
       expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(false);
       expect(screen.getByTestId("new-worktree-dialog")).toBe(dialog);
       expect(dialog.dataset.open).toBe("false");
+    });
+
+    it("hands a Retry's failed request to the stock dialog", async () => {
+      render(<ProjectDialogHost />);
+      const selection = useWorktreeSelectionStore.getState();
+      selection.addPendingCreation("/repo-worktrees/retry-me", {
+        branch: "feature/retry-me",
+        pr: { number: 42 } as NonNullable<PendingCreationDraft["pr"]>,
+      });
+      selection.failPendingCreation("/repo-worktrees/retry-me", "boom");
+      act(() =>
+        useWorktreeSelectionStore.getState().retryPendingCreation("/repo-worktrees/retry-me")
+      );
+
+      const dialog = await screen.findByTestId("new-worktree-dialog");
+      expect(dialog.dataset.open).toBe("true");
+      expect(dialog.dataset.restoreBranch).toBe("feature/retry-me");
+      expect(dialog.dataset.restorePath).toBe("/repo-worktrees/retry-me");
+      expect(dialog.dataset.pr).toBe("42");
     });
 
     it("refreshes the worktree list and hands the new id to the opener", async () => {
@@ -314,7 +344,7 @@ describe("ProjectDialogHost", () => {
       act(() =>
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
           surfacePanelKindId: PLUGIN_KIND,
-          initialBranchInput: "feature/x",
+          initialRecipeId: "recipe-x",
           onCreated,
         })
       );
@@ -324,7 +354,7 @@ describe("ProjectDialogHost", () => {
       expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
       expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
       const { createDialog } = useWorktreeSelectionStore.getState();
-      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.initialRecipeId).toBe("recipe-x");
       expect(createDialog.onCreated).toBe(onCreated);
 
       act(() => useWorktreeSelectionStore.getState().closeCreateDialog());
@@ -363,7 +393,7 @@ describe("ProjectDialogHost", () => {
       act(() =>
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
           surfacePanelKindId: PLUGIN_KIND,
-          initialBranchInput: "feature/x",
+          initialRecipeId: "recipe-x",
           onCreated,
         })
       );
@@ -388,7 +418,7 @@ describe("ProjectDialogHost", () => {
       expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
       expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
       const { createDialog } = useWorktreeSelectionStore.getState();
-      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.initialRecipeId).toBe("recipe-x");
       expect(createDialog.onCreated).toBe(onCreated);
     });
 

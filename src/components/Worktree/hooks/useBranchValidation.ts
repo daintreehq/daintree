@@ -21,12 +21,17 @@ export function useBranchValidation({
   isOpen,
   skipAvailabilityCheck = false,
   overrideBranchName,
+  restoredBranch,
+  restoredPath,
 }: {
   branchInput: string;
   rootPath: string;
   isOpen: boolean;
   skipAvailabilityCheck?: boolean;
   overrideBranchName?: string;
+  /** A Retry's branch and the path it was submitted with. */
+  restoredBranch?: string;
+  restoredPath?: string;
 }): UseBranchValidationResult {
   const [isCheckingBranch, setIsCheckingBranch] = useState(false);
   const [isGeneratingPath, setIsGeneratingPath] = useState(false);
@@ -38,6 +43,10 @@ export function useBranchValidation({
   // on blur/submit so the availability check can't rewrite the field mid-typing.
   const pendingResolutionRef = useRef<{ requestedName: string; resolvedName: string } | null>(null);
   const acceptedResolutionRef = useRef<string | null>(null);
+  // A Retry's path belongs to its branch: it holds while the field shows that
+  // branch, and the first path suggested for any other branch retires it, so a
+  // Retry that fixes the branch name gets a path to match.
+  const restoredPathRef = useRef<{ branch: string; path: string } | null>(null);
 
   // Reset on open
   useEffect(() => {
@@ -46,11 +55,14 @@ export function useBranchValidation({
     setIsGeneratingPath(false);
     setBranchWasAutoResolved(false);
     setPathWasAutoResolved(false);
-    setWorktreePath("");
+    const restored =
+      restoredBranch && restoredPath ? { branch: restoredBranch, path: restoredPath } : null;
+    restoredPathRef.current = restored;
+    setWorktreePath(restored?.path ?? "");
     pathTouchedRef.current = false;
     pendingResolutionRef.current = null;
     acceptedResolutionRef.current = null;
-  }, [isOpen]);
+  }, [isOpen, restoredBranch, restoredPath]);
 
   // Debounced branch validation + path generation
   const effectiveBranchName = overrideBranchName ?? branchInput;
@@ -72,6 +84,23 @@ export function useBranchValidation({
       setIsGeneratingPath(false);
       return;
     }
+
+    const restored = restoredPathRef.current;
+    const keepRestoredPath = restored !== null && restored.branch === trimmedInput;
+    if (keepRestoredPath) setWorktreePath(restored.path);
+    // Only a suggestion that lands writes the path, so an effect run cancelled
+    // by the next keystroke can't retire the restored one. A restored branch
+    // that has since been taken will be submitted under another name, so its
+    // path goes with the old one.
+    const applySuggestedPath = (path: string, autoResolved: boolean, branchTaken = false) => {
+      if (keepRestoredPath && !branchTaken) {
+        setPathWasAutoResolved(false);
+        return;
+      }
+      restoredPathRef.current = null;
+      setPathWasAutoResolved(autoResolved);
+      setWorktreePath(path);
+    };
 
     if (!skipAvailabilityCheck) {
       const parsed = parseBranchInput(trimmedInput);
@@ -126,6 +155,8 @@ export function useBranchValidation({
 
           const branchResult = results[0];
           const pathResult = results[1];
+          const branchTaken =
+            branchResult.status === "fulfilled" && branchResult.value !== fullName;
 
           if (branchResult.status === "fulfilled") {
             const availableBranch = branchResult.value;
@@ -145,16 +176,16 @@ export function useBranchValidation({
             const pathBaseName = suggestedPath.split(/[/\\]/).pop() || "";
             const branchSlug = fullName.replace(/[^a-zA-Z0-9-_]/g, "-");
             const pathResolved = pathBaseName !== branchSlug && /-\d+$/.test(pathBaseName);
-            setPathWasAutoResolved(pathResolved);
-            setWorktreePath(suggestedPath);
+            applySuggestedPath(suggestedPath, pathResolved, branchTaken);
           } else {
             logError("Failed to get default path", pathResult.reason);
-            setPathWasAutoResolved(false);
             const sanitizedBranch = fullName.replace(/[^a-zA-Z0-9-_]/g, "-");
             const separator = rootPath.includes("\\") ? "\\" : "/";
             const repoName = rootPath.split(/[/\\]/).pop() || "repo";
-            setWorktreePath(
-              `${rootPath}${separator}..${separator}${repoName}-worktrees${separator}${sanitizedBranch}`
+            applySuggestedPath(
+              `${rootPath}${separator}..${separator}${repoName}-worktrees${separator}${sanitizedBranch}`,
+              false,
+              branchTaken
             );
           }
         });
@@ -181,19 +212,18 @@ export function useBranchValidation({
         .then((suggestedPath) => {
           if (abortController.signal.aborted) return;
           setIsGeneratingPath(false);
-          setPathWasAutoResolved(false);
-          setWorktreePath(suggestedPath);
+          applySuggestedPath(suggestedPath, false);
         })
         .catch((err) => {
           if (abortController.signal.aborted) return;
           logError("Failed to get default path", err);
           setIsGeneratingPath(false);
-          setPathWasAutoResolved(false);
           const sanitizedBranch = trimmedInput.replace(/[^a-zA-Z0-9-_]/g, "-");
           const separator = rootPath.includes("\\") ? "\\" : "/";
           const repoName = rootPath.split(/[/\\]/).pop() || "repo";
-          setWorktreePath(
-            `${rootPath}${separator}..${separator}${repoName}-worktrees${separator}${sanitizedBranch}`
+          applySuggestedPath(
+            `${rootPath}${separator}..${separator}${repoName}-worktrees${separator}${sanitizedBranch}`,
+            false
           );
         });
     }, 300);

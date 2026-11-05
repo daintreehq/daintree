@@ -428,6 +428,8 @@ import {
   _resetForTests as resetForgeResourceCache,
 } from "@/lib/forgeResourceCache";
 import type { Issue } from "@shared/types/forge";
+import type { PendingCreationDraft } from "@/store/worktreeStore";
+import { linkProviderIssue } from "@/utils/linkProviderIssue";
 
 beforeEach(() => {
   clearBranchListCache();
@@ -448,6 +450,11 @@ async function advanceTimersGradually(totalMs: number, stepMs = 100) {
       await vi.advanceTimersByTimeAsync(stepMs);
     });
   }
+}
+
+/** A failed creation's request, as the sidebar's Retry hands it back. */
+function retryDraft(overrides: Partial<PendingCreationDraft> = {}): PendingCreationDraft {
+  return { path: "/test/root-worktrees/feature/test", branch: "feature/test", ...overrides };
 }
 
 function renderDialog(props: Partial<React.ComponentProps<typeof NewWorktreeDialog>> = {}) {
@@ -950,6 +957,375 @@ describe("NewWorktreeDialog — pending creation wiring", () => {
     } finally {
       _resetHostPlatformForTests();
     }
+  });
+});
+
+describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () => {
+  const RETRY_ISSUE: Issue = {
+    number: 77,
+    title: "Retry keeps the request",
+    body: "",
+    state: "open",
+    rawState: "open",
+    url: "https://example.com/issues/77",
+    assignees: [],
+    labels: [],
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
+  };
+  const RETRY_PR = {
+    number: 42,
+    title: "Test PR",
+    body: "Closes #9",
+    headRef: "develop",
+    baseRef: "main",
+    state: "open" as const,
+    rawState: "OPEN",
+    url: "https://github.com/test/repo/pull/42",
+    author: { login: "user", avatarUrl: "", rawData: null },
+    isDraft: false,
+    merged: false,
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockDispatch.mockResolvedValue({
+      ok: true,
+      result: { worktreeId: "new-wt-id", branch: "feature/retry-me" },
+    });
+    projectSettingsFixture.value = { resourceEnvironments: { staging: {} } };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+    projectSettingsFixture.value = null;
+    firstAgentFixtures.lastRecipeByProject = {};
+    firstAgentFixtures.lastIssueRecipeByProject = {};
+  });
+
+  async function submitAndSettle() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  function createOptions() {
+    const call = mockDispatch.mock.calls.find(([id]) => id === "worktree.create");
+    return (call?.[1] as { options: Record<string, unknown> } | undefined)?.options;
+  }
+
+  /** What the resubmit hands back to the sidebar row, path included. */
+  function resubmittedDraft() {
+    const [path, meta] = mockAddPendingCreation.mock.calls.at(-1) as [string, object];
+    return { path, ...meta };
+  }
+
+  it("resubmits an issue create on its base, remote flag, environment and path", async () => {
+    const draft = retryDraft({
+      path: "/custom/place/retry-me",
+      branch: "feature/retry-me",
+      issue: RETRY_ISSUE,
+      // A bare create that linked an issue inside the dialog.
+      openedForIssue: false,
+      pr: null,
+      baseBranch: "origin/develop",
+      branchMode: "new",
+      fromRemote: true,
+      worktreeMode: "staging",
+      recipeId: null,
+      agentId: null,
+      prompt: "",
+    });
+    renderDialog({ initialIssue: RETRY_ISSUE, restoreDraft: draft });
+    // Past the branch list, the path suggestion and the settings that would
+    // otherwise reseed base, path and environment.
+    await advanceTimersGradually(800);
+
+    expect((screen.getByTestId("worktree-path-input") as HTMLInputElement).value).toBe(
+      "/custom/place/retry-me"
+    );
+    expect(recipePickerCalls.last).toMatchObject({ restoredRecipeId: null });
+
+    await submitAndSettle();
+
+    expect(createOptions()).toEqual({
+      baseBranch: "origin/develop",
+      newBranch: "feature/retry-me",
+      path: "/custom/place/retry-me",
+      fromRemote: true,
+      useExistingBranch: false,
+      provisionResource: true,
+      worktreeMode: "staging",
+    });
+    expect(vi.mocked(linkProviderIssue)).toHaveBeenCalledWith("new-wt-id", RETRY_ISSUE);
+    expect(resubmittedDraft()).toEqual(draft);
+  });
+
+  it("keeps the restored base and local environment over a cached list and a non-local default", async () => {
+    // A first opening fills the branch cache, so the Retry seeds from it.
+    const { unmount } = renderDialog();
+    await advanceTimersGradually(500);
+    unmount();
+    // The refresh never lands, so only the cached seed can supply the base.
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+    projectSettingsFixture.value = {
+      resourceEnvironments: { staging: {} },
+      defaultWorktreeMode: "staging",
+    } as typeof projectSettingsFixture.value;
+
+    renderDialog({
+      restoreDraft: retryDraft({
+        baseBranch: "develop",
+        branchMode: "new",
+        fromRemote: false,
+        worktreeMode: "local",
+      }),
+    });
+    await advanceTimersGradually(800);
+    await submitAndSettle();
+
+    expect(createOptions()).toMatchObject({
+      baseBranch: "develop",
+      newBranch: "feature/test",
+      fromRemote: false,
+      worktreeMode: "local",
+      provisionResource: undefined,
+    });
+  });
+
+  it("reopens an existing-branch create in existing mode on its branch", async () => {
+    const draft = retryDraft({
+      path: "/test/root-worktrees/feature/existing-work",
+      branch: "feature/existing-work",
+      issue: null,
+      openedForIssue: false,
+      pr: null,
+      baseBranch: "main",
+      branchMode: "existing",
+      fromRemote: false,
+      worktreeMode: "local",
+      recipeId: null,
+      agentId: null,
+      prompt: "",
+    });
+    renderDialog({ restoreDraft: draft });
+    await advanceTimersGradually(800);
+
+    const existingRadio = screen.getByRole("radio", { name: /existing branch/i });
+    expect(existingRadio.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
+      "feature/existing-work"
+    );
+
+    await submitAndSettle();
+
+    expect(createOptions()).toMatchObject({
+      baseBranch: "feature/existing-work",
+      newBranch: "feature/existing-work",
+      useExistingBranch: true,
+      fromRemote: false,
+    });
+    expect(resubmittedDraft()).toEqual(draft);
+  });
+
+  it("sends a PR checkout's source PR again", async () => {
+    const draft = retryDraft({
+      path: "/test/root-worktrees/develop",
+      branch: "develop",
+      issue: null,
+      openedForIssue: false,
+      pr: RETRY_PR,
+      // What the PR's head resolved to when it was first submitted.
+      baseBranch: "origin/develop",
+      branchMode: "new",
+      fromRemote: true,
+      worktreeMode: "local",
+      recipeId: null,
+      agentId: null,
+      prompt: "",
+    });
+    renderDialog({ initialPR: RETRY_PR, restoreDraft: draft });
+    await advanceTimersGradually(800);
+    await submitAndSettle();
+
+    expect(createOptions()).toMatchObject({
+      baseBranch: "origin/develop",
+      newBranch: "develop",
+      useExistingBranch: true,
+      sourcePrNumber: 42,
+      sourcePrTitle: "Test PR",
+      sourcePrUrl: "https://github.com/test/repo/pull/42",
+      sourcePrLinkedIssueNumber: 9,
+    });
+    expect(resubmittedDraft()).toEqual(draft);
+  });
+
+  it("resolves a PR checkout's head again rather than trusting the saved base", async () => {
+    renderDialog({
+      initialPR: RETRY_PR,
+      restoreDraft: retryDraft({
+        path: "/test/root-worktrees/develop",
+        branch: "develop",
+        pr: RETRY_PR,
+        baseBranch: "origin/stale",
+        fromRemote: false,
+      }),
+    });
+    await advanceTimersGradually(800);
+    await submitAndSettle();
+
+    expect(createOptions()).toMatchObject({ baseBranch: "origin/develop", sourcePrNumber: 42 });
+  });
+
+  it.each([
+    ["No recipe", null],
+    ["a cloned layout", CLONE_LAYOUT_ID],
+    ["a listed recipe", "recipe-2"],
+  ])("hands the recipe picker a Retry's %s", async (_label, recipeId) => {
+    renderDialog({ restoreDraft: retryDraft({ recipeId }) });
+    await advanceTimersGradually(100);
+    expect(recipePickerCalls.last).toMatchObject({ restoredRecipeId: recipeId });
+  });
+
+  it("hands the recipe picker no restored recipe outside a Retry", async () => {
+    renderDialog({ initialRecipeId: "recipe-2" });
+    await advanceTimersGradually(100);
+    expect(recipePickerCalls.last).toMatchObject({ restoredRecipeId: undefined });
+  });
+
+  it.each([
+    ["a bare create's", false, "bare-recipe"],
+    ["an issue create's", true, "issue-recipe"],
+  ])(
+    "reads %s remembered setup, whatever issue it linked",
+    async (_label, openedForIssue, expected) => {
+      firstAgentFixtures.lastRecipeByProject = { "test-project": "bare-recipe" };
+      firstAgentFixtures.lastIssueRecipeByProject = { "test-project": "issue-recipe" };
+      // The sidebar's Retry opens with the linked issue, if any, as the dialog's issue.
+      renderDialog({
+        initialIssue: openedForIssue ? null : RETRY_ISSUE,
+        restoreDraft: retryDraft({ issue: openedForIssue ? null : RETRY_ISSUE, openedForIssue }),
+      });
+      await advanceTimersGradually(100);
+      expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBe(expected);
+    }
+  );
+
+  it("records an issue create's opening, so its Retry reads the same setup", async () => {
+    renderDialog({ initialIssue: RETRY_ISSUE });
+    await advanceTimersGradually(800);
+    await submitAndSettle();
+
+    expect(resubmittedDraft()).toMatchObject({ issue: RETRY_ISSUE, openedForIssue: true });
+  });
+
+  it("restores each Retry on a dialog kept mounted, then opens clean", async () => {
+    const onClose = vi.fn();
+    const dialog = (isOpen: boolean, restoreDraft: PendingCreationDraft | null) => (
+      <NewWorktreeDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        rootPath="/test/root"
+        restoreDraft={restoreDraft}
+      />
+    );
+    const pathValue = () => (screen.getByTestId("worktree-path-input") as HTMLInputElement).value;
+    const { rerender } = render(
+      dialog(
+        true,
+        retryDraft({
+          path: "/custom/retry-a",
+          branch: "feature/retry-a",
+          branchMode: "new",
+          agentId: "claude",
+          prompt: "first draft",
+        })
+      )
+    );
+    await advanceTimersGradually(800);
+    expect((screen.getByTestId("branch-name-input") as HTMLInputElement).value).toBe(
+      "feature/retry-a"
+    );
+    expect(pathValue()).toBe("/custom/retry-a");
+
+    rerender(dialog(false, null));
+    rerender(
+      dialog(
+        true,
+        retryDraft({
+          path: "/custom/old-fix",
+          branch: "bugfix/old-fix",
+          branchMode: "existing",
+          agentId: null,
+          prompt: "",
+        })
+      )
+    );
+    await advanceTimersGradually(800);
+    expect(
+      screen.getByRole("radio", { name: /existing branch/i }).getAttribute("aria-checked")
+    ).toBe("true");
+    expect(screen.getByTestId("existing-branch-picker").textContent).toContain("bugfix/old-fix");
+    expect(pathValue()).toBe("/custom/old-fix");
+    expect(screen.queryByTestId("first-agent-prompt")).toBeNull();
+
+    rerender(dialog(false, null));
+    rerender(dialog(true, null));
+    await advanceTimersGradually(800);
+    expect(
+      screen.getByRole("radio", { name: /existing branch/i }).getAttribute("aria-checked")
+    ).toBe("false");
+    expect((screen.getByTestId("branch-name-input") as HTMLInputElement).value).toBe("");
+    expect(pathValue()).toBe("");
+  });
+
+  it("gives a Retry whose branch is renamed a path for the new name", async () => {
+    renderDialog({
+      restoreDraft: retryDraft({ path: "/custom/place/retry-me", branch: "feature/retry-me" }),
+    });
+    await advanceTimersGradually(800);
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/retry-fixed" },
+      });
+    });
+    await advanceTimersGradually(500);
+
+    expect((screen.getByTestId("worktree-path-input") as HTMLInputElement).value).toBe(
+      "/test/root-worktrees/feature/retry-fixed"
+    );
+  });
+
+  it("asks before a Retry is closed, since the failed row is already gone", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose, restoreDraft: retryDraft() });
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Discard changes" })).toBeDefined();
   });
 });
 
@@ -2165,14 +2541,14 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
   });
 
   it("restores a Retry's agent and prompt", async () => {
-    renderDialog({ initialAgentId: "claude", initialPrompt: PROMPT });
+    renderDialog({ restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT }) });
     await advanceTimersGradually(500);
     expect(screen.getByDisplayValue(PROMPT).getAttribute("data-testid")).toBe("first-agent-prompt");
   });
 
   it("keeps a Retry's explicit No agent over the remembered agent", async () => {
     firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
-    renderDialog({ initialAgentId: null, initialPrompt: "" });
+    renderDialog({ restoreDraft: retryDraft({ agentId: null, prompt: "" }) });
     await advanceTimersGradually(500);
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
   });
@@ -2970,7 +3346,10 @@ describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
   });
 
   it("restores a Retry's agent over an issue create's remembered No agent", async () => {
-    renderDialog({ initialIssue: ISSUE, initialAgentId: "claude", initialPrompt: "" });
+    renderDialog({
+      initialIssue: ISSUE,
+      restoreDraft: retryDraft({ issue: ISSUE, agentId: "claude", prompt: "" }),
+    });
     await advanceTimersGradually(500);
 
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
@@ -3000,7 +3379,10 @@ describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
 
   it("keeps a Retry's agent over an issue create's remembered agent", async () => {
     firstAgentFixtures.lastIssueAgentByProject = { "test-project": "claude" };
-    renderDialog({ initialIssue: ISSUE, initialAgentId: null, initialPrompt: "" });
+    renderDialog({
+      initialIssue: ISSUE,
+      restoreDraft: retryDraft({ issue: ISSUE, agentId: null, prompt: "" }),
+    });
     await advanceTimersGradually(500);
 
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
