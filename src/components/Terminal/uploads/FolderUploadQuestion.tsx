@@ -11,20 +11,20 @@ import {
 } from "@/components/Git/GitOperationPreview";
 import { formatBytes } from "@/lib/formatBytes";
 import { pluralize } from "@/lib/pluralize";
-import type {
-  FolderUploadPathProblem,
-  FolderUploadProblem,
-  FolderUploadTotals,
-} from "@shared/types/folderUpload";
+import type { FolderUploadPathProblem, FolderUploadTotals } from "@shared/types/folderUpload";
 import {
   HOST_INBOX_ENTRY_TTL_MS,
   type FolderNotCopiedReason,
   type FolderSummaryItem,
+  type FolderUploadCheck,
   type FolderUploadSummary,
 } from "@shared/types/ipc/fileTransfer";
 import type { UploadQuestion } from "./uploadConfirm";
 
 type FolderQuestion = Extract<UploadQuestion, { kind: "folder" }>;
+
+/** What stopped a folder: one of its own limits or names, or the walk giving up. */
+type RefusalProblem = Extract<FolderUploadCheck, { status: "refused" }>["problem"];
 
 /** Rows a list on the question shows before it says how many more there are. */
 const LIST_ROWS = 5;
@@ -107,9 +107,18 @@ export interface FolderRefusal {
 
 /** What the question says about the limit or names that stopped a folder. */
 export function folderRefusal(
-  problem: FolderUploadProblem,
+  problem: RefusalProblem,
   summary: FolderUploadSummary
 ): FolderRefusal {
+  if (problem.kind === "walk-limit") {
+    // The walk stopped looking, so its count is always as far as it got.
+    return {
+      title: `More than ${pluralize(problem.maximum, "item")} to look through`,
+      detail: `It has at least ${pluralize(problem.actual, "item")}, counting links and other entries that aren't copied. ${SEND_LESS}`,
+      pathsLabel: "Largest contributors",
+      paths: problem.paths,
+    };
+  }
   if (problem.kind === "clash") {
     return {
       title: "Two names clash",
@@ -278,7 +287,7 @@ function largestRows(summary: FolderUploadSummary): ItemRowData[] {
 /** What a refused folder's listed path adds to the limit it crossed, when the summary knows. */
 function contributionText(
   item: FolderSummaryItem | undefined,
-  problem: FolderUploadProblem,
+  problem: RefusalProblem,
   lowerBound: boolean
 ): string | null {
   if (!item || problem.kind !== "limit") return null;
@@ -357,7 +366,7 @@ function RefusedPaths({
   summary,
   refusal,
 }: {
-  problem: FolderUploadProblem;
+  problem: RefusalProblem;
   summary: FolderUploadSummary;
   refusal: FolderRefusal;
 }) {

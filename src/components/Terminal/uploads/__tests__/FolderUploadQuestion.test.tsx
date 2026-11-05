@@ -281,6 +281,27 @@ describe("the folder question", () => {
     expect(listItems("Largest contributors")).toEqual(["node_modules/"]);
   });
 
+  it("refuses a folder the walk gave up on, naming where the items are", () => {
+    void ask({
+      status: "refused",
+      problem: {
+        kind: "walk-limit",
+        maximum: 20_000,
+        actual: 20_001,
+        paths: [`${ROOT}/links/`, nodeModules.path],
+      },
+      summary: summary({ lowerBound: true, largest: [nodeModules] }),
+    });
+    const refusal = screen.getByTestId("folder-upload-refusal").textContent ?? "";
+    expect(refusal).toContain("More than 20,000 items to look through");
+    expect(refusal).toContain(
+      "It has at least 20,001 items, counting links and other entries that aren't copied."
+    );
+    // The summary counts what is copied, not what the walk looked at, so no figure.
+    expect(listItems("Largest contributors")).toEqual(["links/", "node_modules/"]);
+    expect(buttonLabels()).toEqual(["Close dialog", "Close"]);
+  });
+
   it("names both sides of a name clash", async () => {
     const answer = ask({
       status: "refused",
