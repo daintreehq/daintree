@@ -6,6 +6,7 @@ import {
   getTerminalThemeFromAppScheme,
   resolveAppTheme,
   type AppColorScheme,
+  type ColorVisionMode,
 } from "@shared/theme";
 import {
   BUILT_IN_SCHEMES,
@@ -88,7 +89,8 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
 
 function computeEffectiveTheme(
   selectedSchemeId: string,
-  customSchemes: TerminalColorScheme[]
+  customSchemes: TerminalColorScheme[],
+  colorVisionMode: ColorVisionMode
 ): ITheme {
   const allSchemes = [...BUILT_IN_SCHEMES, ...customSchemes];
   const scheme = allSchemes.find((s) => s.id === selectedSchemeId);
@@ -97,8 +99,13 @@ function computeEffectiveTheme(
     return getTerminalThemeFromCSS();
   }
 
+  // Only the scheme that follows the app theme takes the colour-vision mode; a
+  // terminal scheme the user picked by name keeps its own palette.
   if (scheme.id === DEFAULT_SCHEME_ID) {
-    return getTerminalThemeFromAppScheme(resolveCommittedScheme(useAppThemeStore.getState()));
+    return getTerminalThemeFromAppScheme(
+      resolveCommittedScheme(useAppThemeStore.getState()),
+      colorVisionMode
+    );
   }
 
   return {
@@ -111,9 +118,13 @@ function computeEffectiveTheme(
  * Computes the terminal theme when an app theme preview is active.
  * Derives colors directly from the app theme tokens.
  */
-function computeAppPreviewTheme(appPreviewId: string, appCustomSchemes: unknown[]): ITheme {
+function computeAppPreviewTheme(
+  appPreviewId: string,
+  appCustomSchemes: unknown[],
+  colorVisionMode: ColorVisionMode
+): ITheme {
   const appScheme = resolveAppTheme(appPreviewId, appCustomSchemes as AppColorScheme[]);
-  return getTerminalThemeFromAppScheme(appScheme);
+  return getTerminalThemeFromAppScheme(appScheme, colorVisionMode);
 }
 
 let _cachedTheme: ITheme | null = null;
@@ -123,7 +134,8 @@ let _cachedCustomSchemes: TerminalColorScheme[] | null = null;
 let _cachedAppScheme: AppColorScheme | null = null;
 let _cachedAppPreviewSchemeId: string | null = null;
 let _cachedAppCustomSchemes: unknown[] | null = null;
-// The unknown-scheme fallback reads CSS variables, which colour-vision mode rewrites.
+// Colour-vision mode recolours the app-linked palette, and the unknown-scheme
+// fallback reads CSS variables the mode rewrites.
 let _cachedColorVisionMode: string | null = null;
 
 /**
@@ -170,10 +182,11 @@ export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
   if (activeId === "app-preview") {
     _cachedTheme = computeAppPreviewTheme(
       appPreviewSchemeId ?? DEFAULT_APP_SCHEME_ID,
-      appCustomSchemes
+      appCustomSchemes,
+      colorVisionMode
     );
   } else {
-    _cachedTheme = computeEffectiveTheme(activeId, state.customSchemes);
+    _cachedTheme = computeEffectiveTheme(activeId, state.customSchemes, colorVisionMode);
   }
   return _cachedTheme;
 }
@@ -215,17 +228,19 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
   getEffectiveTheme: (): ITheme => {
     const state = get();
     const activeId = resolveActiveSchemeId(state);
+    const { colorVisionMode } = useAppThemeStore.getState();
 
     if (activeId === "app-preview") {
       const appPreviewSchemeId = useAppThemeStore.getState().previewSchemeId;
       const appCustomSchemes = selectSelectableSchemes(useAppThemeStore.getState());
       return computeAppPreviewTheme(
         appPreviewSchemeId ?? DEFAULT_APP_SCHEME_ID,
-        appCustomSchemes as AppColorScheme[]
+        appCustomSchemes as AppColorScheme[],
+        colorVisionMode
       );
     }
 
-    return computeEffectiveTheme(activeId, state.customSchemes);
+    return computeEffectiveTheme(activeId, state.customSchemes, colorVisionMode);
   },
 }));
 
@@ -237,7 +252,8 @@ useAppThemeStore.subscribe((state, prev) => {
     state.pluginSchemes !== prev.pluginSchemes ||
     state.pluginSnapshotScheme !== prev.pluginSnapshotScheme ||
     state.projectSchemeId !== prev.projectSchemeId ||
-    state.projectSnapshotScheme !== prev.projectSnapshotScheme
+    state.projectSnapshotScheme !== prev.projectSnapshotScheme ||
+    state.colorVisionMode !== prev.colorVisionMode
   ) {
     useTerminalColorSchemeStore.setState((s) => ({ appThemeVersion: s.appThemeVersion + 1 }));
   }

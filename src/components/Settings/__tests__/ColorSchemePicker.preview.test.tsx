@@ -2,7 +2,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { BUILT_IN_SCHEMES, DEFAULT_SCHEME_ID } from "@/config/terminalColorSchemes";
-import { BUILT_IN_APP_SCHEMES, relativeLuminance } from "@shared/theme";
+import {
+  BUILT_IN_APP_SCHEMES,
+  getTerminalThemeFromAppScheme,
+  relativeLuminance,
+} from "@shared/theme";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 
@@ -46,6 +50,17 @@ describe("Match app theme preview", () => {
       const expected = appScheme.tokens["terminal-background"];
       if (!expected) return;
       expect(preview.colors.background?.toLowerCase()).toBe(expected.toLowerCase());
+    }
+  );
+
+  it.each(["red-green", "blue-yellow"] as const)(
+    "paints the %s palette the terminals paint under that mode",
+    (mode) => {
+      const appScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+      const preview = resolveSchemeForPreview(match, appScheme, mode);
+      const terminals = getTerminalThemeFromAppScheme(appScheme, mode);
+      expect(preview.colors).toEqual(terminals);
+      expect(preview.colors).not.toEqual(getTerminalThemeFromAppScheme(appScheme));
     }
   );
 });

@@ -14,9 +14,10 @@ import {
   STATUS_TEXT_INKS,
   SYNTAX_CANVAS_FLOORS,
   SYNTAX_CANVAS_SURFACE,
+  TERMINAL_ANSI_LIGHTNESS_FLOOR,
   isHexColor,
 } from "./contrast.js";
-import { liftToContrast } from "./oklch.js";
+import { hexToOklch, liftToContrast, oklchToHex } from "./oklch.js";
 import {
   deriveActivityTextInks,
   deriveDestructiveAction,
@@ -151,7 +152,6 @@ export const RED_GREEN_OVERRIDES: Record<string, string> = withDiffSurfaces(
     "--theme-activity-working": "#648fff",
     "--theme-pr-open": "#648fff",
     "--theme-pr-closed": "#fe6100",
-    "--theme-terminal-selection": "#1a1f2e",
     "--theme-terminal-red": "#d55e00",
     "--theme-terminal-green": "#009e73",
     "--theme-terminal-bright-red": "#fe6100",
@@ -220,6 +220,72 @@ const COLOR_VISION_OVERRIDES: Partial<Record<ColorVisionMode, Record<string, str
   "blue-yellow": BLUE_YELLOW_OVERRIDES,
 };
 
+// The ANSI base/bright pairs a mode can recolour. A pair moves as one, by a single
+// lightness step, so it keeps the gap between its inks that the base/bright
+// distinctness check reads.
+const TERMINAL_ANSI_PAIRS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenKey]> = [
+  ["terminal-red", "terminal-bright-red"],
+  ["terminal-green", "terminal-bright-green"],
+  ["terminal-yellow", "terminal-bright-yellow"],
+  ["terminal-blue", "terminal-bright-blue"],
+  ["terminal-magenta", "terminal-bright-magenta"],
+];
+
+// Over the floor, for rounding to hex bytes moving the lightness back a little.
+const TERMINAL_FIT_HEADROOM = 0.01;
+
+/**
+ * The terminal colours a mode writes over `scheme`. The maps' ANSI inks were
+ * picked for dark terminals, and every built-in theme's terminal is dark (light
+ * themes included), so there they ship as authored. On a terminal background they
+ * sit too close to, such as a custom theme's light one, each pair moves along
+ * lightness, away from the background and at its own hues, until both inks clear
+ * the gap the theme's own ANSI inks are held to. Without a scheme, or on a
+ * background the hex maths can't read, the map's raw values are all there is.
+ */
+export function getColorVisionTerminalWrites(
+  mode: ColorVisionMode,
+  scheme?: AppColorScheme
+): Record<string, string> {
+  const overrides = COLOR_VISION_OVERRIDES[mode];
+  if (!overrides) return {};
+  const writes: Record<string, string> = Object.fromEntries(
+    Object.entries(overrides).filter(([name]) => name.startsWith("--theme-terminal-"))
+  );
+  const background = scheme?.tokens["terminal-background"];
+  const backdrop =
+    typeof background === "string" && isHexColor(background) ? hexToOklch(background) : null;
+  if (!backdrop) return writes;
+
+  const lighter = backdrop.l < 0.5;
+  const goal = TERMINAL_ANSI_LIGHTNESS_FLOOR + TERMINAL_FIT_HEADROOM;
+  const clears = (lightness: number) =>
+    Math.abs(lightness - backdrop.l) >= TERMINAL_ANSI_LIGHTNESS_FLOOR;
+  for (const pair of TERMINAL_ANSI_PAIRS) {
+    const inks = pair.flatMap((token) => {
+      const name = `--theme-${token}`;
+      const seed = writes[name];
+      const color = seed === undefined ? null : hexToOklch(seed);
+      return color ? [{ name, color }] : [];
+    });
+    if (inks.every(({ color }) => clears(color.l))) continue;
+    // The step the ink nearest the background needs takes every ink in the pair
+    // past the floor on the side away from it; one pinned at black or white is
+    // further still. `oklchToHex` keeps lightness, and the headroom covers its
+    // rounding to bytes.
+    const step = Math.max(
+      ...inks.map(({ color }) =>
+        lighter ? backdrop.l + goal - color.l : color.l - (backdrop.l - goal)
+      )
+    );
+    for (const { name, color } of inks) {
+      const l = Math.min(1, Math.max(0, lighter ? color.l + step : color.l - step));
+      writes[name] = oklchToHex({ ...color, l });
+    }
+  }
+  return writes;
+}
+
 // Each text ink lifted from a status or activity ink, beside the ink it follows.
 const LIFTED_TEXT_INKS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenKey]> = [
   ["diff-text-insert", "status-success"],
@@ -243,8 +309,9 @@ const FIT_HEADROOM = 0.05;
  * theme's own ink is held to on this theme's surfaces (#15580). The text inks and
  * the destructive fill that follow a status or activity ink are then derived from
  * the ink the mode actually paints, the way the theme derives its own; one whose
- * source ink the mode leaves alone keeps the theme's. Without a scheme the map's raw values
- * are all there is.
+ * source ink the mode leaves alone keeps the theme's. The terminal inks are fitted
+ * by `getColorVisionTerminalWrites`, which the terminals' own palette reads too.
+ * Without a scheme the map's raw values are all there is.
  */
 export function getColorVisionWrites(
   mode: ColorVisionMode,
@@ -254,6 +321,7 @@ export function getColorVisionWrites(
   if (!overrides) return {};
   const writes = { ...overrides };
   if (!scheme) return writes;
+  Object.assign(writes, getColorVisionTerminalWrites(mode, scheme));
   const effective: Partial<Record<AppThemeTokenKey, string>> = { ...scheme.tokens };
   for (const [name, value] of Object.entries(overrides)) {
     effective[name.slice("--theme-".length) as AppThemeTokenKey] = value;

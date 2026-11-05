@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ITheme } from "@xterm/xterm";
 import {
   getTerminalScrollbarDefaults,
   getTerminalThemeFromAppScheme,
   resolveAppTheme,
 } from "@shared/theme";
+import { getColorVisionWrites } from "@shared/theme/colorVisionOverrides";
 import {
   DEFAULT_SCHEME_ID,
   getSchemeById,
@@ -503,10 +505,101 @@ describe("terminalColorSchemeStore", () => {
       unsubscribe();
     });
 
+    it("bumps the snapshot when colour-vision mode changes", () => {
+      const versionBefore = useTerminalColorSchemeStore.getState().appThemeVersion;
+      useAppThemeStore.setState({ colorVisionMode: "red-green" });
+      expect(useTerminalColorSchemeStore.getState().appThemeVersion).toBeGreaterThan(versionBefore);
+    });
+
     it("does not bump the snapshot for unrelated app-store changes", () => {
       const versionBefore = useTerminalColorSchemeStore.getState().appThemeVersion;
       useAppThemeStore.setState({ ...useAppThemeStore.getState() });
       expect(useTerminalColorSchemeStore.getState().appThemeVersion).toBe(versionBefore);
+    });
+  });
+
+  describe("colour-vision mode on app-linked terminals (#16272)", () => {
+    const MODE_SLOTS = {
+      "red-green": [
+        ["red", "terminal-red"],
+        ["green", "terminal-green"],
+        ["brightRed", "terminal-bright-red"],
+        ["brightGreen", "terminal-bright-green"],
+        ["magenta", "terminal-magenta"],
+        ["brightMagenta", "terminal-bright-magenta"],
+      ],
+      "blue-yellow": [
+        ["yellow", "terminal-yellow"],
+        ["blue", "terminal-blue"],
+        ["brightYellow", "terminal-bright-yellow"],
+        ["brightBlue", "terminal-bright-blue"],
+      ],
+    } as const satisfies Record<string, ReadonlyArray<readonly [keyof ITheme, string]>>;
+
+    for (const [mode, slots] of Object.entries(MODE_SLOTS) as Array<
+      [keyof typeof MODE_SLOTS, (typeof MODE_SLOTS)[keyof typeof MODE_SLOTS]]
+    >) {
+      it.each(["daintree", "bondi"])(`${mode} on %s paints the mode's ANSI colours`, (appId) => {
+        useAppThemeStore.setState({ selectedSchemeId: appId, colorVisionMode: mode });
+        const appScheme = resolveAppTheme(appId, []);
+        const writes = getColorVisionWrites(mode, appScheme);
+        const own = getTerminalThemeFromAppScheme(appScheme);
+        const accessors = {
+          selectEffectiveTheme: selectEffectiveTheme(useTerminalColorSchemeStore.getState()),
+          getEffectiveTheme: useTerminalColorSchemeStore.getState().getEffectiveTheme(),
+        };
+
+        for (const [accessor, theme] of Object.entries(accessors)) {
+          for (const [slot, token] of slots) {
+            expect(theme[slot], `${accessor} ${slot}`).toBe(writes[`--theme-${token}`]);
+            expect(theme[slot], `${accessor} ${slot} differs from the scheme's own`).not.toBe(
+              own[slot]
+            );
+          }
+        }
+      });
+    }
+
+    it("leaves the terminal theme identical to the scheme's own in default mode", () => {
+      useAppThemeStore.setState({ selectedSchemeId: "bondi", colorVisionMode: "default" });
+      const own = getTerminalThemeFromAppScheme(resolveAppTheme("bondi", []));
+      expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).toEqual(own);
+      expect(useTerminalColorSchemeStore.getState().getEffectiveTheme()).toEqual(own);
+    });
+
+    it("recolours open terminals on a mode switch and restores them on default", () => {
+      const own = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+      let notified = 0;
+      const unsubscribe = useTerminalColorSchemeStore.subscribe(() => {
+        notified += 1;
+      });
+
+      useAppThemeStore.setState({ colorVisionMode: "red-green" });
+      const recoloured = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+      expect(notified).toBeGreaterThan(0);
+      expect(recoloured.red).not.toBe(own.red);
+
+      useAppThemeStore.setState({ colorVisionMode: "default" });
+      expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).toEqual(own);
+      unsubscribe();
+    });
+
+    it("applies the mode during an app-theme preview", () => {
+      useAppThemeStore.setState({ previewSchemeId: "fiordland", colorVisionMode: "blue-yellow" });
+      const writes = getColorVisionWrites("blue-yellow", resolveAppTheme("fiordland", []));
+      expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState()).blue).toBe(
+        writes["--theme-terminal-blue"]
+      );
+      expect(useTerminalColorSchemeStore.getState().getEffectiveTheme().blue).toBe(
+        writes["--theme-terminal-blue"]
+      );
+    });
+
+    it("leaves an explicitly chosen terminal scheme alone", () => {
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
+      const dracula = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+      useAppThemeStore.setState({ colorVisionMode: "red-green" });
+      expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).toEqual(dracula);
     });
   });
 });
