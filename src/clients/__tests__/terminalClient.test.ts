@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TERMINAL_GRID_DIMENSION } from "@shared/types/terminal";
 
 // Track IPC onData subscriptions so we can simulate IPC data delivery
-const ipcOnDataHandlers: Array<{ id: string; cb: (data: string | Uint8Array) => void }> = [];
+type IpcDataHandler = (data: string | Uint8Array, streamEnd?: number) => void;
+const ipcOnDataHandlers: Array<{ id: string; cb: IpcDataHandler }> = [];
 const ipcOnDataCleanups: Array<() => void> = [];
 
 const mockElectronTerminal = {
-  onData: vi.fn((id: string, cb: (data: string | Uint8Array) => void) => {
+  onData: vi.fn((id: string, cb: IpcDataHandler) => {
     const entry = { id, cb };
     ipcOnDataHandlers.push(entry);
     const cleanup = () => {
@@ -177,6 +178,17 @@ describe("terminalClient MessagePort data routing", () => {
     handler!.cb("ipc-data");
 
     expect(received).toEqual(["ipc-data"]);
+  });
+
+  it("hands an IPC chunk's stream offset to the subscriber, and none when it carries none (#16259)", () => {
+    const callback = vi.fn();
+    terminalClient.onData("term-1", callback);
+
+    const handler = ipcOnDataHandlers.find((h) => h.id === "term-1");
+    handler!.cb("fenced", 42);
+    handler!.cb("unfenced");
+
+    expect(callback.mock.calls).toStrictEqual([["fenced", 42], ["unfenced"]]);
   });
 
   it("cleans up callback registry on unsubscribe", () => {
