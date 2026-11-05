@@ -20,6 +20,15 @@ export type CrashRecoveryGateState =
     };
 
 /**
+ * Whether hydration may read persisted state. A failed auto-restore still has
+ * the dialog up, and whatever the user picks next rewrites that state, so
+ * hydrating then would load panels a fresh start is about to clear.
+ */
+export function isCrashGateResolved(state: CrashRecoveryGateState): boolean {
+  return state.status === "none";
+}
+
+/**
  * Derive crash-gate state from the batched boot payload. The pending/config
  * pair used to come from two separate IPC calls (`crash-recovery:get-pending`
  * and `crash-recovery:get-config`) — the renderer now reads them from the

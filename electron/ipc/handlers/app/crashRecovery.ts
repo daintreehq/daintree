@@ -75,7 +75,20 @@ export function registerCrashRecoveryHandlers(): () => void {
             throw new Error("Crash recovery restore failed");
           }
         } else {
-          service.resetToFresh();
+          // The listed panels live in each captured workspace's state file,
+          // which the crash left intact, so resetting the global record alone
+          // hydrates them straight back. Cleared before resetToFresh drops the
+          // pre-crash snapshot, and undone on any failure so the dialog can
+          // still restore or retry.
+          const originals = new Map<string, ProjectState>();
+          try {
+            await clearProjectPanels(service.getSnapshotWorkspaceIds(), originals);
+            if (!service.resetToFresh()) throw new Error("Global app state reset failed");
+          } catch (err) {
+            console.error("[CrashRecovery] Failed to start fresh:", err);
+            await rollBackProjectPanels(originals);
+            throw new Error("Crash recovery fresh start failed", { cause: err });
+          }
           service.clearPendingCrash();
         }
       }
@@ -133,6 +146,30 @@ async function removeDeselectedProjectPanels(
       return next;
     });
   }
+}
+
+async function clearProjectPanels(
+  projectIds: string[],
+  originals: Map<string, ProjectState>
+): Promise<void> {
+  for (const projectId of projectIds) {
+    await projectStore.enqueueProjectStateUpdate(projectId, (existing) => {
+      if (!existing || !hasPanelState(existing)) return null;
+      originals.set(projectId, existing);
+      // Panels opened after the last backup tick were never listed, but a
+      // fresh start still means the workspace opens with none.
+      return { ...existing, terminals: [], tabGroups: [], terminalSizes: {}, draftInputs: {} };
+    });
+  }
+}
+
+function hasPanelState(state: ProjectState): boolean {
+  return (
+    state.terminals.length > 0 ||
+    (state.tabGroups?.length ?? 0) > 0 ||
+    Object.keys(state.terminalSizes ?? {}).length > 0 ||
+    Object.keys(state.draftInputs ?? {}).length > 0
+  );
 }
 
 async function rollBackProjectPanels(originals: Map<string, ProjectState>): Promise<void> {

@@ -589,6 +589,43 @@ describe("CrashRecoveryService", () => {
         .filter((f) => f.startsWith("session-state.crashed-"));
       expect(remaining).toEqual([]);
     });
+
+    it("reports a failed write and keeps the crashed backup for a retry (#16257)", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { sidebarWidth: 999, terminals: [] },
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      svc.initialize();
+      storeMock.set.mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      expect(svc.resetToFresh()).toBe(false);
+      expect(
+        fs.readdirSync(backupDir).filter((f) => f.startsWith("session-state.crashed-"))
+      ).toHaveLength(1);
+
+      storeMock.set.mockImplementation(() => {});
+      expect(svc.resetToFresh()).toBe(true);
+    });
   });
 
   describe("cleanupOnExit", () => {

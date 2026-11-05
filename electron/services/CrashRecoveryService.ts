@@ -28,7 +28,7 @@ import {
 } from "../utils/fs.js";
 import { WATCHDOG_KILL_FLAG_NAME } from "../watchdog-host-core.js";
 import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention.js";
-import { stateFilePath } from "./projectStorePaths.js";
+import { isValidWorkspaceStateId, stateFilePath } from "./projectStorePaths.js";
 import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { holdTerminalsEndedByHost, readHostEnd } from "./hostEndHoldPolicy.js";
@@ -652,6 +652,24 @@ export class CrashRecoveryService {
     }
   }
 
+  /**
+   * Workspaces whose persisted layout the crash snapshot captured, empty ones
+   * included. Their state files outlive the crash, so a fresh start has to
+   * clear them or the panels the dialog listed hydrate straight back. Empty
+   * for a legacy snapshot, whose only panel list is the global one.
+   *
+   * Read from the cached pre-crash snapshot only: without one, the disk
+   * fallback is this session's own backup, naming workspaces the dialog never
+   * listed.
+   */
+  getSnapshotWorkspaceIds(): string[] {
+    const layouts = this.cachedBackupSnapshot?.projectLayouts;
+    if (!isPlainObject(layouts)) return [];
+    return Object.keys(layouts).filter(
+      (id) => Array.isArray(layouts[id]) && isValidWorkspaceStateId(id)
+    );
+  }
+
   restoreBackup(panelIds?: string[]): boolean {
     try {
       let snapshot = this.resolveRestoreSnapshot();
@@ -736,7 +754,7 @@ export class CrashRecoveryService {
     return filter;
   }
 
-  resetToFresh(): void {
+  resetToFresh(): boolean {
     try {
       store.set("appState", {
         sidebarWidth: 350,
@@ -747,8 +765,10 @@ export class CrashRecoveryService {
       });
       this.unlinkCrashedBackup();
       console.log("[CrashRecovery] Reset to fresh state");
+      return true;
     } catch (err) {
       console.error("[CrashRecovery] Failed to reset to fresh:", err);
+      return false;
     }
   }
 

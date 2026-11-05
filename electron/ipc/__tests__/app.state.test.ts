@@ -1095,6 +1095,57 @@ describe("app:boot handler", () => {
       expect((result.appState as Record<string, unknown>).mruList).toEqual([]);
     });
 
+    describe("a workspace a crash fresh start cleared (#16257)", () => {
+      const STALE_GLOBAL_PANEL = {
+        id: "crashed-agent",
+        kind: "terminal",
+        title: "Agent",
+        location: "grid",
+        cwd: "/projects/real",
+      };
+
+      async function hydrateHeirWith(projectState: Record<string, unknown>) {
+        // The heir holding a global list is the case that could hand panels back.
+        legacyOwnerRef.current = REAL_PROJECT.id;
+        globalAppStateRef.current = {
+          ...DEFAULT_GLOBAL_APP_STATE,
+          terminals: [STALE_GLOBAL_PANEL],
+        };
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: { projectId: REAL_PROJECT.id, sidebarWidth: 350, ...projectState },
+          quarantinedPath: undefined,
+        } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+        return invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      }
+
+      it("hydrates with no panels and keeps the worktree selection", async () => {
+        const result = await hydrateHeirWith({
+          activeWorktreeId: "wt-kept",
+          terminals: [],
+          tabGroups: [],
+          terminalSizes: {},
+          draftInputs: {},
+        });
+        const appState = result.appState as Record<string, unknown>;
+
+        expect(appState.terminals).toEqual([]);
+        expect(appState.activeWorktreeId).toBe("wt-kept");
+        expect(result.tabGroups).toEqual([]);
+        expect(result.terminalSizes).toEqual({});
+        expect(result.draftInputs).toEqual({});
+      });
+
+      it("would inherit the global panel from a record with no terminal list", async () => {
+        // Control: proves the fixture above is one hydrate would act on, so its
+        // empty result comes from the cleared list and not from validation.
+        const result = await hydrateHeirWith({});
+
+        expect((result.appState as { terminals: Array<{ id: string }> }).terminals).toEqual([
+          expect.objectContaining({ id: STALE_GLOBAL_PANEL.id }),
+        ]);
+      });
+    });
+
     // The legacy record has exactly one heir. Nothing used to consume it, so
     // every project row that had not saved terminals yet re-read the same list
     // and was seeded with another project's panels — `cwd` and `worktreeId`

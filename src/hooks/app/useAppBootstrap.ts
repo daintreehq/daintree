@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAppBoot } from "./useAppBoot";
-import { useCrashRecoveryGate } from "./useCrashRecoveryGate";
+import { isCrashGateResolved, useCrashRecoveryGate } from "./useCrashRecoveryGate";
 import { useAppHydration } from "./useAppHydration";
 import { useShortcutHints } from "./useShortcutHints";
 import { useGettingStartedChecklist } from "./useGettingStartedChecklist";
@@ -65,7 +65,7 @@ export function useAppBootstrap() {
     updateConfig: updateCrashConfig,
   } = useCrashRecoveryGate(bootResult);
 
-  const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
+  const crashResolved = isCrashGateResolved(crashState);
 
   // When crash recovery was pending at boot, the resolve path (`restoreBackup`
   // or `resetToFresh` in CrashRecoveryService) mutates `store.appState` after
