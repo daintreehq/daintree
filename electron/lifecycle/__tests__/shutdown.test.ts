@@ -242,6 +242,13 @@ vi.mock("../../services/TelemetryService.js", () => ({
   closeTelemetry: closeTelemetryMock,
 }));
 
+// relaunchApp arms a real waiter process; the relaunch tests only need to see it armed.
+const armRelaunchMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../armRelaunch.js", () => ({
+  armRelaunch: armRelaunchMock,
+}));
+
 const isSmokeTestMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("../../setup/environment.js", () => ({
@@ -2776,6 +2783,59 @@ describe("registerShutdownHandler", () => {
       expect(onReadyToInstall).not.toHaveBeenCalled();
       expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
       expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+    });
+  });
+
+  // An app-initiated relaunch (GPU mitigation, hardware-acceleration toggle,
+  // state reset) runs this same chain, so only its real outcome may mark the
+  // exit clean (#16273).
+  describe("app-initiated relaunch", () => {
+    beforeEach(() => {
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+      performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(Promise.resolve());
+    });
+
+    async function setupRelaunch() {
+      const { registerShutdownHandler } = await import("../shutdown.js");
+      registerShutdownHandler(makeDeps());
+      const { relaunchApp } = await import("../appRelaunch.js");
+      return relaunchApp;
+    }
+
+    it("records a clean exit once the chain settles clean, before exiting into the relaunch", async () => {
+      const relaunchApp = await setupRelaunch();
+
+      relaunchApp("gpu-mitigation");
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+
+      expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+      expect(crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0]).toBeLessThan(
+        appMock.exit.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("leaves running.lock in place when the chain times out, and still relaunches", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+
+      try {
+        const relaunchApp = await setupRelaunch();
+        relaunchApp("gpu-mitigation");
+
+        await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS);
+        await vi.runAllTimersAsync();
+
+        expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+      } finally {
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
     });
   });
 
