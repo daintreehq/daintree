@@ -221,6 +221,32 @@ interface InboxEntry {
   bytes: number;
 }
 
+/**
+ * The bytes of every regular file under `target` and the newest mtime of
+ * anything in it, `target` included. Symlinks are counted as themselves and
+ * never followed, so nothing outside the inbox is measured.
+ */
+async function measureTree(
+  target: string,
+  stat: { mtimeMs: number; size: number; isFile(): boolean; isDirectory(): boolean }
+): Promise<{ bytes: number; mtimeMs: number }> {
+  let bytes = stat.isFile() ? stat.size : 0;
+  let mtimeMs = stat.mtimeMs;
+  if (!stat.isDirectory()) return { bytes, mtimeMs };
+  const pending = [target];
+  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+    for (const inner of await fs.readdir(dir).catch(() => [] as string[])) {
+      const innerPath = path.join(dir, inner);
+      const innerStat = await fs.lstat(innerPath).catch(() => null);
+      if (!innerStat) continue;
+      if (innerStat.isFile()) bytes += innerStat.size;
+      mtimeMs = Math.max(mtimeMs, innerStat.mtimeMs);
+      if (innerStat.isDirectory()) pending.push(innerPath);
+    }
+  }
+  return { bytes, mtimeMs };
+}
+
 export class HostInbox {
   readonly root: string;
   private readonly now: () => number;
@@ -451,17 +477,7 @@ export class HostInbox {
         const entryPath = path.join(dir, name);
         const stat = await fs.lstat(entryPath).catch(() => null);
         if (!stat) continue;
-        let bytes = stat.isFile() ? stat.size : 0;
-        let mtimeMs = stat.mtimeMs;
-        if (stat.isDirectory()) {
-          for (const inner of await fs.readdir(entryPath).catch(() => [] as string[])) {
-            const innerStat = await fs.lstat(path.join(entryPath, inner)).catch(() => null);
-            if (!innerStat) continue;
-            if (innerStat.isFile()) bytes += innerStat.size;
-            mtimeMs = Math.max(mtimeMs, innerStat.mtimeMs);
-          }
-        }
-        entries.push({ path: entryPath, kind: bucket, mtimeMs, bytes });
+        entries.push({ path: entryPath, kind: bucket, ...(await measureTree(entryPath, stat)) });
       }
     }
     return entries;

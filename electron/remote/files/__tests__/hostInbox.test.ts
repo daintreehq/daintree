@@ -252,6 +252,124 @@ describe("cleanup", () => {
   });
 });
 
+/** An entry holding a whole tree: `files` maps paths inside the folder to their size. */
+async function addTree(
+  entryName: string,
+  folderName: string,
+  files: Record<string, number>,
+  ageMs = 0
+): Promise<string> {
+  const entry = path.join(root, "files", entryName);
+  const touched = [entry];
+  for (const [relative, size] of Object.entries(files)) {
+    const file = path.join(entry, folderName, relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, Buffer.alloc(size));
+    touched.push(file);
+    for (let dir = path.dirname(file); dir !== entry; dir = path.dirname(dir)) touched.push(dir);
+  }
+  if (ageMs) {
+    for (const target of new Set(touched)) await age(target, ageMs);
+  }
+  return entry;
+}
+
+const exists = async (p: string) => !!(await fs.lstat(p).catch(() => null));
+
+describe("entries holding a tree", () => {
+  it("counts every file of a nested tree against the size cap", async () => {
+    const inbox = new HostInbox({ root, maxTotalBytes: 25 });
+    await inbox.ensure();
+    // The tree's direct children hold nothing; its 20 bytes are all nested.
+    const tree = await addTree(
+      "20200101-000000-aaaaaaaaaaaa",
+      "project",
+      { "src/a.ts": 8, "src/lib/b.ts": 8, "docs/deep/er/c.md": 4 },
+      3000
+    );
+    const newer = await addFile("files", "20200101-000001-bbbbbbbbbbbb", 10, 1000);
+    await inbox.cleanup();
+    expect(await exists(tree)).toBe(false);
+    expect(await exists(newer)).toBe(true);
+  });
+
+  it("keeps a tree within the cap when nothing pushes it over", async () => {
+    const inbox = new HostInbox({ root, maxTotalBytes: 25 });
+    await inbox.ensure();
+    const tree = await addTree("20200101-000000-aaaaaaaaaaaa", "project", {
+      "src/a.ts": 8,
+      "src/lib/b.ts": 8,
+    });
+    await addFile("files", "20200101-000001-bbbbbbbbbbbb", 8);
+    await inbox.cleanup();
+    expect(await exists(path.join(tree, "project", "src", "lib", "b.ts"))).toBe(true);
+  });
+
+  it("prunes an old tree whole, and keeps one a recent file inside holds fresh", async () => {
+    const inbox = new HostInbox({ root });
+    await inbox.ensure();
+    const old = await addTree(
+      "20200101-000000-aaaaaaaaaaaa",
+      "old",
+      { "a/b/c.txt": 4, "d.txt": 4 },
+      25 * HOUR
+    );
+    const touched = await addTree(
+      "20200101-000001-bbbbbbbbbbbb",
+      "touched",
+      { "a/b/c.txt": 4, "d.txt": 4 },
+      25 * HOUR
+    );
+    // An agent wrote deep inside this one an hour ago.
+    await age(path.join(touched, "touched", "a", "b", "c.txt"), HOUR);
+    await inbox.cleanup();
+    expect(await exists(old)).toBe(false);
+    expect(await exists(path.join(touched, "touched", "a", "b", "c.txt"))).toBe(true);
+    expect(await exists(path.join(touched, "touched", "d.txt"))).toBe(true);
+  });
+
+  it("never follows a symlink inside a tree when counting or pruning it", async () => {
+    const outside = await fs.mkdtemp(path.join(base, "outside-"));
+    await fs.writeFile(path.join(outside, "big.bin"), Buffer.alloc(100));
+    const inbox = new HostInbox({ root, maxTotalBytes: 50 });
+    await inbox.ensure();
+    const tree = await addTree("20200101-000000-aaaaaaaaaaaa", "project", { "a.txt": 4 });
+    await fs.symlink(outside, path.join(tree, "project", "linked"));
+    await inbox.cleanup();
+    // The 100 bytes behind the link aren't the inbox's: the tree stays under the cap.
+    expect(await exists(tree)).toBe(true);
+
+    await age(path.join(tree, "project", "a.txt"), 25 * HOUR);
+    await age(path.join(tree, "project"), 25 * HOUR);
+    await age(tree, 25 * HOUR);
+    await fs.lutimes(
+      path.join(tree, "project", "linked"),
+      new Date(Date.now() - 25 * HOUR),
+      new Date(Date.now() - 25 * HOUR)
+    );
+    await inbox.cleanup();
+    expect(await exists(tree)).toBe(false);
+    expect(await fs.readdir(outside)).toEqual(["big.bin"]);
+  });
+
+  it("still deduplicates an existing single-file entry beside a tree with the same id", async () => {
+    const inbox = new HostInbox({ root });
+    await inbox.ensure();
+    const content = Buffer.from("notes");
+    const sha256 = crypto.createHash("sha256").update(content).digest("hex");
+    const id = sha256.slice(0, 12);
+    // A tree whose folder carries the same name sorts first and must not be taken for it.
+    await addTree(`20200101-000000-${id}`, "notes.txt", { "inner.txt": content.byteLength });
+    const part = await inbox.createPart();
+    await part.handle.write(content);
+    await part.handle.close();
+    const placed = await inbox.place("files", part.path, "notes.txt", sha256);
+    expect(await inbox.findDuplicate("files", "notes.txt", sha256, content.byteLength)).toBe(
+      placed
+    );
+  });
+});
+
 async function addFileAt(dir: string, ageMs: number): Promise<void> {
   await fs.mkdir(dir);
   await fs.writeFile(path.join(dir, "a"), "x");
