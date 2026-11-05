@@ -405,6 +405,9 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       );
     });
 
+    const OAUTH_POPUP_URL =
+      "https://oauth.provider.com/authorize?client_id=test&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fcallback&code_challenge=abc123";
+
     it("delivers every guest push to its embedder while another project's view is active", () => {
       // Project A's view embeds the guest and sits cached; project B's view is
       // the window's active app view, which is all a window-level send reaches.
@@ -449,6 +452,10 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
           { preventDefault: vi.fn() },
           "https://example.com/"
         );
+        const openHandler = vi.mocked(contents.setWindowOpenHandler).mock.calls[0]![0] as (d: {
+          url: string;
+        }) => { action: string };
+        expect(openHandler({ url: OAUTH_POPUP_URL })).toEqual({ action: "deny" });
         getEventHandlers(contents, "unresponsive")[0]();
         getEventHandlers(contents, "responsive")[0]();
         const beforeInput = getEventHandlers(contents, "before-input-event")[0];
@@ -457,15 +464,25 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         beforeInput({ preventDefault: vi.fn() }, key("w"));
         getEventHandlers(contents, "did-navigate")[0]({}, "http://localhost:5173/next", 200, "OK");
 
-        expect(embedderSend.mock.calls.map(([channel]) => channel)).toEqual([
-          "webview:dialog-request",
-          "webview:navigation-blocked",
-          "webview:unresponsive",
-          "webview:responsive",
-          "webview:find-shortcut",
-          "webview:reload-shortcut",
-          "webview:close-shortcut",
-          "webview:dialog-dismiss",
+        expect(embedderSend.mock.calls).toEqual([
+          [
+            "webview:dialog-request",
+            expect.objectContaining({ panelId: "panel-a", type: "confirm", message: "Leave?" }),
+          ],
+          [
+            "webview:navigation-blocked",
+            expect.objectContaining({ panelId: "panel-a", url: "https://example.com/" }),
+          ],
+          [
+            "webview:navigation-blocked",
+            expect.objectContaining({ panelId: "panel-a", url: OAUTH_POPUP_URL }),
+          ],
+          ["webview:unresponsive", { panelId: "panel-a" }],
+          ["webview:responsive", { panelId: "panel-a" }],
+          ["webview:find-shortcut", { panelId: "panel-a", shortcut: "find" }],
+          ["webview:reload-shortcut", { panelId: "panel-a" }],
+          ["webview:close-shortcut", { panelId: "panel-a" }],
+          ["webview:dialog-dismiss", { panelId: "panel-a" }],
         ]);
         expect(activeViewSend).not.toHaveBeenCalled();
       } finally {
@@ -475,8 +492,9 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("resolves the dialog when the embedder cannot take the request", () => {
       const mockResolveDialog = vi.fn();
+      const registerDialog = vi.fn((_dialogId: string) => "panel-1");
       mockedGetWebviewDialogService.mockReturnValue({
-        registerDialog: vi.fn(() => "panel-1"),
+        registerDialog,
         getPanelId: vi.fn(),
         resolveDialog: mockResolveDialog,
       } as unknown as ReturnType<typeof getWebviewDialogService>);
@@ -498,13 +516,51 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       // Nobody will answer it, so the page is released with the dialog's
       // cancel answer instead of hanging on a prompt no view shows.
-      expect(mockResolveDialog).toHaveBeenCalledWith(expect.any(String), false);
+      expect(mockResolveDialog).toHaveBeenCalledWith(registerDialog.mock.calls[0]![0], false);
+    });
+
+    it.each([
+      ["has no embedder", undefined],
+      ["has a destroyed embedder", embedderWith(vi.fn(), true)],
+      [
+        "has an embedder whose send throws",
+        embedderWith(() => {
+          throw new Error("render frame disposed");
+        }),
+      ],
+    ])("leaves Cmd/Ctrl+R to the page when the guest %s", (_label, embedder) => {
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      if (embedder) {
+        (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedder;
+      }
+      simulateWebContentsCreated(contents);
+
+      const isMac = process.platform === "darwin";
+      const event = { preventDefault: vi.fn() };
+      getEventHandlers(contents, "before-input-event")[0](event, {
+        type: "keyDown",
+        key: "r",
+        meta: isMac,
+        control: !isMac,
+        alt: false,
+        shift: false,
+      });
+
+      // No view will reload, so swallowing the key would leave nothing happening.
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
 
     it("resolves dialog when the guest has no embedder", () => {
       const mockResolveDialog = vi.fn();
+      const registerDialog = vi.fn((_dialogId: string) => "panel-1");
       mockedGetWebviewDialogService.mockReturnValue({
-        registerDialog: vi.fn(() => "panel-1"),
+        registerDialog,
         getPanelId: vi.fn(),
         resolveDialog: mockResolveDialog,
       } as unknown as ReturnType<typeof getWebviewDialogService>);
@@ -517,7 +573,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       const mockCallback = vi.fn();
       jsDialogHandlers[0](mockEvent, "http://localhost:3000", "Alert", "alert", "", mockCallback);
 
-      expect(mockResolveDialog).toHaveBeenCalledWith(expect.any(String), true);
+      expect(mockResolveDialog).toHaveBeenCalledWith(registerDialog.mock.calls[0]![0], true);
     });
 
     it("sends find shortcut to the guest's embedder", () => {

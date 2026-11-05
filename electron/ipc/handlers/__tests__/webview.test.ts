@@ -70,15 +70,11 @@ const mainWindowMock = vi.hoisted(() => ({
   isDestroyed: vi.fn(() => false),
 }));
 
+// Window-level sends are their own spies: a row routed through one must not
+// look delivered just because it landed on the embedder mock.
 vi.mock("../../utils.js", () => ({
-  sendToRenderer: vi.fn(
-    (mainWindow: typeof mainWindowMock, channel: string, ...args: unknown[]) => {
-      mainWindow.webContents.send(channel, ...args);
-    }
-  ),
-  broadcastToRenderer: vi.fn((channel: string, ...args: unknown[]) => {
-    embedderMock.send(channel, ...args);
-  }),
+  sendToRenderer: vi.fn(),
+  broadcastToRenderer: vi.fn(),
   sendToWebContents: vi.fn(
     (
       wc: { send: (...a: unknown[]) => void; isDestroyed: () => boolean } | null | undefined,
@@ -489,6 +485,31 @@ describe("registerWebviewHandlers", () => {
       expect(broadcastToRenderer).not.toHaveBeenCalled();
     });
 
+    it("takes up a live embedder when capture restarts after the cached one was destroyed", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      const start = getHandler("webview:start-console-capture");
+      await start(null, 42, "pane-1");
+      await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+
+      // The session outlives the stop; the embedder it holds does not.
+      embedderMock.isDestroyed.mockReturnValue(true);
+      const nextEmbedder = { id: 8, send: vi.fn(), isDestroyed: vi.fn(() => false) };
+      mockWebContents.hostWebContents = nextEmbedder;
+      await start(null, 42, "pane-1");
+
+      getMessageListener()({}, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "after restart" }],
+        timestamp: 3002,
+      });
+
+      expect(nextEmbedder.send).toHaveBeenCalledWith(
+        "webview:console-message",
+        expect.objectContaining({ paneId: "pane-1", summaryText: "after restart" })
+      );
+      expect(embedderMock.send).not.toHaveBeenCalled();
+    });
+
     it("routes rows and context resets to the guest's embedder while another project's view is active", async () => {
       // Project A's view embeds the guest; project B's view is the window's
       // active app view, which is all a window-level send can reach.
@@ -514,6 +535,9 @@ describe("registerWebviewHandlers", () => {
           timestamp: 4001,
           exceptionDetails: { text: "Uncaught", exception: { type: "string", value: "boom" } },
         });
+        messageListener({}, "Log.entryAdded", {
+          entry: { source: "network", level: "error", text: "GET /@vite/client 504" },
+        });
         messageListener({}, "Runtime.executionContextsCleared", {});
         const detachCall = debuggerMock.on.mock.calls.find(
           ([event]: string[]) => event === "detach"
@@ -525,13 +549,25 @@ describe("registerWebviewHandlers", () => {
         expect(channelsTo(embedderA)).toEqual([
           "webview:console-message",
           "webview:console-message",
+          "webview:console-message",
           "webview:console-context-cleared",
           "webview:console-context-cleared",
         ]);
-        expect(embedderA.send).toHaveBeenCalledWith(
-          "webview:console-message",
-          expect.objectContaining({ paneId: "pane-a", summaryText: "[vite] hmr failed" })
-        );
+        const payloads = embedderA.send.mock.calls.map(([, payload]) => payload);
+        expect(payloads.slice(0, 3)).toEqual([
+          expect.objectContaining({ paneId: "pane-a", summaryText: "[vite] hmr failed" }),
+          expect.objectContaining({ paneId: "pane-a", summaryText: "Uncaught" }),
+          expect.objectContaining({ paneId: "pane-a", summaryText: "GET /@vite/client 504" }),
+        ]);
+        const [cleared, detached] = payloads.slice(3) as Array<{
+          paneId: string;
+          navigationGeneration: number;
+        }>;
+        expect(cleared.paneId).toBe("pane-a");
+        expect(detached).toEqual({
+          paneId: "pane-a",
+          navigationGeneration: cleared.navigationGeneration + 1,
+        });
         expect(activeB.send).not.toHaveBeenCalled();
         expect(embedderMock.send).not.toHaveBeenCalled();
         expect(sendToRenderer).not.toHaveBeenCalled();

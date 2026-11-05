@@ -316,25 +316,41 @@ describe("webview OAuth loopback CDP token-exchange rewrite", () => {
     );
   });
 
-  it("reports a timed-out sign-in to the embedder captured when the flow began", async () => {
-    // The sign-in waits on the system browser; whatever happens to the guest
-    // meanwhile, its status still belongs to the view that started it.
-    startOAuthLoopbackMock.mockImplementation(async () => {
-      mockWebContents.hostWebContents = null;
-      return { success: false, cause: "timed-out" };
-    });
+  it.each([
+    ["timed-out", { phase: "timed-out", message: "Sign-in timed out" }],
+    ["error", { phase: "error", message: undefined }],
+  ] as const)(
+    "reports a %s sign-in to the embedder captured before the flow first awaited",
+    async (cause, status) => {
+      // The sign-in waits on the system browser; whatever happens to the guest
+      // after the flow starts, its status still belongs to the view that began it.
+      mockDialogService.consumeOAuthSessionStorage.mockImplementationOnce(async () => {
+        mockWebContents.hostWebContents = null;
+        return [];
+      });
+      startOAuthLoopbackMock.mockResolvedValue({ success: false, cause });
 
-    try {
-      await getOAuthHandler()(null, "https://idp.example.com/authorize", "oauth-panel", 42);
-    } finally {
-      mockWebContents.hostWebContents = embedder;
+      try {
+        await getOAuthHandler()(null, "https://idp.example.com/authorize", "oauth-panel", 42);
+      } finally {
+        mockWebContents.hostWebContents = embedder;
+      }
+
+      expect(sendToWebContents).toHaveBeenCalledTimes(1);
+      expect(sendToWebContents).toHaveBeenCalledWith(embedder, "webview:oauth-loopback-status", {
+        panelId: "oauth-panel",
+        ...status,
+      });
+      expect(sendToRenderer).not.toHaveBeenCalled();
     }
+  );
 
-    expect(sendToWebContents).toHaveBeenCalledWith(embedder, "webview:oauth-loopback-status", {
-      panelId: "oauth-panel",
-      phase: "timed-out",
-      message: "Sign-in timed out",
-    });
+  it("sends no status for a cancelled sign-in", async () => {
+    startOAuthLoopbackMock.mockResolvedValue({ success: false, cause: "cancelled" });
+
+    await getOAuthHandler()(null, "https://idp.example.com/authorize", "oauth-panel", 42);
+
+    expect(sendToWebContents).not.toHaveBeenCalled();
     expect(sendToRenderer).not.toHaveBeenCalled();
   });
 });

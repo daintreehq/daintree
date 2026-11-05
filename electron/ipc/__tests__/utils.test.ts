@@ -479,14 +479,31 @@ describe("sendToWebContents", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("withholds what the remote-bound view filter refuses", () => {
-    const send = vi.fn();
-    const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 7);
+  it("asks the remote-bound view filter about each push and honours its answer", () => {
+    const refused = vi.fn();
+    const accepted = vi.fn();
+    const filter = vi.fn((webContentsId: number) => webContentsId !== 7);
+    const uninstall = setRemoteBoundViewFilter(filter);
     try {
       expect(
-        sendToWebContents({ id: 7, isDestroyed: () => false, send } as never, "channel:test")
+        sendToWebContents(
+          { id: 7, isDestroyed: () => false, send: refused } as never,
+          "channel:test",
+          { row: 1 }
+        )
       ).toBe(false);
-      expect(send).not.toHaveBeenCalled();
+      expect(
+        sendToWebContents(
+          { id: 8, isDestroyed: () => false, send: accepted } as never,
+          "channel:test",
+          { row: 2 }
+        )
+      ).toBe(true);
+
+      expect(filter).toHaveBeenNthCalledWith(1, 7, "channel:test", [{ row: 1 }]);
+      expect(filter).toHaveBeenNthCalledWith(2, 8, "channel:test", [{ row: 2 }]);
+      expect(refused).not.toHaveBeenCalled();
+      expect(accepted).toHaveBeenCalledWith("channel:test", { row: 2 });
     } finally {
       uninstall();
     }
