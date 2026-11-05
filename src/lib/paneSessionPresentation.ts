@@ -38,10 +38,11 @@ function isStillStopped(pane: PaneObservation): boolean {
 }
 
 /**
- * A pane the fleet places in `needs-you` — Canopy read an ask on its current
- * turn that the user hasn't had in front of them — and still stopped as the
- * pane last saw it. What the amber glyph and the counts stand for; the pane
- * edge reads the wider {@link isUnseenAskPane}.
+ * A pane the fleet places in `needs-you` — its agent printed that it needs the
+ * user, or Canopy read an ask on its current turn that the user hasn't had in
+ * front of them — and still stopped as the pane last saw it. What the amber
+ * glyph and the counts stand for; the pane edge reads the wider
+ * {@link isUnseenAskPane}.
  */
 export function isNeedsYouPane(
   needsYouRunIds: ReadonlySet<string>,
@@ -51,22 +52,33 @@ export function isNeedsYouPane(
 }
 
 /**
- * A pane whose current stop the fleet reads as an ask the user hasn't seen
+ * A pane whose current stop the fleet reads as an outstanding ask
  * (`runUnseenAsk`), and the pane's own newer observation still agrees. What the
  * full-pane amber edge draws for, the pane's own or a hidden tab's.
  *
- * Canopy's reading holds for the turn it read, whatever stop the pane has
- * slid to since, so it only needs the run still stopped. An observed ask is
- * the wait itself: a pane that has since shown a different stop — finished,
- * idle, or at a plain prompt — is a poll ahead of the fleet, and the ask is
- * over. A wait the pane holds no reason for is still the fleet's to call: the
- * input controller's directing spell hands the wait back without one.
+ * The agent's own report holds until the next prompt, and Canopy's reading
+ * for the turn it read, whatever stop the pane has slid to since, so both only
+ * need the run still stopped. An observed ask is the wait itself: a pane that
+ * has since shown a different stop — finished, idle, or at a plain prompt — is
+ * a poll ahead of the fleet, and the ask is over. A wait the pane holds no
+ * reason for is still the fleet's to call: the input controller's directing
+ * spell hands the wait back without one.
  */
 export function isUnseenAskPane(ask: UnseenAsk | undefined, pane: PaneObservation): boolean {
   if (ask === undefined || !isStillStopped(pane)) return false;
-  if (ask === "canopy") return true;
-  const { agentState } = pane;
-  return agentState !== "completed" && agentState !== "idle" && pane.waitingReason !== "prompt";
+  switch (ask) {
+    case "agent":
+    case "canopy":
+      return true;
+    case "observed": {
+      const { agentState } = pane;
+      return agentState !== "completed" && agentState !== "idle" && pane.waitingReason !== "prompt";
+    }
+    default: {
+      const exhaustive: never = ask;
+      return exhaustive;
+    }
+  }
 }
 
 /**
@@ -75,7 +87,7 @@ export function isUnseenAskPane(ask: UnseenAsk | undefined, pane: PaneObservatio
  * the run (dock, tabs, switcher, sidebar, Canopy), so they all agree.
  *
  * The display state keeps every live agent visible by drawing a quiet one as
- * `waiting`, so the band decides what that wait is: an unread Canopy ask is the
+ * `waiting`, so the band decides what that wait is: a run in Needs you is the
  * amber ring, a hand-back or an unread wait is the unread mark, a read one is
  * finished, and an error wait is blocked. Everything else — a prompt that asks
  * nothing, a seen ask, the user's own park or snooze, or no fleet report yet —

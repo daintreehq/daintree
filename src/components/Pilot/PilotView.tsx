@@ -475,6 +475,7 @@ function RunRow({
     row.canopyEvidence === null
       ? null
       : `${row.canopyEvidence.claim}, ${row.canopyEvidence.attribution}`,
+    row.agentReport,
     row.agePhrase,
     row.secondaryPhrase,
   ]
@@ -552,6 +553,21 @@ function RunRow({
         >
           <span className="min-w-0 truncate">{row.canopyEvidence.claim}</span>
           <span className="shrink-0">· {row.canopyEvidence.attribution}</span>
+        </span>
+      )}
+
+      {/*
+        The agent's own word that it needs the user, in the same slot: it
+        outranks a reading and a park outranks it, so none of the three share
+        a row.
+      */}
+      {row.agentReport !== null && (
+        <span
+          aria-hidden="true"
+          data-agent-report=""
+          className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-text-secondary"
+        >
+          {row.agentReport}
         </span>
       )}
 

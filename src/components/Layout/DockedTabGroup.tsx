@@ -722,8 +722,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   });
   const agentState = getDockDisplayAgentState(activePanel);
   const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
-  // The run's fleet band decides the glyph, as on the pane's own chip: only an
-  // unread Canopy ask is a wait.
+  // The run's fleet band decides the glyph, as on the pane's own chip: only a
+  // run in Needs you is a wait.
   const shownAgentState = resolvePaneSessionPresentation(
     displayAgentState,
     activeBand,

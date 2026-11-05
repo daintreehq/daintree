@@ -142,9 +142,8 @@ export function getGroupBlockedAgentState(
 
 /**
  * The state a grid tab group's edge takes from its members. Waiting is a hidden
- * tab whose stop the fleet reads as an ask the user hasn't seen
- * (`runUnseenAsk`) — the shown tab draws its own — and working is any member at
- * work.
+ * tab whose stop the fleet reads as an outstanding ask (`runUnseenAsk`) — the
+ * shown tab draws its own — and working is any member at work.
  */
 export function getGroupAmbientAgentState(
   panels: ReadonlyArray<AgentStateSource>,

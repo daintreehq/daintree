@@ -35,8 +35,8 @@ export type OverflowBadgeSeverity = "critical" | "waiting" | "warning" | "notice
  * Per PANEL, never per agent type: a `working` session must not hide a
  * sibling `waiting` one — that is exactly what the badge exists to surface,
  * and the trigger's accessible name has to agree with the badge. A session's
- * dot is its agent button's pip (`sessionPipState`): waiting only for an
- * unread Canopy ask.
+ * dot is its agent button's pip (`sessionPipState`): waiting only for a run
+ * in Needs you.
  */
 export function countOverflowAgentStates(
   panelsById: Record<string, PanelInstance>,

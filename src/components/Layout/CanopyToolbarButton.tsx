@@ -8,7 +8,7 @@ import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
-import { bandForRun } from "@shared/utils/fleetBands";
+import { runUnseenAsk } from "@shared/utils/fleetBands";
 import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -21,16 +21,18 @@ const CANOPY_LABEL = "Canopy";
 
 /**
  * Runs Canopy read asking the user something they haven't had in front of them
- * since: the fleet's own `needs-you` band. Main marks the ask read once the run
- * has been in front of the user for the read dwell, in its pane or in Canopy's
- * panel, so a look in any project view takes it off every view's count, and a
- * new ask is a new turn that counts again. Parked, snoozed, archived and
- * replied runs never band there.
+ * since: the fleet's `needs-you` band where Canopy's reading placed the run.
+ * One the agent's own needs-you marker placed is the agent's claim, not
+ * Canopy's, and the badge doesn't take credit for it. Main marks the ask read
+ * once the run has been in front of the user for the read dwell, in its pane
+ * or in Canopy's panel, so a look in any project view takes it off every
+ * view's count, and a new ask is a new turn that counts again. Parked,
+ * snoozed, archived and replied runs never band there.
  */
 function urgentCount(fleet: FleetSnapshot | null): number {
   if (!fleet) return 0;
   let count = 0;
-  for (const run of fleet.runs) if (bandForRun(run) === "needs-you") count += 1;
+  for (const run of fleet.runs) if (runUnseenAsk(run) === "canopy") count += 1;
   return count;
 }
 

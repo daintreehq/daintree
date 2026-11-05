@@ -35,7 +35,7 @@ export function usePaneObservation(terminalId: string | null): PaneObservation |
 /**
  * What one terminal's state glyph draws, wherever the run shows: its display
  * state through the run's fleet band and the pane's own observation, the call
- * the pane's header makes. Amber is an unread Canopy ask the pane still shows
+ * the pane's header makes. Amber is a run in Needs you the pane still shows
  * stopped, a hand-back is unread or finished, an error wait is blocked, and a
  * prompt that asks nothing draws nothing.
  */

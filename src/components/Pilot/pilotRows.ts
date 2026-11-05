@@ -3,6 +3,7 @@ import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
+  isAgentReportedNeed,
   runCanopyPlacement,
   bandLabel,
   bandTimestamp,
@@ -94,6 +95,13 @@ export interface PilotAgentRow {
    * moved has to say so and show the words it moved on.
    */
   canopyEvidence: CanopyEvidenceParts | null;
+  /**
+   * The attribution for a row the agent's own needs-you marker placed, in the
+   * same slot: what moved it is the agent's claim, not a reading, and the row
+   * says whose. Fixed words, since the fleet row carries the report and never
+   * the agent's summary. Null for every other row.
+   */
+  agentReport: string | null;
   /**
    * How long the run has been WORKING, on a row whose clock is measuring
    * something else. Only a quiet row has one, and it exists purely for the
@@ -445,16 +453,24 @@ function ageOf(
 
 /**
  * The attribution for a row Canopy placed. A park or snooze outranks the
- * reading, and a row the user shelved must not claim a reading moved it.
+ * reading, and so does the agent's own report, so a row either of them placed
+ * must not claim a reading moved it.
  */
 function canopyEvidenceFor(
   run: FleetRunRow,
   band: FleetBand,
   nowMs: number
 ): CanopyEvidenceParts | null {
-  if (band === "parked" || band === "snoozed") return null;
+  if (band === "parked" || band === "snoozed" || isAgentReportedNeed(run)) return null;
   const placement = runCanopyPlacement(run);
   return placement === undefined ? null : canopyEvidenceParts(placement, nowMs);
+}
+
+/** What a row the agent's needs-you marker placed says of it. */
+export const AGENT_REPORT_EVIDENCE = "Says it needs you";
+
+function agentReportFor(run: FleetRunRow, band: FleetBand): string | null {
+  return band === "needs-you" && isAgentReportedNeed(run) ? AGENT_REPORT_EVIDENCE : null;
 }
 
 /**
@@ -522,6 +538,7 @@ export function buildPilotGroups(
         ...ageOf(run, band, ctx.nowMs),
         parkNote: run.park?.note ?? null,
         canopyEvidence: canopyEvidenceFor(run, band, ctx.nowMs),
+        agentReport: agentReportFor(run, band),
       };
     });
 
@@ -806,6 +823,7 @@ export function buildPilotPluginGroup(
     agePhrase: null,
     parkNote: null,
     canopyEvidence: null,
+    agentReport: null,
     secondaryPhrase: null,
   }));
   return narrowGroup<PilotPluginGroup>(

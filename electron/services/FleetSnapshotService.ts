@@ -304,6 +304,7 @@ export class FleetSnapshotService {
         x.handBack?.markedUnreadAt !== y.handBack?.markedUnreadAt ||
         x.wait?.stoppedAt !== y.wait?.stoppedAt ||
         x.wait?.seenAt !== y.wait?.seenAt ||
+        x.handbackReport !== y.handbackReport ||
         x.quietSince !== y.quietSince ||
         x.answerAttention !== y.answerAttention ||
         !sameCanopyRefinement(x.canopy, y.canopy)
@@ -401,6 +402,11 @@ export class FleetSnapshotService {
           ...(snooze !== undefined ? { snooze } : {}),
           ...(handBack !== undefined ? { handBack } : {}),
           ...(wait !== undefined ? { wait } : {}),
+          // Only the report, never the summary: a fleet row carries no
+          // terminal or handback text, and a done report places nothing.
+          ...(terminal.lastHandback?.report === "needs-you"
+            ? { handbackReport: "needs-you" as const }
+            : {}),
           ...(canopy !== undefined ? { canopy } : {}),
           ...(answerAttention !== undefined ? { answerAttention } : {}),
           // Stall cue: only for a working run, and only once the CURRENT

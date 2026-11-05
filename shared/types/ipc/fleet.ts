@@ -252,6 +252,16 @@ export interface FleetRunRow {
    */
   wait?: RunWaitRecord;
   /**
+   * Present iff the run's latest handback marker is the needs-you one: the
+   * agent printed that it needs the user to look, decide or act before it can
+   * go on (#16190). An observation of what was printed, and the agent's own
+   * claim — never a verdict, and never its summary text. Held until the
+   * terminal's `lastHandback` clears, on the next prompt or a respawn, so it
+   * can outlive the stop it was printed at; `bandForRun` reads it only while
+   * the run is still stopped.
+   */
+  handbackReport?: "needs-you";
+  /**
    * When a WORKING run last showed signs of life — the later of its last
    * output and its entry into the current working stint — present only once
    * that silence has crossed main's stall threshold. "Working · 47m" and

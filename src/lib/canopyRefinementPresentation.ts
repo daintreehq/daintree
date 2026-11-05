@@ -1,6 +1,6 @@
 import type { FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import { bandForRun, runCanopyPlacement } from "@/lib/fleetAttention";
+import { bandForRun, isAgentReportedNeed, runCanopyPlacement } from "@/lib/fleetAttention";
 
 /** Longest quote a row carries; the screen line it came from can run to the pane's width. */
 const MAX_QUOTE_LENGTH = 160;
@@ -55,8 +55,9 @@ const indexCache = new WeakMap<FleetSnapshot, Map<string, RunCanopyRefinement>>(
 
 /**
  * The refinement placing one run (`runId` is the terminal id), or undefined
- * when the free rules alone placed it — a park or snooze included, which
- * outranks any reading. A snapshot not yet delivered places nothing.
+ * when something else placed it: the free rules, a park or snooze, or the
+ * agent's own needs-you report, each of which outranks any reading. A
+ * snapshot not yet delivered places nothing.
  */
 export function canopyPlacementForRun(
   snapshot: FleetSnapshot | null,
@@ -68,7 +69,7 @@ export function canopyPlacementForRun(
     index = new Map();
     for (const run of snapshot.runs) {
       const placement = runCanopyPlacement(run);
-      if (placement === undefined) continue;
+      if (placement === undefined || isAgentReportedNeed(run)) continue;
       const band = bandForRun(run);
       if (band === "parked" || band === "snoozed") continue;
       index.set(run.runId, placement);

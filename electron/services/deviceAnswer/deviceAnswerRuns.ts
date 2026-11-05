@@ -38,6 +38,12 @@ export interface WaitingRunView {
   /** The user parked or snoozed it here; it is still waiting all the same. */
   parked: boolean;
   snoozed: boolean;
+  /**
+   * The agent printed that it needs the person (#16190): its own claim, as
+   * the fleet row carries it, never its words. Absent from a host from before
+   * it said, which ranks the run by its wait alone.
+   */
+  handbackReport?: "needs-you";
   /** The bottom of its screen as plain text, or null when it couldn't be read. */
   screen: string | null;
   /** The options its screen draws that a press can reach, top to bottom. */
@@ -142,16 +148,19 @@ export function isRunStillWaiting(
 
 type Need = Pick<
   WaitingRunSummary,
-  "runId" | "spawnedAt" | "waitingReason" | "since" | "parked" | "snoozed"
+  "runId" | "spawnedAt" | "waitingReason" | "since" | "parked" | "snoozed" | "handbackReport"
 >;
 
 /**
- * Approvals, questions and errors ask something of the person; an agent at
- * its prompt has handed back. Either set aside (parked, snoozed) comes after
- * the same kind left in front of them.
+ * Approvals, questions and errors ask something of the person, and so does an
+ * agent that printed that it needs them; one merely at its prompt has handed
+ * back. Either set aside (parked, snoozed) comes after the same kind left in
+ * front of them.
  */
 function tierOf(run: Need): number {
-  const asks = !isHandBackStop("waiting", run.waitingReason ?? undefined);
+  const asks =
+    run.handbackReport === "needs-you" ||
+    !isHandBackStop("waiting", run.waitingReason ?? undefined);
   return (asks ? 0 : 2) + (run.parked || run.snoozed ? 1 : 0);
 }
 
@@ -183,6 +192,7 @@ function needOf(row: FleetRunRow): Need {
     since: row.since ?? null,
     parked: row.park !== undefined,
     snoozed: row.snooze !== undefined,
+    ...(row.handbackReport !== undefined ? { handbackReport: row.handbackReport } : {}),
   };
 }
 

@@ -62,7 +62,7 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   waitingCount: number;
 } {
   const worktreeIds = useWorktreeIds();
-  // Only an unread Canopy ask reaches the title's `(N)` or the Dock badge — the
+  // Only a run in Needs you reaches the title's `(N)` or the Dock badge — the
   // same call every other waiting count makes. A prompt that asks nothing and
   // a hand-back don't.
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
@@ -122,8 +122,8 @@ function useFleetBandTerminals(bands: ReadonlySet<FleetBand>): PtyPanelData[] {
 
 /**
  * Agents asking for something: the sidebar's Attention bucket. A hand-back is
- * not one of them unless Canopy read an ask in it, and a parked or snoozed
- * agent has been shelved by the user.
+ * not one of them unless its agent said it needs the user or Canopy read an
+ * ask in it, and a parked or snoozed agent has been shelved by the user.
  */
 export function useWaitingTerminals(): PtyPanelData[] {
   return useFleetBandTerminals(ATTENTION_FILTER_BANDS);

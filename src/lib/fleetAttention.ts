@@ -2,6 +2,7 @@ import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import {
   FLEET_BANDS,
   bandForRun,
+  isAgentReportedNeed,
   runCanopyPlacement,
   runUnseenAsk,
   type FleetBand,
@@ -12,6 +13,7 @@ import { isHandBackStop } from "@shared/utils/runHandBack";
 export {
   FLEET_BANDS,
   bandForRun,
+  isAgentReportedNeed,
   runCanopyPlacement,
   runUnseenAsk,
   type FleetBand,
@@ -94,8 +96,9 @@ export function fleetBandRunKey(
 }
 
 /**
- * The one band the amber glyph and the counts stand for: a Canopy reading of an
- * ask the user hasn't seen. The pane edge reads the wider {@link runUnseenAsk}.
+ * The one band the amber glyph and the counts stand for: a stopped run whose
+ * agent printed that it needs the user, or a Canopy reading of an ask the user
+ * hasn't seen. The pane edge reads the wider {@link runUnseenAsk}.
  */
 export const NEEDS_YOU_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["needs-you"]);
 
@@ -103,8 +106,8 @@ const NO_UNSEEN_ASKS: ReadonlyMap<string, UnseenAsk> = new Map();
 const unseenAskCache = new WeakMap<FleetSnapshot, ReadonlyMap<string, UnseenAsk>>();
 
 /**
- * Every run whose current stop is an ask the user hasn't seen, by run id (the
- * terminal id), with whose ask it is: what the pane edge draws amber for.
+ * Every run whose current stop is an outstanding ask, by run id (the terminal
+ * id), with whose ask it is: what the pane edge draws amber for.
  * Cached per snapshot and empty before the first one. Each snapshot reads a
  * new map, so a selector over it compares shallowly.
  */

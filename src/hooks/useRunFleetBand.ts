@@ -31,14 +31,14 @@ export function useFleetBandRunIds(bands: ReadonlySet<FleetBand>): ReadonlySet<s
 }
 
 /**
- * This terminal's current stop as an ask the user hasn't seen, and whose:
- * the pane edge's amber. Undefined before the fleet has reported it.
+ * This terminal's current stop as an outstanding ask, and whose: the pane
+ * edge's amber. Undefined before the fleet has reported it.
  */
 export function useRunUnseenAsk(terminalId: string): UnseenAsk | undefined {
   return useFleetSnapshotStore((s) => fleetUnseenAskForRun(s.snapshot, terminalId));
 }
 
-/** Every run asking unseen, by run id, the same map across pushes that leave the asks alone. */
+/** Every run with an outstanding ask, by run id, the same map across pushes that leave the asks alone. */
 export function useUnseenAsks(): ReadonlyMap<string, UnseenAsk> {
   return useFleetSnapshotStore(useShallow((s) => fleetUnseenAsks(s.snapshot)));
 }
