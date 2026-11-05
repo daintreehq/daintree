@@ -1539,8 +1539,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "diagnostics",
-    "danger": "safe",
-    "dangerRationale": undefined,
+    "danger": "confirm",
+    "dangerRationale": "Drops every captured event from the inspector view and main's in-memory capture buffer. There is no undo.",
     "description": "Clear captured events in the event inspector",
     "examples": undefined,
     "id": "eventInspector.clear",

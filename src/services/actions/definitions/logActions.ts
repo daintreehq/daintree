@@ -452,8 +452,14 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Clear captured events in the event inspector",
     category: "diagnostics",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
+    // Confirm is wired at the Diagnostics dock call site, NOT in run(); user-source
+    // dispatch isn't gated, so a palette pick would wipe events unprompted. Same
+    // shape as logs.clear.
+    palette: { mode: "hidden" },
     scope: "renderer",
+    dangerRationale:
+      "Drops every captured event from the inspector view and main's in-memory capture buffer. There is no undo.",
     run: async () => {
       useEventStore.getState().clearEvents();
       await eventInspectorClient.clear();

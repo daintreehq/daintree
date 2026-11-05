@@ -101,6 +101,7 @@ const AUDITED_LEAKY_IDS: readonly string[] = [
   "keybinding.resetAll",
   "worktree.sessions.endAll",
   "logs.clear",
+  "eventInspector.clear",
 ];
 
 describe("action palette behavior", () => {
