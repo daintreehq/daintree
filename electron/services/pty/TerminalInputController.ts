@@ -25,6 +25,8 @@ import {
   isFocusReport,
   isTerminalReportOnly,
   delay,
+  BRACKETED_PASTE_END,
+  BRACKETED_PASTE_START,
   PASTE_THRESHOLD_CHARS,
   OUTPUT_SETTLE_DEBOUNCE_MS,
   OUTPUT_SETTLE_MAX_WAIT_MS,
@@ -44,9 +46,12 @@ import {
 
 const IMAGE_STAT_TIMEOUT_MS = 1000;
 
-/** A carriage return that isn't the second half of an ESC-prefixed soft newline. */
-function hasBareEnter(data: string): boolean {
-  for (let i = data.indexOf("\r"); i !== -1; i = data.indexOf("\r", i + 1)) {
+/**
+ * A carriage return in `data` between `from` and `to` that isn't the second
+ * half of an ESC-prefixed soft newline.
+ */
+function hasBareEnter(data: string, from: number, to: number): boolean {
+  for (let i = data.indexOf("\r", from); i !== -1 && i < to; i = data.indexOf("\r", i + 1)) {
     if (i === 0 || data[i - 1] !== "\x1b") return true;
   }
   return false;
@@ -104,6 +109,8 @@ function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
 export class TerminalInputController {
   private shutdownLockDepth = 0;
   private inputGeneration = 0;
+  /** A bracketed paste raw input opened and hasn't closed yet, so its CRs are text. */
+  private typedPasteOpen = false;
   /**
    * When the submit lane last wrote to the prompt (#13496). A strict
    * submission waits for the agent's state to change after it, so a brief
@@ -206,6 +213,9 @@ export class TerminalInputController {
 
     terminal.lastInputTime = Date.now();
     if (!isTerminalReportOnly(data)) this.stampTyped(terminal.lastInputTime);
+    // Read before the analysis hears the keys: in-thread, it can move the
+    // state on before the write returns.
+    const reachesPrompt = keysReachPrompt(terminal);
     if (traceId !== undefined) {
       terminal.traceId = traceId || undefined;
     }
@@ -219,7 +229,7 @@ export class TerminalInputController {
 
     try {
       terminal.ptyProcess.write(data);
-      this.noteTypedSubmit(data);
+      this.noteTypedSubmit(data, reachesPrompt);
       return { ok: true };
     } catch (error) {
       this.host.logWriteError(error, { operation: "tryWrite", traceId });
@@ -276,6 +286,9 @@ export class TerminalInputController {
       return false;
     }
     terminal.lastInputTime = Date.now();
+    // Read before the analysis hears the keys: in-thread, it can move the
+    // state on before the write returns.
+    const reachesPrompt = keysReachPrompt(terminal);
     // `rethrow` is the submit lane's own body and Enter, which leave the
     // composer empty once the Enter lands; only raw input can leave a draft.
     if (!rethrow && !isTerminalReportOnly(data)) {
@@ -361,6 +374,7 @@ export class TerminalInputController {
         this.host.logWriteError(error, { operation: "write(bracketed-paste)", traceId });
         return false;
       }
+      if (!rethrow) this.noteTypedSubmit(data, reachesPrompt);
       return true;
     }
 
@@ -378,7 +392,7 @@ export class TerminalInputController {
     }
     // The submit lane drops the handback once its own Enter lands; typed keys
     // are the other way a prompt reaches the agent.
-    if (!rethrow) this.noteTypedSubmit(data);
+    if (!rethrow) this.noteTypedSubmit(data, reachesPrompt);
     return true;
   }
 
@@ -386,16 +400,42 @@ export class TerminalInputController {
    * Typed keys that submit the agent's next prompt drop the last handback, as
    * a submission through the lane does (#16190): the marker answered the turn
    * before, and a needs-you report left standing would place the next stop in
-   * Needs you though that turn never said so. Only a bare Enter submits: a
-   * soft newline is ESC followed by CR, and keys on an approval dialog pick an
-   * option rather than reach the prompt.
+   * Needs you though that turn never said so. Only a bare Enter outside a
+   * paste submits: a soft newline is ESC followed by CR, a pasted CR is text,
+   * and keys on an approval dialog pick an option rather than reach the
+   * prompt. `reachesPrompt` is read before the analysis heard the keys.
    */
-  private noteTypedSubmit(data: string): void {
+  private noteTypedSubmit(data: string, reachesPrompt: boolean): void {
+    const submits = this.typedSubmit(data);
     const terminal = this.host.terminalInfo;
-    if (terminal.lastHandback === undefined || !keysReachPrompt(terminal)) return;
-    if (!hasBareEnter(data)) return;
+    if (!submits || !reachesPrompt || terminal.lastHandback === undefined) return;
     terminal.lastHandback = undefined;
     terminal.lastHandbackUnpublished = false;
+  }
+
+  /**
+   * Whether raw `data` holds a bare Enter outside any bracketed paste. A paste
+   * can arrive across writes (CopyTree streams its body between the markers),
+   * so one left open is carried to the next write.
+   */
+  private typedSubmit(data: string): boolean {
+    let submits = false;
+    let at = 0;
+    while (at < data.length) {
+      if (this.typedPasteOpen) {
+        const end = data.indexOf(BRACKETED_PASTE_END, at);
+        if (end === -1) return submits;
+        this.typedPasteOpen = false;
+        at = end + BRACKETED_PASTE_END.length;
+        continue;
+      }
+      const start = data.indexOf(BRACKETED_PASTE_START, at);
+      if (hasBareEnter(data, at, start === -1 ? data.length : start)) submits = true;
+      if (start === -1) return submits;
+      this.typedPasteOpen = true;
+      at = start + BRACKETED_PASTE_START.length;
+    }
+    return submits;
   }
 
   submit(

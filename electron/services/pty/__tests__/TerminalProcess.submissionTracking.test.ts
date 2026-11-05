@@ -5,6 +5,7 @@ import { TerminalProcess } from "../TerminalProcess.js";
 import { events } from "../../events.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { TerminalInputController } from "../TerminalInputController.js";
+import type { AnalysisBackend } from "../analysis/AnalysisBackend.js";
 import { OUTPUT_PROGRESS_SAMPLE_MS } from "../OutputProgressTracker.js";
 
 /**
@@ -423,6 +424,69 @@ describe("TerminalProcess handback requests (#12488)", () => {
     info.lastHandback = handback;
     terminal.tryWrite("go on\r");
     expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback through a paste broadcast whole or streamed across writes, until an Enter after it", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+    info.lastHandback = handback;
+
+    terminal.tryWrite("\x1b[200~one\rtwo\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+
+    // CopyTree writes the markers apart from the body it streams between them.
+    terminal.write("\x1b[200~");
+    terminal.write("first\rsecond\r");
+    terminal.write("third\r");
+    terminal.write("\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+
+    terminal.write("\x1b[200~pasted\x1b[201~\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback when keys answer an approval the analysis moves on as they arrive", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    info.lastHandback = handback;
+    const analysis = (
+      terminal as unknown as {
+        inputController: { host: { analysis: AnalysisBackend } };
+      }
+    ).inputController.host.analysis;
+    // In-thread, the input observation sets the agent working before the write returns.
+    vi.spyOn(analysis, "hasMonitor").mockReturnValue(true);
+    vi.spyOn(analysis, "notifyInput").mockImplementation(() => {
+      info.agentState = "working";
+      info.waitingReason = undefined;
+    });
+
+    terminal.write("y\r");
+    expect(info.agentState).toBe("working");
+    expect(info.lastHandback).toBe(handback);
+
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    terminal.tryWrite("y\r");
+    expect(info.lastHandback).toBe(handback);
     terminal.dispose();
   });
 
