@@ -2,6 +2,7 @@ import { useState } from "react";
 import { RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
@@ -266,7 +267,7 @@ export function ProjectPluginIndicator() {
               </>
             )}
 
-            {error && <p className="text-3xs text-status-danger leading-tight">{error}</p>}
+            {error && <InlineError className="text-2xs leading-tight">{error}</InlineError>}
 
             <Button
               variant="link"

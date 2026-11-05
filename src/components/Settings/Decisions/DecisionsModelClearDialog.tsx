@@ -1,3 +1,4 @@
+import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { pluralize } from "@/lib/pluralize";
 
@@ -44,11 +45,7 @@ export function DecisionsModelClearDialog({
       onConfirm={onConfirm}
       isConfirmLoading={clearing}
     >
-      {error && (
-        <p role="alert" className="text-xs text-status-error select-text">
-          {error}
-        </p>
-      )}
+      {error && <InlineError role="alert">{error}</InlineError>}
     </ConfirmDialog>
   );
 }

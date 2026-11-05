@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { Radar } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FOOTER_ITEM_CLASS } from "@/components/HelpPanel/footerItem";
@@ -229,9 +230,7 @@ export function TerminalNotifyChip({
             {text}
           </p>
           {stopFailed && (
-            <p className="text-xs text-status-danger" role="alert">
-              Couldn't stop notices. They're still on.
-            </p>
+            <InlineError role="alert">Couldn't stop notices. They're still on.</InlineError>
           )}
           <div className="flex justify-end">
             <Button variant="secondary" size="xs" onClick={stop} disabled={stopping}>
