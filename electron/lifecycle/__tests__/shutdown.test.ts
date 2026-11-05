@@ -70,6 +70,14 @@ vi.mock("../../services/CrashLoopGuardService.js", () => ({
   getCrashLoopGuard: vi.fn(() => crashLoopGuardMock),
 }));
 
+const panelSuspectLedgerMock = vi.hoisted(() => ({
+  markCleanLaunch: vi.fn(),
+}));
+
+vi.mock("../../services/PanelSuspectLedgerService.js", () => ({
+  getPanelSuspectLedger: vi.fn(() => panelSuspectLedgerMock),
+}));
+
 const quitWarningMock = vi.hoisted(() => ({
   getActiveAgentCount: vi.fn(() => 0),
   showQuitWarning: vi.fn(() => Promise.resolve(true)),
@@ -2811,9 +2819,32 @@ describe("registerShutdownHandler", () => {
       expect(armRelaunchMock).toHaveBeenCalledTimes(1);
       expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
       expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
-      expect(crashLoopGuardMock.markCleanExit.mock.invocationCallOrder[0]).toBeLessThan(
+      // Not idempotent: a second call would advance suspect-panel decay twice.
+      expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+      expect(panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0]).toBeLessThan(
         appMock.exit.mock.invocationCallOrder[0]
       );
+    });
+
+    it("writes no clean-exit marker until the relaunch's chain settles", async () => {
+      let releaseCleanup: () => void = () => {};
+      mcpServerMock.stop.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseCleanup = resolve;
+        })
+      );
+      const relaunchApp = await setupRelaunch();
+
+      relaunchApp("gpu-mitigation");
+      await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+      expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+      expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      releaseCleanup();
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
     });
 
     it("leaves running.lock in place when the chain times out, and still relaunches", async () => {
@@ -2832,6 +2863,7 @@ describe("registerShutdownHandler", () => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
         expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
         expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
       } finally {
         consoleSpy.mockRestore();
         vi.useRealTimers();

@@ -738,37 +738,52 @@ describe("GpuCrashMonitorService", () => {
         expectNoCleanExitMarker();
       });
 
-      it("writes no clean-exit marker while the relaunch's shutdown chain is still running", async () => {
-        shutdownMock.settle = false;
+      // Soft: the first strike on a fresh Wayland session. Nuclear: the third
+      // strike once the ANGLE fallback is already in place.
+      async function crashIntoRelaunch(tier: "soft" | "nuclear") {
+        if (tier === "nuclear") writeGpuAngleFallbackFlag(tmpDir);
         await loadAndInit();
-        emitGpuCrash();
-        await vi.waitFor(() => {
-          expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-        });
-        expect(shutdownMock.onSettled).not.toBeNull();
-        expectNoCleanExitMarker();
+        const strikes = tier === "nuclear" ? 3 : 1;
+        for (let i = 0; i < strikes; i++) emitGpuCrash();
+      }
 
-        // A chain that times out hands off "dirty": the exit still happens, and
-        // running.lock stays on disk as the next boot's dirty-exit signal.
-        shutdownMock.onSettled!("dirty");
-        await vi.waitFor(() => {
-          expect(appMock.exit).toHaveBeenCalledWith(0);
-        });
-        expectNoCleanExitMarker();
-      });
-
-      it.each(["already-shutting-down", "unavailable"] as const)(
-        "a relaunch refused as %s writes no clean-exit marker",
-        async (result) => {
-          shutdownMock.result = result;
-          await loadAndInit();
-          emitGpuCrash();
-          await new Promise((r) => setImmediate(r));
-          expect(appMock.relaunch).not.toHaveBeenCalled();
+      it.each(["soft", "nuclear"] as const)(
+        "%s relaunch writes no clean-exit marker while its shutdown chain is still running",
+        async (tier) => {
+          shutdownMock.settle = false;
+          await crashIntoRelaunch(tier);
+          await vi.waitFor(() => {
+            expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+          });
+          expect(shutdownMock.onSettled).not.toBeNull();
           expect(appMock.exit).not.toHaveBeenCalled();
+          expectNoCleanExitMarker();
+
+          // A chain that times out hands off "dirty": the exit still happens, and
+          // running.lock stays on disk as the next boot's dirty-exit signal.
+          shutdownMock.onSettled!("dirty");
+          await vi.waitFor(() => {
+            expect(appMock.exit).toHaveBeenCalledWith(0);
+          });
           expectNoCleanExitMarker();
         }
       );
+
+      it.each([
+        ["soft", "already-shutting-down"],
+        ["soft", "unavailable"],
+        ["nuclear", "already-shutting-down"],
+        ["nuclear", "unavailable"],
+      ] as const)("%s relaunch refused as %s writes no clean-exit marker", async (tier, result) => {
+        shutdownMock.result = result;
+        await crashIntoRelaunch(tier);
+        await new Promise((r) => setImmediate(r));
+        expect(shutdownMock.onSettled).not.toBeNull();
+        expect(appMock.relaunch).not.toHaveBeenCalled();
+        expect(telemetryServiceMock.closeTelemetry).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+        expectNoCleanExitMarker();
+      });
 
       it("soft hard-stop writes all three markers in order before app.exit(0)", async () => {
         crashLoopGuardMock.shouldRelaunch.mockReturnValue(false);

@@ -51,7 +51,8 @@ export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset" 
  *
  * A refused request means something else already owns the shutdown — an
  * in-flight quit or update install. That process is ending anyway, so the
- * relaunch stays armed and rides it out rather than racing it.
+ * request is dropped without arming a relaunch: an armed one cannot be
+ * cancelled, and would bring a deliberate Quit back up.
  */
 export function relaunchApp(reason: AppRelaunchReason): void {
   // Claim the shutdown BEFORE arming the relaunch. Electron offers no way to
