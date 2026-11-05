@@ -3,7 +3,7 @@ import type { TerminalSnapshot } from "../types/project.js";
 import type { AddPanelOptions } from "../types/addPanelOptions.js";
 import type { PanelMenuItemContribution, PanelToolbarItemContribution } from "../types/plugin.js";
 import { getAgentConfig } from "./agentRegistry.js";
-import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
+import { PANEL_KIND_BRAND_COLORS } from "../theme/entityColors.js";
 
 /**
  * One `contributes.panels[].toolbar` entry as the registry carries it. `actionId`
