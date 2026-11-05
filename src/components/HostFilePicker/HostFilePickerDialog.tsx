@@ -308,6 +308,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [pathDraft, setPathDraft] = useState("");
+  // The field holds what the user typed, not a path the dialog put there.
+  const [draftEdited, setDraftEdited] = useState(false);
   // The path field opens focused, so it opens as a field; once focus leaves it
   // the path reads as segments again.
   const [editingPath, setEditingPath] = useState(true);
@@ -368,6 +370,13 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   useEffect(() => {
     requestRef.current = request;
   }, [request]);
+  const resolveRef = useRef(onResolve);
+  useEffect(() => {
+    resolveRef.current = onResolve;
+  }, [onResolve]);
+  // The typed folder the primary was pressed on: chosen once it opens, and
+  // forgotten by any other navigation, an edit to the path, or a failure.
+  const confirmOwedRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -401,6 +410,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         setListing(result);
         setListedDirectory(directory);
         setPathDraft(result.path);
+        setDraftEdited(false);
         setSelectedNames((current) =>
           sameFolder
             ? current.filter((name) =>
@@ -414,11 +424,19 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
           sameFolder ? Math.min(index, Math.max(0, result.entries.length - 1)) : 0
         );
         setLoadError(null);
+        if (confirmOwedRef.current === directory) {
+          confirmOwedRef.current = null;
+          // The typed folder itself, never a row selected in the folder before.
+          const picked = resolveChoice(requestRef.current, result.path, []);
+          if (picked) resolveRef.current(picked);
+        }
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
+        if (confirmOwedRef.current === directory) confirmOwedRef.current = null;
         setLoadError(clientErrorText(cause, "Couldn't open that folder"));
         setPathDraft(directory);
+        setDraftEdited(false);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -453,11 +471,19 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const parentTarget =
     directory === null ? null : ready ? listing.parent : hostPathParent(directory);
   const shownPath = directory ?? listing?.path ?? "";
+  const draftTarget = pathDraft.trim();
+  // A folder picker's field holds a path the user typed that the folder on
+  // screen doesn't answer: the primary goes there (validating it, even when it
+  // is empty) and chooses it, rather than the folder it replaces.
+  const draftPending =
+    request.mode === "directory" && draftEdited && pathDraft !== (ready ? listing.path : directory);
 
   const navigate = (target: string) => {
+    confirmOwedRef.current = null;
     setLoadError(null);
     setPathError(null);
     setPathDraft(target);
+    setDraftEdited(false);
     if (target === directory) {
       setReloadKey((key) => key + 1);
       return;
@@ -498,17 +524,26 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   };
 
   const editPath = (draft?: string) => {
-    if (draft !== undefined) setPathDraft(draft);
+    if (draft !== undefined) {
+      confirmOwedRef.current = null;
+      setPathDraft(draft);
+      setDraftEdited(true);
+    }
     setEditingPath(true);
   };
 
-  const goToDraft = () => {
-    const target = pathDraft.trim();
-    if (!isAbsoluteHostPath(target)) {
+  const goToDraft = (thenConfirm = false) => {
+    if (!isAbsoluteHostPath(draftTarget)) {
       setPathError("Enter an absolute path, starting with /");
       return;
     }
-    navigate(target);
+    navigate(draftTarget);
+    if (thenConfirm) confirmOwedRef.current = draftTarget;
+  };
+
+  const confirmPrimary = () => {
+    if (draftPending) goToDraft(true);
+    else confirm();
   };
 
   const onListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -577,6 +612,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     <span className="truncate text-status-error" role="alert">
       {pathError}
     </span>
+  ) : draftPending ? (
+    draftTarget !== "" && (
+      <SummaryLines
+        label="Typed path"
+        name={<span className="truncate">{hostPathLeaf(draftTarget)}</span>}
+        detail={draftTarget}
+      />
+    )
   ) : loading ? (
     <span className="truncate">{showProgress ? openingText : ""}</span>
   ) : loadError !== null ? (
@@ -657,13 +700,16 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               autoComplete="off"
               className="h-8 min-w-0 flex-1"
               onChange={(event) => {
+                confirmOwedRef.current = null;
                 setPathDraft(event.target.value);
+                setDraftEdited(true);
                 setPathError(null);
               }}
               onBlur={() => {
                 setEditingPath(false);
                 setPathError(null);
                 setPathDraft(shownPath);
+                setDraftEdited(false);
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -889,11 +935,31 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         </div>
       </div>
 
-      <AppDialog.Footer
-        hint={<span className="flex h-[2.125rem] min-w-0 items-center">{hint}</span>}
-        secondaryAction={{ label: "Cancel", onClick: () => onResolve(null) }}
-        primaryAction={{ label: confirmLabel, onClick: confirm, disabled: !choice }}
-      />
+      {/* Pressing the primary would move focus first, and the path field's blur
+          would put the listed folder back before the click lands: while the
+          field holds a typed path, the press leaves focus where it is. */}
+      <div
+        className="contents"
+        onMouseDownCapture={(event) => {
+          if (
+            draftPending &&
+            event.target instanceof Element &&
+            event.target.closest('[data-confirm-role="confirm"]')
+          ) {
+            event.preventDefault();
+          }
+        }}
+      >
+        <AppDialog.Footer
+          hint={<span className="flex h-[2.125rem] min-w-0 items-center">{hint}</span>}
+          secondaryAction={{ label: "Cancel", onClick: () => onResolve(null) }}
+          primaryAction={{
+            label: confirmLabel,
+            onClick: confirmPrimary,
+            disabled: !choice && !draftPending,
+          }}
+        />
+      </div>
     </AppDialog>
   );
 }
