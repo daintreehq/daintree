@@ -230,7 +230,8 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
 
   test("the Shell sets up Decisions and pairs the phone", async () => {
     test.setTimeout(240_000);
-    await connectRelay(shell.window, relay);
+    // This Shell has no agent CLI; only the enrolled Host launches Claude.
+    await connectRelay(shell.window, relay, []);
     await saveAndVerifyKit(shell.app, shell.window, path.join(root, "kit.json"));
     await pairPhone(shell.window, phone, relay);
     // Enrolled by hand below, as a Host with no keychain is.

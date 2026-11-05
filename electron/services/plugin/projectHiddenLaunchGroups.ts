@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 // eager-import-allow: reads hidden launcher groups via store.get so toggling one plugin preserves the other groups and projects
 import { store } from "../../store.js";
 
@@ -69,6 +70,6 @@ export function setProjectLaunchGroupHidden(
   const updated = { ...all };
   if (next.length === 0) delete updated[projectId];
   else updated[projectId] = next;
-  store.set(STORE_KEY, updated);
+  setRawStoreValue(store, STORE_KEY, updated);
   return next;
 }

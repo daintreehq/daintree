@@ -1,3 +1,5 @@
+import { writeClipboardImage } from "../../utils/clipboardAccess.js";
+vi.mock("../../utils/clipboardAccess.js", () => ({ writeClipboardImage: vi.fn() }));
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
@@ -17,7 +19,7 @@ vi.mock("electron", () => ({
   clipboard: {
     writeText: vi.fn(),
     writeImage: vi.fn(),
-    readText: vi.fn(() => ""),
+    readText: vi.fn(async () => ""),
   },
   // Mirrors Electron's real contract: createFromBuffer never throws on
   // malformed input, it returns an image whose isEmpty() is true. Bytes
@@ -90,10 +92,10 @@ function pngBytes(length = 8): Uint8Array {
 
 beforeEach(() => {
   appendSpy.mockClear();
-  mockClipboard.writeImage.mockClear();
+  vi.mocked(writeClipboardImage).mockClear();
   mockClipboard.writeText.mockClear();
   mockClipboard.readText.mockClear();
-  mockClipboard.readText.mockReturnValue("");
+  mockClipboard.readText.mockResolvedValue("");
   baseDir = mkdtempSync(join(tmpdir(), "plugin-clip-"));
   const pluginsRoot = join(baseDir, "plugins");
   mkdirSync(pluginsRoot, { recursive: true });
@@ -118,7 +120,7 @@ describe("host.clipboard capability gating", () => {
   });
 
   it("reads text when clipboard:read is declared", async () => {
-    mockClipboard.readText.mockReturnValue("from-os");
+    mockClipboard.readText.mockResolvedValue("from-os");
     const host = registerPlugin(["clipboard:read"]);
     expect(await host.clipboard.readText()).toBe("from-os");
   });
@@ -201,13 +203,13 @@ describe("host.clipboard.writeImage", () => {
     await expect(host.clipboard.writeImage(pngBytes())).resolves.toBeUndefined();
     // Assert the decoded object, not just a call count — passing the raw
     // buffer or a re-decoded image would still satisfy a count check.
-    expect(mockClipboard.writeImage).toHaveBeenCalledWith(sentinel);
+    expect(vi.mocked(writeClipboardImage)).toHaveBeenCalledWith(sentinel);
   });
 
   it("rejects without clipboard:write", async () => {
     const host = registerPlugin(["clipboard:read"]);
     await expect(host.clipboard.writeImage(pngBytes())).rejects.toThrow(/PERMISSION_REQUIRED/);
-    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(vi.mocked(writeClipboardImage)).not.toHaveBeenCalled();
   });
 
   it("rejects a non-Uint8Array payload", async () => {
@@ -215,7 +217,7 @@ describe("host.clipboard.writeImage", () => {
     await expect(host.clipboard.writeImage("not-bytes" as unknown as Uint8Array)).rejects.toThrow(
       /VALIDATION/
     );
-    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(vi.mocked(writeClipboardImage)).not.toHaveBeenCalled();
   });
 
   it("rejects bytes that do not decode to an image", async () => {
@@ -226,7 +228,7 @@ describe("host.clipboard.writeImage", () => {
     await expect(host.clipboard.writeImage(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow(
       /VALIDATION/
     );
-    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(vi.mocked(writeClipboardImage)).not.toHaveBeenCalled();
   });
 
   it("rejects a payload one byte over the 20 MiB limit without decoding it", async () => {
@@ -241,13 +243,13 @@ describe("host.clipboard.writeImage", () => {
     // times the compressed size, so admitting the bytes to the decoder first
     // would defeat it.
     expect(vi.mocked(nativeImage.createFromBuffer)).not.toHaveBeenCalled();
-    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(vi.mocked(writeClipboardImage)).not.toHaveBeenCalled();
   });
 
   it("accepts a payload exactly at the limit", async () => {
     const host = registerPlugin(["clipboard:write"]);
     await expect(host.clipboard.writeImage(pngBytes(LIMIT))).resolves.toBeUndefined();
-    expect(mockClipboard.writeImage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(writeClipboardImage)).toHaveBeenCalledTimes(1);
   });
 
   it("decodes a subarray view's own bytes, not its whole backing buffer", async () => {
@@ -280,7 +282,7 @@ describe("host.clipboard.writeImage", () => {
     const host = registerPlugin(["clipboard:write"]);
     svc.unloadPlugin("acme.clip");
     await expect(host.clipboard.writeImage(pngBytes())).rejects.toThrow(/PLUGIN_UNLOADED/);
-    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(vi.mocked(writeClipboardImage)).not.toHaveBeenCalled();
   });
 });
 
@@ -334,7 +336,7 @@ describe("host.clipboard with a driver on another machine", () => {
       [PluginFrontendMethod.CLIPBOARD, "readText"],
     ]);
     expect(mockClipboard.writeText).not.toHaveBeenCalled();
-    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+    expect(vi.mocked(writeClipboardImage)).not.toHaveBeenCalled();
     expect(mockClipboard.readText).not.toHaveBeenCalled();
   });
 

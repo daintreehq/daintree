@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 // eager-import-allow: reads presentation profiles via store.get for settings snapshots and updates that preserve other projects' answers
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -197,7 +198,7 @@ function writeEntry(
   entry: Record<string, unknown>
 ): StoredProjectPresentation {
   entry.revision = parseRevision(entry.revision) + 1;
-  store.set(STORE_KEY, { ...all, [projectId]: entry });
+  setRawStoreValue(store, STORE_KEY, { ...all, [projectId]: entry });
   return parseEntry(projectId, entry);
 }
 

@@ -50,9 +50,9 @@ function git(cwd: string, ...args: string[]): string {
  * and all. Optional locks stay off so it can't refresh the index the capture
  * then reads.
  */
-function plainStatus(cwd: string): string {
+function plainStatus(cwd: string, ...paths: string[]): string {
   try {
-    return execFileSync("git", ["status", "--porcelain"], {
+    return execFileSync("git", ["status", "--porcelain", "--", ...paths], {
       cwd,
       env: { ...fixtureEnv(), GIT_OPTIONAL_LOCKS: "0" },
       encoding: "utf8",
@@ -263,8 +263,10 @@ describe("captureReviewPoint", () => {
       git(repo, "add", "b.txt");
       write(repo, "u.txt", "untracked\n");
 
-      // The fixture is armed: a plain status runs both filters.
-      plainStatus(repo);
+      // A broken process-filter handshake can abort status before another
+      // path is checked, so prove each positive control independently.
+      plainStatus(repo, "f.spy");
+      plainStatus(repo, "f.proc");
       expect(fs.existsSync(cleanRan) && fs.existsSync(processRan)).toBe(true);
       fs.rmSync(cleanRan);
       fs.rmSync(processRan);

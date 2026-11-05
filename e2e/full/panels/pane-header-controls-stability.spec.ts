@@ -202,11 +202,14 @@ async function expectGeometryUnchanged(
       (el, dwellMs) =>
         new Promise<Box[]>((resolve) => {
           const seen: Box[] = [];
-          const start = performance.now();
-          const tick = () => {
+          // A delayed first frame is not an observation window. Measure the
+          // dwell from the first sample so it always spans multiple paints.
+          let start: number | null = null;
+          const tick = (timestamp: number) => {
+            start ??= timestamp;
             const r = el.getBoundingClientRect();
             seen.push({ x: r.x, y: r.y, width: r.width, height: r.height });
-            if (performance.now() - start >= dwellMs) resolve(seen);
+            if (timestamp - start >= dwellMs && seen.length > 1) resolve(seen);
             else requestAnimationFrame(tick);
           };
           requestAnimationFrame(tick);

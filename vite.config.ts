@@ -4,19 +4,20 @@ import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { visualizer } from "rollup-plugin-visualizer";
 import path from "path";
-import { getDevServerConfig } from "./shared/config/devServer";
+import { getDevServerConfig } from "./shared/config/devServer.ts";
 // Inlines the stylesheets the renderer's plugin Tailwind compiler compiles
 // against. Shared with vitest.config.ts so the adapter's contract tests see the
 // same bytes the app does — a plain `?raw` import would not, because Vitest
 // stubs every `.css` specifier (including `?raw`) to an empty string.
 import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
 import { asciiOnlyChunksPlugin } from "./scripts/lib/ascii-only-chunks.mjs";
+import { xtermMinifyIdentifiersGuardPlugin } from "./scripts/lib/xtermMinifyGuard.ts";
 import {
   createImportMapState,
   cspTransformPlugin,
   inlineSkeletonScriptsPlugin,
   renderFanoutProbePlugin,
-} from "./scripts/lib/vite-index-html";
+} from "./scripts/lib/vite-index-html.ts";
 import {
   PLUGIN_SDK_REACT_CHUNK_NAME,
   PLUGIN_UI_CHUNK_NAME,
@@ -27,42 +28,20 @@ import {
   isPluginSdkReactSourceModule,
   isPluginUiSourceModule,
   isTourSourceModule,
-} from "./scripts/lib/vite-host-facade";
+} from "./scripts/lib/vite-host-facade.ts";
 import {
   chunkModulesPlugin,
   firstRenderSeedsPlugin,
   reactCompilerReportPlugin,
   rendererBundleSizePlugin,
-} from "./scripts/lib/vite-build-diagnostics";
+} from "./scripts/lib/vite-build-diagnostics.ts";
 import {
   compileHintsPlugin,
   firstRenderModulePreloadPlugin,
   latin400FontPreloadPlugin,
-} from "./scripts/lib/vite-boot-preload";
+} from "./scripts/lib/vite-boot-preload.ts";
 
 const devServerConfig = getDevServerConfig();
-
-// Build-time invariant guard: esbuild.minifyIdentifiers must stay false.
-// xterm 6.0 ships pre-minified code with a closure in `requestMode` that
-// captures a mangled parameter name. If esbuild re-minifies the bundle, it
-// renames the parameter but not the closure reference, producing
-// `ReferenceError: i is not defined` and crashing the parser silently.
-// This guard fails the build if the config is accidentally changed.
-function xtermMinifyIdentifiersGuardPlugin(): Plugin {
-  return {
-    name: "xterm-minify-identifiers-guard",
-    apply: "build",
-    configResolved(config) {
-      const esbuildConfig = config.esbuild;
-      if (!esbuildConfig || esbuildConfig.minifyIdentifiers !== false) {
-        throw new Error(
-          "esbuild.minifyIdentifiers must be false to prevent xterm 6.0 parser crash. " +
-            "See https://github.com/daintreehq/daintree/blob/develop/vite.config.ts#L215-L221"
-        );
-      }
-    },
-  };
-}
 
 export default defineConfig(({ command, mode }) => {
   const { logger: compilerLogger, plugin: compilerReportPlugin } =
@@ -74,13 +53,6 @@ export default defineConfig(({ command, mode }) => {
     // WSL distros); the Host role is gated in main at runtime and build time.
     define: {
       __DAINTREE_REMOTE_HOSTS__: JSON.stringify(true),
-    },
-    // xterm 6.0 ships a bundled InputHandler that references an unminified
-    // identifier in `requestMode`; Vite's default identifier mangling produces
-    // `ReferenceError: i is not defined` at runtime. Disable identifier
-    // renaming only — whitespace and syntax compression still apply.
-    esbuild: {
-      minifyIdentifiers: false,
     },
     plugins: [
       pluginStyleContract(),
@@ -167,6 +139,8 @@ export default defineConfig(({ command, mode }) => {
           lazyBarrel: true,
         },
         output: {
+          // Preserve the xterm parser workaround in Oxc, the active Vite 8 minifier.
+          minify: process.env.DAINTREE_RENDER_PROBE === "1" ? "dce-only" : { mangle: false },
           // The `boot` codeSplitting group merges cross-chunk module sets,
           // which can reorder module evaluation relative to the automatic
           // chunking the app's latent import cycles happened to tolerate.
@@ -241,17 +215,11 @@ export default defineConfig(({ command, mode }) => {
                 // catch-all `vendor` chunk. `entriesAwareMergeThreshold: 0`
                 // disables small-subgroup merging so the deferred split holds.
                 //
-                // vite is held at ~8.0.14 (package.json): 8.1.x (rolldown
-                // ~1.1.5) re-materializes this split but miscompiles it — the
-                // motionFeatures facade chunk re-exports the deferred
-                // subgroup's `domMax` binding without ever invoking that
-                // chunk's lazy-init function, so LazyMotion's features resolve
-                // to undefined and renderer boot dies with "Cannot destructure
-                // property 'renderer' of 'undefined'". Note the split is
-                // already inert on 8.0.x/rolldown 1.0.x (domMax currently
-                // merges into the eager vendor-motion chunk); verify both the
-                // init wiring and the restored deferral before lifting the
-                // pin.
+                // Vite 8.1 previously emitted the deferred facade without
+                // invoking its lazy initializer, so domMax was undefined at
+                // boot. Vite 8.3.5 initializes it and keeps this implementation
+                // outside the entry's static import closure. Preserve both
+                // properties when changing the grouping or build toolchain.
                 name: "vendor-motion",
                 test: /node_modules[\\/](framer-motion|motion-dom|motion-utils)[\\/]/,
                 entriesAware: true,
@@ -266,6 +234,7 @@ export default defineConfig(({ command, mode }) => {
                 // chunk: claimed here, all of it would load at startup. A
                 // lucide-react module is static when anything outside the
                 // package imports it, or a static lucide-react module does.
+                debugName: "vendor-icons",
                 name: (id, ctx) => {
                   const seen = new Set<string>();
                   const isStatic = (moduleId: string): boolean => {
@@ -432,21 +401,24 @@ export default defineConfig(({ command, mode }) => {
         ...(process.env.DAINTREE_RENDER_PROBE === "1"
           ? { "react-dom/client": "react-dom/profiling" }
           : {}),
-        "@": path.resolve(__dirname, "./src"),
-        "@shared": path.resolve(__dirname, "./shared"),
+        "@": path.resolve(import.meta.dirname, "./src"),
+        "@shared": path.resolve(import.meta.dirname, "./shared"),
         // The app compiles the tour engine from source, so an edit shows up
         // without rebuilding the package's `dist/` (which only exists for
         // publishing). Subpaths first so the root entry alias doesn't swallow them.
-        "@daintreehq/tour/react": path.resolve(__dirname, "./packages/tour/src/react.ts"),
-        "@daintreehq/tour/kit": path.resolve(__dirname, "./packages/tour/src/kit.ts"),
-        "@daintreehq/tour/mock-app": path.resolve(__dirname, "./packages/tour/src/mock-app.ts"),
-        "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
+        "@daintreehq/tour/react": path.resolve(import.meta.dirname, "./packages/tour/src/react.ts"),
+        "@daintreehq/tour/kit": path.resolve(import.meta.dirname, "./packages/tour/src/kit.ts"),
+        "@daintreehq/tour/mock-app": path.resolve(
+          import.meta.dirname,
+          "./packages/tour/src/mock-app.ts"
+        ),
+        "@daintreehq/tour": path.resolve(import.meta.dirname, "./packages/tour/src/index.ts"),
         // Nothing in the app imports this; the host facade does, for plugins.
-        "@daintreehq/plugin-ui": path.resolve(__dirname, "./src/pluginUi/index.ts"),
+        "@daintreehq/plugin-ui": path.resolve(import.meta.dirname, "./src/pluginUi/index.ts"),
         // Likewise only the raw-view facade imports this. Source, not the
         // package's `dist/`, which is a publish artifact that may be unbuilt.
         "@daintreehq/plugin-sdk/react": path.resolve(
-          __dirname,
+          import.meta.dirname,
           "./packages/plugin-sdk/src/react.ts"
         ),
         // refractor/core eagerly imports parse-entities, whose browser-condition
@@ -454,7 +426,7 @@ export default defineConfig(({ command, mode }) => {
         // that crashes the diff-tokenize Web Worker at startup. Pin the package's
         // worker-safe default build (character-entities map, no DOM) everywhere.
         "decode-named-character-reference": path.resolve(
-          __dirname,
+          import.meta.dirname,
           "node_modules/decode-named-character-reference/index.js"
         ),
       },

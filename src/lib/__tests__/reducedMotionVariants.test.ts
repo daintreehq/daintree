@@ -21,57 +21,85 @@ beforeAll(async () => {
   compiler = await createPluginCssCompiler();
 });
 
-/**
- * The compiled rule for `className`, brace-matched. The compiler keeps CSS
- * nesting, so the variant's branches appear inside it as nested rules.
- */
-function blockFor(css: string, className: string): string {
+interface CompiledRule {
+  selector: string;
+  body: string;
+  ancestors: string[];
+}
+
+// Tailwind 4.3.4 flattens nested variants. Track each rule's enclosing media
+// query so these assertions check the same conditions in either output form.
+function rulesFor(css: string, className: string): CompiledRule[] {
   const escaped = className.replace(/([[\]:/.(),])/g, "\\$1");
-  const at = css.indexOf(`.${escaped} {`);
-  expect(at, `${className} did not compile`).toBeGreaterThan(-1);
-  let depth = 0;
-  for (let i = css.indexOf("{", at); i < css.length; i++) {
-    if (css[i] === "{") depth++;
-    else if (css[i] === "}" && --depth === 0) return css.slice(at, i + 1);
-  }
-  return css.slice(at);
+  const rules: CompiledRule[] = [];
+  const scan = (source: string, ancestors: string[]): void => {
+    let cursor = 0;
+    while (cursor < source.length) {
+      const open = source.indexOf("{", cursor);
+      if (open === -1) return;
+      const selector = source
+        .slice(cursor, open)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .trim();
+      let depth = 1;
+      let end = open + 1;
+      while (end < source.length && depth > 0) {
+        if (source[end] === "{") depth++;
+        else if (source[end] === "}") depth--;
+        end++;
+      }
+      const body = source.slice(open + 1, end - 1);
+      if (selector.startsWith(`.${escaped}`)) rules.push({ selector, body, ancestors });
+      scan(body, [...ancestors, selector]);
+      cursor = end;
+    }
+  };
+  scan(css, []);
+  expect(rules.length, `${className} did not compile`).toBeGreaterThan(0);
+  return rules;
+}
+
+function underMedia(rule: CompiledRule, query: string): boolean {
+  return [...rule.ancestors, rule.body].some((text) => text.includes(query));
+}
+
+function hasAppSelector(rule: CompiledRule, selector: string): boolean {
+  return rule.selector.includes(selector) || rule.body.includes(`&${selector}`);
 }
 
 describe("motion variants honour the in-app reduced-motion setting", () => {
   it("motion-reduce: applies under the app flag as well as the OS query", () => {
-    const block = blockFor(
+    const rules = rulesFor(
       compiler.build(["motion-reduce:transition-none"]),
       "motion-reduce:transition-none"
     );
-    expect(block).toContain("prefers-reduced-motion: reduce");
-    // The flag must be an ANCESTOR of the element (`&:where(body[…] *)`), and
-    // at zero specificity. A bare nested `body[…] { }` compiles to `.x body[…]`,
-    // a body inside the element, which silently never matches.
-    expect(block).toContain(`&:where(${APP_FLAG} *)`);
-    expect(block).not.toMatch(/^\s*body\[data-reduce-animations/m);
+    expect(rules.some((rule) => underMedia(rule, "prefers-reduced-motion: reduce"))).toBe(true);
+    expect(rules.some((rule) => hasAppSelector(rule, `:where(${APP_FLAG} *)`))).toBe(true);
+    expect(rules.every((rule) => !rule.selector.includes(` ${APP_FLAG}`))).toBe(true);
   });
 
   it("motion-safe: stops applying under the app flag", () => {
-    const block = blockFor(
+    const rules = rulesFor(
       compiler.build(["motion-safe:animate-pulse"]),
       "motion-safe:animate-pulse"
     );
-    expect(block).toContain("prefers-reduced-motion: no-preference");
-    expect(block).toContain(`&:where(:not(${APP_FLAG} *))`);
+    expect(
+      rules.some(
+        (rule) =>
+          underMedia(rule, "prefers-reduced-motion: no-preference") &&
+          hasAppSelector(rule, `:where(:not(${APP_FLAG} *))`)
+      )
+    ).toBe(true);
   });
 });
 
 describe("reduce-motion: works as a utility too", () => {
-  // `reduce-motion` is also the at-rule spelling (`@variant reduce-motion { }`
-  // in CSS files), and the plugin vocabulary advertises it as a class prefix.
-  // As a prefix its bare `body[…] { }` branch nests under the element and never
-  // matches, so the ancestor branch is what makes the utility honour the app flag.
   it("carries the app-flag branch as an ancestor of the element", () => {
-    const block = blockFor(
+    const rules = rulesFor(
       compiler.build(["reduce-motion:transition-none"]),
       "reduce-motion:transition-none"
     );
-    expect(block).toContain("prefers-reduced-motion: reduce");
-    expect(block).toContain(`&:where(${APP_FLAG} *)`);
+    expect(rules.some((rule) => underMedia(rule, "prefers-reduced-motion: reduce"))).toBe(true);
+    expect(rules.some((rule) => hasAppSelector(rule, `:where(${APP_FLAG} *)`))).toBe(true);
   });
 });

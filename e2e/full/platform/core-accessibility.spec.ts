@@ -173,7 +173,7 @@ test.describe("Core: Accessibility and focus", () => {
 
     test("welcome screen passes WCAG 2.2 AA audit", async () => {
       const { window } = ctx;
-      await window.getByRole("button", { name: "Open project", exact: true }).waitFor({
+      await window.getByRole("button", { name: /^Open project\b/, exact: true }).waitFor({
         state: "visible",
         timeout: T_MEDIUM,
       });

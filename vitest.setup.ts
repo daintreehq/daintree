@@ -6,8 +6,9 @@
 
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
 import { installTestLocale } from "./scripts/lib/testLocale.js";
+import { installDomBuiltinModules } from "./scripts/lib/testDomBuiltinModules.js";
 import { installTestIsolation } from "./electron/__tests__/helpers/testIsolation.js";
-import { vi } from "vitest";
+import { afterAll, vi } from "vitest";
 
 markIpcSecurityReady();
 
@@ -38,6 +39,7 @@ if (new Intl.NumberFormat().resolvedOptions().locale !== TEST_LOCALE) {
 // none of which can render a Radix primitive at all) paid that import on every
 // one of them for nothing.
 if (typeof document !== "undefined") {
+  afterAll(installDomBuiltinModules());
   const { primeRadix } = await import("./src/components/ui/radix-loader");
   await primeRadix();
 }

@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../utils/storeValues.js";
 // eager-import-allow: wires the plugin-audit ring buffer to the synchronous electron-store slice at boot (global service, mirrors ActionBreadcrumbService)
 import { randomUUID } from "node:crypto";
 import type {
@@ -296,7 +297,7 @@ export function getPluginActionAuditService(): PluginActionAuditService {
     instance = new PluginActionAuditService(
       (patch) => {
         const current = (store.get("plugins") ?? {}) as Record<string, unknown>;
-        store.set("plugins", { ...current, ...patch });
+        setRawStoreValue(store, "plugins", { ...current, ...patch });
       },
       () => (store.get("plugins") ?? {}) as Record<string, unknown>
     );

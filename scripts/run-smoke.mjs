@@ -155,6 +155,9 @@ export function validateSmokeOutput(runIndex, runCount, result) {
   if (output.includes("Bootstrap failed:")) {
     throw new Error(`Smoke run ${runIndex}/${runCount} reported a renderer bootstrap failure`);
   }
+  if (output.includes("Check failed:")) {
+    throw new Error(`Smoke run ${runIndex}/${runCount} reported a native check failure`);
+  }
   for (const marker of REQUIRED_MARKERS) {
     if (!output.includes(marker)) {
       throw new Error(`Smoke run ${runIndex}/${runCount} missing expected marker: ${marker}`);

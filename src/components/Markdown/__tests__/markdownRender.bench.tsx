@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Run: npx vitest bench --run src/components/Markdown/__tests__/markdownRender.bench.tsx
-import { afterAll, beforeAll, bench, describe, vi } from "vitest";
+import { afterAll, beforeAll, test, describe, vi } from "vitest";
 import { act, cleanup, render, type RenderResult } from "@testing-library/react";
 import { refractor } from "refractor/core";
 
@@ -94,41 +94,43 @@ describe("MarkdownDocument: cacheBust-only rerender (3k-line doc)", () => {
   let view: RenderResult | null = null;
   let tick = 0;
 
-  bench(
-    "rerender with only cacheBust changing",
-    () => {
-      tick += 1;
-      act(() => {
-        view!.rerender(<MarkdownDocument {...PROPS} content={DOC} cacheBust={String(tick)} />);
-      });
-    },
-    {
-      time: 3000,
-      warmupIterations: 3,
-      setup: () => {
-        view?.unmount();
-        view = render(<MarkdownDocument {...PROPS} content={DOC} cacheBust="0" />);
-        // One mount, then 20 token-only rerenders: how many times is the whole
-        // document parsed?
-        counters.gfm = 0;
-        for (let i = 1; i <= 20; i++) {
-          act(() => {
-            view!.rerender(<MarkdownDocument {...PROPS} content={DOC} cacheBust={`probe-${i}`} />);
-          });
-        }
-        const imgs = view.container.querySelectorAll("img");
-        const src = imgs[0]?.getAttribute("src") ?? "";
-        REPORT.push(
-          `[markdown] parses over 20 cacheBust-only rerenders: ${counters.gfm}; ` +
-            `first img v=${new URL(src).searchParams.get("v")} (${imgs.length} imgs)`
-        );
+  test("rerender with only cacheBust changing", async ({ bench }) => {
+    await bench(
+      "rerender with only cacheBust changing",
+      {
+        beforeAll: () => {
+          view?.unmount();
+          view = render(<MarkdownDocument {...PROPS} content={DOC} cacheBust="0" />);
+          // One mount, then 20 token-only rerenders: how many times is the whole
+          // document parsed?
+          counters.gfm = 0;
+          for (let i = 1; i <= 20; i++) {
+            act(() => {
+              view!.rerender(
+                <MarkdownDocument {...PROPS} content={DOC} cacheBust={`probe-${i}`} />
+              );
+            });
+          }
+          const imgs = view.container.querySelectorAll("img");
+          const src = imgs[0]?.getAttribute("src") ?? "";
+          REPORT.push(
+            `[markdown] parses over 20 cacheBust-only rerenders: ${counters.gfm}; ` +
+              `first img v=${new URL(src).searchParams.get("v")} (${imgs.length} imgs)`
+          );
+        },
+        afterAll: () => {
+          view?.unmount();
+          view = null;
+        },
       },
-      teardown: () => {
-        view?.unmount();
-        view = null;
-      },
-    }
-  );
+      () => {
+        tick += 1;
+        act(() => {
+          view!.rerender(<MarkdownDocument {...PROPS} content={DOC} cacheBust={String(tick)} />);
+        });
+      }
+    ).run({ time: 3000, warmupIterations: 3 });
+  });
 });
 
 describe("HighlightedCode: 5k-line TS fence mount", () => {
@@ -142,33 +144,31 @@ describe("HighlightedCode: 5k-line TS fence mount", () => {
     cleanup();
   };
 
-  bench(
-    "cold mount (empty highlight cache)",
-    () => {
+  test("cold mount (empty highlight cache)", async ({ bench }) => {
+    await bench("cold mount (empty highlight cache)", {}, () => {
       clearCache();
       mountOnce();
-    },
-    { time: 3000, warmupIterations: 2 }
-  );
+    }).run({ time: 3000, warmupIterations: 2 });
+  });
 
-  bench(
-    "remount of the same fence",
-    () => {
-      mountOnce();
-    },
-    {
-      time: 3000,
-      warmupIterations: 2,
-      setup: () => {
-        clearCache();
-        const spy = vi.spyOn(refractor, "highlight");
-        for (let i = 0; i < 5; i++) mountOnce();
-        highlightCalls = spy.mock.calls.length;
-        spy.mockRestore();
-        REPORT.push(`[highlight] refractor.highlight calls over 5 remounts: ${highlightCalls}`);
-        clearCache();
-        mountOnce();
+  test("remount of the same fence", async ({ bench }) => {
+    await bench(
+      "remount of the same fence",
+      {
+        beforeAll: () => {
+          clearCache();
+          const spy = vi.spyOn(refractor, "highlight");
+          for (let i = 0; i < 5; i++) mountOnce();
+          highlightCalls = spy.mock.calls.length;
+          spy.mockRestore();
+          REPORT.push(`[highlight] refractor.highlight calls over 5 remounts: ${highlightCalls}`);
+          clearCache();
+          mountOnce();
+        },
       },
-    }
-  );
+      () => {
+        mountOnce();
+      }
+    ).run({ time: 3000, warmupIterations: 2 });
+  });
 });

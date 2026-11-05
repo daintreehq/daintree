@@ -257,7 +257,7 @@ test("non-git folder dialog review — choice screen across entry paths and them
 
     // 4. Arrival from the create-project-folder flow — the other real entry point.
     await step("create-flow", async () => {
-      await page.getByRole("button", { name: "Create project", exact: true }).click();
+      await page.getByRole("button", { name: /^Create project\b/, exact: true }).click();
       const inDialog = (name: string) =>
         page.locator("[data-app-dialog-surface]").getByRole("button", { name, exact: true });
       await inDialog("Browse for a location").waitFor({ state: "visible", timeout: 8000 });

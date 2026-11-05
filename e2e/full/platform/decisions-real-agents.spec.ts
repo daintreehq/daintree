@@ -243,7 +243,7 @@ test.beforeAll(async () => {
 
   const workDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-decisions-agents-"));
   ({ context, phone } = await launchPhone(mkdtempSync(path.join(workDir, "phone-"))));
-  await connectRelay(page, relay);
+  await connectRelay(page, relay, ["Claude", "Codex"]);
   await saveAndVerifyKit(ctx.app, page, path.join(workDir, "kit.json"));
   await pairPhone(page, phone, relay);
   await closeSettings(page);

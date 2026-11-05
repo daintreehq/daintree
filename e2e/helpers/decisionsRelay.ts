@@ -191,7 +191,11 @@ export async function closeSettings(page: Page): Promise<void> {
 }
 
 /** Turns Decisions on, checks the relay and claims it, as a person does in Settings. */
-export async function connectRelay(page: Page, relay: LocalRelay): Promise<void> {
+export async function connectRelay(
+  page: Page,
+  relay: LocalRelay,
+  agentNames: readonly string[] = ["Claude"]
+): Promise<void> {
   await openDecisionsSettings(page);
   const panel = page.locator(DECISIONS_SETTINGS_DIALOG);
   await panel.getByRole("switch", { name: /Enable Decisions/ }).click();
@@ -204,6 +208,12 @@ export async function connectRelay(page: Page, relay: LocalRelay): Promise<void>
   await panel.getByLabel("Claim secret").fill(relay.claimSecret);
   await panel.getByRole("button", { name: "Claim relay" }).click();
   await expect(panel.getByText("Setup isn't finished")).toBeVisible({ timeout: 30_000 });
+  for (const name of agentNames) {
+    const askHuman = panel.getByRole("switch", { name: `ask_human for ${name}`, exact: true });
+    await askHuman.setChecked(true);
+    await expect(askHuman).toBeChecked();
+    await expect(askHuman).toBeEnabled();
+  }
 }
 
 /** Saves a recovery kit to `kitPath` through the save dialog, then verifies it. */
@@ -249,9 +259,9 @@ export async function pairPhone(
 
   await device.goto(invite);
   if (label) await device.getByLabel("Name this device").fill(label);
-  await device.getByRole("button", { name: "Pair this phone" }).click();
-  await device.getByText("Confirm this code on your computer").waitFor({ timeout: 30_000 });
-  const phoneCode = (await device.locator(".big-code").innerText()).replace(/\D/g, "");
+  await device.getByRole("button", { name: "Pair this device" }).click();
+  await device.getByRole("heading", { name: "Compare the code" }).waitFor({ timeout: 30_000 });
+  const phoneCode = (await device.locator(".pair-digits").innerText()).replace(/\D/g, "");
   expect(phoneCode).toHaveLength(6);
 
   await expect(dialog.getByText("Do these six digits match your phone?")).toBeVisible({
@@ -288,8 +298,26 @@ export async function launchPhone(
   return { context, phone: await context.newPage(), hasPush };
 }
 
+async function openPhoneDestination(device: Page, name: "Home" | "Settings"): Promise<void> {
+  const destination = device.getByRole("link", { name: new RegExp(`^${name}\\b`) }).first();
+  if (!(await destination.isVisible())) {
+    await device.getByRole("button", { name: /^Menu(?:,|$)/ }).click();
+  }
+  await destination.click();
+}
+
 export async function openInbox(device: Page): Promise<void> {
-  await device.getByRole("link", { name: /Inbox/ }).first().click();
+  await openPhoneDestination(device, "Home");
+}
+
+export async function openPhoneNotifications(device: Page): Promise<void> {
+  await openPhoneDestination(device, "Settings");
+  await device.getByRole("link", { name: /^Notifications\b/ }).click();
+}
+
+export async function choosePhoneOption(device: Page, name: RegExp): Promise<void> {
+  // The composer mirrors the choices as chips. Use the full option cards here.
+  await device.locator('input[type="radio"]').and(device.getByRole("radio", { name })).check();
 }
 
 /** Opens `question` on the phone, picks `option` and/or writes `text`, and submits. */
@@ -299,11 +327,15 @@ export async function answerOnPhone(
   answer: { option?: RegExp; text?: string }
 ): Promise<void> {
   await openInbox(phone);
-  await phone.getByText(question).first().waitFor({ timeout: 60_000 });
-  await phone.getByText(question).first().click();
+  const row = phone.getByRole("main").getByRole("link").filter({ hasText: question });
+  const newQuestions = phone.getByRole("button", { name: /^\d+ new questions?\b/ });
+  // Home holds its order while it is open; arrivals are offered above the list.
+  await row.or(newQuestions).first().waitFor({ timeout: 60_000 });
+  if (await newQuestions.isVisible()) await newQuestions.click();
+  await row.click({ timeout: 60_000 });
   await expect(phone.getByRole("heading", { name: question })).toBeVisible();
-  if (answer.option) await phone.getByRole("radio", { name: answer.option }).check();
+  if (answer.option) await choosePhoneOption(phone, answer.option);
   if (answer.text !== undefined) await phone.locator("textarea").first().fill(answer.text);
-  await phone.getByRole("button", { name: /Submit (decision|answer)/ }).click();
-  await expect(phone.getByText(/Answered by you/)).toBeVisible({ timeout: 30_000 });
+  await phone.getByRole("button", { name: /^Send (decision|answer)$/ }).click();
+  await expect(phone.getByText("Your answer", { exact: true })).toBeVisible({ timeout: 30_000 });
 }

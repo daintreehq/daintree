@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 import { windowStatesStore } from "../../store.js";
 
@@ -33,7 +34,7 @@ export const migration020: Migration = {
       };
     }
 
-    windowStatesStore.set("windowStates", merged);
+    setRawStoreValue(windowStatesStore, "windowStates", merged);
 
     // Clean up legacy keys from main store (use delete, not set(undefined) — electron-store v11 throws on undefined values, per #2727)
     store.delete("windowStates");

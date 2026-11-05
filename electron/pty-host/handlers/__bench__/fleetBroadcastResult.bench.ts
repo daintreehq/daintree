@@ -5,7 +5,7 @@
 // times the views each reaches, and bytes are JSON payload lengths.
 //
 //   npx vitest bench --run electron/pty-host/handlers/__bench__/fleetBroadcastResult.bench.ts
-import { afterAll, bench, describe, vi } from "vitest";
+import { afterAll, test, describe, vi } from "vitest";
 import { EventEmitter } from "events";
 import type { BroadcastWriteResultPayload } from "../../../../shared/types/pty-host.js";
 
@@ -155,14 +155,20 @@ function runScenario({ failAt, lateDelivery }: Scenario): Metrics {
 const report: Record<string, Metrics> = {};
 
 describe(`fleet broadcast results — ${TARGETS} targets × ${KEYSTROKES} keystrokes`, () => {
-  bench("all targets succeed", () => {
-    report["all-ok"] = runScenario({ failAt: null, lateDelivery: false });
+  test("all targets succeed", async ({ bench }) => {
+    await bench("all targets succeed", () => {
+      report["all-ok"] = runScenario({ failAt: null, lateDelivery: false });
+    }).run();
   });
-  bench("transient failure then recovery", () => {
-    report["fail→recover"] = runScenario({ failAt: FAIL_AT, lateDelivery: false });
+  test("transient failure then recovery", async ({ bench }) => {
+    await bench("transient failure then recovery", () => {
+      report["fail→recover"] = runScenario({ failAt: FAIL_AT, lateDelivery: false });
+    }).run();
   });
-  bench("transient failure then recovery, results in flight", () => {
-    report["fail→recover (late)"] = runScenario({ failAt: FAIL_AT, lateDelivery: true });
+  test("transient failure then recovery, results in flight", async ({ bench }) => {
+    await bench("transient failure then recovery, results in flight", () => {
+      report["fail→recover (late)"] = runScenario({ failAt: FAIL_AT, lateDelivery: true });
+    }).run();
   });
 });
 

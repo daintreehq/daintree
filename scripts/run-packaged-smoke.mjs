@@ -267,6 +267,9 @@ export function validateSmokeOutput(runIndex, runCount, result, requiredMarkers)
       `Packaged smoke run ${runIndex}/${runCount} reported a renderer bootstrap failure`
     );
   }
+  if (validationOutput.includes("Check failed:")) {
+    throw new Error(`Packaged smoke run ${runIndex}/${runCount} reported a native check failure`);
+  }
   for (const marker of requiredMarkers) {
     if (!validationOutput.includes(marker)) {
       throw new Error(

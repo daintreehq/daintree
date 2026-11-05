@@ -2,7 +2,7 @@ import type { Plugin } from "vite";
 import path from "path";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "../../shared/config/csp";
+import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "../../shared/config/csp.ts";
 
 // CSP definitions for development and production. Single source of truth lives
 // in shared/config/csp.ts so the meta tag injected here and the HTTP header set

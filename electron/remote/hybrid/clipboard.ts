@@ -1,4 +1,5 @@
-import { clipboard, type NativeImage } from "electron";
+import type { NativeImage } from "electron";
+import { readClipboardImage } from "../../utils/clipboardAccess.js";
 import type { ClipboardSaveImageOptions } from "../../../shared/types/ipc/fileTransfer.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -20,7 +21,7 @@ import type { HostUploadClient } from "../files/uploadClient.js";
  */
 
 export interface ClipboardSplitDeps {
-  readImage(): NativeImage;
+  readImage(): NativeImage | Promise<NativeImage>;
   uploader(): Pick<HostUploadClient, "uploadClipboardImage" | "grantLocalSources"> | undefined;
 }
 
@@ -38,7 +39,7 @@ function saveImage(deps: ClipboardSplitDeps): HybridSplit {
     // The window's operation id for the upload, so it can follow and cancel it.
     const options = args[0] as ClipboardSaveImageOptions | undefined;
     const opId = typeof options?.opId === "string" ? options.opId : undefined;
-    const image = deps.readImage();
+    const image = await deps.readImage();
     if (image.isEmpty()) {
       throw new AppError({
         code: "CLIPBOARD_EMPTY",
@@ -101,7 +102,7 @@ export function installClipboardSplits(
   dispatcher: Pick<IpcDispatcher<IpcContext>, "registerHybridSplit"> = getIpcDispatcher()
 ): () => void {
   const splits = createClipboardSplits({
-    readImage: () => clipboard.readImage(),
+    readImage: readClipboardImage,
     uploader: () => getRemoteService("hostUploadClient"),
   });
   const disposers = Object.entries(splits).map(([channel, split]) =>

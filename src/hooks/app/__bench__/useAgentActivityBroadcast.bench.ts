@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { activityWrites, focusWrites, measureCalls, seedPanels } from "./panelSubscriberFixture";
 
@@ -30,6 +30,10 @@ process.stderr.write(
 );
 
 describe("useAgentActivityBroadcast subscriber (50 panels / 10 worktrees)", () => {
-  bench("1000 updateActivity writes", activityWrites);
-  bench("1000 focus-only writes", focusWrites);
+  test("1000 updateActivity writes", async ({ bench }) => {
+    await bench("1000 updateActivity writes", activityWrites).run();
+  });
+  test("1000 focus-only writes", async ({ bench }) => {
+    await bench("1000 focus-only writes", focusWrites).run();
+  });
 });

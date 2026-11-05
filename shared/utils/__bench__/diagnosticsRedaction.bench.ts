@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { test, describe } from "vitest";
 import { applyReplacementsCounted, PREBUILT_REDACTIONS } from "../diagnosticsTransform.js";
 import type { ReplacementRule } from "../diagnosticsTransform.js";
 import { legacyApplyReplacementsCounted } from "./legacyApplyReplacements.js";
@@ -30,13 +30,17 @@ rules.push({ kind: "literal", find: "token-", replace: "T-" });
 for (const mb of [1, 3]) {
   const json = makePayload(mb * 1024 * 1024);
   describe(`redaction rules on ~${mb} MB JSON`, () => {
-    bench("legacy", () => void legacyApplyReplacementsCounted(json, rules), {
-      iterations: 3,
-      warmupIterations: 1,
+    test("legacy", async ({ bench }) => {
+      await bench("legacy", {}, () => void legacyApplyReplacementsCounted(json, rules)).run({
+        iterations: 3,
+        warmupIterations: 1,
+      });
     });
-    bench("current", () => void applyReplacementsCounted(json, rules), {
-      iterations: 3,
-      warmupIterations: 1,
+    test("current", async ({ bench }) => {
+      await bench("current", {}, () => void applyReplacementsCounted(json, rules)).run({
+        iterations: 3,
+        warmupIterations: 1,
+      });
     });
   });
 }

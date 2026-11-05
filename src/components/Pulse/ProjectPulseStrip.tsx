@@ -206,10 +206,10 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   // speech-input user can say what they read — and "Show project activity"
   // shares no phrase with the "Project pulse" printed on the button.
   const activityLabel = pulse
-    ? `Project pulse — ${pulse.activeDays} of ${pulse.projectAgeDays} active days${
+    ? `Project pulse — ${pulse.activeDays}/${pulse.projectAgeDays} active days${
         hasStreak ? `, ${pulse.currentStreakDays} day streak` : ""
       }, show activity`
-    : "Project pulse — show activity";
+    : "Project pulse — View activity";
 
   return (
     <button
@@ -230,7 +230,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       className="group flex h-8 w-full min-w-0 items-center gap-3 rounded-[var(--radius-md)] px-3 text-left transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-      <span className="shrink-0 text-xs text-text-secondary">Project pulse</span>
+      <span className="shrink-0 text-xs text-text-secondary">Project pulse</span>{" "}
       {/* A narrowing column sheds detail in reverse priority: the streak goes
           first, then the ribbon, and the counts and the chevron stay. Every
           part used to be `shrink-0`, so below ~35rem the strip ran past the
@@ -251,7 +251,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
                   ribbon and a 250-day streak left the reader to guess which
                   span it counted. */}
               {pulse.activeDays}/{pulse.projectAgeDays} active days
-            </span>
+            </span>{" "}
             {hasStreak && (
               <span className="flex items-center gap-1 text-xs tabular-nums text-text-secondary @max-[34rem]/launcher:hidden">
                 <StreakFlame streakDays={pulse.currentStreakDays!} size={12} />

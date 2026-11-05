@@ -7,11 +7,10 @@ import { DECISIONS_REMOVE_TERMINAL_PREFIX } from "@shared/config/terminalScreenP
 import { isRemovableRelayOrigin } from "@shared/config/relayRemoval";
 
 /**
- * The published CLI the guided removal runs. Pinned apart from the deploy's
- * `DECISIONS_CLI_VERSION`: `remove` first shipped in 0.3.0, and it uploads no
- * relay, so its version has nothing to match in the libraries this build pins.
+ * The published CLI the guided removal runs. `remove` first shipped in
+ * 0.3.0 and uploads no relay, so it stays pinned independently of deploy.
  */
-export const DECISIONS_REMOVE_CLI_VERSION = "0.3.0";
+export const DECISIONS_REMOVE_CLI_VERSION = "0.5.0";
 
 export const RELAY_REMOVE_TERMINAL_TITLE = "Remove Decisions relay";
 

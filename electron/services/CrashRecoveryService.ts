@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../utils/storeValues.js";
 // eager-import-allow: reads/writes crash-recovery state via sync fs and store.get during early startup
 import { app, BrowserWindow } from "electron";
 import fs from "node:fs";
@@ -1672,10 +1673,14 @@ export class CrashRecoveryService {
 
   private applySessionSnapshot(snapshot: SessionSnapshot): void {
     if (isValidAppStateSnapshot(snapshot.appState)) {
-      store.set("appState", snapshot.appState);
+      setRawStoreValue(store, "appState", snapshot.appState);
     }
     if (isPlainObject(snapshot.windowStates)) {
-      windowStatesStore.set("windowStates", snapshot.windowStates as Record<string, unknown>);
+      setRawStoreValue(
+        windowStatesStore,
+        "windowStates",
+        snapshot.windowStates as Record<string, unknown>
+      );
     }
   }
 

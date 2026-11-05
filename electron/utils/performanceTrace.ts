@@ -10,7 +10,7 @@ import { contentTracing } from "electron";
  * `--trace`. Tracing adds measurable overhead, so it is deliberately kept
  * orthogonal to (and off for) normal `DAINTREE_PERF_CAPTURE` runs.
  *
- * Output is Chromium's JSON Trace Event Format, written to the `.json` path —
+ * Output is Perfetto's protobuf trace format, written to the `.pftrace` path —
  * directly droppable into https://ui.perfetto.dev with no conversion.
  */
 

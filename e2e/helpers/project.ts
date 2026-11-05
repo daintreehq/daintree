@@ -16,7 +16,7 @@ export async function openProject(
 ): Promise<void> {
   const isWindowsCI = process.env.CI && process.platform === "win32";
   await mockOpenDialog(app, projectPath);
-  const openFolder = window.getByRole("button", { name: "Open project", exact: true });
+  const openFolder = window.getByRole("button", { name: /^Open project\b/, exact: true });
   await expect(openFolder).toBeVisible({ timeout: isWindowsCI ? 30_000 : 10_000 });
   await openFolder.click();
 }

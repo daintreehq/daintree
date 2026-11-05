@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import { store } from "../../store.js";
 import type { PluginAccountBinding } from "../../../shared/types/plugin.js";
 import { isPluginConnectionId } from "../../../shared/utils/pluginConnections.js";
@@ -75,7 +76,7 @@ export const pluginAccountBindings: PluginAccountBindingStore = {
     const updated = { ...all };
     if (Object.keys(updatedProject).length === 0) delete updated[projectId];
     else updated[projectId] = updatedProject;
-    store.set(STORE_KEY, updated);
+    setRawStoreValue(store, STORE_KEY, updated);
     return true;
   },
 };

@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 // eager-import-allow: reads project file-editor choices via store.get so changing one file-type answer preserves every other saved choice
 import { store } from "../../store.js";
 import {
@@ -56,6 +57,6 @@ export function setProjectFileEditorChoice(
   const updated = { ...all };
   if (Object.keys(next).length === 0) delete updated[projectId];
   else updated[projectId] = next;
-  store.set(STORE_KEY, updated);
+  setRawStoreValue(store, STORE_KEY, updated);
   return next;
 }

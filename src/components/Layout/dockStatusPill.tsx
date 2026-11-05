@@ -61,7 +61,7 @@ export function DockStatusPillLabel({
   return (
     <>
       {icon}
-      {!compact && <span className={cn("font-medium", condensable)}>{label}</span>}
+      {!compact && <span className={cn("font-medium", condensable)}>{label} </span>}
       <span
         data-dock-pill-local={hasLocal ? "" : undefined}
         // Without a local share the count inherits the pill's own tone, so it

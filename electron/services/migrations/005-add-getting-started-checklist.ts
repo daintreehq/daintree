@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 export const migration005: Migration = {
@@ -35,6 +36,6 @@ export const migration005: Migration = {
     console.log(
       `[Migration 005] Adding checklist (dismissed=${dismissed}) for user with completed=${onboarding.completed}`
     );
-    store.set("onboarding", { ...onboarding, checklist });
+    setRawStoreValue(store, "onboarding", { ...onboarding, checklist });
   },
 };

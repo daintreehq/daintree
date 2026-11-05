@@ -7,6 +7,11 @@ const clipboardMock = vi.hoisted(() => ({
   readText: vi.fn(),
 }));
 
+vi.mock("../../../utils/clipboardAccess.js", () => ({
+  readClipboardImage: clipboardMock.readImage,
+  writeClipboardImage: clipboardMock.writeImage,
+}));
+
 const nativeImageMock = vi.hoisted(() => ({
   createFromBuffer: vi.fn(),
 }));
@@ -25,7 +30,7 @@ vi.mock("electron", () => ({
     handle: vi.fn(),
     removeHandler: vi.fn(),
   },
-  clipboard: clipboardMock,
+  clipboard: { ...clipboardMock, selection: clipboardMock },
   nativeImage: nativeImageMock,
   dialog: dialogMock,
   BrowserWindow: browserWindowMock,
@@ -477,7 +482,7 @@ describe("clipboard:write-selection handler", () => {
     const handler = getHandler("clipboard:write-selection");
     const result = await handler(fakeEvent, "selected text");
 
-    expect(clipboardMock.writeText).toHaveBeenCalledWith("selected text", "selection");
+    expect(clipboardMock.writeText).toHaveBeenCalledWith("selected text");
     expect(result).toBeUndefined();
   });
 
@@ -555,7 +560,7 @@ describe("clipboard:read-selection handler", () => {
     const handler = getHandler("clipboard:read-selection");
     const result = await handler(fakeEvent);
 
-    expect(clipboardMock.readText).toHaveBeenCalledWith("selection");
+    expect(clipboardMock.readText).toHaveBeenCalledWith();
     expect(result).toEqual({ text: "pasted text" });
   });
 

@@ -840,6 +840,22 @@ describe("opening host files", () => {
     expect(mocks.writeText).toHaveBeenCalledWith("/home/greg/b.ts");
   });
 
+  it.each([
+    CHANNELS.SYSTEM_OPEN_IN_EDITOR,
+    CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER,
+    CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED,
+  ])("reports an asynchronous clipboard failure from %s", async (channel) => {
+    const { invoke } = setup(
+      () => ({ preferredEditor: { id: "zed" }, discoveredEditors: [] }),
+      () => "local"
+    );
+    mocks.writeText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+
+    await expect(invoke(channel, [{ path: "/home/greg/a.ts", projectId: "p1" }])).rejects.toThrow(
+      "clipboard unavailable"
+    );
+  });
+
   it("copies nothing when the editor opened the file", async () => {
     const { invoke } = setup(
       () => ({ preferredEditor: { id: "vscode" }, discoveredEditors: [] }),

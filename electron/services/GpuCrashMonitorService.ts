@@ -349,8 +349,9 @@ function logStartupGpuStatus(): void {
   startupGpuListenerBound = true;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let reported = false;
+  let ready = false;
   const emit = (): void => {
-    if (startupGpuStatusLogged) return;
+    if (!ready || startupGpuStatusLogged) return;
     // The deadline logs what's there, but only a report settles the status a
     // later read may keep for the session.
     if (reported) markGpuInfoSettled();
@@ -376,22 +377,32 @@ function logStartupGpuStatus(): void {
     settleTimer = setTimeout(emit, STARTUP_GPU_STATUS_SETTLE_MS);
     settleTimer.unref?.();
   });
-  setTimeout(emit, STARTUP_GPU_STATUS_DEADLINE_MS).unref?.();
+  // Chromium 156 rejects GPU initialization before its browser main loop is
+  // ready. Keep crash/report listeners early, but defer every native GPU read.
+  void app.whenReady().then(() => {
+    ready = true;
+    setTimeout(emit, STARTUP_GPU_STATUS_DEADLINE_MS).unref?.();
+    if (reported) {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(emit, STARTUP_GPU_STATUS_SETTLE_MS);
+      settleTimer.unref?.();
+    }
 
-  // getGPUInfo can hang on some drivers (and is absent in some test/host
-  // environments) — guard + bound it so diagnostics never wedge boot.
-  if (typeof app.getGPUInfo !== "function") return;
-  void withTimeout(app.getGPUInfo("basic"), 5000, "gpu-info-timeout")
-    .then((info) => {
-      const renderer = (info as { auxAttributes?: { renderer?: string } } | null)?.auxAttributes
-        ?.renderer;
-      if (typeof renderer === "string" && renderer.length > 0) {
-        logger.info("gpu-startup-renderer", { renderer });
-      }
-    })
-    .catch(() => {
-      /* timeout/unavailable — the status log is the durable trace */
-    });
+    // getGPUInfo can hang on some drivers (and is absent in some test/host
+    // environments) — guard + bound it so diagnostics never wedge boot.
+    if (typeof app.getGPUInfo !== "function") return;
+    return withTimeout(app.getGPUInfo("basic"), 5000, "gpu-info-timeout")
+      .then((info) => {
+        const renderer = (info as { auxAttributes?: { renderer?: string } } | null)?.auxAttributes
+          ?.renderer;
+        if (typeof renderer === "string" && renderer.length > 0) {
+          logger.info("gpu-startup-renderer", { renderer });
+        }
+      })
+      .catch(() => {
+        /* timeout/unavailable — the status log is the durable trace */
+      });
+  });
 }
 
 export function initializeGpuCrashMonitor(): GpuCrashMonitorService {

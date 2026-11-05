@@ -6,7 +6,7 @@ import path from "path";
 // against empty strings: Vitest stubs every `.css` specifier — `?raw` included
 // — so the bytes have to arrive as a virtual JS module instead.
 import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
-import { isRemoteHostSupportedOn } from "./shared/config/remoteHostsSupport";
+import { isRemoteHostSupportedOn } from "./shared/config/remoteHostsSupport.ts";
 
 // Remote Hosts suites assume POSIX paths and Unix sockets by design: the
 // boot, both roles' links, and the project service behind host-to-host clone
@@ -33,35 +33,40 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
-      "@shared": path.resolve(__dirname, "./shared"),
+      "@": path.resolve(import.meta.dirname, "./src"),
+      "@shared": path.resolve(import.meta.dirname, "./shared"),
       // Same source aliases as vite.config.ts; subpaths first so the root entry
       // alias doesn't swallow them.
-      "@daintreehq/tour/react": path.resolve(__dirname, "./packages/tour/src/react.ts"),
-      "@daintreehq/tour/kit": path.resolve(__dirname, "./packages/tour/src/kit.ts"),
-      "@daintreehq/tour/mock-app": path.resolve(__dirname, "./packages/tour/src/mock-app.ts"),
-      "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
-      "@daintreehq/plugin-ui": path.resolve(__dirname, "./src/pluginUi/index.ts"),
+      "@daintreehq/tour/react": path.resolve(import.meta.dirname, "./packages/tour/src/react.ts"),
+      "@daintreehq/tour/kit": path.resolve(import.meta.dirname, "./packages/tour/src/kit.ts"),
+      "@daintreehq/tour/mock-app": path.resolve(
+        import.meta.dirname,
+        "./packages/tour/src/mock-app.ts"
+      ),
+      "@daintreehq/tour": path.resolve(import.meta.dirname, "./packages/tour/src/index.ts"),
+      "@daintreehq/plugin-ui": path.resolve(import.meta.dirname, "./src/pluginUi/index.ts"),
       // Source, so a story suite runs against this tree's preview rather than
       // whichever `dist/` the workspace link happens to point at.
       "@daintreehq/plugin-sdk/testing/preview": path.resolve(
-        __dirname,
+        import.meta.dirname,
         "./packages/plugin-sdk/src/testing-preview.ts"
       ),
       // The reference application's tests import the SDK the way a scaffolded
       // project does, by package name; resolve those to source as well.
       "@daintreehq/plugin-sdk/testing": path.resolve(
-        __dirname,
+        import.meta.dirname,
         "./packages/plugin-sdk/src/testing.ts"
       ),
       "@daintreehq/plugin-sdk/operations": path.resolve(
-        __dirname,
+        import.meta.dirname,
         "./packages/plugin-sdk/src/operations.ts"
       ),
     },
   },
   test: {
     globals: true,
+    // Preserve the existing mock lifecycle when upgrading from Vitest 4.
+    clearMocks: false,
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
     onConsoleLog: () => false,

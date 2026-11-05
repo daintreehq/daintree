@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../utils/storeValues.js";
 // eager-import-allow: reads portable config via store.get synchronously while building a bundle
 import { createHash } from "node:crypto";
 import { store } from "../store.js";
@@ -962,7 +963,7 @@ export class ConfigBundleService {
         }
 
         if (pending.length > 0) {
-          store.set("agentSettings.agents", next);
+          setRawStoreValue(store, "agentSettings.agents", next);
         }
 
         const readBack = readAgents();
@@ -976,7 +977,11 @@ export class ConfigBundleService {
         return results;
       },
       restore: async (snapshot) => {
-        store.set("agentSettings.agents", (snapshot ?? {}) as Record<string, unknown>);
+        setRawStoreValue(
+          store,
+          "agentSettings.agents",
+          (snapshot ?? {}) as Record<string, unknown>
+        );
       },
     };
   }

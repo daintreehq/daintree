@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Run: BENCH_OUT=/tmp/rows.txt npx vitest bench --run src/components/Settings/__tests__/McpAuditLogViewer.bench.tsx
 import { writeFileSync } from "node:fs";
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 import { act, cleanup, render, type RenderResult } from "@testing-library/react";
 import type { McpLogRecord } from "@shared/types";
 
@@ -112,44 +112,41 @@ function mount(): RenderResult {
 }
 
 describe(`McpAuditLogViewer, ${N} records`, () => {
-  bench(
-    "mount",
-    () => {
+  test("mount", async ({ bench }) => {
+    await bench("mount", { afterAll: report }, () => {
       counters.timeRenders = 0;
       act(() => {
         mount();
       });
       stats.mountRows.push(counters.timeRenders);
       cleanup();
-    },
-    { iterations: 5, warmupIterations: 1, time: 0, teardown: report }
-  );
+    }).run({ iterations: 5, warmupIterations: 1, time: 0 });
+  });
 
-  bench(
-    "minute tick (mounted)",
-    () => {
-      counters.timeRenders = 0;
-      act(() => {
-        vi.setSystemTime(Date.now() + 60_000);
-        ticker.bump();
-      });
-      stats.tickRows.push(counters.timeRenders);
-    },
-    {
-      iterations: 10,
-      warmupIterations: 1,
-      time: 0,
-      setup: () => {
-        cleanup();
-        vi.setSystemTime(BASE);
+  test("minute tick (mounted)", async ({ bench }) => {
+    await bench(
+      "minute tick (mounted)",
+      {
+        beforeAll: () => {
+          cleanup();
+          vi.setSystemTime(BASE);
+          act(() => {
+            mount();
+          });
+        },
+        afterAll: () => {
+          cleanup();
+          report();
+        },
+      },
+      () => {
+        counters.timeRenders = 0;
         act(() => {
-          mount();
+          vi.setSystemTime(Date.now() + 60_000);
+          ticker.bump();
         });
-      },
-      teardown: () => {
-        cleanup();
-        report();
-      },
-    }
-  );
+        stats.tickRows.push(counters.timeRenders);
+      }
+    ).run({ iterations: 10, warmupIterations: 1, time: 0 });
+  });
 });

@@ -44,6 +44,7 @@ import { dispatchAction } from "../../helpers/actions";
 import {
   answerOnPhone as answerOn,
   closeSettings as closeSettingsOf,
+  choosePhoneOption,
   connectRelay,
   DECISIONS_CHECKOUT,
   DECISIONS_SETTINGS_DIALOG as DIALOG,
@@ -51,6 +52,7 @@ import {
   localRelay,
   openDecisionsSettings,
   openInbox as openInboxOf,
+  openPhoneNotifications,
   pairPhone as pairPhoneOf,
   saveAndVerifyKit,
   type LocalRelay,
@@ -163,12 +165,9 @@ test("pairs the phone app when both sides show the same six digits", async () =>
   test.setTimeout(180_000);
   await pairPhone(phone);
   if (phoneHasPush) {
-    await phone
-      .getByRole("link", { name: /Settings/ })
-      .first()
-      .click();
-    await phone.getByRole("button", { name: "Turn on notifications" }).click();
-    await expect(phone.getByText("Notifications are on. Send a test to be sure.")).toBeVisible({
+    await openPhoneNotifications(phone);
+    await phone.getByRole("button", { name: "Set up notifications", exact: true }).click();
+    await expect(phone.getByText("Notifications are on. Send a test to check.")).toBeVisible({
       timeout: 90_000,
     });
     await openInbox();
@@ -209,7 +208,9 @@ async function launchAgent(): Promise<Agent> {
     .poll(() => getTerminalTextById(page, id), { timeout: 30_000 })
     .toContain(FAKE_AGENT_READY);
 
-  const configPath = launch.argv[launch.argv.indexOf("--mcp-config") + 1];
+  const configAt = launch.argv.indexOf("--mcp-config");
+  expect(configAt, launch.argv.join(" ")).toBeGreaterThanOrEqual(0);
+  const configPath = launch.argv[configAt + 1];
   expect(configPath, launch.argv.join(" ")).toBeTruthy();
   const config = JSON.parse(readFileSync(configPath, "utf8")) as {
     mcpServers: Record<string, { url: string; headers?: Record<string, string> }>;
@@ -269,12 +270,17 @@ test("the phone answers and Daintree types the answer into the agent that asked"
   await expect(phone.locator("main")).toContainText(path.basename(repoDir));
   expect(await phone.locator("body").innerText()).not.toMatch(/[0-9a-f]{32}/);
   await phone.screenshot({ fullPage: true, path: test.info().outputPath("phone-question.png") });
-  await phone.getByText("Context from the agent").click();
-  await expect(phone.getByText("The compact one saves 48px")).toBeVisible({ timeout: 15_000 });
+  await phone
+    .locator("summary")
+    .filter({ hasText: /^Context/ })
+    .click();
+  await expect(
+    phone.getByRole("paragraph").filter({ hasText: "The compact one saves 48px" })
+  ).toBeVisible({ timeout: 15_000 });
   await expect(phone.locator("img").first()).toBeVisible({ timeout: 15_000 });
-  await phone.getByRole("radio", { name: /Compact sidebar/ }).check();
+  await choosePhoneOption(phone, /Compact sidebar/);
   await phone.locator("textarea").first().fill("Ship it.\nKeep the classic one behind a setting.");
-  await phone.getByRole("button", { name: /Submit (decision|answer)/ }).click();
+  await phone.getByRole("button", { name: /^Send (decision|answer)$/ }).click();
 
   await expect
     .poll(() => readFakeAgentStdin(binDir, paneId), { timeout: 60_000 })
@@ -288,8 +294,12 @@ test("the phone answers and Daintree types the answer into the agent that asked"
   expect(typed).toContain("  Keep the classic one behind a setting.");
 
   await phone
+    .getByRole("button", { name: /^Delivery:/ })
+    .first()
+    .click();
+  await phone
     .locator('ol[aria-label="Delivery progress"] li[aria-current="step"]')
-    .filter({ hasText: "Typed into the agent’s terminal" })
+    .filter({ hasText: "Typed into the terminal" })
     .waitFor({ timeout: 30_000 });
 
   const read = await mcp.callTool({ name: "get_decision", arguments: { question_id: questionId } });
@@ -300,25 +310,28 @@ test("the phone answers and Daintree types the answer into the agent that asked"
   });
 });
 
-test("a correction from the phone reaches the agent as a new revision with its reason", async () => {
+test("a follow-up from the phone reaches the agent without replacing the human answer", async () => {
   test.setTimeout(120_000);
   const before = readFakeAgentStdin(binDir, paneId).length;
-  await phone.getByRole("button", { name: "Change this answer…" }).click();
-  await phone.getByRole("radio", { name: /Classic sidebar/ }).check();
+  // Decisions 0.5 keeps human answers final; later words are a follow-up.
+  await expect(phone.getByRole("button", { name: /Change this answer|Overrule/ })).toHaveCount(0);
   await phone
-    .getByPlaceholder("Your agent sees this with the correction")
+    .getByRole("textbox", { name: "Follow-up", exact: true })
     .fill("Support asked for labels.");
-  await phone.getByRole("button", { name: "Send correction" }).click();
-  await phone.getByRole("dialog").getByRole("button", { name: "Send correction" }).click();
+  await phone.getByRole("button", { name: "Send follow-up", exact: true }).click();
 
   await expect
     .poll(() => readFakeAgentStdin(binDir, paneId).slice(before), { timeout: 60_000 })
-    .toContain("[END DAINTREE DECISION ANSWER]");
+    .toContain("[END DAINTREE DECISION FOLLOW-UP]");
   const typed = readFakeAgentStdin(binDir, paneId).slice(before);
-  expect(typed).toContain("revision: 2");
-  expect(typed).toContain("choice: classic");
-  expect(typed).toContain("This corrects an earlier answer");
-  expect(typed).toContain("reason: Support asked for labels.");
+  expect(typed).toContain(`question_id: ${questionId}`);
+  expect(typed).toContain("sent_from: phone");
+  expect(typed).toContain("text: Support asked for labels.");
+  expect(typed).not.toContain("[DAINTREE DECISION ANSWER]");
+  expect(
+    (await mcp.callTool({ name: "get_decision", arguments: { question_id: questionId } }))
+      .structuredContent
+  ).toMatchObject({ status: "human-answered", provenance: "human", choice: "compact" });
   expect(phoneProblems, phoneProblems.join("\n")).toEqual([]);
 });
 
@@ -360,7 +373,7 @@ test("an agent can withdraw a question it no longer needs, and the phone says so
   test.setTimeout(120_000);
   const question = "Should the export button move to the toolbar?";
   const id = await askMidTurn({ question, kind: "text" });
-  await phone.getByRole("link", { name: /Inbox/ }).first().click();
+  await openInbox();
   await phone.getByText(question).first().waitFor({ timeout: 30_000 });
 
   await phone.getByText(question).first().click();
@@ -368,7 +381,7 @@ test("an agent can withdraw a question it no longer needs, and the phone says so
 
   const cancelled = await mcp.callTool({ name: "cancel_question", arguments: { question_id: id } });
   expect(cancelled.isError, JSON.stringify(cancelled.content)).toBeFalsy();
-  await expect(phone.getByText("Your agent withdrew this question")).toBeVisible({
+  await expect(phone.getByText("Withdrawn by your agent", { exact: true })).toBeVisible({
     timeout: 30_000,
   });
   const read = await mcp.callTool({ name: "get_decision", arguments: { question_id: id } });
@@ -416,7 +429,7 @@ test("the setup check proves the whole loop with a test question answered on the
     .click();
 
   const testQuestion = "Daintree setup check: did this question reach you?";
-  await phone.getByRole("link", { name: /Inbox/ }).first().click();
+  await openInbox();
   // A fresh Chrome profile's first pushes can come back from FCM as gone while its registration
   // settles, and the relay rightly drops that subscription. The check then stops at push
   // configuration and says to turn notifications on in the app: done here as a person would.
@@ -437,22 +450,19 @@ test("the setup check proves the whole loop with a test question answered on the
       type: "push-turned-on-again",
       description: "the push service dropped the phone's first subscription",
     });
-    await phone
-      .getByRole("link", { name: /Settings/ })
-      .first()
-      .click();
-    await phone.getByRole("button", { name: "Turn on notifications" }).click();
+    await openPhoneNotifications(phone);
+    await phone.getByRole("button", { name: "Set up notifications", exact: true }).click();
     await expect(phone.getByText(/Notifications are on/)).toBeVisible({ timeout: 30_000 });
     await panel
       .getByRole("button", { name: /^Check again$/ })
       .first()
       .click();
-    await phone.getByRole("link", { name: /Inbox/ }).first().click();
+    await openInbox();
   }
   await phone.getByText(testQuestion).first().waitFor({ timeout: 60_000 });
   await phone.getByText(testQuestion).first().click();
-  await phone.getByRole("radio", { name: /Received/ }).check();
-  await phone.getByRole("button", { name: /Submit (decision|answer)/ }).click();
+  await choosePhoneOption(phone, /Received/);
+  await phone.getByRole("button", { name: /^Send (decision|answer)$/ }).click();
   await expect(panel.getByText(/^Every step passed on /)).toBeVisible({ timeout: 120_000 });
   await expect(panel.getByText("Setup isn't finished")).toBeHidden();
   for (const step of [
@@ -543,10 +553,19 @@ test("the design-review gate needs a person, and its approval is bound to the sc
   await openInbox();
   await phone.getByText(question).first().waitFor({ timeout: 60_000 });
   await phone.getByText(question).first().click();
-  await expect(phone.locator(".thumb img")).toHaveCount(2, { timeout: 30_000 });
-  await expect(phone.getByRole("radio")).toHaveCount(2);
-  await phone.getByRole("radio", { name: /Approve/ }).check();
-  await phone.getByRole("button", { name: /Submit decision/ }).click();
+  const files = phone.getByRole("tablist", { name: "Files", exact: true }).getByRole("tab");
+  await expect(files).toHaveCount(2, { timeout: 30_000 });
+  for (const file of await files.all()) {
+    await file.click();
+    const preview = phone.getByRole("tabpanel");
+    await preview.scrollIntoViewIfNeeded();
+    await expect(preview).toBeInViewport({ ratio: 0.5 });
+    await expect(preview.getByRole("img")).toBeVisible({ timeout: 30_000 });
+  }
+  await expect(phone.locator('input[type="radio"]')).toHaveCount(2);
+  await expect(phone.getByRole("radiogroup").getByRole("radio")).toHaveCount(2);
+  await choosePhoneOption(phone, /Approve/);
+  await phone.getByRole("button", { name: "Send decision", exact: true }).click();
 
   await expect.poll(() => typedSince(from), { timeout: 60_000 }).toContain(`question_id: ${id}`);
   expect(typedSince(from)).toContain("choice: approve");
@@ -749,6 +768,10 @@ test("an answer given while Daintree is closed is there when it opens again", as
   await closeApp(ctx.app);
 
   await answerOnPhone(question, { option: /After the release/ });
+  await phone
+    .getByRole("button", { name: /^Delivery:/ })
+    .first()
+    .click();
   await expect(
     phone.locator('ol[aria-label="Delivery progress"]').getByText("Saved on your relay")
   ).toBeVisible();

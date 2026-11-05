@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import { auditRingStore } from "../persistence/auditRingStore.js";
 import { store } from "../../store.js";
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/pluginMcpAudit.js";
@@ -24,7 +25,7 @@ export function getPluginMcpAuditService(): PluginMcpAuditService {
     auditInstance = new PluginMcpAuditService(
       (patch) => {
         const current = (store.get("pluginMcpAudit") ?? {}) as Record<string, unknown>;
-        store.set("pluginMcpAudit", { ...current, ...patch });
+        setRawStoreValue(store, "pluginMcpAudit", { ...current, ...patch });
       },
       () => (store.get("pluginMcpAudit") ?? {}) as Record<string, unknown>,
       {

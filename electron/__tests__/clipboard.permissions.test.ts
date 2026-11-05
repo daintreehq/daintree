@@ -1,3 +1,7 @@
+vi.mock("../utils/clipboardAccess.js", () => ({
+  readClipboardImage: clipboardMock.readImage,
+  writeClipboardImage: clipboardMock.writeImage,
+}));
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";

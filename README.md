@@ -159,7 +159,7 @@ Get the latest build at **[daintree.org/download](https://daintree.org/download)
 
 | Platform | What you get |
 | --- | --- |
-| **macOS&nbsp;12+** | A signed and notarized `.dmg` for Apple Silicon, Intel or Universal |
+| **macOS&nbsp;13+** | A signed and notarized `.dmg` for Apple Silicon, Intel or Universal |
 | **Windows&nbsp;10+** | A per-user installer for x64 or arm64: no admin rights, and it updates in place |
 | **Linux** | `.AppImage` and `.deb` for x64 or arm64, on glibc 2.34+ (Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 or later), under X11 or Wayland |
 

@@ -14,7 +14,7 @@ import type { DecisionsRelayVersions } from "@shared/types/decisions";
  * range overlaps the one passed in, so it needn't match the libraries this
  * build pins.
  */
-export const DECISIONS_UPDATE_CLI_VERSION = "0.3.0";
+export const DECISIONS_UPDATE_CLI_VERSION = "0.5.0";
 
 export const RELAY_UPDATE_TERMINAL_TITLE = "Update Decisions relay";
 

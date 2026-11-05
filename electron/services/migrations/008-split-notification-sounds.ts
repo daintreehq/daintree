@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 export const migration008: Migration = {
@@ -22,7 +23,7 @@ export const migration008: Migration = {
     console.log(`[Migration 008] Migrating soundFile "${oldSoundFile}" to per-event sound fields`);
 
     const { soundFile: _, ...rest } = settings;
-    store.set("notificationSettings", {
+    setRawStoreValue(store, "notificationSettings", {
       ...rest,
       completedSoundFile: oldSoundFile,
       waitingSoundFile: "waiting.wav",

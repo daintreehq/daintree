@@ -3,8 +3,8 @@ import path from "path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { isInScanSurface } from "./compiler-scan-surface.mjs";
-import { getFirstRenderPreloadSeeds } from "../../shared/config/panelKindRegistry";
-import { isHostFacadeChunkName } from "./vite-host-facade";
+import { getFirstRenderPreloadSeeds } from "../../shared/config/panelKindRegistry.ts";
+import { isHostFacadeChunkName } from "./vite-host-facade.ts";
 
 type CompilerLoggerEvent = { kind: string };
 

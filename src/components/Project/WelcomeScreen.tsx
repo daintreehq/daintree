@@ -244,11 +244,9 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       key={id}
                       onClick={onClick}
                       tone={lifted ? "elevated" : "default"}
-                      // Title is the accessible name; the description is announced
-                      // once via aria-describedby. aria-label keeps the name clean
-                      // so the in-button description text isn't double-announced.
-                      aria-label={title}
-                      aria-describedby={`qa-desc-${id}`}
+                      // Speech input needs every visible word in the accessible
+                      // name. Include the description once, without repeating it.
+                      aria-label={`${title} ${description}`}
                       className={cn(
                         "flex-col items-start gap-1 @min-[1800px]/welcome:p-4",
                         // Room for the secondary action pinned in the corner.
@@ -258,7 +256,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
                         <Icon className="h-4 w-4 shrink-0 text-text-secondary @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5" />
                         {title}
-                      </span>
+                      </span>{" "}
                       <span
                         id={`qa-desc-${id}`}
                         className="text-xs text-text-secondary leading-relaxed @min-[1920px]/welcome:text-sm"

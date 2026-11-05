@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 /**
@@ -14,6 +15,6 @@ export const migration038: Migration = {
     const voiceInput = store.get("voiceInput") as Record<string, unknown> | undefined;
     if (!voiceInput || typeof voiceInput !== "object") return;
     if (voiceInput.recordingMode !== "toggle") return;
-    store.set("voiceInput", { ...voiceInput, recordingMode: "tap-or-hold" });
+    setRawStoreValue(store, "voiceInput", { ...voiceInput, recordingMode: "tap-or-hold" });
   },
 };

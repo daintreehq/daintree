@@ -19,7 +19,12 @@ export const COMPONENT_LIMITS = {
  * they have no DOM roots of their own. `unknown` is a framework that does not
  * say, not a guess at either.
  */
-export const ComponentEnvironmentSchema = z.enum(["client", "server", "unknown"]);
+// An explicit enum object keeps declaration output independent of the compiler's union order.
+export const ComponentEnvironmentSchema = z.enum({
+  client: "client",
+  server: "server",
+  unknown: "unknown",
+});
 export type ComponentEnvironment = z.infer<typeof ComponentEnvironmentSchema>;
 
 /**

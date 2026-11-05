@@ -810,7 +810,7 @@ export function GeneralTab({
                             />
                           ) : (
                             <span className="flex-1 text-sm text-text-primary">{name}</span>
-                          )}
+                          )}{" "}
                           {status && (
                             <span
                               data-agent-status={status.label}

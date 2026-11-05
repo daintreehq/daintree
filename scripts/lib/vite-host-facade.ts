@@ -13,11 +13,11 @@ import { createHash } from "node:crypto";
 // The map itself serves the wider HOST_IMPORTMAP_SERVED_SPECIFIERS: the
 // externals contract plus raw-only entries (the SDK's React hooks) that bundled
 // views keep bundling and only zero-build views resolve through the host.
-import { HOST_IMPORTMAP_SERVED_SPECIFIERS } from "../../packages/plugin-vite/src/hostImportMap";
-import { getFirstRenderPreloadSeeds } from "../../shared/config/panelKindRegistry";
-import { formatErrorMessage } from "../../shared/utils/errorMessage";
-import { HOST_FACADE_REQUIRED_EXPORTS, type HostFacadeSpecifier } from "./host-facade-exports";
-import type { ImportMapBuildState } from "./vite-index-html";
+import { HOST_IMPORTMAP_SERVED_SPECIFIERS } from "../../packages/plugin-vite/src/hostImportMap.ts";
+import { getFirstRenderPreloadSeeds } from "../../shared/config/panelKindRegistry.ts";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.ts";
+import { HOST_FACADE_REQUIRED_EXPORTS, type HostFacadeSpecifier } from "./host-facade-exports.ts";
+import type { ImportMapBuildState } from "./vite-index-html.ts";
 
 // `HOST_IMPORTMAP_SERVED_SPECIFIERS` (imported from @daintreehq/plugin-vite above) is
 // the set of specifiers exposed to externalized plugin bundles and raw views. Each one gets

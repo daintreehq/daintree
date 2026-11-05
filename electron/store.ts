@@ -992,13 +992,6 @@ export interface StoreSchema {
 const storeOptions = {
   defaults: {
     _schemaVersion: 0,
-    windowState: {
-      x: undefined,
-      y: undefined,
-      width: 1200,
-      height: 800,
-      isMaximized: false,
-    },
     terminalConfig: {
       scrollbackLines: 1000,
       performanceMode: false,
@@ -1091,7 +1084,6 @@ const storeOptions = {
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     canopyMode: "unset" as const,
-    windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},
     rosettaWarningDismissed: false,

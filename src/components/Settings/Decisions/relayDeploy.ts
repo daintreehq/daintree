@@ -5,16 +5,6 @@ import { isWindows } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { DECISIONS_DEPLOY_TERMINAL_PREFIX } from "@shared/config/terminalScreenPersistence";
 
-/**
- * The published CLI the guided deploy runs. Pinned, never `latest`: its
- * `deploy` uploads the relay of its own version, and the relay and the
- * libraries are released together, so it matches the protocol package this
- * build pins and the relay check expects. 0.3.0 was the first to ask its setup
- * questions before changing anything (daintreehq/decisions#21) and to take
- * its defaults from, and hand its result to, a host app (daintreehq/decisions#22).
- */
-export const DECISIONS_CLI_VERSION = "0.4.0";
-
 export const RELAY_DEPLOY_TERMINAL_TITLE = "Deploy Decisions relay";
 
 /**
@@ -30,8 +20,9 @@ export function freshRelayName(): string {
 }
 
 /**
- * What the pane runs, in full and in view. No token, account, claim flag or
- * key: Wrangler signs in through the browser, and the answers Daintree knows
+ * Runs npm's latest published CLI, which deploys its own relay and phone app.
+ * No token, account, claim flag or key: Wrangler signs in through the
+ * browser, and the answers Daintree knows
  * and the result it gets back travel over the host channel, whose path is no
  * secret and is safe unquoted in any shell. On Windows it names npm's batch
  * shim, since PowerShell would otherwise pick `npx.ps1`, which its default
@@ -39,7 +30,7 @@ export function freshRelayName(): string {
  */
 export function relayDeployCommand(name: string, windows: boolean, hostChannel: string): string {
   const npx = windows ? "npx.cmd" : "npx";
-  return `${npx} --yes @daintreehq/decisions-cli@${DECISIONS_CLI_VERSION} deploy --name ${name} --bucket ${name} --host-channel ${hostChannel}`;
+  return `${npx} --yes @daintreehq/decisions-cli@latest deploy --name ${name} --bucket ${name} --host-channel ${hostChannel}`;
 }
 
 export interface RelayDeployPlacement {

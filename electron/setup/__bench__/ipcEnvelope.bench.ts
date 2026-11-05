@@ -1,4 +1,4 @@
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 
 // validateIpcInvokeEnvelope runs on every ipcMain.handle invoke before the
 // listener. Payload shapes mirror real traffic: small request objects, file
@@ -105,23 +105,47 @@ process.stderr.write(
 );
 
 describe("validateIpcInvokeEnvelope", () => {
-  bench("small object", () => validateIpcInvokeEnvelope("files:read", small));
-  bench("terminal:spawn env (40 vars)", () =>
-    validateIpcInvokeEnvelope("terminal:spawn", terminalSpawn)
-  );
-  bench("nested array (500 objects)", () => validateIpcInvokeEnvelope("app:set-state", nested));
-  bench("10 KB source string", () => validateIpcInvokeEnvelope("clipboard:write-text", save10k));
-  bench("100 KB source string", () => validateIpcInvokeEnvelope("clipboard:write-text", save100k));
-  bench("1 MB source string (artifactOps)", () =>
-    validateIpcInvokeEnvelope("artifact:save-to-file", save1m)
-  );
-  bench("worst case: 1 MB string, control char at the end", () =>
-    validateIpcInvokeEnvelope("artifact:save-to-file", save1mTrailingControl)
-  );
-  bench("worst case: nested array, Date as the last key", () =>
-    validateIpcInvokeEnvelope("app:set-state", nestedWithDate)
-  );
-  bench("weighted mix (100 invokes)", () => {
-    for (const [channel, args] of MIX) validateIpcInvokeEnvelope(channel, args);
+  test("small object", async ({ bench }) => {
+    await bench("small object", () => validateIpcInvokeEnvelope("files:read", small)).run();
+  });
+  test("terminal:spawn env (40 vars)", async ({ bench }) => {
+    await bench("terminal:spawn env (40 vars)", () =>
+      validateIpcInvokeEnvelope("terminal:spawn", terminalSpawn)
+    ).run();
+  });
+  test("nested array (500 objects)", async ({ bench }) => {
+    await bench("nested array (500 objects)", () =>
+      validateIpcInvokeEnvelope("app:set-state", nested)
+    ).run();
+  });
+  test("10 KB source string", async ({ bench }) => {
+    await bench("10 KB source string", () =>
+      validateIpcInvokeEnvelope("clipboard:write-text", save10k)
+    ).run();
+  });
+  test("100 KB source string", async ({ bench }) => {
+    await bench("100 KB source string", () =>
+      validateIpcInvokeEnvelope("clipboard:write-text", save100k)
+    ).run();
+  });
+  test("1 MB source string (artifactOps)", async ({ bench }) => {
+    await bench("1 MB source string (artifactOps)", () =>
+      validateIpcInvokeEnvelope("artifact:save-to-file", save1m)
+    ).run();
+  });
+  test("worst case: 1 MB string, control char at the end", async ({ bench }) => {
+    await bench("worst case: 1 MB string, control char at the end", () =>
+      validateIpcInvokeEnvelope("artifact:save-to-file", save1mTrailingControl)
+    ).run();
+  });
+  test("worst case: nested array, Date as the last key", async ({ bench }) => {
+    await bench("worst case: nested array, Date as the last key", () =>
+      validateIpcInvokeEnvelope("app:set-state", nestedWithDate)
+    ).run();
+  });
+  test("weighted mix (100 invokes)", async ({ bench }) => {
+    await bench("weighted mix (100 invokes)", () => {
+      for (const [channel, args] of MIX) validateIpcInvokeEnvelope(channel, args);
+    }).run();
   });
 });

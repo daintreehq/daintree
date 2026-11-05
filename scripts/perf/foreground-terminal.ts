@@ -411,7 +411,7 @@ for (let round = 0; round < rounds; round++) {
     if (values.trace)
       await ctx.app.evaluate(
         async ({ contentTracing }, dest) => contentTracing.stopRecording(dest),
-        `${output}.${round}.trace.json`
+        `${output}.${round}.pftrace`
       );
     assert.deepEqual(
       Object.keys(after.gpu).sort(),
