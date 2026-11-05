@@ -203,7 +203,7 @@ describe("runProjectSync", () => {
     expect(electron.steps.length).toBeGreaterThan(1);
     const spawnStep = vi.fn(() => ({ status: 0 }));
     expect(runProjectSync("electron", { spawnStep })).toBe(0);
-    expect(spawnStep).toHaveBeenCalledTimes(electron.steps.length);
+    expect(spawnStep.mock.calls.map(([, args]) => args.slice(1))).toEqual(electron.steps);
   });
 
   it("stops at the first failing step and returns its status", () => {
