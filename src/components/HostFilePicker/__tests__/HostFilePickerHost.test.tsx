@@ -422,6 +422,20 @@ describe("HostFilePickerHost typed path", () => {
     expect(settled()).toBe(false);
   });
 
+  it("forgets the press when a new path is started from the list while the typed folder loads", async () => {
+    const { settled, field } = await openFolderPick();
+    typePath(field, "/home/greg/work");
+    const finish = holdListing();
+    press(confirmButton("Open"));
+    fireEvent.keyDown(field, { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "/" });
+    expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe("/");
+    await finish();
+    await findRow("app");
+    await act(async () => {});
+    expect(settled()).toBe(false);
+  });
+
   it("forgets the press when the typed folder fails, so Retry only lists it", async () => {
     const { settled, field } = await openFolderPick();
     listDirectory.mockRejectedValueOnce(new Error("The host isn't connected."));

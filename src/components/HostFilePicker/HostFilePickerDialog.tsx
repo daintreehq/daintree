@@ -525,6 +525,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
 
   const editPath = (draft?: string) => {
     if (draft !== undefined) {
+      confirmOwedRef.current = null;
       setPathDraft(draft);
       setDraftEdited(true);
     }
