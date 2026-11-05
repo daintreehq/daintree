@@ -261,19 +261,36 @@ function holdFirstSend(transport: ClientUploadTransport) {
   return { spy, atGate: atGate.promise, release: gate.resolve };
 }
 
-/** An unpack that waits for the test (`release`) before it starts writing, or stops on a cancel. */
+/**
+ * An unpack that writes the whole tree into staging, then waits for the test
+ * (`release`) or a cancel before the host publishes it.
+ */
 function heldUnpack() {
   const entered = deferred();
   const gate = deferred();
   const unpack: typeof unpackFolderArchive = async (args) => {
+    const result = await unpackFolderArchive(args);
     entered.resolve();
     await Promise.race([
       gate.promise,
-      new Promise<void>((resolve) => args.signal?.addEventListener("abort", () => resolve())),
+      new Promise<void>((resolve) => {
+        if (args.signal?.aborted) resolve();
+        args.signal?.addEventListener("abort", () => resolve());
+      }),
     ]);
-    return unpackFolderArchive(args);
+    return result;
   };
   return { unpack, entered: entered.promise, release: gate.resolve };
+}
+
+/** Files the host has unpacked into staging and not yet published or discarded. */
+async function stagedFiles(): Promise<string[]> {
+  const names = await fs.readdir(inboxRoot, { recursive: true }).catch(() => [] as string[]);
+  return names.filter((name) => name.startsWith(".stage-") && name.endsWith("app.ts"));
+}
+
+function errorCode(error: unknown): string | undefined {
+  return (error as { code?: string } | null)?.code;
 }
 
 describe("sending a folder to its host", () => {
@@ -303,11 +320,13 @@ describe("sending a folder to its host", () => {
     const { uploads, events } = await setup();
     const handle = await droppedFolder(uploads, LARGE());
 
-    await sendFolder(uploads, handle);
+    await sendFolder(uploads, handle, "op-measured");
 
     const progress = events.filter((event) => event.type === "folder-progress");
+    expect(progress.every((event) => event.opId === "op-measured")).toBe(true);
+    expect(phasesOf(events, "op-measured")).toEqual(["packing", "sending", "unpacking"]);
     const sending = progress.filter((event) => event.phase === "sending");
-    expect(sending.length).toBeGreaterThan(0);
+    expect(sending.at(-1)?.transferredBytes).toBe(sending.at(-1)?.totalBytes);
     for (const event of sending) {
       expect(event.filesDone).toBeNull();
       expect(event.totalBytes).toBeGreaterThan(4 * BULK_CHUNK_BYTES);
@@ -320,8 +339,24 @@ describe("sending a folder to its host", () => {
     }
   });
 
+  it("answers what changed when the folder changed since its summary, sending nothing", async () => {
+    const { uploads, folders } = await setup();
+    const handle = await droppedFolder(uploads, SMALL);
+    await fs.writeFile(path.join(localDir, "Audit", "src", "app.ts"), "export const changed = 1;");
+
+    await expect(sendFolder(uploads, handle)).resolves.toEqual({
+      status: "changed",
+      path: "Audit/src/app.ts",
+      change: "modified",
+    });
+    const records = (folders as unknown as { operations: Map<string, unknown> }).operations;
+    expect(records.size).toBe(0);
+    expect(await packedArchives()).toEqual([]);
+  });
+
   it("shares one send between asks under the same id, and refuses the id for another folder", async () => {
-    const { uploads } = await setup();
+    const { uploads, transport } = await setup();
+    const prepares = vi.spyOn(transport, "prepareFolder");
     const handle = await droppedFolder(uploads, SMALL);
     const other = await droppedFolder(uploads, SMALL, "Other");
 
@@ -341,6 +376,7 @@ describe("sending a folder to its host", () => {
 
     const [one, two] = await Promise.all([first, again]);
     expect(two).toEqual(one);
+    expect(prepares).toHaveBeenCalledTimes(1);
     expect(await publishedEntries()).toHaveLength(1);
   });
 });
@@ -371,6 +407,7 @@ describe("cancelling a folder send", () => {
       },
     });
     const held = holdFirstSend(transport);
+    const cancels = vi.spyOn(transport, "cancelFolder");
     const handle = await droppedFolder(uploads, LARGE());
 
     const sent = sendFolder(uploads, handle);
@@ -380,6 +417,7 @@ describe("cancelling a folder send", () => {
     expect(uploads.cancel("op-folder", 7)).toBe(true);
 
     await expect(sent).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(cancels).toHaveBeenCalledWith(HOST, "op-folder", expect.anything());
     expect(await publishedEntries()).toEqual([]);
     expect(await inFlightLeftovers()).toEqual([]);
     expect(await packedArchives()).toEqual([]);
@@ -393,11 +431,13 @@ describe("cancelling a folder send", () => {
     const sent = sendFolder(uploads, handle);
     await held.entered;
     await vi.waitFor(() => expect(phasesOf(events).at(-1)).toBe("unpacking"));
+    expect(await stagedFiles()).toHaveLength(1);
     expect(uploads.cancel("op-folder", 7)).toBe(true);
 
     await expect(sent).rejects.toMatchObject({ code: "CANCELLED" });
     expect(await publishedEntries()).toEqual([]);
     expect(await inFlightLeftovers()).toEqual([]);
+    expect(await packedArchives()).toEqual([]);
   });
 
   it("that arrives before its send, which starts cancelled", async () => {
@@ -434,6 +474,8 @@ describe("a link that drops during a folder send", () => {
       },
     });
     const held = holdFirstSend(transport);
+    const packs = vi.spyOn(uploads, "packFolder");
+    const prepares = vi.spyOn(transport, "prepareFolder");
     const handle = await droppedFolder(uploads, LARGE());
 
     const sent = sendFolder(uploads, handle);
@@ -444,7 +486,15 @@ describe("a link that drops during a folder send", () => {
 
     const result = await sent;
     expect(result.status).toBe("sent");
+    expect(packs).toHaveBeenCalledTimes(1);
     expect(held.spy).toHaveBeenCalledTimes(2);
+    // Asked again under the view's id; the host recorded that archive as never
+    // arriving whole, so it went again as an operation of its own.
+    expect(prepares.mock.calls.map(([, request]) => request.opId)).toEqual([
+      "op-folder",
+      "op-folder",
+      expect.stringMatching(/^resend-[0-9a-f]{32}$/),
+    ]);
     expect(phasesOf(events)).toEqual(["packing", "sending", "unpacking"]);
     expect(await publishedEntries()).toHaveLength(1);
     expect(await inFlightLeftovers()).toEqual([]);
@@ -457,17 +507,31 @@ describe("a link that drops during a folder send", () => {
       unpack: held.unpack,
     });
     const sends = vi.spyOn(transport, "sendFolderArchive");
+    const prepares = vi.spyOn(transport, "prepareFolder");
+    const statusFailures: Array<string | undefined> = [];
+    const askStatus = transport.folderStatus.bind(transport);
+    vi.spyOn(transport, "folderStatus").mockImplementation(async (...args) => {
+      try {
+        return await askStatus(...args);
+      } catch (error) {
+        statusFailures.push(errorCode(error));
+        throw error;
+      }
+    });
     const handle = await droppedFolder(uploads, SMALL);
 
     const sent = sendFolder(uploads, handle);
     await held.entered;
+    expect(await stagedFiles()).toHaveLength(1);
     dropLink();
+    await vi.waitFor(() => expect(statusFailures).toContain("HOST_DISCONNECTED"));
     await relink();
     held.release();
 
     const result = await sent;
     expect(result.status).toBe("sent");
     expect(sends).toHaveBeenCalledTimes(1);
+    expect(prepares).toHaveBeenCalledTimes(1);
     expect(phasesOf(events)).toEqual(["packing", "sending", "unpacking"]);
     expect(await publishedEntries()).toHaveLength(1);
   });
@@ -499,6 +563,7 @@ describe("a host from before folder uploads", () => {
 describe("a folder's destination", () => {
   it("is refused when it names a worktree, before anything is packed or asked", async () => {
     const { uploads, folders } = await setup();
+    const packs = vi.spyOn(uploads, "packFolder");
     const handle = await droppedFolder(uploads, SMALL);
 
     await expect(
@@ -513,6 +578,6 @@ describe("a folder's destination", () => {
 
     const records = (folders as unknown as { operations: Map<string, unknown> }).operations;
     expect(records.size).toBe(0);
-    expect(await packedArchives()).toEqual([]);
+    expect(packs).not.toHaveBeenCalled();
   });
 });

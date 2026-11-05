@@ -942,6 +942,9 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       if (disposed) throw cancelled();
       if (walks.has(opId)) throw invalid("That operation id belongs to a folder walk");
       if (running.has(opId)) throw invalid("That operation id belongs to an upload");
+      if (typeof payload.handle !== "string" || !FOLDER_HANDLE.test(payload.handle)) {
+        throw invalid("Invalid folder handle");
+      }
       // The same view asking again for the same folder shares the send, even
       // once its handle has lapsed; anything else claiming the id is refused.
       const fingerprint = JSON.stringify([hostId, payload.handle]);

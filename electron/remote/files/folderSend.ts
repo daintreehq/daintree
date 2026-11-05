@@ -114,12 +114,11 @@ function pause(ms: number, signal: AbortSignal): Promise<boolean> {
 }
 
 /**
- * The id a resend runs under on the host: derived, so it is the same for
- * every retry of that resend, and never one the view chose for itself.
+ * The id a resend runs under on the host: random, so no id a view chooses
+ * can ever name it, and kept for every retry of that resend.
  */
-function resendOpId(opId: string, resend: number): string {
-  const digest = crypto.createHash("sha256").update(opId).digest("hex").slice(0, 32);
-  return `resend-${resend}-${digest}`;
+function resendOpId(): string {
+  return `resend-${crypto.randomBytes(16).toString("hex")}`;
 }
 
 function packFailure(error: unknown, localLabel: string): Error {
@@ -273,19 +272,20 @@ export async function sendLocalFolder(
         if (signal.aborted) throw cancelledError();
         throw error;
       }
-      let outcome: UploadLocalFolderResult | typeof ABORTED;
+      // Held until the host has settled, a cancel included: the host counts
+      // the operation against its own folder slots until then.
       try {
-        outcome = await delivery.run();
+        const outcome = await delivery.run();
+        if (outcome !== ABORTED) return outcome;
+        // Stopped by the person, the view going or the client stopping: the
+        // archive is no use any more, and the host is asked to stop too.
+        await delivery.removeArchive();
+        const answer = await delivery.cancelOnHost();
+        if (answer?.status === "done") return delivery.sent(answer.hostPath);
+        throw cancelledError();
       } finally {
         release();
       }
-      if (outcome !== ABORTED) return outcome;
-      // Stopped by the person, the view going or the client stopping: the
-      // archive is no use any more, and the host is asked to stop too.
-      await delivery.removeArchive();
-      const answer = await delivery.cancelOnHost();
-      if (answer?.status === "done") return delivery.sent(answer.hostPath);
-      throw cancelledError();
     } finally {
       await delivery.removeArchive();
     }
@@ -306,6 +306,8 @@ class FolderDelivery {
   private uncertain = false;
   private removal: Promise<void> | null = null;
   private removed = false;
+  /** The host's answer to the one cancel this send asks for. */
+  private cancelling: Promise<FolderUploadCancelResult | null> | null = null;
 
   constructor(
     private readonly options: FolderSendOptions,
@@ -337,10 +339,16 @@ class FolderDelivery {
 
   /**
    * Ask the host to stop this operation, once more after a dropped link,
-   * and say where it ended; null when the host couldn't be asked.
+   * and say where it ended; null when the host couldn't be asked. Asked once
+   * per send: a second call shares the first's answer.
    */
-  async cancelOnHost(): Promise<FolderUploadCancelResult | null> {
-    if (!this.reached) return null;
+  cancelOnHost(): Promise<FolderUploadCancelResult | null> {
+    if (!this.reached) return Promise.resolve(null);
+    this.cancelling ??= this.askHostToCancel();
+    return this.cancelling;
+  }
+
+  private async askHostToCancel(): Promise<FolderUploadCancelResult | null> {
     const { transport, hostId, webContentsId, hostLabel, teardown } = this.options;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -511,7 +519,7 @@ class FolderDelivery {
           // new operation, never under the id the host has closed.
           if (answer.reason === "transfer-failed" && !this.received && this.resends < MAX_RESENDS) {
             this.resends += 1;
-            this.hostOpId = resendOpId(this.options.opId, this.resends);
+            this.hostOpId = resendOpId();
             this.reached = false;
             this.uncertain = false;
             return "prepare";
@@ -552,6 +560,13 @@ class FolderDelivery {
           answer = await transport.folderStatus(hostId, this.hostOpId, callOptions);
         }
         settled = await follow(answer, session);
+        // Stopped while the host answered: only a folder already in place
+        // stands; anything else is the cancel's to settle.
+        const inPlace =
+          typeof settled === "object" &&
+          !(settled instanceof AppError) &&
+          settled.status === "sent";
+        if (signal.aborted && !inPlace) return ABORTED;
       } catch (error) {
         if (signal.aborted) return ABORTED;
         const code = codeOf(error);
