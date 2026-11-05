@@ -103,9 +103,9 @@ const PROD_STARTUP_VIEW_URL = "app://daintree/index.html?projectId=project-a";
 const DEV_APP_URL = "http://localhost:5173";
 const STARTUP_VIEW_URL = "http://localhost:5173/?projectId=project-a";
 
-function buildSender() {
+function buildSender(id = 1) {
   return {
-    id: 1,
+    id,
     isDestroyed: vi.fn(() => false),
     loadURL: vi.fn<(url: string) => Promise<void>>(async () => undefined),
   };
@@ -170,94 +170,6 @@ describe("registerRecoveryHandlers", () => {
         "recovery:reload-app rejected: untrusted sender"
       );
       expect(sender.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("loads the app into the view showing the recovery page, not the primary window", async () => {
-      const primary = buildWindow();
-      const sender = buildSender();
-      const localDeps = {
-        mainWindow: primary,
-        windowRegistry: { getPrimary: () => ({ browserWindow: primary }) },
-      } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await handler(buildEvent(TRUSTED_RECOVERY_URL, sender));
-
-      expect(sender.loadURL).toHaveBeenCalledTimes(1);
-      expect(sender.loadURL).toHaveBeenCalledWith(DEV_APP_URL);
-      expect(primary.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("restores the startup view's project-scoped entry URL", async () => {
-      const sender = buildSender();
-      recordEntry(sender, STARTUP_VIEW_URL);
-      registerRecoveryHandlers(deps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await handler(buildEvent(TRUSTED_RECOVERY_URL, sender));
-
-      expect(sender.loadURL).toHaveBeenCalledWith(STARTUP_VIEW_URL);
-    });
-
-    it("restores each view's own entry URL, not another window's", async () => {
-      const otherWindowView = buildSender();
-      recordEntry(otherWindowView, "http://localhost:5173/?projectId=project-b");
-      const sender = buildSender();
-      recordEntry(sender, STARTUP_VIEW_URL);
-      registerRecoveryHandlers(deps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await handler(buildEvent(TRUSTED_RECOVERY_URL, sender));
-
-      expect(sender.loadURL).toHaveBeenCalledWith(STARTUP_VIEW_URL);
-      expect(otherWindowView.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("logs a rejected navigation instead of leaving it unhandled", async () => {
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      try {
-        const sender = buildSender();
-        sender.loadURL.mockRejectedValueOnce(new Error("ERR_FAILED"));
-        registerRecoveryHandlers(deps);
-        const handler = getHandlerFn("recovery:reload-app");
-
-        await expect(handler(buildEvent(TRUSTED_RECOVERY_URL, sender))).resolves.toBeUndefined();
-        await vi.waitFor(() =>
-          expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("reload failed to load"),
-            expect.objectContaining({ message: "ERR_FAILED" })
-          )
-        );
-      } finally {
-        errorSpy.mockRestore();
-      }
-    });
-
-    describe("in production", () => {
-      beforeEach(() => vi.stubEnv("NODE_ENV", "production"));
-      afterEach(() => vi.unstubAllEnvs());
-
-      it("restores the project-scoped app:// entry URL", async () => {
-        const sender = buildSender();
-        recordEntry(sender, PROD_STARTUP_VIEW_URL);
-        registerRecoveryHandlers(deps);
-        const handler = getHandlerFn("recovery:reload-app");
-
-        await handler(buildEvent(PROD_RECOVERY_URL, sender));
-
-        expect(sender.loadURL).toHaveBeenCalledWith(PROD_STARTUP_VIEW_URL);
-      });
-
-      it("loads the static app:// entry into a project view, whose project rides in its preload args", async () => {
-        const sender = buildSender();
-        registerRecoveryHandlers(deps);
-        const handler = getHandlerFn("recovery:reload-app");
-
-        await handler(buildEvent(PROD_RECOVERY_URL, sender));
-
-        expect(sender.loadURL).toHaveBeenCalledWith(MAIN_RENDERER_URL);
-      });
     });
 
     it("is a no-op when the sender's webContents is destroyed", async () => {
@@ -346,6 +258,103 @@ describe("registerRecoveryHandlers", () => {
       expect(sender.loadURL).not.toHaveBeenCalled();
     });
   });
+
+  describe.each(["recovery:reload-app", "recovery:reset-and-reload"])(
+    "%s on a valid recovery page",
+    (channel) => {
+      beforeEach(async () => {
+        const { getCrashRecoveryService: getCrash } =
+          await import("../../../services/CrashRecoveryService.js");
+        vi.mocked(getCrash).mockReturnValue({
+          resetToFresh: vi.fn(),
+          clearPendingCrash: vi.fn(),
+        } as unknown as ReturnType<typeof getCrash>);
+      });
+
+      it("loads the default entry into the view showing the page, not the primary window", async () => {
+        const primary = buildWindow();
+        const sender = buildSender();
+        const localDeps = {
+          mainWindow: primary,
+          windowRegistry: { getPrimary: () => ({ browserWindow: primary }) },
+        } as unknown as HandlerDependencies;
+        registerRecoveryHandlers(localDeps);
+        const handler = getHandlerFn(channel);
+
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, sender));
+
+        expect(sender.loadURL).toHaveBeenCalledTimes(1);
+        expect(sender.loadURL).toHaveBeenCalledWith(DEV_APP_URL);
+        expect(primary.loadURL).not.toHaveBeenCalled();
+      });
+
+      it("restores each view's own recorded entry URL", async () => {
+        const startupView = buildSender(1);
+        recordEntry(startupView, STARTUP_VIEW_URL);
+        const otherWindowView = buildSender(2);
+        recordEntry(otherWindowView, "http://localhost:5173/?projectId=project-b");
+        const unrecordedView = buildSender(3);
+        registerRecoveryHandlers(deps);
+        const handler = getHandlerFn(channel);
+
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, startupView));
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, otherWindowView));
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, unrecordedView));
+
+        expect(startupView.loadURL).toHaveBeenCalledExactlyOnceWith(STARTUP_VIEW_URL);
+        expect(otherWindowView.loadURL).toHaveBeenCalledExactlyOnceWith(
+          "http://localhost:5173/?projectId=project-b"
+        );
+        expect(unrecordedView.loadURL).toHaveBeenCalledExactlyOnceWith(DEV_APP_URL);
+      });
+
+      it("logs a rejected navigation instead of leaving it unhandled", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const sender = buildSender();
+          sender.loadURL.mockRejectedValueOnce(new Error("ERR_FAILED"));
+          registerRecoveryHandlers(deps);
+          const handler = getHandlerFn(channel);
+
+          await expect(handler(buildEvent(TRUSTED_RECOVERY_URL, sender))).resolves.toBeUndefined();
+          await vi.waitFor(() =>
+            expect(errorSpy).toHaveBeenCalledWith(
+              expect.stringContaining("failed to load"),
+              expect.objectContaining({ message: "ERR_FAILED" })
+            )
+          );
+        } finally {
+          errorSpy.mockRestore();
+        }
+      });
+
+      describe("in production", () => {
+        beforeEach(() => vi.stubEnv("NODE_ENV", "production"));
+        afterEach(() => vi.unstubAllEnvs());
+
+        it("restores the project-scoped app:// entry URL", async () => {
+          const sender = buildSender();
+          recordEntry(sender, PROD_STARTUP_VIEW_URL);
+          registerRecoveryHandlers(deps);
+          const handler = getHandlerFn(channel);
+
+          await handler(buildEvent(PROD_RECOVERY_URL, sender));
+
+          expect(sender.loadURL).toHaveBeenCalledWith(PROD_STARTUP_VIEW_URL);
+        });
+
+        it("loads the static app:// entry into a view with no recorded URL", async () => {
+          const sender = buildSender();
+          registerRecoveryHandlers(deps);
+          const handler = getHandlerFn(channel);
+
+          await handler(buildEvent(PROD_RECOVERY_URL, sender));
+
+          expect(sender.loadURL).toHaveBeenCalledWith(MAIN_RENDERER_URL);
+        });
+      });
+    }
+  );
 
   describe("recovery:export-diagnostics", () => {
     it("rejects untrusted sender and does not collect diagnostics, show dialog, or write file", async () => {
