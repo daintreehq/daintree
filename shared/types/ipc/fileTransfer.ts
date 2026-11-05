@@ -1,3 +1,4 @@
+import type { FolderUploadProblem, FolderUploadTotals } from "../folderUpload.js";
 import type { HostId, OperationId } from "../remoteHosts.js";
 import type { HostPickRequest } from "./hostFiles.js";
 
@@ -87,11 +88,84 @@ export interface DownloadResult {
   bytes: number;
 }
 
+/** Why something inside a dropped folder is left out of what is sent. */
+export type FolderNotCopiedReason =
+  | "symlink"
+  | "junction"
+  /** Any other Windows reparse point. */
+  | "reparse-point"
+  /** A device, socket, FIFO or anything else that isn't a file or a folder. */
+  | "special-file"
+  | "unreadable";
+
+/** An item directly inside the dropped folder, with what it adds to the totals. */
+export interface FolderSummaryItem {
+  /** In the archive's root-prefixed form: `Root/node_modules/`, `Root/video.mov`. */
+  path: string;
+  kind: "file" | "folder";
+  /** Files at or under it, so 1 for a file. */
+  fileCount: number;
+  /** Folders at or under it, itself included, so 0 for a file. */
+  folderCount: number;
+  totalBytes: number;
+}
+
+/**
+ * A folder dropped or pasted in a remote window, as the question shows it
+ * before anything is sent. Every list holds at most
+ * `FOLDER_UPLOAD_SUMMARY_MAX_ITEMS`; the counts beside them cover the rest.
+ */
+export interface FolderUploadSummary {
+  rootName: string;
+  totals: FolderUploadTotals;
+  /**
+   * The walk stopped early (at a limit, a clash or a path it can't carry):
+   * every count and size here and in the lists is at least what it shows.
+   */
+  lowerBound: boolean;
+  /**
+   * Hidden files and folders (`.git`, `.env`), copied and counted like any
+   * other, and the outermost of them by path.
+   */
+  hidden: FolderUploadTotals & { paths: string[] };
+  /**
+   * The items directly inside the folder that hold the most bytes, largest
+   * first. A count or size limit's problem names its own largest
+   * contributors, ranked by what that limit counts.
+   */
+  largest: FolderSummaryItem[];
+  /** What is left out and why: never followed, never sent. */
+  notCopied: { count: number; items: Array<{ path: string; reason: FolderNotCopiedReason }> };
+}
+
+/** A summarized folder: ready to ask about, or refused with the limit or clash responsible. */
+export type FolderUploadCheck =
+  | { status: "ready"; summary: FolderUploadSummary }
+  | { status: "refused"; summary: FolderUploadSummary; problem: FolderUploadProblem };
+
+export type FolderUploadPhase = "packing" | "sending" | "unpacking";
+
 export type FileTransferEvent =
   | {
       type: "progress";
       opId: OperationId;
       transferredBytes: number;
+      totalBytes: number;
+    }
+  /**
+   * A folder upload's progress. Each phase measures its own work: packing
+   * counts files packed and their content bytes, sending the archive's bytes,
+   * unpacking the files the host has written. Null is "not measured in this
+   * phase", never zero; the totals are always known.
+   */
+  | {
+      type: "folder-progress";
+      opId: OperationId;
+      phase: FolderUploadPhase;
+      filesDone: number | null;
+      filesTotal: number;
+      transferredBytes: number | null;
+      /** The archive's size while sending, the files' content otherwise. */
       totalBytes: number;
     }
   /**
