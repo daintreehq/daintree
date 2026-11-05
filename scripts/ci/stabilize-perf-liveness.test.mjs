@@ -65,9 +65,9 @@ describe("stabilize perf liveness (#16267)", () => {
     // The map entry has to carry the piece's own selection, not a constant.
     const jqVar = select.match(/"perf-liveness":\s*\$(\w+)/)?.[1];
     expect(jqVar).toBeDefined();
-    const shellVar = select.match(new RegExp(`--argjson ${jqVar} "\\$(\\w+)"`))?.[1];
+    const shellVar = select.match(new RegExp(`--argjson ${jqVar} "\\$\\{?(\\w+)\\}?"`))?.[1];
     expect(shellVar).toBeDefined();
-    expect(select).toMatch(new RegExp(`^\\s*${shellVar}=\\$\\(has perf-liveness\\)`, "m"));
+    expect(select).toMatch(new RegExp(`^\\s*${shellVar}=\\$\\(has "?perf-liveness"?\\)`, "m"));
   });
 
   it("holds stabilize-ok to every job the selection can expect", () => {
