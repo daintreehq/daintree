@@ -122,6 +122,10 @@ describe("webview OAuth loopback CDP token-exchange rewrite", () => {
     debuggerMock.isAttached.mockReturnValue(false);
     debuggerMock.sendCommand.mockImplementation(() => Promise.resolve({}));
     mockWebContents.isDestroyed.mockReturnValue(false);
+    mockWebContents.hostWebContents = embedder;
+    // A one-shot left queued by a test that failed early would otherwise drop
+    // the host in whichever test calls it next.
+    mockDialogService.consumeOAuthSessionStorage.mockReset().mockResolvedValue([]);
     mockDialogService.getPanelId.mockReturnValue("oauth-panel");
     startOAuthLoopbackMock.mockResolvedValue({
       success: true,
