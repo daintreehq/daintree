@@ -27,9 +27,9 @@ export type SetupWaitOutcome = WorktreeSetupState | "still-running" | "error";
 
 /**
  * Setup outcomes an agent starts after. A failed or timed-out setup counts:
- * setup has ended rather than still installing, and most failures are
- * something the agent can fix inside the tree. The worktree card shows the
- * failure either way.
+ * setup has reported its outcome (a timed-out plugin step may still be winding
+ * down), and most failures are something the agent can fix inside the tree.
+ * The worktree card shows the failure either way.
  */
 type AgentStartingOutcome = "ready" | "failed" | "timed-out";
 

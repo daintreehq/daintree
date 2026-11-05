@@ -346,7 +346,7 @@ describe("runAgentLayoutWhenReady (#13807)", () => {
       expect(mockNotify).not.toHaveBeenCalled();
 
       // A Retry setup afterwards takes setup through running to ready; nothing
-      // is left polling or listening to run the layout a second time.
+      // is left polling to run the layout a second time.
       scriptDispatch([readiness("running", true), readiness("ready")]);
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(recipe.run).toHaveBeenCalledTimes(1);
