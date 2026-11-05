@@ -76,7 +76,11 @@ let persistence: PluginLaunchPersistence | null = null;
 /** The disk's copy, loaded on attach. Holds records restore hasn't handed back yet. */
 const stored = new Map<string, StoredPluginLaunch>();
 
-function readStoredRecord(terminalId: string, raw: unknown, now: number): StoredPluginLaunch | null {
+function readStoredRecord(
+  terminalId: string,
+  raw: unknown,
+  now: number
+): StoredPluginLaunch | null {
   if (terminalId.length === 0 || terminalId.length > SEND_TO_AGENT_MAX_ID_LENGTH) return null;
   if (raw === null || typeof raw !== "object") return null;
   const { pluginId, projectId, seenAt } = raw as Record<string, unknown>;

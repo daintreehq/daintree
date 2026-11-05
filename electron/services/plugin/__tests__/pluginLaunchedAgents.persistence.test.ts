@@ -39,7 +39,13 @@ function launched(terminalId: string): ActionDispatchResult {
 }
 
 function launch(terminalId: string, pluginId = PLUGIN, projectId: string | null = null): void {
-  recordPluginLaunch(pluginId, "agent.launch", { agentId: "claude" }, launched(terminalId), projectId);
+  recordPluginLaunch(
+    pluginId,
+    "agent.launch",
+    { agentId: "claude" },
+    launched(terminalId),
+    projectId
+  );
 }
 
 /** Quit and start again: memory goes, the disk stays, and nothing runs until restore. */
