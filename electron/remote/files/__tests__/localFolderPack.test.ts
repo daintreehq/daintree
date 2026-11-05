@@ -475,7 +475,12 @@ describe("the startup sweep", () => {
   it("removes a stale archive and leaves everything else alone", async () => {
     await fs.mkdir(packs, { recursive: true, mode: 0o700 });
     const stale = [archiveName(), archiveName()];
-    const unrelated = ["notes.txt", `${archiveName()}.bak`, "123-abc.zip", archiveName().toUpperCase()];
+    const unrelated = [
+      "notes.txt",
+      `${archiveName()}.bak`,
+      "123-abc.zip",
+      archiveName().toUpperCase(),
+    ];
     for (const name of [...stale, ...unrelated]) await fs.writeFile(path.join(packs, name), "x");
     const folderNamedLikeOne = archiveName();
     await fs.mkdir(path.join(packs, folderNamedLikeOne));
