@@ -33,6 +33,7 @@ import {
   removePendingRemoteBackgroundRestores,
   resetOpenWindowsTrackerForTests,
   resumeOpenWindowsSaves,
+  saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
   setPendingBackgroundRestores,
@@ -533,6 +534,49 @@ describe("saveOpenWindowsNow", () => {
         expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
       }
     );
+
+    it.each(["win32", "linux"])(
+      "records what the last window shows as it starts closing on %s",
+      (value) => {
+        Object.defineProperty(process, "platform", { value });
+        const remote = `ubuntu-24.04:${"b".repeat(64)}`;
+        const win: FakeWindow = { windowId: 1, projectId: "local" };
+        initOpenWindowsTracker({ registry: makeRegistry([win]), readOnly: false });
+
+        // The window moved onto a host, which schedules no save of its own.
+        win.projectId = remote;
+        saveBeforeLastWindowCloses(1);
+        expect(lastWritten()).toEqual([{ projectId: remote }]);
+
+        // Its `closed` save then finds nothing and keeps that record.
+        writeOpenWindowsManifest.mockClear();
+        saveOpenWindowsNow(1);
+        expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+      }
+    );
+
+    it("leaves a closing window alone while another stays open", () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      initOpenWindowsTracker({
+        registry: makeRegistry([
+          { windowId: 1, projectId: "a" },
+          { windowId: 2, projectId: "b" },
+        ]),
+        readOnly: false,
+      });
+      saveBeforeLastWindowCloses(1);
+      expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    });
+
+    it("does nothing on darwin, where Cmd+Q snapshots the live windows", () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      initOpenWindowsTracker({
+        registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+        readOnly: false,
+      });
+      saveBeforeLastWindowCloses(1);
+      expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    });
 
     it("still records an empty set on darwin, where the app survives windowless", () => {
       Object.defineProperty(process, "platform", { value: "darwin" });

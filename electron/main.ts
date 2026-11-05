@@ -166,6 +166,7 @@ import {
   enableOpenWindowsSaves,
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
+  saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
   suppressOpenWindowsSaves,
@@ -655,6 +656,9 @@ if (!gotTheLock) {
     // from the registry context captured here rather than read in the handler.
     const closedWindowId = ctx.windowId;
     scheduleOpenWindowsSave();
+    win.on("close", () => {
+      if (!recreation.isRecreating()) saveBeforeLastWindowCloses(closedWindowId);
+    });
     win.on("closed", () => {
       forgetRemoteWindowRestore(closedWindowId);
       clearPendingWindowRecreation(closedWindowId);

@@ -95,8 +95,12 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Global scrollbar styling */
-  * {
+  /* Global scrollbar styling. The standard properties disable every
+     ::-webkit-scrollbar rule below, which is right where the OS draws overlay
+     scrollbars but left Windows on its classic arrowed bar, so they stay off
+     there (markScrollbarPlatform in lib/scrollbarGutter.ts). :where() keeps the
+     selector at zero specificity, as a bare `*` was. */
+  :where(:root:not(.platform-win32)) * {
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   }
