@@ -498,9 +498,11 @@ export class HostInbox {
    * rename and return that host path. The entry folder is made first and the
    * tree renamed into it, never the staging folder renamed onto the entry: a
    * rename onto an empty folder replaces it on macOS and Linux. On failure the
-   * staging is kept, to publish again or discard.
+   * staging is kept, to publish again or discard. An abort of `signal` seen
+   * before the rename stops it, so a cancel that lands while this waits its
+   * turn behind a cleanup pass still wins; once the rename has begun, it wins.
    */
-  async publishTree(staging: InboxStaging, name: string): Promise<string> {
+  async publishTree(staging: InboxStaging, name: string, signal?: AbortSignal): Promise<string> {
     const stagePath = this.stagings.get(staging);
     if (stagePath === undefined) throw new Error("Not a live staging folder of this inbox");
     const safeName = sanitizeInboxName(name);
@@ -510,6 +512,7 @@ export class HostInbox {
       if (this.stagings.get(staging) !== stagePath) {
         throw new Error("Not a live staging folder of this inbox");
       }
+      signal?.throwIfAborted();
       const tree = await fs.lstat(staging.treePath);
       if (!tree.isDirectory()) throw new Error("The staged tree is not a folder");
       const stamp = inboxTimestamp(this.now());
@@ -519,6 +522,7 @@ export class HostInbox {
         if (dir === null) continue;
         const published = path.join(dir, safeName);
         try {
+          signal?.throwIfAborted();
           await fs.rename(staging.treePath, published);
         } catch (error) {
           await fs.rmdir(dir).catch(() => {});
