@@ -2321,8 +2321,7 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
 
   function notStartedBars() {
     return mockNotify.mock.calls.filter(
-      ([payload]) =>
-        payload.title === "Recipe not started" || payload.title === "Agent not started"
+      ([payload]) => payload.title === "Recipe not started" || payload.title === "Agent not started"
     );
   }
 
