@@ -43,7 +43,11 @@ const USELESS_TITLE_PATTERNS: readonly RegExp[] = [
   AGENT_BINARY_PATTERN,
   // Absolute/home paths (reject only when the whole string is path-shaped)
   /^(?:~\/?|\/)[^\s]*$/,
-  /^[A-Z]:\\[^\s]*$/i,
+  // Windows paths may hold spaces ("C:\Program Files\…\pwsh.exe", the title
+  // PowerShell and cmd give a console), and an elevated one is prefixed
+  // "Administrator: ". None of `<>:"|?*` can appear in one, so a sentence that
+  // merely starts with a drive letter still reads as a sentence.
+  /^(?:Administrator:\s+)?[A-Z]:\\[^<>:"|?*\r\n]*$/i,
   // user@host:path shell prompts followed by path/prompt char (not plain "user@domain: subject")
   /^[\w.-]+@[\w.-]+:[~/][^\s]*[#$>]?\s*$/,
   // PowerShell-style prompts: "PS C:\path>"
