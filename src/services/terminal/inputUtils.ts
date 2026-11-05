@@ -1,3 +1,5 @@
+import { isWindows } from "@/lib/platform";
+
 // eslint-disable-next-line no-control-regex
 const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
 
@@ -129,4 +131,20 @@ export function createSurrogatePairJoiner(): SurrogatePairJoiner {
       pendingHigh = "";
     },
   };
+}
+
+/**
+ * Alt+F4, which closes the window on Windows. xterm reads it as a modified F4
+ * and cancels it, so a terminal holding focus kept the window from closing; a
+ * key handler returns false for it to leave the event to the system.
+ */
+export function isWindowCloseChord(event: KeyboardEvent): boolean {
+  return (
+    isWindows() &&
+    (event.key === "F4" || event.code === "F4") &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  );
 }

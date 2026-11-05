@@ -55,7 +55,11 @@ import {
   useTerminalColorSchemeStore,
 } from "@/store/terminalColorSchemeStore";
 import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFence";
-import { createSurrogatePairJoiner, isTerminalReply } from "@/services/terminal/inputUtils";
+import {
+  createSurrogatePairJoiner,
+  isTerminalReply,
+  isWindowCloseChord,
+} from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
@@ -293,6 +297,7 @@ export function CanopyTerminal({
       rows: 24,
       cursorBlink: false,
     });
+    terminal.attachCustomKeyEventHandler((event) => !isWindowCloseChord(event));
     // Awaited before the snapshot's first write, so widths are recorded as the grid records them.
     const unicodeReady = activateUnicode11(terminal);
     terminal.open(host);

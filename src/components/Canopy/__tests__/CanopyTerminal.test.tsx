@@ -94,6 +94,7 @@ vi.mock("@xterm/xterm", () => ({
     onDimensionsChange() {
       return { dispose() {} };
     }
+    attachCustomKeyEventHandler() {}
     onData(listener: (data: string) => void) {
       this.onDataListener = listener;
       return { dispose: () => (this.onDataListener = null) };
