@@ -447,11 +447,22 @@ describe("packing a summarized folder", () => {
     await fs.chmod(packsDir(), 0o500);
 
     try {
-      await expect(first.remove()).rejects.toBeTruthy();
+      // EACCES is retried with backoff before it fails; only the waits are faked.
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      let settled = false;
+      const removing = first.remove().finally(() => (settled = true));
+      removing.catch(() => {});
+      while (!settled) {
+        await vi.advanceTimersByTimeAsync(10_000);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      vi.useRealTimers();
+      await expect(removing).rejects.toBeTruthy();
       await expect(client.packFolder(7, handle, { signal: signal() })).rejects.toMatchObject({
         code: "RATE_LIMITED",
       });
     } finally {
+      vi.useRealTimers();
       await fs.chmod(packsDir(), 0o700);
     }
 
