@@ -3,9 +3,10 @@
 // CI does not run the check script; the freshness gate is the vitest suite
 // src/services/actions/__tests__/pluginActionsDoc.test.ts.
 //
-// The built-in actions a plugin may dispatch are everything in
-// `BUILT_IN_ACTION_IDS` except `DENY_PLUGIN_DISPATCH_ACTION_IDS`, and the args
-// and danger tier come from the definitions themselves. Generated rather than
+// The built-in actions a plugin may dispatch are every registered id in
+// `BUILT_IN_ACTION_IDS` or `KEY_ACTION_VALUES` except
+// `DENY_PLUGIN_DISPATCH_ACTION_IDS` and the `restricted` ones, and the args and
+// danger tier come from the definitions themselves. Generated rather than
 // hand-written for the reason the issue gives: the first real plugin found nine
 // of these by reading `src/services/actions/definitions/`, and a hand-kept list
 // would rot within a release.

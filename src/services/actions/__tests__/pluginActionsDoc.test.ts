@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActionRegistry, createActionRegistryWithRemoteHosts } from "./helpers/wireSurface";
 import { renderPluginActionsDoc } from "../../../../scripts/codegen/pluginActionsDoc";
-import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
+import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
+import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 
 const DOC_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -47,6 +48,33 @@ describe("docs/plugins/actions.md", () => {
     for (const [id, factory] of registry) {
       if (factory().danger === "restricted") expect(doc).not.toContain(`\`${id}\``);
     }
+  });
+
+  it("documents exactly the registered actions a plugin can see and dispatch", async () => {
+    const registry = await createActionRegistryWithRemoteHosts();
+
+    // Derived from the registry and the flags `host.actions` filters on, never
+    // from an id table: the page once walked `BUILT_IN_ACTION_IDS` alone and
+    // dropped every keybinding-only id, while its own freshness check agreed.
+    const visible: string[] = [];
+    for (const [id, factory] of registry) {
+      const def = factory();
+      if (def.danger === "restricted" || def.denyPluginDispatch === true) continue;
+      visible.push(id);
+    }
+
+    const documentedIds = (doc: string) =>
+      [...doc.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]).sort();
+
+    expect(documentedIds(renderPluginActionsDoc(registry))).toEqual(visible.sort());
+    expect(documentedIds(readFileSync(DOC_PATH, "utf-8"))).toEqual(visible);
+
+    // Guards the comparison above against passing vacuously: ids that only
+    // `KEY_ACTION_VALUES` lists must be part of what it just matched.
+    const runtimeIds = new Set<string>(BUILT_IN_ACTION_IDS);
+    expect(
+      visible.filter((id) => KEY_ACTION_VALUES.has(id) && !runtimeIds.has(id)).length
+    ).toBeGreaterThan(0);
   });
 
   it("marks optional arguments and lists required ones first", async () => {
