@@ -336,6 +336,7 @@ describe("runAgentLayoutWhenReady (#13807)", () => {
   it.each(["failed", "timed-out"])(
     "runs the layout once, without a hand-back, when setup ends %s (#16242)",
     async (state) => {
+      vi.useFakeTimers();
       scriptDispatch([readiness("running", true), readiness(state)]);
       const recipe = layout();
 
@@ -343,8 +344,12 @@ describe("runAgentLayoutWhenReady (#13807)", () => {
 
       expect(recipe.run).toHaveBeenCalledTimes(1);
       expect(mockNotify).not.toHaveBeenCalled();
-      // The wait is one-shot: a later Retry setup reaching ready has nothing
-      // left listening to spawn the layout a second time.
+
+      // A Retry setup afterwards takes setup through running to ready; nothing
+      // is left polling or listening to run the layout a second time.
+      scriptDispatch([readiness("running", true), readiness("ready")]);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(recipe.run).toHaveBeenCalledTimes(1);
       const waits = mockDispatch.mock.calls.filter(([id]) => id === "worktree.waitUntilReady");
       expect(waits).toHaveLength(2);
     }
@@ -388,5 +393,8 @@ describe("runAgentLayoutWhenReady (#13807)", () => {
     action.onClick();
     await vi.waitFor(() => expect(recipe.run).toHaveBeenCalledTimes(1));
     expect(mockDismissNotification).toHaveBeenCalledWith("bar-1");
+    // Straight away: the replay doesn't wait on setup again.
+    const waits = mockDispatch.mock.calls.filter(([id]) => id === "worktree.waitUntilReady");
+    expect(waits).toHaveLength(1);
   });
 });

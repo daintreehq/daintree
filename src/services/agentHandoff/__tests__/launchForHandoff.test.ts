@@ -103,7 +103,7 @@ describe("launchAgentForHandoff", () => {
   });
 
   it.each(["failed", "timed-out"])(
-    "launches and drafts after setup ends %s, leaving the failure on the worktree card (#16242)",
+    "launches and drafts after setup ends %s instead of refusing (#16242)",
     async (setupState) => {
       const { calls, deps } = depsWith({
         "worktree.createWithRecipe": created,

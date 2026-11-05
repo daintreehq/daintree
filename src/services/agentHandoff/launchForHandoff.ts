@@ -99,8 +99,8 @@ async function waitForSetup(
     switch (field(status.result, "setupState")) {
       // Unknown means this host did not track it (a restart, an adopted
       // worktree): there is nothing to wait for, and the tree exists. A
-      // failed or timed-out setup has stopped too, and the agent is often what
-      // fixes it; the worktree card keeps the failure and its Retry setup.
+      // failed or timed-out setup has ended too, and the agent is often what
+      // fixes it; the worktree card shows the failure.
       case "ready":
       case "unknown":
       case "failed":

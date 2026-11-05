@@ -2326,7 +2326,7 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
   }
 
   it.each(["failed", "timed-out"])(
-    "runs a recipe that starts an agent, shells included, after setup ends %s (#16242)",
+    "hands a recipe that starts an agent to the runner once after setup ends %s (#16242)",
     async (setupState) => {
       recipePickerCalls.selected = {
         id: "r1",
@@ -2346,7 +2346,12 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
 
       expect(actionCalls("worktree.waitUntilReady")).toHaveLength(1);
       expect(runRecipe).toHaveBeenCalledTimes(1);
-      expect(runRecipe.mock.calls[0]?.[0]).toBe("r1");
+      expect(runRecipe).toHaveBeenCalledWith(
+        "r1",
+        "/test/root-worktrees/feature/test",
+        "new-wt-id",
+        expect.objectContaining({ branchName: "feature/test" })
+      );
       expect(notStartedBars()).toEqual([]);
     }
   );
