@@ -175,6 +175,16 @@ const VALID_TYPES: ReadonlySet<NotificationHistoryEntry["type"]> = new Set([
 // minute is treated as garbage rather than a valid future timestamp.
 const FUTURE_TIMESTAMP_SLACK_MS = 60_000;
 
+// Quick-create's Undo used to persist `worktree.delete { force: true }`, which
+// an inbox row replays with no dialog and no change check, days later, over
+// whatever the worktree has gained since (#16264). Entries already on disk keep
+// their record; only that action goes.
+function isStoredForceDelete(action: Record<string, unknown>): boolean {
+  if (action.actionId !== "worktree.delete") return false;
+  const args = action.actionArgs;
+  return typeof args === "object" && args !== null && "force" in args && args.force === true;
+}
+
 function sanitizeActions(raw: unknown): NotificationHistoryEntry["actions"] {
   if (!Array.isArray(raw)) return undefined;
   const validated: NotificationHistoryAction[] = [];
@@ -183,6 +193,7 @@ function sanitizeActions(raw: unknown): NotificationHistoryEntry["actions"] {
     const a = item as Record<string, unknown>;
     if (typeof a.label !== "string" || a.label.length === 0) continue;
     if (typeof a.actionId !== "string" || a.actionId.length === 0) continue;
+    if (isStoredForceDelete(a)) continue;
     validated.push({
       label: a.label,
       actionId: a.actionId as ActionId,

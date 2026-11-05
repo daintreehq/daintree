@@ -1103,6 +1103,78 @@ describe("notificationHistorySlice", () => {
       expect(result!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
       expect(result!.actions![0]!.variant).toBe("secondary");
     });
+
+    it("strips a stored force delete from an old quick-create entry but keeps the entry (#16264)", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        title: "Worktree created",
+        message: "bugfix/issue-7-fix-thing",
+        correlationId: "wt-1",
+        context: { worktreeId: "wt-1" },
+        actions: [
+          {
+            label: "Undo",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
+          { label: "Open", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+        ],
+      });
+      expect(result).not.toBeNull();
+      expect(result!.correlationId).toBe("wt-1");
+      expect(result!.actions!.map((a) => a.actionId)).toEqual(["panel.focus"]);
+    });
+
+    it("drops the actions field when a stored force delete was the only action", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        message: "x",
+        actions: [
+          {
+            label: "Undo",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
+        ],
+      });
+      expect(result!.actions).toBeUndefined();
+    });
+
+    it("strips a stored force delete by what it does, not by its label", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        message: "x",
+        actions: [
+          {
+            label: "Remove",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
+          { label: "Undo", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+          { label: "Delete", actionId: "worktree.delete", actionArgs: { worktreeId: "wt-2" } },
+          {
+            label: "Delete",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-3", force: false },
+          },
+          { label: "Close", actionId: "terminal.close", actionArgs: { force: true } },
+        ],
+      });
+      // Only the force delete goes: a plain delete is refused by the host on a
+      // changed tree, and `force` means nothing to other actions.
+      expect(result!.actions!.map((a) => [a.label, a.actionId, a.actionArgs])).toEqual([
+        ["Undo", "panel.focus", { panelId: "p1" }],
+        ["Delete", "worktree.delete", { worktreeId: "wt-2" }],
+        ["Delete", "worktree.delete", { worktreeId: "wt-3", force: false }],
+        ["Close", "terminal.close", { force: true }],
+      ]);
+    });
   });
 
   describe("snoozedThreads", () => {

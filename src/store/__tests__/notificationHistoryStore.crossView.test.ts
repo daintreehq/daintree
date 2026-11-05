@@ -532,3 +532,39 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     });
   });
 });
+
+describe("notificationHistoryStore hydration of legacy actions (#16264)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreLocalStorage();
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps an old quick-create entry but loses the force delete it stored", async () => {
+    const legacy: NotificationHistoryEntry = {
+      ...makeEntry({ id: "quick-create", type: "success", correlationId: "wt-1" }),
+      title: "Worktree created",
+      actions: [
+        {
+          label: "Undo",
+          actionId: "worktree.delete",
+          actionArgs: { worktreeId: "wt-1", force: true },
+        },
+      ],
+    };
+    installLocalStorage(seed([legacy]));
+
+    const view = await openView();
+
+    // The inbox row renders, and Mod+Enter fires, whatever this hydrated state holds.
+    const hydrated = view.getState().entries.find((e) => e.id === "quick-create");
+    expect(hydrated).toMatchObject({ title: "Worktree created", correlationId: "wt-1" });
+    expect(hydrated?.actions).toBeUndefined();
+  });
+});
