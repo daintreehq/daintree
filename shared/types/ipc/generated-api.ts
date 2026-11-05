@@ -611,6 +611,9 @@ export interface GeneratedElectronAPI {
     statLocalFile(
       ...args: IpcInvokeMap["file-transfer:stat-local-file"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:stat-local-file"]["result"]>;
+    summarizeLocalFolder(
+      ...args: IpcInvokeMap["file-transfer:summarize-local-folder"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:summarize-local-folder"]["result"]>;
     uploadBytes(
       ...args: IpcInvokeMap["file-transfer:upload-bytes"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:upload-bytes"]["result"]>;

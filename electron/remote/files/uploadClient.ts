@@ -4,6 +4,8 @@ import path from "node:path";
 import type {
   FileTransferEvent,
   LocalFileStat,
+  LocalFolderSummaryResult,
+  SummarizeLocalFolderPayload,
   TransferDestination,
   UploadBytesPayload,
   UploadLocalFilePayload,
@@ -22,6 +24,12 @@ import { bytesTransferSource, fileTransferSource, type TransferSource } from "..
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { ClientUploadTransport } from "./ClientUploadTransport.js";
 import type { EndpointFeed } from "./clientInstall.js";
+import {
+  LocalFolderWalkError,
+  walkLocalFolder,
+  type FolderSnapshot,
+  type LocalFolderWalkOptions,
+} from "./localFolderWalk.js";
 
 /**
  * What the Shell's file-transfer handler and the clipboard split reach
@@ -58,6 +66,23 @@ export interface HostUploadClient {
   grantLocalSources(webContentsId: number, paths: unknown): void;
   /** Size and kind of a local file this view was granted, or null when there is none. */
   statLocalSource(webContentsId: number, localPath: unknown): Promise<LocalFileStat | null>;
+  /**
+   * Walks a folder this view was granted (a drop or paste of the folder
+   * itself) and, when it can be sent, issues the handle a send names it by.
+   * Runs under the payload's operation id, so `cancel` stops it.
+   */
+  summarizeLocalFolder(
+    webContentsId: number,
+    payload: SummarizeLocalFolderPayload
+  ): Promise<LocalFolderSummaryResult>;
+  /**
+   * What a handle this view was issued summarized, for packing and sending
+   * it. Refused PERMISSION from any other view, once the view's grant of the
+   * folder has expired, and after the view is gone.
+   */
+  resolveFolderHandle(webContentsId: number, handle: unknown): Readonly<FolderSnapshot>;
+  /** Stops every folder walk and lets go of every view it watches. */
+  dispose(): void;
 }
 
 declare module "../runtime.js" {
@@ -85,6 +110,8 @@ export interface HostUploadClientDeps {
   random?: () => number;
   /** Calls `onGone` once the view is destroyed; returns a function that stops watching. */
   watchView?(webContentsId: number, onGone: () => void): () => void;
+  /** Stands in for the filesystem and platform a folder walk sees. */
+  walkOptions?: Omit<LocalFolderWalkOptions, "signal">;
 }
 
 const PROGRESS_INTERVAL_MS = 100;
@@ -113,9 +140,24 @@ const CLIPBOARD_DESTINATION: TransferDestination = { kind: "inbox", bucket: "cli
 const EARLY_CANCEL_TTL_MS = 60_000;
 const MAX_EARLY_CANCELS = 256;
 const MAX_EARLY_CANCEL_VIEWS = 64;
+/** Folder walks at once, per view and in all: each is bounded, but a page could ask for many. */
+const MAX_WALKS_PER_VIEW = 2;
+const MAX_WALKS = 4;
+/**
+ * Summarized folders kept ready to send. Each holds up to a few MB of
+ * snapshot, so the oldest goes first: a question left unanswered that long
+ * is the likeliest to be abandoned.
+ */
+const MAX_FOLDER_HANDLES_PER_VIEW = 8;
+const MAX_FOLDER_HANDLES = 16;
+const FOLDER_HANDLE = /^[0-9a-f]{32}$/;
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
+}
+
+function isOperationId(opId: unknown): opId is string {
+  return typeof opId === "string" && opId.length > 0 && opId.length <= 128;
 }
 
 function validateCommon(payload: {
@@ -126,9 +168,7 @@ function validateCommon(payload: {
   if (typeof payload.hostId !== "string" || !isValidRemoteHostId(payload.hostId)) {
     throw invalid("Invalid host");
   }
-  if (typeof payload.opId !== "string" || payload.opId.length === 0 || payload.opId.length > 128) {
-    throw invalid("Invalid operation id");
-  }
+  if (!isOperationId(payload.opId)) throw invalid("Invalid operation id");
   const destination = payload.destination as TransferDestination | undefined;
   if (destination?.kind === "inbox") {
     if (destination.bucket !== "clipboard" && destination.bucket !== "files") {
@@ -208,7 +248,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
   /** Per view, the operation ids whose cancel arrived before their upload, and until when. */
   const earlyCancels = new Map<number, Map<string, number>>();
   const noteEarlyCancel = (opId: string, webContentsId: number): void => {
-    if (typeof opId !== "string" || opId.length === 0 || opId.length > 128) return;
+    if (!isOperationId(opId)) return;
     const now = Date.now();
     let forView = earlyCancels.get(webContentsId);
     if (!forView) {
@@ -284,15 +324,99 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
   /** Per view, the local files the person chose there, and until when. */
   const grants = new Map<number, Map<string, number>>();
 
-  const isGranted = (webContentsId: number, localPath: string): boolean => {
+  /** When the view's grant of this exact path runs out, or null when it has none. */
+  const grantExpiry = (webContentsId: number, localPath: string): number | null => {
     const forView = grants.get(webContentsId);
     const expiresAt = forView?.get(localPath);
-    if (forView === undefined || expiresAt === undefined) return false;
+    if (forView === undefined || expiresAt === undefined) return null;
     if (expiresAt <= Date.now()) {
       forView.delete(localPath);
-      return false;
+      return null;
     }
-    return true;
+    return expiresAt;
+  };
+  const isGranted = (webContentsId: number, localPath: string): boolean =>
+    grantExpiry(webContentsId, localPath) !== null;
+
+  /** Folder walks in progress, by operation id: a walk shares the id space uploads use. */
+  const walks = new Map<
+    string,
+    {
+      webContentsId: number;
+      localPath: string;
+      controller: AbortController;
+      promise: Promise<LocalFolderSummaryResult>;
+    }
+  >();
+  /**
+   * Summarized folders, by handle, oldest first. A handle lasts until the
+   * grant it was issued under runs out, never longer, even when the folder
+   * is dropped again: that drop asks again and gets a handle of its own.
+   */
+  const folderHandles = new Map<
+    string,
+    { webContentsId: number; localPath: string; expiresAt: number; snapshot: FolderSnapshot }
+  >();
+  /** Per view holding grants, handles or walks: stops watching for its end. */
+  const viewWatchers = new Map<number, () => void>();
+
+  const forgetView = (webContentsId: number): void => {
+    viewWatchers.get(webContentsId)?.();
+    viewWatchers.delete(webContentsId);
+    grants.delete(webContentsId);
+    earlyCancels.delete(webContentsId);
+    for (const [handle, record] of folderHandles) {
+      if (record.webContentsId === webContentsId) folderHandles.delete(handle);
+    }
+    for (const walk of walks.values()) {
+      if (walk.webContentsId === webContentsId) walk.controller.abort();
+    }
+  };
+  // What a view was granted, and what it summarized, goes with it.
+  const watchViewState = (webContentsId: number): void => {
+    if (!deps.watchView || viewWatchers.has(webContentsId)) return;
+    let gone = false;
+    const unwatch = deps.watchView(webContentsId, () => {
+      gone = true;
+      forgetView(webContentsId);
+    });
+    if (!gone) viewWatchers.set(webContentsId, unwatch);
+  };
+
+  const issueFolderHandle = (
+    webContentsId: number,
+    localPath: string,
+    expiresAt: number,
+    snapshot: FolderSnapshot
+  ): string => {
+    const now = Date.now();
+    for (const [handle, record] of folderHandles) {
+      if (record.expiresAt <= now) folderHandles.delete(handle);
+    }
+    const forView = [...folderHandles].filter(
+      ([, record]) => record.webContentsId === webContentsId
+    );
+    for (const [handle] of forView.slice(
+      0,
+      Math.max(0, forView.length - MAX_FOLDER_HANDLES_PER_VIEW + 1)
+    )) {
+      folderHandles.delete(handle);
+    }
+    while (folderHandles.size >= MAX_FOLDER_HANDLES) {
+      const oldest = folderHandles.keys().next().value;
+      if (oldest === undefined) break;
+      folderHandles.delete(oldest);
+    }
+    Object.freeze(snapshot.entries);
+    Object.freeze(snapshot.notCopied);
+    const handle = crypto.randomBytes(16).toString("hex");
+    folderHandles.set(handle, {
+      webContentsId,
+      localPath,
+      expiresAt,
+      snapshot: Object.freeze(snapshot),
+    });
+    return handle;
   };
 
   const notGranted = (localPath: string) =>
@@ -333,6 +457,8 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
   ): Promise<UploadResult> => {
     // One id is one upload: the same view asking again for the same thing
     // shares it, and anything else claiming the id is refused.
+    if (walks.has(opId))
+      return Promise.reject(invalid("That operation id belongs to a folder walk"));
     const fingerprint = JSON.stringify([hostId, source, destination]);
     const existing = running.get(opId);
     if (existing) {
@@ -519,6 +645,12 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     },
 
     cancel(opId, webContentsId) {
+      const walk = walks.get(opId);
+      if (walk) {
+        if (walk.webContentsId !== webContentsId) return false;
+        walk.controller.abort();
+        return true;
+      }
       const entry = running.get(opId);
       if (!entry) {
         // The cancel can overtake its own upload, which is still on its way
@@ -545,6 +677,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
         forView = new Map();
         grants.set(webContentsId, forView);
       }
+      watchViewState(webContentsId);
       const expiresAt = Date.now() + grantTtlMs;
       for (const candidate of paths) {
         if (!isLocalPath(candidate)) continue;
@@ -565,7 +698,136 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       if (!stat) return null;
       return { size: stat.size, isDirectory: stat.isDirectory() };
     },
+
+    async summarizeLocalFolder(webContentsId, payload) {
+      const localPath = payload?.localPath;
+      const opId = payload?.opId;
+      if (!isLocalPath(localPath)) throw invalid("Invalid local path");
+      if (!isOperationId(opId)) throw invalid("Invalid operation id");
+      // Only the folder itself, as the person dropped it: a path inside it is
+      // never granted, so it can't be summarized or sent on its own.
+      if (!isGranted(webContentsId, localPath)) throw notGranted(localPath);
+      const existing = walks.get(opId);
+      if (existing) {
+        if (existing.webContentsId !== webContentsId || existing.localPath !== localPath) {
+          throw invalid("That operation id belongs to another folder walk");
+        }
+        return existing.promise;
+      }
+      if (running.has(opId)) throw invalid("That operation id belongs to an upload");
+      const name = localBaseName(localPath);
+      const forView = [...walks.values()].filter((walk) => walk.webContentsId === webContentsId);
+      if (forView.length >= MAX_WALKS_PER_VIEW || walks.size >= MAX_WALKS) {
+        throw new AppError({
+          code: "RATE_LIMITED",
+          message: "Too many folder walks at once",
+          userMessage: `Couldn't look through ${name} yet: other folders are still being read. Try again in a moment.`,
+        });
+      }
+      const controller = new AbortController();
+      if (takeEarlyCancel(opId, webContentsId)) controller.abort();
+      watchViewState(webContentsId);
+      const promise = (async (): Promise<LocalFolderSummaryResult> => {
+        const walk = walkLocalFolder(localPath, { ...deps.walkOptions, signal: controller.signal });
+        // A cancel answers at once, rather than when the walk next looks up
+        // from a slow disk; the walk itself stops there.
+        walk.catch(() => {});
+        let walked: Awaited<typeof walk>;
+        try {
+          walked = await Promise.race([walk, abortion(controller.signal)]);
+        } catch (error) {
+          throw walkFailure(error, name, deps.localLabel);
+        }
+        if (controller.signal.aborted) throw walkCancelled();
+        if (walked.status === "refused") {
+          return { status: "refused", summary: walked.summary, problem: walked.problem };
+        }
+        const expiresAt = grantExpiry(webContentsId, localPath);
+        if (expiresAt === null) throw notGranted(localPath);
+        const handle = issueFolderHandle(webContentsId, localPath, expiresAt, walked.snapshot);
+        return { status: "ready", summary: walked.summary, handle };
+      })().finally(() => {
+        if (walks.get(opId)?.promise === promise) walks.delete(opId);
+      });
+      walks.set(opId, { webContentsId, localPath, controller, promise });
+      return promise;
+    },
+
+    resolveFolderHandle(webContentsId, handle) {
+      if (typeof handle !== "string" || !FOLDER_HANDLE.test(handle)) {
+        throw invalid("Invalid folder handle");
+      }
+      const record = folderHandles.get(handle);
+      // Another view's handle is refused without touching it, so naming it
+      // can't end it for the view it belongs to.
+      if (!record || record.webContentsId !== webContentsId) throw folderHandleGone();
+      if (record.expiresAt <= Date.now() || !isGranted(webContentsId, record.localPath)) {
+        folderHandles.delete(handle);
+        throw folderHandleGone();
+      }
+      return record.snapshot;
+    },
+
+    dispose() {
+      for (const walk of walks.values()) walk.controller.abort();
+      for (const unwatch of viewWatchers.values()) unwatch();
+      viewWatchers.clear();
+      folderHandles.clear();
+    },
   };
+}
+
+function walkCancelled(): AppError {
+  return new AppError({ code: "CANCELLED", message: "Folder walk cancelled" });
+}
+
+/** Rejects with CANCELLED once `signal` aborts; never settles otherwise. */
+function abortion(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) return reject(walkCancelled());
+    signal.addEventListener("abort", () => reject(walkCancelled()), { once: true });
+  });
+}
+
+function folderHandleGone(): AppError {
+  return new AppError({
+    code: "PERMISSION",
+    message: "The folder handle is not valid for this view",
+    userMessage: "That folder has to be dropped again before it can be sent.",
+  });
+}
+
+function walkFailure(error: unknown, name: string, localLabel: string): AppError {
+  if (error instanceof AppError) return error;
+  const reason = error instanceof LocalFolderWalkError ? error.reason : "unreadable";
+  switch (reason) {
+    case "cancelled":
+      return walkCancelled();
+    case "not-a-folder":
+      return new AppError({
+        code: "NOT_A_DIRECTORY",
+        message: "The local path is not a folder",
+        userMessage: `${name} isn't a folder on ${localLabel}.`,
+      });
+    case "link":
+      return new AppError({
+        code: "NOT_A_DIRECTORY",
+        message: "The local folder is a link",
+        userMessage: `${name} is a link, and links aren't followed. Drop the folder it points to instead.`,
+      });
+    case "changed":
+      return new AppError({
+        code: "INVALID_PATH",
+        message: "The local folder changed while it was read",
+        userMessage: `${name} changed while it was being read on ${localLabel}. Try again.`,
+      });
+    case "unreadable":
+      return new AppError({
+        code: "INVALID_PATH",
+        message: "The local folder could not be read",
+        userMessage: `Couldn't read ${name} on ${localLabel}.`,
+      });
+  }
 }
 
 function hostLabelFor(hostId: HostId): string {
@@ -609,6 +871,7 @@ export function installHostUploadClient(
     feed.onEndpointOpened((hostId, info) => transport.noteEndpointOpened(hostId, info)),
     feed.onEndpointClosed((hostId, info) => transport.noteEndpointClosed(hostId, info)),
     registerRemoteService("hostUploadClient", client),
+    () => client.dispose(),
   ];
   return () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();

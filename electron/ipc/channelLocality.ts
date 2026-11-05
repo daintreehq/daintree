@@ -387,6 +387,7 @@ export const CHANNEL_LOCALITY = {
   "file-transfer:grant-local-sources": "shell",
   "file-transfer:set-upload-preferences": "shell",
   "file-transfer:stat-local-file": "shell",
+  "file-transfer:summarize-local-folder": "shell",
   "file-transfer:upload-bytes": "shell",
   "file-transfer:upload-local-file": "shell",
   "file-watch:fingerprint": "host",

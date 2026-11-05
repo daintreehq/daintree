@@ -13,6 +13,8 @@ import type {
   DownloadResult,
   GrantClickedFilePayload,
   LocalFileStat,
+  LocalFolderSummaryResult,
+  SummarizeLocalFolderPayload,
   UploadBytesPayload,
   UploadLocalFilePayload,
   UploadPreferences,
@@ -51,6 +53,15 @@ export const fileTransferNamespace = defineIpcNamespace({
           ctx.webContentsId,
           payload?.localPath
         ),
+      { withContext: true }
+    ),
+    // A dropped or pasted folder, walked on this machine: what it holds, and
+    // a handle bound to this view for sending exactly that. Only the folder
+    // the view was granted, never a path inside it.
+    summarizeLocalFolder: op(
+      FILE_TRANSFER_METHOD_CHANNELS.summarizeLocalFolder,
+      async (ctx, payload: SummarizeLocalFolderPayload): Promise<LocalFolderSummaryResult> =>
+        requireRemoteService("hostUploadClient").summarizeLocalFolder(ctx.webContentsId, payload),
       { withContext: true }
     ),
     getUploadPreferences: op(
