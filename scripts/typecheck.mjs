@@ -204,6 +204,15 @@ export function runProjectSync(name, { spawnStep = spawnSync } = {}) {
   return 0;
 }
 
+// The exit status for `--only <project>`, which excludes the all-project modes.
+export function runOnly(argv, runProject = runProjectSync) {
+  if (argv.includes("--changed") || argv.includes("--dry-run")) {
+    console.error("[typecheck] --only cannot be combined with --changed or --dry-run");
+    return 2;
+  }
+  return runProject(argv[argv.indexOf("--only") + 1] ?? "");
+}
+
 function run(projects) {
   const args = [
     CONCURRENTLY,
@@ -224,15 +233,8 @@ function main() {
   const dryRun = argv.includes("--dry-run");
   const baseIndex = argv.indexOf("--base");
   const explicitBase = baseIndex === -1 ? null : argv[baseIndex + 1];
-  const onlyIndex = argv.indexOf("--only");
 
-  if (onlyIndex !== -1) {
-    if (changedMode || dryRun) {
-      console.error("[typecheck] --only cannot be combined with --changed or --dry-run");
-      process.exit(2);
-    }
-    process.exit(runProjectSync(argv[onlyIndex + 1] ?? ""));
-  }
+  if (argv.includes("--only")) process.exit(runOnly(argv));
 
   if (tscMissing()) process.exit(1);
 

@@ -580,15 +580,19 @@ function validateCommandHandlerExtensions() {
  * full typecheck would stall the watcher); a banner points devs at
  * `npm run check`.
  */
-function runPluginTypecheck() {
-  if (isWatch) {
+export function runPluginTypecheck({
+  watch = isWatch,
+  runProject = runProjectSync,
+  exit = (code) => process.exit(code),
+} = {}) {
+  if (watch) {
     console.log("[Build] Plugin types skipped in watch mode — run npm run check to typecheck.");
     return;
   }
-  const status = runProjectSync("plugins");
+  const status = runProject("plugins");
   if (status !== 0) {
     console.error("[Build] Plugin typecheck failed.");
-    process.exit(status);
+    exit(status);
   }
 }
 
