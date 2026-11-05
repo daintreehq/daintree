@@ -192,7 +192,7 @@ vi.mock("@/components/TerminalRecipe/RecipeManager", () => ({
   }) => (
     <div data-testid="recipe-manager" data-open={String(isOpen)}>
       <button onClick={() => onEditRecipe(MANAGER_RECIPE)}>edit recipe</button>
-      <button onClick={() => onCreateRecipe("project")}>new project recipe</button>
+      <button onClick={() => onCreateRecipe("project")}>new team recipe</button>
     </div>
   ),
 }));
@@ -659,7 +659,7 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.omissions).toBe("");
     });
 
-    it.each(["edit recipe", "new project recipe"])(
+    it.each(["edit recipe", "new team recipe"])(
       "drops a captured draft's report when the manager's %s takes over",
       async (button) => {
         render(<ProjectDialogHost />);
@@ -794,7 +794,7 @@ describe("ProjectDialogHost", () => {
       act(() => {
         window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
       });
-      fireEvent.click(await screen.findByText("new project recipe"));
+      fireEvent.click(await screen.findByText("new team recipe"));
 
       expect(screen.getByTestId("recipe-manager").dataset.open).toBe("false");
       const editor = await screen.findByTestId("recipe-editor");

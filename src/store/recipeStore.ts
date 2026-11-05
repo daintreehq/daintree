@@ -1033,11 +1033,28 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const prevProject = get().projectRecipes;
     const prevInRepo = get().inRepoRecipes;
 
+    // Replacing an existing team recipe replaces its file, so its ProjectFileStore
+    // mirror must follow: the merged list and the manager's Team row read the
+    // mirror, and would show the old content until the next reload.
+    const withPromotedMirror = (list: TerminalRecipe[]) =>
+      list.map((r) =>
+        r.id === promoted.id && isInRepoRecipeId(r)
+          ? {
+              ...promoted,
+              // What reconciliation keeps from the mirror it rewrites.
+              projectId: r.projectId,
+              worktreeId: r.worktreeId,
+              lastUsedAt: r.lastUsedAt,
+              usageHistory: r.usageHistory,
+            }
+          : r
+      );
     const nextInRepo = [...prevInRepo.filter((r) => r.id !== promoted.id), promoted];
     const nextGlobal =
       deleteOriginal && isGlobal ? prevGlobal.filter((r) => r.id !== recipeId) : prevGlobal;
-    const nextProject =
-      deleteOriginal && !isGlobal ? prevProject.filter((r) => r.id !== recipeId) : prevProject;
+    const nextProject = withPromotedMirror(
+      deleteOriginal && !isGlobal ? prevProject.filter((r) => r.id !== recipeId) : prevProject
+    );
 
     set({
       globalRecipes: nextGlobal,
@@ -1079,9 +1096,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         logError("Failed to delete original recipe", error);
         set({
           globalRecipes: prevGlobal,
-          projectRecipes: prevProject,
+          projectRecipes: withPromotedMirror(prevProject),
           inRepoRecipes: nextInRepo,
-          recipes: mergeRecipes(prevGlobal, prevProject, nextInRepo, get().pluginRecipes),
+          recipes: mergeRecipes(
+            prevGlobal,
+            withPromotedMirror(prevProject),
+            nextInRepo,
+            get().pluginRecipes
+          ),
         });
         throw error;
       }

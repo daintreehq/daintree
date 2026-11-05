@@ -162,6 +162,7 @@ import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
 import { buildLaunchCommandFromFlags } from "@shared/types/agentSettings";
+import { mergeRecipes } from "@shared/utils/recipeListing";
 
 /** A host approval that genuinely covers `recipe`, as the bridge would issue it. */
 function approvalFor(recipe: { id: string; terminals: RecipeTerminal[] }, terminalCount?: number) {
@@ -4308,6 +4309,96 @@ describe("recipeStore", () => {
 
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
+    });
+
+    describe("overwriting a team recipe that has a ProjectFileStore mirror", () => {
+      const existingInRepo = {
+        id: "recipe-existing-abc",
+        name: "My Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, command: "old", env: {} }],
+        createdAt: 100,
+      };
+      const mirror = {
+        ...existingInRepo,
+        projectId: "project-1",
+        worktreeId: "wt-1",
+        lastUsedAt: 50,
+        usageHistory: [40, 50],
+      };
+      // Slugs to the same my-recipe.json as "My Recipe".
+      const globalSource = {
+        id: "global-variant",
+        name: "my recipe",
+        terminals: [{ type: "terminal" as const, command: "new", env: {} }],
+        createdAt: 200,
+      };
+      const localSource = {
+        ...globalSource,
+        id: "project-variant",
+        projectId: "project-1",
+      };
+      const setup = (source: TerminalRecipe) => {
+        const global = source.projectId === undefined ? [source] : [];
+        const project = source.projectId === undefined ? [mirror] : [mirror, source];
+        useRecipeStore.setState({
+          globalRecipes: global,
+          projectRecipes: project,
+          inRepoRecipes: [existingInRepo],
+          recipes: mergeRecipes(global, project, [existingInRepo], []),
+          currentProjectId: "project-1",
+        });
+      };
+      const commandOf = (list: TerminalRecipe[], id: string) =>
+        list.find((r) => r.id === id)?.terminals[0]?.command;
+
+      it("replaces the mirror, so the row and the launch list show the new content", async () => {
+        setup(globalSource);
+
+        await useRecipeStore.getState().saveToRepo("global-variant", false);
+
+        const state = useRecipeStore.getState();
+        expect(state.recipes.filter((r) => r.id === existingInRepo.id)).toHaveLength(1);
+        expect(commandOf(state.recipes, existingInRepo.id)).toBe("new");
+        expect(state.projectRecipes).toHaveLength(1);
+        expect(state.projectRecipes[0]).toMatchObject({
+          id: existingInRepo.id,
+          projectId: "project-1",
+          worktreeId: "wt-1",
+          lastUsedAt: 50,
+          usageHistory: [40, 50],
+        });
+        expect(commandOf(state.projectRecipes, existingInRepo.id)).toBe("new");
+      });
+
+      it("puts the old mirror back with the rest when persisting fails", async () => {
+        setup(globalSource);
+        updateInRepoRecipeMock.mockRejectedValueOnce(new Error("disk full"));
+
+        await expect(useRecipeStore.getState().saveToRepo("global-variant", false)).rejects.toThrow(
+          "disk full"
+        );
+
+        const state = useRecipeStore.getState();
+        expect(commandOf(state.projectRecipes, existingInRepo.id)).toBe("old");
+        expect(commandOf(state.inRepoRecipes, existingInRepo.id)).toBe("old");
+      });
+
+      it("keeps the new mirror, and the original, when deleting the original fails", async () => {
+        setup(localSource);
+        deleteRecipeMock.mockRejectedValueOnce(new Error("locked"));
+
+        await expect(useRecipeStore.getState().saveToRepo("project-variant", true)).rejects.toThrow(
+          "locked"
+        );
+
+        const state = useRecipeStore.getState();
+        expect(state.projectRecipes.map((r) => r.id).sort()).toEqual(
+          [existingInRepo.id, "project-variant"].sort()
+        );
+        expect(commandOf(state.projectRecipes, existingInRepo.id)).toBe("new");
+        expect(commandOf(state.inRepoRecipes, existingInRepo.id)).toBe("new");
+      });
     });
 
     it("reuses an existing in-repo id when promoting a filename-slug variant of an existing name", async () => {

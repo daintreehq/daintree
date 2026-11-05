@@ -560,10 +560,10 @@ export const SEL = {
     dialog: '[role="dialog"]:has(h2:text-is("Recipe manager"))',
     teamSection: 'h3:text-is("Team recipes")',
     globalSection: 'h3:text-is("Global recipes")',
-    // The section header's "New" button carries the full name as its label;
-    // the all-empty state spells it out as visible text.
-    newProjectRecipeButton:
-      'button[aria-label="New project recipe"], button:has(:text-is("New project recipe"))',
+    // The Team section's "New" button carries the full name as its label; the
+    // all-empty state spells it out as visible text.
+    newTeamRecipeButton:
+      'button[aria-label="New team recipe"], button:has(:text-is("New team recipe"))',
     // Present only in the all-empty state; a populated manager files import
     // under the toolbar's Import menu (`importMenuTrigger`).
     importButton: 'button:has(:text-is("Import from clipboard"))',
