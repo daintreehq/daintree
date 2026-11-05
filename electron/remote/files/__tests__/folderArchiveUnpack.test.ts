@@ -1,4 +1,4 @@
-import { createWriteStream, writeFileSync } from "node:fs";
+import { createWriteStream, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,12 @@ import {
 import { BULK_CHUNK_BYTES } from "../../link/frames.js";
 import { unpackFolderArchive, type UnpackFolderArchiveOptions } from "../folderArchiveUnpack.js";
 import { folderArchiveMode } from "../folderUploadLinkMethods.js";
-import { forgeFolderArchive, type ForgedEntry, type ForgeOptions } from "./forgeFolderArchive.js";
+import {
+  forgeFolderArchive,
+  forgeLocalRecord,
+  type ForgedEntry,
+  type ForgeOptions,
+} from "./forgeFolderArchive.js";
 
 let base: string;
 let staging: string;
@@ -289,12 +294,37 @@ describe("unpackFolderArchive: forged archives", () => {
       expect(result).toMatchObject({ ok: false, rule: "size", entry: "Root/a.txt" });
     });
 
-    it("refuses a local header that disagrees with the central record", async () => {
+    it.each([
+      ["size", { size: 100 }],
+      ["compressed size", { compressedSize: 100 }],
+      ["CRC", { crc: 0x1234 }],
+      ["flags", { flags: 0 }],
+      ["method", { method: 8 }],
+    ] satisfies Array<[string, ForgedEntry["local"]]>)(
+      "refuses a local header whose %s disagrees with the central record",
+      async (_label, local) => {
+        const result = await unpack([ROOT, { name: "Root/a.txt", data: content, local }]);
+        expect(result).toEqual({
+          ok: false,
+          reason: "unsafe-archive",
+          rule: "header-mismatch",
+          entry: "Root/a.txt",
+        });
+      }
+    );
+
+    it("takes a data descriptor whose local header already carries the real values", async () => {
+      const crc = zlib.crc32(content);
       const result = await unpack([
         ROOT,
-        { name: "Root/a.txt", data: content, local: { size: 100, compressedSize: 100 } },
+        {
+          name: "Root/a.txt",
+          data: content,
+          descriptor: true,
+          local: { crc, size: content.length, compressedSize: content.length },
+        },
       ]);
-      expect(result).toMatchObject({ ok: false, rule: "header-mismatch", entry: "Root/a.txt" });
+      expect(result).toMatchObject({ ok: true });
     });
 
     it("refuses a local header naming a different entry", async () => {
@@ -305,12 +335,54 @@ describe("unpackFolderArchive: forged archives", () => {
       expect(result).toMatchObject({ ok: false, rule: "header-mismatch", entry: "Root/a.txt" });
     });
 
-    it("refuses a data descriptor that disagrees with the central record", async () => {
+    it.each([
+      ["size", { size: 99 }],
+      ["compressed size", { compressedSize: 99 }],
+      ["CRC", { crc: 0x1234 }],
+    ] satisfies Array<[string, ForgedEntry["descriptorFields"]]>)(
+      "refuses a data descriptor whose %s disagrees with the central record",
+      async (_label, descriptorFields) => {
+        const result = await unpack([
+          ROOT,
+          { name: "Root/a.txt", data: content, descriptor: true, descriptorFields },
+        ]);
+        expect(result).toEqual({
+          ok: false,
+          reason: "unsafe-archive",
+          rule: "header-mismatch",
+          entry: "Root/a.txt",
+        });
+      }
+    );
+
+    it("refuses a local header and descriptor that half fill in the real values", async () => {
       const result = await unpack([
         ROOT,
-        { name: "Root/a.txt", data: content, descriptor: true, descriptorFields: { size: 99 } },
+        { name: "Root/a.txt", data: content, descriptor: true, local: { size: content.length } },
       ]);
       expect(result).toMatchObject({ ok: false, rule: "header-mismatch", entry: "Root/a.txt" });
+    });
+
+    it("refuses sizes at ZIP64's sentinel", async () => {
+      const result = await unpack([ROOT, { name: "Root/a.txt", data: "x", size: 0xffffffff }]);
+      expect(result).toEqual({
+        ok: false,
+        reason: "unsafe-archive",
+        rule: "size",
+        entry: "Root/a.txt",
+      });
+    });
+
+    it("refuses headers that agree on more data than the archive holds for the entry", async () => {
+      const result = await unpack([ROOT, { name: "Root/a.txt", data: "x", size: 100 }], {
+        declared: { totalBytes: 100 },
+      });
+      expect(result).toEqual({
+        ok: false,
+        reason: "unsafe-archive",
+        rule: "layout",
+        entry: "Root/a.txt",
+      });
     });
 
     it("refuses content that doesn't match its CRC, removing what was written", async () => {
@@ -354,11 +426,35 @@ describe("unpackFolderArchive: forged archives", () => {
         reason: "unsafe-archive",
         rule: "declared",
       });
-      expect(await unpack(entries, { declared: { folderCount: 1 } })).toMatchObject({
+      expect(await unpack(entries, { declared: { folderCount: 1 } })).toEqual({
         ok: false,
+        reason: "unsafe-archive",
+        rule: "declared",
+      });
+      expect(await unpack(entries, { declared: { totalBytes: 4 } })).toEqual({
+        ok: false,
+        reason: "unsafe-archive",
         rule: "declared",
       });
       await stagingIsEmpty();
+    });
+
+    it("refuses more folders than declared at the first one over", async () => {
+      expect(await unpack([ROOT, { name: "Root/d/" }], { declared: { folderCount: 0 } })).toEqual({
+        ok: false,
+        reason: "unsafe-archive",
+        rule: "declared",
+        entry: "Root/d/",
+      });
+    });
+
+    it.each([
+      ["a negative count", { fileCount: -1 }],
+      ["a fractional count", { folderCount: 0.5 }],
+      ["a count past safe integers", { totalBytes: Number.MAX_SAFE_INTEGER + 1 }],
+      ["NaN", { fileCount: Number.NaN }],
+    ])("throws on %s declared", async (_label, declared) => {
+      await expect(unpack(entries, { declared })).rejects.toBeInstanceOf(RangeError);
     });
 
     it("refuses an end record that counts fewer entries than the central directory holds", async () => {
@@ -396,13 +492,19 @@ describe("unpackFolderArchive: forged archives", () => {
     await stagingIsEmpty();
   });
 
-  it("refuses a file colliding with a folder", async () => {
+  it("refuses a file colliding with a folder of the same name", async () => {
     const result = await unpack([
       ROOT,
       { name: "Root/thing", data: "file" },
-      { name: "Root/Thing/" },
+      { name: "Root/thing/" },
     ]);
-    expect(result).toMatchObject({ ok: false, reason: "name-clash" });
+    expect(result).toEqual({
+      ok: false,
+      reason: "name-clash",
+      rule: "content",
+      entry: "Root/thing/",
+      problem: { kind: "clash", paths: ["Root/thing", "Root/thing/"] },
+    });
   });
 
   it("refuses a path past the depth bound and takes one at it", async () => {
@@ -463,6 +565,87 @@ describe("unpackFolderArchive: forged archives", () => {
     }
   );
 
+  it("refuses bytes after the last entry's data", async () => {
+    const result = await unpack([
+      ROOT,
+      { name: "Root/a.txt", data: "a", padding: Buffer.from("x") },
+    ]);
+    expect(result).toEqual({
+      ok: false,
+      reason: "unsafe-archive",
+      rule: "layout",
+      entry: "Root/a.txt",
+    });
+  });
+
+  it("refuses an entry whose data hides another whole entry", async () => {
+    const inner: ForgedEntry = { name: "Root/b.txt", data: "bee" };
+    const embedded = forgeLocalRecord(inner);
+    // Root/'s local record, then a.txt's header; a.txt's data starts there.
+    const embeddedAt = 30 + "Root/".length + 30 + "Root/a.txt".length;
+    const result = await unpack([
+      ROOT,
+      { name: "Root/a.txt", data: embedded },
+      { ...inner, localHeaderAt: embeddedAt },
+    ]);
+    expect(result).toEqual({
+      ok: false,
+      reason: "unsafe-archive",
+      rule: "layout",
+      entry: "Root/a.txt",
+    });
+    await stagingIsEmpty();
+  });
+
+  it("takes central records in a different order from the entries they describe", async () => {
+    const result = await unpack(
+      [
+        ROOT,
+        { name: "Root/a/" },
+        { name: "Root/a/x.txt", data: "x" },
+        { name: "Root/y.txt", data: "y" },
+      ],
+      { forge: { centralOrder: [3, 2, 1, 0] } }
+    );
+    expect(result).toMatchObject({ ok: true });
+    expect(await fs.readFile(path.join(staging, "a/x.txt"), "utf8")).toBe("x");
+  });
+
+  it.each([
+    ["this disk's number", 4],
+    ["the central directory's disk", 6],
+    ["this disk's entry count", 8],
+  ])("refuses an end record spanning disks by %s", async (_label, field) => {
+    const archive = forgeFolderArchive([ROOT, { name: "Root/a.txt", data: "a" }]);
+    archive.writeUInt16LE(
+      archive.readUInt16LE(archive.length - 22 + field) + 1,
+      archive.length - 22 + field
+    );
+    await fs.writeFile(archivePath, archive);
+    const result = await unpackFolderArchive({
+      archivePath,
+      stagingDir: staging,
+      rootName: "Root",
+      declared: { fileCount: 1, folderCount: 0, totalBytes: 1 },
+    });
+    expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "format" });
+  });
+
+  it("refuses a central record past the central directory's end", async () => {
+    const archive = forgeFolderArchive([ROOT, { name: "Root/a.txt", data: "a" }]);
+    // The end record's central size, one byte short of the records it holds.
+    const sizeAt = archive.length - 22 + 12;
+    archive.writeUInt32LE(archive.readUInt32LE(sizeAt) - 1, sizeAt);
+    await fs.writeFile(archivePath, archive);
+    const result = await unpackFolderArchive({
+      archivePath,
+      stagingDir: staging,
+      rootName: "Root",
+      declared: { fileCount: 1, folderCount: 0, totalBytes: 1 },
+    });
+    expect(result).toEqual({ ok: false, reason: "unsafe-archive", rule: "format" });
+  });
+
   it("refuses a central record pointing at another entry's data", async () => {
     const result = await unpack([
       ROOT,
@@ -500,6 +683,42 @@ describe("unpackFolderArchive: forged archives", () => {
     comment.writeUInt32LE(0x06054b50, 2);
     const result = await unpack([ROOT, { name: "Root/a.txt", data: "a" }], { forge: { comment } });
     expect(result).toMatchObject({ ok: true });
+  });
+
+  it("looks past a comment that ends in what reads as a whole end record", async () => {
+    const comment = Buffer.alloc(22);
+    comment.writeUInt32LE(0x06054b50, 0);
+    const result = await unpack([ROOT, { name: "Root/a.txt", data: "a" }], { forge: { comment } });
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("refuses an invalid root name before opening the archive", async () => {
+    const result = await unpackFolderArchive({
+      archivePath: path.join(base, "never-opened.zip"),
+      stagingDir: staging,
+      rootName: "..",
+      declared: { fileCount: 0, folderCount: 0, totalBytes: 0 },
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "unsafe-archive",
+      rule: "content",
+      problem: { kind: "path", problem: "dot-name", path: ".." },
+    });
+  });
+
+  it("won't read an archive through a link", async () => {
+    const real = path.join(base, "real.zip");
+    await fs.writeFile(real, forgeFolderArchive([ROOT]));
+    await fs.symlink(real, archivePath);
+    await expect(
+      unpackFolderArchive({
+        archivePath,
+        stagingDir: staging,
+        rootName: "Root",
+        declared: { fileCount: 0, folderCount: 0, totalBytes: 0 },
+      })
+    ).rejects.toMatchObject({ code: "ELOOP" });
   });
 
   it("refuses an archive over the size limit before reading it", async () => {
@@ -599,9 +818,120 @@ describe("unpackFolderArchive: cancelling and rolling back", () => {
     expect(await fs.readdir(path.join(staging, "sub"))).toEqual(["foreign.txt"]);
   });
 
+  it("still removes the tree when cancelled as the last file completes", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled at the end");
+    const promise = unpack(files, {
+      signal: controller.signal,
+      onProgress: ({ filesDone, filesTotal }) => {
+        if (filesDone === filesTotal) controller.abort(reason);
+      },
+    });
+    await expect(promise).rejects.toBe(reason);
+    await stagingIsEmpty();
+  });
+
+  it("fails with a progress callback's error and removes what it wrote", async () => {
+    const failure = new Error("progress broke");
+    const promise = unpack(files, {
+      onProgress: () => {
+        throw failure;
+      },
+    });
+    await expect(promise).rejects.toBe(failure);
+    await stagingIsEmpty();
+  });
+
+  it("counts something already gone as removed", async () => {
+    const controller = new AbortController();
+    const promise = unpack(files, {
+      signal: controller.signal,
+      onProgress: () => {
+        unlinkSync(path.join(staging, "sub", "one.txt"));
+        controller.abort();
+      },
+    });
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    await stagingIsEmpty();
+  });
+
+  it("removes a file whose identity couldn't be read back after creating it", async () => {
+    const probe = await fs.open(path.join(base, "probe"), "w");
+    const handleProto = Object.getPrototypeOf(probe) as { stat: () => Promise<unknown> };
+    await probe.close();
+    const stat = handleProto.stat;
+    let calls = 0;
+    const failure = Object.assign(new Error("EIO"), { code: "EIO" });
+    // The archive's own stat comes first; the second is the first file's.
+    vi.spyOn(handleProto, "stat").mockImplementation(function (this: unknown) {
+      if (++calls === 2) return Promise.reject(failure);
+      return stat.call(this);
+    });
+    await expect(unpack([ROOT, { name: "Root/a.txt", data: "a" }])).rejects.toBe(failure);
+    await stagingIsEmpty();
+  });
+
+  it("removes a folder whose identity couldn't be read back after making it", async () => {
+    const failure = Object.assign(new Error("EIO"), { code: "EIO" });
+    const lstat = fs.lstat;
+    const target = path.join(staging, "sub");
+    vi.spyOn(fs, "lstat").mockImplementation(((filePath: string, ...rest: unknown[]) =>
+      filePath === target
+        ? Promise.reject(failure)
+        : (lstat as (...args: unknown[]) => Promise<unknown>)(
+            filePath,
+            ...rest
+          )) as typeof fs.lstat);
+    await expect(unpack([ROOT, { name: "Root/sub/" }])).rejects.toBe(failure);
+    vi.restoreAllMocks();
+    await stagingIsEmpty();
+  });
+
+  it("never writes through a link planted where a file is about to go", async () => {
+    const outside = path.join(base, "outside.txt");
+    await fs.writeFile(outside, "original");
+    const promise = unpack(files, {
+      onProgress: ({ filesDone }) => {
+        if (filesDone === 1) symlinkSync(outside, path.join(staging, "three.txt"));
+      },
+    });
+    await expect(promise).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await fs.readFile(outside, "utf8")).toBe("original");
+    expect(await fs.readdir(staging)).toEqual(["three.txt"]);
+  });
+
+  it("stops when a folder it made is swapped for a link, writing nothing through it", async () => {
+    const elsewhere = path.join(base, "elsewhere");
+    await fs.mkdir(elsewhere);
+    const promise = unpack(files, {
+      onProgress: ({ filesDone }) => {
+        if (filesDone !== 1) return;
+        renameSync(path.join(staging, "sub"), path.join(base, "moved"));
+        symlinkSync(elsewhere, path.join(staging, "sub"));
+      },
+    });
+    await expect(promise).rejects.toThrow(/couldn't remove everything/);
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+    expect(await fs.readdir(path.join(base, "moved"))).toEqual(["one.txt"]);
+  });
+
   it("refuses to start in a staging folder that isn't empty", async () => {
     await fs.writeFile(path.join(staging, "already.txt"), "x");
     await expect(unpack(files)).rejects.toThrow(/empty folder/);
     expect(await fs.readdir(staging)).toEqual(["already.txt"]);
+  });
+
+  it("refuses a staging folder that is a link to one", async () => {
+    const linked = path.join(base, "linked-staging");
+    await fs.symlink(staging, linked);
+    await fs.writeFile(archivePath, forgeFolderArchive([ROOT]));
+    await expect(
+      unpackFolderArchive({
+        archivePath,
+        stagingDir: linked,
+        rootName: "Root",
+        declared: { fileCount: 0, folderCount: 0, totalBytes: 0 },
+      })
+    ).rejects.toThrow(/empty folder/);
   });
 });

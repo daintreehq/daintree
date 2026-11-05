@@ -3,13 +3,13 @@ import path from "node:path";
 import zlib from "node:zlib";
 import {
   FOLDER_UPLOAD_MAX_ARCHIVE_BYTES,
-  type FolderUploadEntryKind,
   type FolderUploadProblem,
   type FolderUploadTotals,
 } from "../../../shared/types/folderUpload.js";
 import {
   checkFolderUploadRootName,
   FolderUploadTally,
+  type FolderUploadEntryKind,
 } from "../../../shared/utils/folderUpload.js";
 import { OWNER_RWX_DIR_MODE } from "../../utils/fs.js";
 import { BULK_CHUNK_BYTES } from "../link/frames.js";
@@ -194,8 +194,9 @@ async function readEndRecord(
   if (!tail) throw refuse("format");
   for (let at = tailLength - END_RECORD_BYTES; at >= 0; at--) {
     if (tail.readUInt32LE(at) !== END_SIGNATURE) continue;
-    // A signature inside the comment isn't the record unless the comment it
-    // declares runs exactly to the end of the archive.
+    // A comment can hold the signature, and even a whole record that seems to
+    // end the archive, so a candidate that fails any check below is passed
+    // over for one further back rather than refused.
     if (at + END_RECORD_BYTES + tail.readUInt16LE(at + 20) !== tailLength) continue;
     const disk = tail.readUInt16LE(at + 4);
     const centralDisk = tail.readUInt16LE(at + 6);
@@ -216,7 +217,7 @@ async function readEndRecord(
       centralOffset === 0xffffffff ||
       centralOffset + centralSize !== offset
     ) {
-      throw refuse("format");
+      continue;
     }
     return { offset, entries, centralSize, centralOffset };
   }
@@ -424,7 +425,8 @@ function identityOf(stat: { dev: number; ino: number }): string {
 
 interface Created {
   absPath: string;
-  identity: string;
+  /** Null until it has been read back; such an entry is removed by name alone. */
+  identity: string | null;
   isDir: boolean;
 }
 
@@ -478,12 +480,14 @@ async function writeTree(
     await assertParentUnchanged(folder.path);
     const absPath = absolute(folder.path);
     await fs.mkdir(absPath, { mode: OWNER_RWX_DIR_MODE });
+    const journal: Created = { absPath, identity: null, isDir: true };
+    created.push(journal);
     const stat = await fs.lstat(absPath);
     if (!stat.isDirectory()) {
       throw new Error("The staging folder changed while the archive was being unpacked");
     }
     const identity = identityOf(stat);
-    created.push({ absPath, identity, isDir: true });
+    journal.identity = identity;
     folderIdentities.set(folder.path.slice(0, -1), identity);
     // The umask can only take bits away from mkdir's mode; put back any it took.
     if ((stat.mode & 0o777) !== OWNER_RWX_DIR_MODE) await restoreFolderMode(absPath, identity);
@@ -499,9 +503,11 @@ async function writeTree(
     const absPath = absolute(file.path);
     const mode = file.executable ? FOLDER_ARCHIVE_EXECUTABLE_MODE : FOLDER_ARCHIVE_FILE_MODE;
     const out = await fs.open(absPath, NEW_FILE_FLAGS, mode);
+    const journal: Created = { absPath, identity: null, isDir: false };
+    created.push(journal);
     try {
       const stat = await out.stat();
-      created.push({ absPath, identity: identityOf(stat), isDir: false });
+      journal.identity = identityOf(stat);
       if ((stat.mode & 0o777) !== mode) await out.chmod(mode);
       let crc = 0;
       let copied = 0;
@@ -538,23 +544,28 @@ async function writeTree(
   }
 }
 
-/** Remove what this call created, newest first, leaving anything put in its place alone. */
+/**
+ * Remove what this call created, newest first, leaving anything put in its
+ * place alone. False when something it created couldn't be removed, or was
+ * replaced by something it won't remove; something already gone is fine.
+ */
 async function rollBack(created: Created[]): Promise<boolean> {
   let clean = true;
   for (const entry of [...created].reverse()) {
     try {
-      const stat = await fs.lstat(entry.absPath).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (!stat) continue;
-      if (stat.isSymbolicLink() || identityOf(stat) !== entry.identity) {
-        clean = false;
-        continue;
+      // An entry whose identity was never read back can only be removed by
+      // name; unlink and rmdir never follow a link, so nothing outside
+      // staging can be reached that way.
+      if (entry.identity !== null) {
+        const stat = await fs.lstat(entry.absPath);
+        if (stat.isSymbolicLink() || identityOf(stat) !== entry.identity) {
+          clean = false;
+          continue;
+        }
       }
       await (entry.isDir ? fs.rmdir(entry.absPath) : fs.unlink(entry.absPath));
-    } catch {
-      clean = false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") clean = false;
     }
   }
   return clean;
@@ -603,11 +614,15 @@ export async function unpackFolderArchive(
     }
     const entries = await planArchive(archive, stat.size, rootName, declared, signal);
     await writeTree(archive, entries, options, identityOf(staging), created);
+    // Closed before the last cancel check, so a cancel that lands while it
+    // closes still removes the tree; handed off first so it closes once.
+    const finished = archive;
+    archive = undefined;
+    await finished.close();
     signal?.throwIfAborted();
     return { ok: true, totals: { ...declared } };
   } catch (error) {
     await archive?.close().catch(() => {});
-    archive = undefined;
     if (!(await rollBack(created))) {
       throw new Error("The unpack stopped and couldn't remove everything it wrote to staging", {
         cause: error,
@@ -615,7 +630,5 @@ export async function unpackFolderArchive(
     }
     if (error instanceof Refused) return { ok: false, ...error.refusal };
     throw error;
-  } finally {
-    await archive?.close().catch(() => {});
   }
 }
