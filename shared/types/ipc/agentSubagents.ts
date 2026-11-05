@@ -104,7 +104,9 @@ export type AgentSubagentUnavailableReason =
   | "timeout"
   | "protocol-error"
   /** The store is there but could not be read. Claude only. */
-  | "store-unreadable";
+  | "store-unreadable"
+  /** The pane's store could not be pinned down, so no file was trusted to be its. */
+  | "store-unknown";
 
 export interface AgentSubagentsOk {
   status: "ok";

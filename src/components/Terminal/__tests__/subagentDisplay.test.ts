@@ -176,6 +176,7 @@ describe("subagentUnavailableMessage", () => {
       "timeout",
       "protocol-error",
       "store-unreadable",
+      "store-unknown",
     ] as const;
     const messages = reasons.map((reason) => subagentUnavailableMessage(reason, "Codex"));
     // `provider-mismatch` and `terminal-unknown` deliberately share one, since

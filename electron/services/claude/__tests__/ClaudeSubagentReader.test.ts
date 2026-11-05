@@ -17,7 +17,6 @@ import {
   parseSubagentMeta,
   readTranscriptFile,
   recordText,
-  resolveClaudeConfigDir,
 } from "../ClaudeSubagentReader.js";
 import {
   SUBAGENT_LIST_LIMIT,
@@ -113,20 +112,6 @@ async function makeSubagentsDir(slugSource: string): Promise<string> {
   await mkdir(dir, { recursive: true });
   return dir;
 }
-
-describe("resolveClaudeConfigDir", () => {
-  it("prefers the CLI's own override over the home-relative default", () => {
-    const overridden = resolveClaudeConfigDir({ CLAUDE_CONFIG_DIR: "/custom/claude" });
-    const defaulted = resolveClaudeConfigDir({});
-    expect(overridden).toBe(path.resolve("/custom/claude"));
-    expect(defaulted).not.toBe(overridden);
-    expect(defaulted.endsWith(path.join(".claude"))).toBe(true);
-  });
-
-  it("ignores an override that is only whitespace", () => {
-    expect(resolveClaudeConfigDir({ CLAUDE_CONFIG_DIR: "   " })).toBe(resolveClaudeConfigDir({}));
-  });
-});
 
 describe("deriveProjectSlug", () => {
   it("replaces separators without disturbing dashes already in the path", () => {

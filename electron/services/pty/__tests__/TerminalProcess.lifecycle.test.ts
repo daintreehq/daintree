@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
+import os from "os";
+import path from "path";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { InThreadAnalysisBackend } from "../analysis/InThreadAnalysisBackend.js";
@@ -110,7 +112,8 @@ function createTerminal(
   pty: IPty,
   options?: Partial<TerminalProcessOptions>,
   deps?: Partial<TerminalProcessDeps>,
-  id = "t-lifecycle"
+  id = "t-lifecycle",
+  spawnContext: SpawnContext = defaultSpawnContext()
 ): TerminalProcess {
   const merged = {
     cwd: process.cwd(),
@@ -134,12 +137,50 @@ function createTerminal(
       processTreeCache: null,
       ...deps,
     },
-    defaultSpawnContext(),
+    spawnContext,
     pty
   );
 }
 
 type TerminalExitedPayload = Parameters<Parameters<typeof events.on<"terminal:exited">>[1]>[0];
+
+describe("TerminalProcess — Claude store on the record (#16269)", () => {
+  function spawnedWith(env: Record<string, string>, options?: Partial<TerminalProcessOptions>) {
+    return createTerminal(createControllablePty(), options, undefined, "t-store", {
+      ...defaultSpawnContext(),
+      env,
+    });
+  }
+
+  it("records the account folder the launch env named", () => {
+    const accountDir = path.resolve(os.tmpdir(), "accounts", "work");
+    const terminal = spawnedWith({ CLAUDE_CONFIG_DIR: accountDir }, { launchAgentId: "claude" });
+    try {
+      expect(terminal.getInfo().claudeConfigDir).toBe(accountDir);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("records the home store for a plain shell whose env names none", () => {
+    // `claude` typed into it later runs against the same env.
+    const terminal = spawnedWith({ PATH: "/usr/bin" });
+    try {
+      expect(terminal.getInfo().claudeConfigDir).toBe(path.join(os.homedir(), ".claude"));
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("records no store when the env names one it can't resolve", () => {
+    const terminal = spawnedWith({ CLAUDE_CONFIG_DIR: "relative/claude" });
+    try {
+      expect(terminal.getInfo().claudeConfigDir).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+});
 
 describe("TerminalProcess — terminal:exited event", () => {
   let exitedListener: ReturnType<typeof vi.fn<(p: TerminalExitedPayload) => void>>;

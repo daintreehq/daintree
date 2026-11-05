@@ -150,6 +150,8 @@ export function subagentUnavailableMessage(
       return `${provider} took too long to respond`;
     case "store-unreadable":
       return `Couldn't read ${provider}'s session files`;
+    case "store-unknown":
+      return `Couldn't tell where this terminal's ${provider} sessions are kept`;
     case "provider-mismatch":
     case "terminal-unknown":
       return `This terminal isn't running ${provider}`;

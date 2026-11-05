@@ -144,6 +144,11 @@ export interface TerminalPublicState {
    * start, so the id alone can't say the teardown observed anything (#13226).
    */
   sessionIdCapturedAtTeardown?: boolean;
+  /**
+   * The Claude Code store this terminal's launch env names, resolved once at
+   * spawn (#16269). Absent when the env names one that can't be resolved.
+   */
+  claudeConfigDir?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */

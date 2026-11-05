@@ -106,6 +106,16 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).scheduledRun).toBeUndefined();
   });
 
+  it("reports the Claude store the launch env named, and nothing when it named none it could resolve", () => {
+    // #16269: the subagent reader trusts only this field for which store a pane
+    // writes to; dropped here, every account pane reads as store-unknown.
+    const ctx = createCtx();
+    expect(
+      mapTerminalInfo(makeTerminal({ claudeConfigDir: "/accounts/work" }), ctx).claudeConfigDir
+    ).toBe("/accounts/work");
+    expect(mapTerminalInfo(makeTerminal(), ctx).claudeConfigDir).toBeUndefined();
+  });
+
   it("reports a terminal whose agent a graceful shutdown is quitting as closing, though it still has a PTY", () => {
     const ctx = createCtx();
     (ctx.ptyManager.isClosing as ReturnType<typeof vi.fn>).mockImplementation(
