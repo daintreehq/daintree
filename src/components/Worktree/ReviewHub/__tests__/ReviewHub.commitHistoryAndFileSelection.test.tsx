@@ -1503,6 +1503,28 @@ describe("ReviewHub", () => {
       expect(await unstageSelection()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
     });
 
+    it("starts a new selection from the clicked row when the anchor was filtered away", async () => {
+      await renderWith(
+        [],
+        [entry("src/a.ts"), entry("docs/mid.md"), entry("src/b.ts"), entry("src/c.ts")]
+      );
+      fireEvent.click(row("src/a.ts"), { metaKey: true });
+      fireEvent.click(row("docs/mid.md"), { metaKey: true });
+      filterBy("Filter changed files", "src/");
+      await waitFor(() => expect(rowIfDrawn("docs/mid.md")).toBeNull());
+
+      fireEvent.click(row("src/c.ts"), { shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(1\)/i
+        );
+      });
+      expect(row("src/c.ts").getAttribute("aria-selected")).toBe("true");
+      expect(row("src/a.ts").getAttribute("aria-selected")).toBe("false");
+      expect(await stageSelection()).toEqual(["src/c.ts"]);
+    });
+
     it("selects the rows between the anchor and the click in churn order (unstaged)", async () => {
       // Churn desc draws: big (50), mid (10), small (2), tiny (1).
       await renderWith(

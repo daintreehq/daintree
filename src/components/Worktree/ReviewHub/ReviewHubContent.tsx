@@ -1325,6 +1325,15 @@ export function ReviewHubContent({
           setSelectionSection(section);
           return;
         }
+        if (anchorIdx === -1 && clickIdx !== -1) {
+          // The anchor was hidden by a later filter or view change, so there is no drawn
+          // range to extend. Start over from the clicked row rather than falling through to
+          // a plain click, which would drop the selection and open a diff.
+          setSelectedPaths(new Set([filePath]));
+          setSelectionSection(section);
+          selectionAnchorRef.current = filePath;
+          return;
+        }
       }
 
       if (e.metaKey || e.ctrlKey) {
