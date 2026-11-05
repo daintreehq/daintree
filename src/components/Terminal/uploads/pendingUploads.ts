@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from "react";
-import type { FileTransferEvent } from "@shared/types/ipc/fileTransfer";
+import type {
+  FolderMaterializeProgress,
+  FolderUploadProgress,
+} from "@shared/types/ipc/fileTransfer";
 import type { MaterializeOptions } from "@shared/types/remoteHosts";
+
+export type { FolderUploadProgress };
 
 /**
  * Uploads in flight to a remote window's host, per surface (a composer, a
@@ -16,14 +21,10 @@ import type { MaterializeOptions } from "@shared/types/remoteHosts";
 
 export const UPLOAD_PROGRESS_DELAY_MS = 250;
 
-/** A folder send's report, as the `folder-progress` event carries it. */
-export type FolderUploadProgress = Omit<
-  Extract<FileTransferEvent, { type: "folder-progress" }>,
-  "type" | "opId"
->;
-
 /** A folder send's progress, cut down to what its chip says. */
 export type FolderUploadStage =
+  | { phase: "waiting" }
+  | { phase: "reading" }
   | { phase: "packing" }
   | { phase: "sending"; percent: number | null }
   | { phase: "unpacking"; filesDone: number | null; filesTotal: number };
@@ -118,14 +119,18 @@ function track<T>(
 }
 
 /**
- * Run one upload under a chip on `surface`. `run` gets the progress callback
+ * Run one upload under a chip on `surface`. `run` gets the progress callbacks
  * and the signal the chip's cancel button aborts; the chip goes away however
- * the upload ends.
+ * the upload ends. A dropped path is only known to be a folder once
+ * `materialize` looks at it, so the chip becomes a folder's on its first
+ * folder report, keeping its place, its delay and its cancel.
  */
 export function trackUpload<T>(
   surface: string,
   name: string,
-  run: (options: Pick<MaterializeOptions, "onProgress" | "signal">) => Promise<T>
+  run: (
+    options: Pick<MaterializeOptions, "onProgress" | "onFolderProgress" | "signal">
+  ) => Promise<T>
 ): Promise<T> {
   return track(surface, name, undefined, (signal, patch) => {
     let lastPercent = -1;
@@ -135,15 +140,17 @@ export function trackUpload<T>(
       lastPercent = percent;
       patch({ fraction: percent / 100 });
     };
-    return run({ onProgress, signal });
+    return run({ onProgress, onFolderProgress: folderReporter(null, patch), signal });
   });
 }
 
 /** What a folder's chip shows for a report: only what changes its words. */
-export function folderUploadStage(progress: FolderUploadProgress): FolderUploadStage {
+export function folderUploadStage(progress: FolderMaterializeProgress): FolderUploadStage {
   switch (progress.phase) {
+    case "waiting":
+    case "reading":
     case "packing":
-      return { phase: "packing" };
+      return { phase: progress.phase };
     case "sending": {
       const { transferredBytes, totalBytes } = progress;
       if (transferredBytes === null || totalBytes <= 0) return { phase: "sending", percent: null };
@@ -169,6 +176,20 @@ function sameStage(a: FolderUploadStage, b: FolderUploadStage): boolean {
   return a.phase === b.phase;
 }
 
+/** Follows a folder's reports on its chip, redrawing only when its words change. */
+function folderReporter(
+  initial: FolderUploadStage | null,
+  patch: (patch: Partial<PendingUpload>) => void
+): (progress: FolderMaterializeProgress) => void {
+  let stage = initial;
+  return (progress) => {
+    const next = folderUploadStage(progress);
+    if (stage !== null && sameStage(stage, next)) return;
+    stage = next;
+    patch({ folder: next });
+  };
+}
+
 /**
  * Run one folder send under a chip on `surface`, which follows it through
  * packing, sending and unpacking. A send starts by packing, so that is what
@@ -179,21 +200,13 @@ export function trackFolderUpload<T>(
   surface: string,
   name: string,
   run: (options: {
-    onFolderProgress: (progress: FolderUploadProgress) => void;
+    onFolderProgress: (progress: FolderMaterializeProgress) => void;
     signal: AbortSignal;
   }) => Promise<T>
 ): Promise<T> {
-  let stage: FolderUploadStage = { phase: "packing" };
+  const stage: FolderUploadStage = { phase: "packing" };
   return track(surface, name, stage, (signal, patch) =>
-    run({
-      onFolderProgress: (progress) => {
-        const next = folderUploadStage(progress);
-        if (sameStage(stage, next)) return;
-        stage = next;
-        patch({ folder: next });
-      },
-      signal,
-    })
+    run({ onFolderProgress: folderReporter(stage, patch), signal })
   );
 }
 

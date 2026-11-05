@@ -6,10 +6,12 @@ import {
   getPendingUploads,
   hasPendingUploads,
   trackFolderUpload,
+  trackUpload,
   UPLOAD_PROGRESS_DELAY_MS,
   type FolderUploadProgress,
 } from "../pendingUploads";
 import { folderUploadSpokenLabel, PendingUploadChips } from "../PendingUploadChips";
+import type { FolderMaterializeProgress } from "@shared/types/ipc/fileTransfer";
 
 const SURFACE = "composer:t1";
 
@@ -114,6 +116,44 @@ describe("folder send chips", () => {
     cancelButton().click();
     await expect(send.done).rejects.toThrow("cancelled");
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  // A drop only turns out to be a folder once `materialize` stats it, so the
+  // chip it started under becomes the folder's rather than a second one.
+  it("turns a dropped path's chip into a folder's on its first folder report", async () => {
+    render(<PendingUploadChips surface={SURFACE} />);
+    let report!: (progress: FolderMaterializeProgress) => void;
+    let aborted = false;
+    const done = trackUpload(
+      SURFACE,
+      "Daintree-Audit-2026-11-05",
+      ({ onFolderProgress, signal }) =>
+        new Promise<string>((_resolve, reject) => {
+          report = onFolderProgress!;
+          signal!.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("cancelled"));
+          });
+        })
+    );
+    advance(UPLOAD_PROGRESS_DELAY_MS);
+    expect(screen.getByRole("status").textContent).toContain("uploading");
+    const id = getPendingUploads(SURFACE)[0]!.id;
+
+    act(() => report({ phase: "waiting" }));
+    expect(shownLabel()).toBe("waiting");
+    act(() => report({ phase: "reading" }));
+    expect(shownLabel()).toBe("reading");
+    act(() => report({ phase: "waiting" }));
+    expect(shownLabel()).toBe("waiting");
+    act(() => report(sending(374)));
+    expect(shownLabel()).toBe("sending 37%");
+    expect(getPendingUploads(SURFACE).map((upload) => upload.id)).toEqual([id]);
+
+    cancelButton().click();
+    await expect(done).rejects.toThrow("cancelled");
+    expect(aborted).toBe(true);
+    expect(hasPendingUploads(SURFACE)).toBe(false);
   });
 
   it("speaks unpacking in tenths while the chip counts every file", () => {

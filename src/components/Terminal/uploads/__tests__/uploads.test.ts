@@ -200,6 +200,58 @@ describe("upload questions", () => {
     release();
     await expect(pending).resolves.toBe(false);
   });
+
+  describe("withdrawn by the upload's signal", () => {
+    const large = (name: string) =>
+      ({ kind: "large", name, bytes: 1, hostLabel: "h" }) as const;
+
+    it("closes the question showing and shows the next, answering no", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const first = askUploadQuestion(large("a"), { signal: controller.signal });
+      const second = askUploadQuestion(large("b"));
+      expect(currentUploadQuestion()?.question).toMatchObject({ name: "a" });
+
+      controller.abort();
+      await expect(first).resolves.toBe(false);
+      expect(currentUploadQuestion()?.question).toMatchObject({ name: "b" });
+      currentUploadQuestion()!.answer(true);
+      await expect(second).resolves.toBe(true);
+    });
+
+    it("takes a waiting question out of the line, leaving the one showing", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const showing = askUploadQuestion(large("a"));
+      const waiting = askUploadQuestion(large("b"), { signal: controller.signal });
+
+      controller.abort();
+      await expect(waiting).resolves.toBe(false);
+      expect(currentUploadQuestion()?.question).toMatchObject({ name: "a" });
+      currentUploadQuestion()!.answer(true);
+      await expect(showing).resolves.toBe(true);
+      expect(currentUploadQuestion()).toBeNull();
+    });
+
+    it("never asks once the signal has aborted", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      controller.abort();
+      await expect(askUploadQuestion(large("a"), { signal: controller.signal })).resolves.toBe(
+        false
+      );
+      expect(currentUploadQuestion()).toBeNull();
+    });
+
+    it("keeps the first answer when the signal aborts after it", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const asked = askUploadQuestion(large("a"), { signal: controller.signal });
+      currentUploadQuestion()!.answer(true);
+      controller.abort();
+      await expect(asked).resolves.toBe(true);
+    });
+  });
 });
 
 describe("Ctrl+V image interception", () => {

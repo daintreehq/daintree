@@ -40,11 +40,18 @@ function emit(): void {
 
 /**
  * Ask, and resolve with the answer. With no host mounted there is nobody to
- * ask, so the answer is no: an upload never proceeds unconfirmed.
+ * ask, so the answer is no: an upload never proceeds unconfirmed. `signal`
+ * withdraws the question, shown or still waiting, and answers no: the upload
+ * it was for was cancelled from its chip.
  */
-export function askUploadQuestion(question: UploadQuestion): Promise<boolean> {
-  if (hosts.length === 0) return Promise.resolve(false);
+export function askUploadQuestion(
+  question: UploadQuestion,
+  options: { signal?: AbortSignal } = {}
+): Promise<boolean> {
+  const { signal } = options;
+  if (hosts.length === 0 || signal?.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
+    const withdraw = () => entry.answer(false);
     const entry: QueuedQuestion = {
       id: nextId++,
       question,
@@ -52,10 +59,12 @@ export function askUploadQuestion(question: UploadQuestion): Promise<boolean> {
         const before = queue.length;
         queue = queue.filter((candidate) => candidate !== entry);
         if (queue.length === before) return;
+        signal?.removeEventListener("abort", withdraw);
         emit();
         resolve(yes && canProceed(question));
       },
     };
+    signal?.addEventListener("abort", withdraw, { once: true });
     queue = [...queue, entry];
     emit();
   });
