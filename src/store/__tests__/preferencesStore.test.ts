@@ -116,16 +116,35 @@ describe("preferencesStore migration", () => {
     expect(store.getState().lastSelectedIssueWorktreeAgentIdByProject).toEqual({ "proj-1": null });
   });
 
-  it("keeps the issue and bare memories apart when either is written (#16283)", async () => {
+  it("replaces a malformed issue memory with an empty one on hydration", async () => {
     setStoredState(
       {
-        lastSelectedIssueWorktreeAgentIdByProject: { "proj-1": "claude", bad: 42 },
+        lastSelectedIssueWorktreeRecipeIdByProject: "r1",
+        lastSelectedIssueWorktreeAgentIdByProject: ["claude"],
       },
       21
     );
     const store = await loadStore();
+    expect(store.getState().lastSelectedIssueWorktreeRecipeIdByProject).toEqual({});
+    expect(store.getState().lastSelectedIssueWorktreeAgentIdByProject).toEqual({});
+  });
+
+  it("keeps the issue and bare memories apart when either is written (#16283)", async () => {
+    setStoredState(
+      {
+        lastSelectedIssueWorktreeRecipeIdByProject: { "proj-1": "r1", "proj-2": "r2", bad: 42 },
+        lastSelectedIssueWorktreeAgentIdByProject: { "proj-1": "claude", "proj-2": null, bad: 42 },
+      },
+      21
+    );
+    const store = await loadStore();
+    expect(store.getState().lastSelectedIssueWorktreeRecipeIdByProject).toEqual({
+      "proj-1": "r1",
+      "proj-2": "r2",
+    });
     expect(store.getState().lastSelectedIssueWorktreeAgentIdByProject).toEqual({
       "proj-1": "claude",
+      "proj-2": null,
     });
 
     store.getState().setLastSelectedIssueWorktreeRecipeIdByProject("proj-1", "issue-recipe");
@@ -134,8 +153,14 @@ describe("preferencesStore migration", () => {
     store.getState().setLastSelectedWorktreeAgentIdByProject("proj-1", "claude");
 
     const state = store.getState();
-    expect(state.lastSelectedIssueWorktreeRecipeIdByProject).toEqual({ "proj-1": "issue-recipe" });
-    expect(state.lastSelectedIssueWorktreeAgentIdByProject).toEqual({ "proj-1": null });
+    expect(state.lastSelectedIssueWorktreeRecipeIdByProject).toEqual({
+      "proj-1": "issue-recipe",
+      "proj-2": "r2",
+    });
+    expect(state.lastSelectedIssueWorktreeAgentIdByProject).toEqual({
+      "proj-1": null,
+      "proj-2": null,
+    });
     expect(state.lastSelectedWorktreeRecipeIdByProject).toEqual({ "proj-1": null });
     expect(state.lastSelectedWorktreeAgentIdByProject).toEqual({ "proj-1": "claude" });
   });

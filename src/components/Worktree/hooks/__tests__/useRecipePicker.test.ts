@@ -142,6 +142,10 @@ describe("useRecipePicker", () => {
       },
     });
     expect(result.current.selectedRecipeId).toBe("issue-recipe");
+    act(() => {
+      result.current.recipeSelectionTouchedRef.current = true;
+      result.current.setSelectedRecipeId(CLONE_LAYOUT_ID);
+    });
 
     rerender({
       ...defaultArgs,

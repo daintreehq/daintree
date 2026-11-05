@@ -2901,8 +2901,27 @@ describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
     );
   });
 
+  it("seeds each opening from its own memory when the setups are swapped", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": null, other: "claude" };
+    firstAgentFixtures.lastRecipeByProject = { "test-project": "global-work", other: null };
+    firstAgentFixtures.lastIssueAgentByProject = { "test-project": "claude", other: null };
+    firstAgentFixtures.lastIssueRecipeByProject = { "test-project": null, other: "global-work" };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
+    expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBe("global-work");
+    cleanup();
+
+    renderDialog({ initialIssue: ISSUE });
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+    expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBeNull();
+  });
+
   it("saves an issue create's picks to the issue memory only", async () => {
     recipeFixtures.recipes = [WORK];
+    firstAgentFixtures.lastIssueRecipeByProject = { "test-project": "older-recipe" };
     renderDialog({ initialIssue: ISSUE });
     await advanceTimersGradually(500);
 
@@ -2948,6 +2967,35 @@ describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
 
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
     expect(recipePickerCalls.last?.lastSelectedWorktreeRecipeId).toBe("global-work");
+  });
+
+  it("restores a Retry's agent over an issue create's remembered No agent", async () => {
+    renderDialog({ initialIssue: ISSUE, initialAgentId: "claude", initialPrompt: "" });
+    await advanceTimersGradually(500);
+
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+  });
+
+  it("remembers nothing in either memory when an issue create is discarded", async () => {
+    const onClose = vi.fn();
+    renderDialog({ initialIssue: ISSUE, onClose });
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockSetLastIssueAgent).not.toHaveBeenCalled();
+    expect(mockSetLastIssueRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
   });
 
   it("keeps a Retry's agent over an issue create's remembered agent", async () => {
