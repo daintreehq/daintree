@@ -75,6 +75,7 @@ function countingFs(): { fs: LocalFolderWalkFs; lstats: () => number } {
         lstats += 1;
         return fs.lstat(target);
       },
+      readlink: (target) => fs.readlink(target),
       access: (target, mode) => fs.access(target, mode),
     },
     lstats: () => lstats,
@@ -106,14 +107,18 @@ describe("walking a dropped folder", () => {
     ]);
     expect(summary.largest[0]).toMatchObject({ kind: "folder", fileCount: 2, folderCount: 2 });
 
-    const paths = snapshot.entries.map((entry) => entry.path);
-    expect(paths[0]).toBe("Project/");
-    expect(paths).toContain("Project/empty/");
-    expect(paths).toContain("Project/deep/er/est/");
-    for (const [index, entryPath] of paths.entries()) {
-      const parent = entryPath.replace(/[^/]+\/?$/, "");
-      if (parent) expect(paths.indexOf(parent)).toBeLessThan(index);
-    }
+    expect(snapshot.entries.map((entry) => entry.path)).toEqual([
+      "Project/",
+      "Project/README.md",
+      "Project/deep/",
+      "Project/deep/er/",
+      "Project/deep/er/est/",
+      "Project/empty/",
+      "Project/src/",
+      "Project/src/app.ts",
+      "Project/src/lib/",
+      "Project/src/lib/util.ts",
+    ]);
     const app = snapshot.entries.find((entry) => entry.path === "Project/src/app.ts")!;
     expect(app).toMatchObject({ kind: "file", size: 100, executable: posix });
     const stat = await fs.lstat(path.join(root, "src/app.ts"));
@@ -244,7 +249,12 @@ describe("walking a dropped folder", () => {
     expect(summary.totals.fileCount).toBe(FILE_LIMIT + 1);
     // Root, its three folders, then files: far fewer than the 600 there are.
     expect(counting.lstats()).toBeLessThan(FILE_LIMIT * 3);
-    expect(problem.kind === "limit" && problem.paths).toEqual(["Root/a/"]);
+    // Only the folder walked first holds any files yet; which one that is is
+    // up to the disk's listing order.
+    expect(problem.kind === "limit" && problem.paths).toHaveLength(1);
+    expect(["Root/a/", "Root/b/", "Root/c/"]).toContain(
+      problem.kind === "limit" && problem.paths[0]
+    );
   });
 
   it("refuses a folder past the size limit without reading the files", async () => {
@@ -391,6 +401,28 @@ describe("walking a dropped folder", () => {
 
     await expect(walk("/x/Root", { fs: swapped })).rejects.toMatchObject({ reason: "changed" });
   });
+
+  it("reports nothing read from a folder swapped while it was listed, refused or not", async () => {
+    const tree: Record<string, FakeNode> = {
+      "/x/Root": { listed: "dir" },
+      "/x/Root/a": { listed: "dir" },
+    };
+    for (let i = 0; i <= FILE_LIMIT; i++) tree[`/x/Root/a/secret-${i}`] = { listed: "file" };
+    const base = fakeFs(tree);
+    let seen = 0;
+    const swapped: LocalFolderWalkFs = {
+      ...base,
+      lstat: async (target) => {
+        const stat = await base.lstat(target);
+        if (target !== "/x/Root/a") return stat;
+        seen += 1;
+        // Found and checked before listing as itself, then gone by the end.
+        return seen <= 2 ? stat : ({ ...stat, ino: stat.ino + 1000 } as Stats);
+      },
+    };
+
+    await expect(walk("/x/Root", { fs: swapped })).rejects.toMatchObject({ reason: "changed" });
+  });
 });
 
 describe("walking on Windows", () => {
@@ -417,6 +449,24 @@ describe("walking on Windows", () => {
     expect(summary.totals).toEqual({ fileCount: 1, folderCount: 0, totalBytes: 4 });
     // Windows has no executable bit to carry, whatever stat's mode says.
     expect(snapshot.entries.find((entry) => entry.path === "Proj/app.exe")?.executable).toBe(false);
+    // lstat would follow a reparse point it can't read as a link.
+    expect(walkFs.lstated.filter((target) => target !== "C:/Users/me/Proj/app.exe")).toEqual([
+      "C:/Users/me/Proj",
+      "C:/Users/me/Proj",
+    ]);
+  });
+
+  it("never follows a dropped folder that is itself a reparse point", async () => {
+    const walkFs = fakeFs({
+      "C:/Users/me": { listed: "dir" },
+      "C:/Users/me/Synced": { listed: "link", actual: "dir" },
+      "C:/Users/me/Synced/file.txt": { listed: "file", size: 1 },
+    });
+
+    await expect(
+      walk("C:/Users/me/Synced", { fs: walkFs, platform: "win32" })
+    ).rejects.toMatchObject({ reason: "link" });
+    expect(walkFs.lstated).toEqual([]);
   });
 });
 
@@ -429,8 +479,12 @@ interface FakeNode {
   mode?: number;
 }
 
-/** A filesystem of `tree` (absolute POSIX-style paths), as a listing and lstat would report it. */
-function fakeFs(tree: Record<string, FakeNode>): LocalFolderWalkFs {
+/**
+ * A filesystem of `tree` (absolute POSIX-style paths), as a listing, lstat and
+ * readlink would report it, noting every path lstat was asked about.
+ */
+function fakeFs(tree: Record<string, FakeNode>): LocalFolderWalkFs & { lstated: string[] } {
+  const lstated: string[] = [];
   const inodes = new Map(Object.keys(tree).map((key, index) => [key, index + 1]));
   const children = new Map<string, string[]>();
   for (const key of Object.keys(tree)) {
@@ -471,8 +525,15 @@ function fakeFs(tree: Record<string, FakeNode>): LocalFolderWalkFs {
         close: async () => {},
       };
     },
+    lstated,
+    async readlink(target) {
+      const found = node(target);
+      if (found.listed === "link" && (found.actual ?? "link") === "link") return "C:/elsewhere";
+      throw Object.assign(new Error("EINVAL"), { code: "EINVAL" });
+    },
     async lstat(target) {
       const key = target.split(path.sep).join("/");
+      lstated.push(key);
       const found = node(key);
       const kind = found.actual ?? found.listed;
       return {

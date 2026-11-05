@@ -105,7 +105,7 @@ describe("summarizing a dropped folder", () => {
       client.summarizeLocalFolder(7, { localPath: file, opId: "op-file" })
     ).rejects.toMatchObject({
       code: "NOT_A_DIRECTORY",
-      userMessage: "notes.txt isn't a folder on This Mac.",
+      userMessage: "That isn't a folder on This Mac.",
     });
   });
 
@@ -196,6 +196,7 @@ describe("summarizing a dropped folder", () => {
           return fs.opendir(folder, options);
         },
         lstat: (target) => fs.lstat(target),
+        readlink: (target) => fs.readlink(target),
         access: (target, mode) => fs.access(target, mode),
       };
       return { walkFs, open, startedWalk };
@@ -213,6 +214,30 @@ describe("summarizing a dropped folder", () => {
 
       await expect(walking).rejects.toMatchObject({ code: "CANCELLED" });
       held.open();
+    });
+
+    it("keeps a cancelled walk's slot until the walk itself stops", async () => {
+      const held = heldWalk();
+      const { client } = setup({ walkFs: held.walkFs });
+      const folder = await droppedFolder(client);
+
+      const first = client.summarizeLocalFolder(7, { localPath: folder, opId: "op-1" });
+      await held.startedWalk;
+      const second = client.summarizeLocalFolder(7, { localPath: folder, opId: "op-2" });
+      client.cancel("op-1", 7);
+      client.cancel("op-2", 7);
+      await expect(first).rejects.toMatchObject({ code: "CANCELLED" });
+      await expect(second).rejects.toMatchObject({ code: "CANCELLED" });
+
+      // Both walks are still waiting on the disk, so a third is turned away.
+      await expect(
+        client.summarizeLocalFolder(7, { localPath: folder, opId: "op-3" })
+      ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+      held.open();
+      await vi.waitFor(async () => {
+        const result = await client.summarizeLocalFolder(7, { localPath: folder, opId: "op-4" });
+        expect(result.status).toBe("ready");
+      });
     });
 
     it("starts cancelled when the cancel overtook the walk", async () => {

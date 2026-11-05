@@ -70,6 +70,7 @@ export interface LocalFolderWalkFs {
     options: { bufferSize: number }
   ): Promise<AsyncIterable<Dirent> & { close(): Promise<void> }>;
   lstat(target: string): Promise<Stats>;
+  readlink(target: string): Promise<string>;
   access(target: string, mode: number): Promise<void>;
 }
 
@@ -100,6 +101,7 @@ const CLASSIFY_BATCH = 16;
 const nodeWalkFs: LocalFolderWalkFs = {
   opendir: (folder, options) => fs.opendir(folder, options),
   lstat: (target) => fs.lstat(target),
+  readlink: (target) => fs.readlink(target),
   access: (target, mode) => fs.access(target, mode),
 };
 
@@ -126,11 +128,12 @@ function isSpecialDirent(dirent: Dirent): boolean {
 
 /**
  * What one listed item is, without following it. Windows lists every reparse
- * point as a link, while lstat calls only symlinks, junctions, WSL links and
- * app execution aliases links and reports any other reparse point (a WSL
- * socket, say) as a plain file or folder: the listing says which those are.
- * Node can't tell a junction from a directory symlink, so both are `symlink`.
- * A folder counts only once it opens, so one that can't be listed is left out
+ * point as a link, and lstat follows any it can't read as one (a WSL socket, a
+ * placeholder some filter owns) to whatever it presents, so a listed reparse
+ * point is never stat'ed: readlink, which never follows, reads symlinks,
+ * junctions, WSL links and app execution aliases and refuses the rest. Node
+ * can't tell a junction from a directory symlink, so both are `symlink`. A
+ * folder counts only once it opens, so one that can't be listed is left out
  * rather than sent empty.
  */
 async function classify(
@@ -139,8 +142,11 @@ async function classify(
   local: string,
   dirent: Dirent
 ): Promise<Classified> {
-  const windows = platform === "win32";
-  if (!windows && dirent.isSymbolicLink()) return { kind: "skip", reason: "symlink" };
+  if (dirent.isSymbolicLink()) {
+    if (platform !== "win32") return { kind: "skip", reason: "symlink" };
+    const target = await walkFs.readlink(local).catch(() => null);
+    return { kind: "skip", reason: target === null ? "reparse-point" : "symlink" };
+  }
   if (isSpecialDirent(dirent)) return { kind: "skip", reason: "special-file" };
   let stat: Stats;
   try {
@@ -149,7 +155,6 @@ async function classify(
     return { kind: "skip", reason: "unreadable" };
   }
   if (stat.isSymbolicLink()) return { kind: "skip", reason: "symlink" };
-  if (windows && dirent.isSymbolicLink()) return { kind: "skip", reason: "reparse-point" };
   if (stat.isDirectory()) {
     try {
       const probe = await walkFs.opendir(local, { bufferSize: 1 });
@@ -194,6 +199,37 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 /**
+ * Whether the dropped folder is itself a Windows reparse point. Only its
+ * parent's listing can say: lstat would follow one it can't read as a link.
+ * A parent that can't be listed leaves it to lstat, which still catches
+ * symlinks and junctions.
+ */
+async function isListedAsReparsePoint(
+  walkFs: LocalFolderWalkFs,
+  localPath: string,
+  signal: AbortSignal
+): Promise<boolean> {
+  const parent = path.dirname(localPath);
+  if (parent === localPath) return false;
+  const name = path.basename(localPath).toLowerCase();
+  let dir: Awaited<ReturnType<LocalFolderWalkFs["opendir"]>>;
+  try {
+    dir = await walkFs.opendir(parent, { bufferSize: DIRECTORY_BUFFER });
+  } catch {
+    return false;
+  }
+  try {
+    for await (const dirent of dir) {
+      throwIfAborted(signal);
+      if (dirent.name.toLowerCase() === name) return dirent.isSymbolicLink();
+    }
+  } catch (error) {
+    if (error instanceof LocalFolderWalkError) throw error;
+  }
+  return false;
+}
+
+/**
  * Summarizes the folder at `localPath`, stopping at the first thing that
  * proves it can't be sent: a limit crossed, a clash, a name the host can't
  * keep. Breadth first, so a refusal's largest contributors are spread across
@@ -209,14 +245,17 @@ export async function walkLocalFolder(
   const rootName = path.basename(localPath);
 
   throwIfAborted(signal);
+  // The dropped item itself is never followed either: a link to a folder is
+  // not the folder.
+  if (platform === "win32" && (await isListedAsReparsePoint(walkFs, localPath, signal))) {
+    throw new LocalFolderWalkError("link");
+  }
   let rootStat: Stats;
   try {
     rootStat = await walkFs.lstat(localPath);
   } catch {
     throw new LocalFolderWalkError("unreadable");
   }
-  // The dropped item itself is never followed either: a link to a folder is
-  // not the folder.
   if (rootStat.isSymbolicLink()) throw new LocalFolderWalkError("link");
   if (!rootStat.isDirectory()) throw new LocalFolderWalkError("not-a-folder");
 
@@ -312,9 +351,18 @@ export async function walkLocalFolder(
   const queue: PendingFolder[] = [
     { local: localPath, archive: rootArchive, stat: rootStat, top: null, hidden: false },
   ];
+  // A folder swapped for another (or for a link) since it was found: listing
+  // it would read what the drop never named. Checked before it is listed and
+  // again before anything read from it is reported, ready or refused.
+  const verify = async (folder: PendingFolder): Promise<void> => {
+    const now = await walkFs.lstat(folder.local).catch(() => null);
+    if (!now || !sameEntry(folder.stat, now)) throw new LocalFolderWalkError("changed");
+  };
+
   for (let next = 0; next < queue.length; next++) {
     const folder = queue[next]!;
     throwIfAborted(signal);
+    if (folder.top !== null) await verify(folder);
     let dir: Awaited<ReturnType<LocalFolderWalkFs["opendir"]>>;
     try {
       dir = await walkFs.opendir(folder.local, { bufferSize: DIRECTORY_BUFFER });
@@ -378,23 +426,21 @@ export async function walkLocalFolder(
       }
       return null;
     };
+    let problem: LocalFolderProblem | null = null;
     try {
       for await (const dirent of dir) {
         batch.push(dirent);
         if (batch.length < CLASSIFY_BATCH) continue;
-        const problem = await flush();
-        if (problem) return refuse(problem);
+        problem = await flush();
+        if (problem) break;
       }
-      const problem = await flush();
-      if (problem) return refuse(problem);
+      problem ??= await flush();
     } catch (error) {
       if (error instanceof LocalFolderWalkError) throw error;
       throw new LocalFolderWalkError("changed");
     }
-    // A folder swapped for another (or for a link) while it was listed: what
-    // was listed may not be what the drop named.
-    const after = await walkFs.lstat(folder.local).catch(() => null);
-    if (!after || !sameEntry(folder.stat, after)) throw new LocalFolderWalkError("changed");
+    await verify(folder);
+    if (problem) return refuse(problem);
   }
 
   entries.sort((a, b) => comparePaths(a.path, b.path));

@@ -357,6 +357,8 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     string,
     { webContentsId: number; localPath: string; expiresAt: number; snapshot: FolderSnapshot }
   >();
+  /** One per folder walk still running, cancelled or not. */
+  const walkingViews = new Set<{ webContentsId: number }>();
   /** Per view holding grants, handles or walks: stops watching for its end. */
   const viewWatchers = new Map<number, () => void>();
 
@@ -706,7 +708,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       if (!isOperationId(opId)) throw invalid("Invalid operation id");
       // Only the folder itself, as the person dropped it: a path inside it is
       // never granted, so it can't be summarized or sent on its own.
-      if (!isGranted(webContentsId, localPath)) throw notGranted(localPath);
+      if (!isGranted(webContentsId, localPath)) throw folderNotGranted();
       const existing = walks.get(opId);
       if (existing) {
         if (existing.webContentsId !== webContentsId || existing.localPath !== localPath) {
@@ -715,35 +717,43 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
         return existing.promise;
       }
       if (running.has(opId)) throw invalid("That operation id belongs to an upload");
-      const name = localBaseName(localPath);
-      const forView = [...walks.values()].filter((walk) => walk.webContentsId === webContentsId);
-      if (forView.length >= MAX_WALKS_PER_VIEW || walks.size >= MAX_WALKS) {
+      let viewWalks = 0;
+      for (const walking of walkingViews) if (walking.webContentsId === webContentsId) viewWalks++;
+      if (viewWalks >= MAX_WALKS_PER_VIEW || walkingViews.size >= MAX_WALKS) {
         throw new AppError({
           code: "RATE_LIMITED",
           message: "Too many folder walks at once",
-          userMessage: `Couldn't look through ${name} yet: other folders are still being read. Try again in a moment.`,
+          userMessage: "Other folders are still being read. Try again in a moment.",
         });
       }
       const controller = new AbortController();
       if (takeEarlyCancel(opId, webContentsId)) controller.abort();
       watchViewState(webContentsId);
+      // Held until the walk itself settles, not its answer: a cancelled walk
+      // stuck on a slow disk still counts, so start and cancel can't pile up
+      // filesystem work past the caps.
+      const slot = { webContentsId };
+      walkingViews.add(slot);
       const promise = (async (): Promise<LocalFolderSummaryResult> => {
         const walk = walkLocalFolder(localPath, { ...deps.walkOptions, signal: controller.signal });
+        walk.then(
+          () => walkingViews.delete(slot),
+          () => walkingViews.delete(slot)
+        );
         // A cancel answers at once, rather than when the walk next looks up
         // from a slow disk; the walk itself stops there.
-        walk.catch(() => {});
         let walked: Awaited<typeof walk>;
         try {
           walked = await Promise.race([walk, abortion(controller.signal)]);
         } catch (error) {
-          throw walkFailure(error, name, deps.localLabel);
+          throw walkFailure(error, deps.localLabel);
         }
         if (controller.signal.aborted) throw walkCancelled();
         if (walked.status === "refused") {
           return { status: "refused", summary: walked.summary, problem: walked.problem };
         }
         const expiresAt = grantExpiry(webContentsId, localPath);
-        if (expiresAt === null) throw notGranted(localPath);
+        if (expiresAt === null) throw folderNotGranted();
         const handle = issueFolderHandle(webContentsId, localPath, expiresAt, walked.snapshot);
         return { status: "ready", summary: walked.summary, handle };
       })().finally(() => {
@@ -797,7 +807,19 @@ function folderHandleGone(): AppError {
   });
 }
 
-function walkFailure(error: unknown, name: string, localLabel: string): AppError {
+function folderNotGranted(): AppError {
+  return new AppError({
+    code: "PERMISSION",
+    message: "The local folder was not chosen in this window",
+    userMessage: "That folder wasn't dropped or pasted in this window.",
+  });
+}
+
+/*
+ * Folder errors never name the folder: a packaged build logs every IPC error
+ * whole, and the renderer already knows which folder it asked about.
+ */
+function walkFailure(error: unknown, localLabel: string): AppError {
   if (error instanceof AppError) return error;
   const reason = error instanceof LocalFolderWalkError ? error.reason : "unreadable";
   switch (reason) {
@@ -807,25 +829,26 @@ function walkFailure(error: unknown, name: string, localLabel: string): AppError
       return new AppError({
         code: "NOT_A_DIRECTORY",
         message: "The local path is not a folder",
-        userMessage: `${name} isn't a folder on ${localLabel}.`,
+        userMessage: `That isn't a folder on ${localLabel}.`,
       });
     case "link":
       return new AppError({
         code: "NOT_A_DIRECTORY",
         message: "The local folder is a link",
-        userMessage: `${name} is a link, and links aren't followed. Drop the folder it points to instead.`,
+        userMessage:
+          "That's a link, and links aren't followed. Drop the folder it points to instead.",
       });
     case "changed":
       return new AppError({
         code: "INVALID_PATH",
         message: "The local folder changed while it was read",
-        userMessage: `${name} changed while it was being read on ${localLabel}. Try again.`,
+        userMessage: `The folder changed while it was being read on ${localLabel}. Try again.`,
       });
     case "unreadable":
       return new AppError({
         code: "INVALID_PATH",
         message: "The local folder could not be read",
-        userMessage: `Couldn't read ${name} on ${localLabel}.`,
+        userMessage: `Couldn't read the folder on ${localLabel}.`,
       });
   }
 }
