@@ -5,37 +5,16 @@ import { dirname } from "node:path";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { getCrashRecoveryService } from "../../services/CrashRecoveryService.js";
-import { getDevServerUrl } from "../../../shared/config/devServer.js";
-import { isMainAppRoute, isRecoveryPageUrl } from "../../../shared/utils/trustedRenderer.js";
+import { getAppEntryUrl } from "../../window/appEntryUrl.js";
+import { isRecoveryPageUrl } from "../../../shared/utils/trustedRenderer.js";
 // Lazy-imported below (recovery export is only triggered from recovery.html
 // by user action — keeps DiagnosticsCollector and its archiver/v8 deps out
 // of the eager-import graph).
 import { getLogFilePath } from "../../utils/logger.js";
 import { typedHandleWithContext } from "../utils.js";
 
-function getAppUrl(): string {
-  if (process.env.NODE_ENV === "development") {
-    return getDevServerUrl();
-  }
-  return "app://daintree/index.html";
-}
-
-// recovery.html replaces the crashed document in the view's own webContents,
-// so the app entry before it is what that view was showing. Only the window's
-// startup view carries its project in the URL (`?projectId=`); views from
-// ProjectViewFactory load the static entry and keep their project in
-// additionalArguments, which survive navigation, so the default URL restores
-// them too.
 function loadAppInView(sender: WebContents, label: string): void {
-  let url = getAppUrl();
-  const history = sender.navigationHistory;
-  for (let i = history.getActiveIndex(); i >= 0; i--) {
-    const entryUrl = history.getEntryAtIndex(i).url;
-    if (isMainAppRoute(entryUrl)) {
-      url = entryUrl;
-      break;
-    }
-  }
+  const url = getAppEntryUrl(sender);
   sender.loadURL(url).catch((err: unknown) => {
     console.error(`[MAIN] Recovery: ${label} failed to load ${url}:`, err);
   });

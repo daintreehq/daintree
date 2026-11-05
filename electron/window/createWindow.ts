@@ -61,6 +61,7 @@ import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import { isE2EDeferRendererLoad, isE2EMode } from "../setup/runtimeFlags.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 import { attachAppViewRendererGoneHandler } from "./appViewRendererGone.js";
+import { getDefaultAppEntryUrl, recordAppEntryUrl } from "./appEntryUrl.js";
 import type { PrepareWindowRecreation } from "./windowRecreation.js";
 
 /**
@@ -462,15 +463,16 @@ export function setupBrowserWindow(
     });
 
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    const entryUrl = `${getDefaultAppEntryUrl()}${qs}`;
+    // The recovery page's reload restores this, query and all (#16258).
+    recordAppEntryUrl(appWebContents, entryUrl);
     console.log(`[MAIN] Loading renderer (${reason})...`);
     if (process.env.NODE_ENV === "development") {
-      const devServerUrl = getDevServerUrl();
-      console.log(`[MAIN] Loading Vite dev server at ${devServerUrl}${qs}`);
-      appWebContents.loadURL(`${devServerUrl}${qs}`);
+      console.log(`[MAIN] Loading Vite dev server at ${entryUrl}`);
     } else {
       console.log("[MAIN] Loading production build via app:// protocol");
-      appWebContents.loadURL(`app://daintree/index.html${qs}`);
     }
+    appWebContents.loadURL(entryUrl);
   };
 
   // Window open handler — on the app view's webContents
