@@ -446,9 +446,7 @@ describe("registerCrashRecoveryHandlers", () => {
           focusMode: true,
           mruList: ["wt-a"],
           terminals: [{ id: "a1" }, { id: "a2" }, { id: "late" }],
-          tabGroups: [
-            { id: "g1", location: "grid", activeTabId: "a2", panelIds: ["a1", "a2"] },
-          ],
+          tabGroups: [{ id: "g1", location: "grid", activeTabId: "a2", panelIds: ["a1", "a2"] }],
           terminalSizes: { a1: { cols: 80, rows: 24 }, late: { cols: 100, rows: 30 } },
           draftInputs: { a2: "draft", late: "draft" },
         };
