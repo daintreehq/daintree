@@ -1,3 +1,5 @@
+import { isWindows } from "@/lib/platform";
+
 /**
  * How much room the platform's scrollbar actually takes, measured rather than
  * assumed.
@@ -28,7 +30,7 @@ export const SCROLLBAR_GUTTER_VAR = "--app-scrollbar-gutter";
  * measure the wider bar and over-subtract. It needs a real size and no border
  * or padding of its own for `offsetWidth - clientWidth` to be the gutter alone.
  */
-const PROBE_STYLE = [
+const PROBE_STYLE_BASE = [
   "position:absolute",
   "top:-9999px",
   "left:-9999px",
@@ -38,10 +40,30 @@ const PROBE_STYLE = [
   "border:0",
   "overflow:scroll",
   "scrollbar-gutter:stable",
-  "scrollbar-width:thin",
   "visibility:hidden",
   "pointer-events:none",
-].join(";");
+];
+
+/** The root class that scopes the standard scrollbar properties off Windows. */
+export const WINDOWS_SCROLLBAR_CLASS = "platform-win32";
+
+/**
+ * Mark the document for Windows scrollbar styling. Chromium ignores every
+ * `::-webkit-scrollbar` rule on an element with `scrollbar-width` or
+ * `scrollbar-color` set, so the global `thin` rule left Windows with its
+ * default classic bar, arrow buttons and all, instead of the designed one.
+ * Windows has no overlay scrollbars for the standard properties to defer to,
+ * so `base.css` keeps them off there and the webkit styling applies.
+ */
+export function markScrollbarPlatform(root: HTMLElement): void {
+  root.classList.toggle(WINDOWS_SCROLLBAR_CLASS, isWindows());
+}
+
+function probeStyle(): string {
+  // Off Windows the probe matches the `thin` every element inherits; on Windows
+  // it gets the same webkit bar every element gets.
+  return (isWindows() ? PROBE_STYLE_BASE : [...PROBE_STYLE_BASE, "scrollbar-width:thin"]).join(";");
+}
 
 /**
  * The width of one reserved gutter, in CSS px. 0 under overlay scrollbars.
@@ -63,7 +85,7 @@ export function measureScrollbarGutter(): number {
   // `scrollbar-gutter` drops it when re-serialising `cssText`, and the probe's
   // configuration would then be unassertable in a test. It changes nothing in
   // an engine that supports the property.
-  probe.setAttribute("style", PROBE_STYLE);
+  probe.setAttribute("style", probeStyle());
 
   document.body.appendChild(probe);
   try {

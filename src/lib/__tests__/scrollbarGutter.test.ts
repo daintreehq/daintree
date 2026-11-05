@@ -204,3 +204,45 @@ describe("watchScrollbarGutter", () => {
     expect(document.documentElement.style.getPropertyValue(SCROLLBAR_GUTTER_VAR)).toBe("0px");
   });
 });
+
+describe("on Windows", () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+
+  function setPlatform(value: string) {
+    Object.defineProperty(window.navigator, "platform", { configurable: true, value });
+  }
+
+  afterEach(() => {
+    if (platformDescriptor) {
+      Object.defineProperty(window.navigator, "platform", platformDescriptor);
+    } else {
+      delete (window.navigator as { platform?: string }).platform;
+    }
+    document.documentElement.classList.remove("platform-win32");
+  });
+
+  it("measures the webkit bar every element gets there, not the standard thin one", async () => {
+    setPlatform("Win32");
+    const { measureScrollbarGutter: measure } = await import("../scrollbarGutter");
+    let style = "";
+    stubProbeBox((probe) => {
+      style = probe.getAttribute("style") ?? "";
+      return { offsetWidth: 100, clientWidth: 94 };
+    });
+
+    expect(measure()).toBe(6);
+    expect(style).toMatch(/overflow:\s*scroll/);
+    expect(style).not.toMatch(/scrollbar-width/);
+  });
+
+  it("marks the root so the standard scrollbar properties stay off", async () => {
+    const { markScrollbarPlatform } = await import("../scrollbarGutter");
+    setPlatform("Win32");
+    markScrollbarPlatform(document.documentElement);
+    expect(document.documentElement.classList.contains("platform-win32")).toBe(true);
+
+    setPlatform("MacIntel");
+    markScrollbarPlatform(document.documentElement);
+    expect(document.documentElement.classList.contains("platform-win32")).toBe(false);
+  });
+});

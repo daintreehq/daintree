@@ -20,7 +20,11 @@ import { createRoot } from "react-dom/client";
 import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
-import { publishScrollbarGutter, watchScrollbarGutter } from "./lib/scrollbarGutter";
+import {
+  markScrollbarPlatform,
+  publishScrollbarGutter,
+  watchScrollbarGutter,
+} from "./lib/scrollbarGutter";
 import { ensureLatin400Preload } from "./lib/fontPreload";
 // Importing this module has the side effect of starting the font load (via
 // the eagerly-initialised `terminalFontReady` singleton). Terminals open
@@ -70,6 +74,7 @@ async function bootstrap() {
   installPluginDocumentRuntime();
 
   applyDefaultAppTheme(document.documentElement);
+  markScrollbarPlatform(document.documentElement);
 
   // Publish the platform's reserved scrollbar gutter before the first render,
   // so dialogs paint on the right column from their first frame rather than
