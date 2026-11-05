@@ -657,9 +657,13 @@ export class CrashRecoveryService {
    * included. Their state files outlive the crash, so a fresh start has to
    * clear them or the panels the dialog listed hydrate straight back. Empty
    * for a legacy snapshot, whose only panel list is the global one.
+   *
+   * Read from the cached pre-crash snapshot only: without one, the disk
+   * fallback is this session's own backup, naming workspaces the dialog never
+   * listed.
    */
   getSnapshotWorkspaceIds(): string[] {
-    const layouts = this.resolveRestoreSnapshot()?.projectLayouts;
+    const layouts = this.cachedBackupSnapshot?.projectLayouts;
     if (!isPlainObject(layouts)) return [];
     return Object.keys(layouts).filter(
       (id) => Array.isArray(layouts[id]) && isValidWorkspaceStateId(id)

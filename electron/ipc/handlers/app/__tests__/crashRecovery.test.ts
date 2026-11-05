@@ -83,6 +83,7 @@ describe("registerCrashRecoveryHandlers", () => {
     projectStoreMock.enqueueProjectStateUpdate.mockImplementation(async () => {});
     crashServiceMock.setPanelFilter.mockClear();
     crashServiceMock.resetToFresh.mockReturnValue(true);
+    crashServiceMock.clearPendingCrash.mockImplementation(() => {});
     crashLoopGuardMock.isSafeMode.mockReturnValue(false);
     crashLoopGuardMock.getCrashCount.mockReturnValue(0);
   });
@@ -420,23 +421,40 @@ describe("registerCrashRecoveryHandlers", () => {
       });
 
       describe("per-project layouts (#16257)", () => {
-        function trackWrites(initial: Record<string, unknown>, failFor?: string) {
-          const disk = new Map<string, unknown>(Object.entries(initial));
-          let failed = false;
+        /**
+         * A stateful stand-in for the per-project store. Fixtures are cloned in,
+         * so an assertion against one can't pass because the handler mutated
+         * the very object it compares with. Each write settles a tick late, as a
+         * real save does, and the listed attempts for a workspace land and then
+         * throw: a file can be replaced before a later sync fails.
+         */
+        function trackWrites(
+          initial: Record<string, unknown>,
+          failingAttempts: Record<string, number[]> = {}
+        ) {
+          const disk = new Map<string, unknown>(Object.entries(structuredClone(initial)));
+          const events: string[] = [];
+          const attempts = new Map<string, number>();
           projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
             async (projectId: string, updater: StateUpdater) => {
               const next = updater(disk.get(projectId));
               if (next === null) return;
+              await new Promise((resolve) => setTimeout(resolve, 0));
               disk.set(projectId, next);
-              // The file can be replaced before a later sync fails, so the
-              // failing workspace needs rolling back as much as the earlier ones.
-              if (projectId === failFor && !failed) {
-                failed = true;
-                throw new Error("EIO");
-              }
+              events.push(`write:${projectId}`);
+              const attempt = (attempts.get(projectId) ?? 0) + 1;
+              attempts.set(projectId, attempt);
+              if (failingAttempts[projectId]?.includes(attempt)) throw new Error("EIO");
             }
           );
-          return disk;
+          crashServiceMock.resetToFresh.mockImplementation(() => {
+            events.push("reset");
+            return true;
+          });
+          crashServiceMock.clearPendingCrash.mockImplementation(() => {
+            events.push("clear-pending");
+          });
+          return { disk, events };
         }
 
         const projA = {
@@ -456,80 +474,133 @@ describe("registerCrashRecoveryHandlers", () => {
           terminals: [{ id: "b1" }],
           draftInputs: { b1: "keep" },
         };
+        const projC = { projectId: "projC", sidebarWidth: 280, terminals: [{ id: "c1" }] };
+        const CLEARED = { terminals: [], tabGroups: [], terminalSizes: {}, draftInputs: {} };
 
-        it("clears every panel of each workspace the snapshot captured", async () => {
-          crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA"]);
-          const disk = trackWrites({ projA, projB });
+        function resolveFresh() {
+          return Promise.resolve().then(() =>
+            getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, { kind: "fresh" })
+          );
+        }
+
+        it("clears every panel of each captured workspace before resetting", async () => {
+          crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA", "projC"]);
+          const { disk, events } = trackWrites({ projA, projB, projC });
           registerCrashRecoveryHandlers();
 
-          await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, { kind: "fresh" });
+          await resolveFresh();
 
-          // `late` was opened after the last backup tick, so the snapshot never
-          // listed it; a fresh start still leaves the workspace with no panels.
+          // Only the workspace is captured, not which of its panels: `late`
+          // opened after the last backup tick and still goes.
           expect(disk.get("projA")).toEqual({
             projectId: "projA",
             sidebarWidth: 350,
             activeWorktreeId: "wt-a",
             focusMode: true,
             mruList: ["wt-a"],
-            terminals: [],
-            tabGroups: [],
-            terminalSizes: {},
-            draftInputs: {},
+            ...CLEARED,
           });
+          expect(disk.get("projC")).toEqual({ projectId: "projC", sidebarWidth: 280, ...CLEARED });
           expect(disk.get("projB")).toEqual(projB);
-          expect(crashServiceMock.resetToFresh).toHaveBeenCalledTimes(1);
-          expect(crashServiceMock.clearPendingCrash).toHaveBeenCalledTimes(1);
-          expect(
-            projectStoreMock.enqueueProjectStateUpdate.mock.invocationCallOrder[0]
-          ).toBeLessThan(crashServiceMock.resetToFresh.mock.invocationCallOrder[0]);
+          expect(events).toEqual(["write:projA", "write:projC", "reset", "clear-pending"]);
         });
 
-        it("skips a captured workspace that has no panels left to clear", async () => {
+        it.each([
+          [
+            "tab groups",
+            { tabGroups: [{ id: "g", location: "grid", activeTabId: "x", panelIds: ["x", "y"] }] },
+          ],
+          ["terminal sizes", { terminalSizes: { x: { cols: 80, rows: 24 } } }],
+          ["draft inputs", { draftInputs: { x: "draft" } }],
+        ])("clears leftover %s from a workspace with no panels", async (_label, leftover) => {
           crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA"]);
-          const empty = { projectId: "projA", sidebarWidth: 350, terminals: [] };
-          const disk = trackWrites({ projA: empty });
+          const { disk } = trackWrites({
+            projA: {
+              projectId: "projA",
+              sidebarWidth: 350,
+              activeWorktreeId: "wt-a",
+              terminals: [],
+              ...leftover,
+            },
+          });
           registerCrashRecoveryHandlers();
 
-          await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, { kind: "fresh" });
+          await resolveFresh();
 
-          expect(disk.get("projA")).toBe(empty);
-          expect(crashServiceMock.resetToFresh).toHaveBeenCalledTimes(1);
+          expect(disk.get("projA")).toEqual({
+            projectId: "projA",
+            sidebarWidth: 350,
+            activeWorktreeId: "wt-a",
+            ...CLEARED,
+          });
         });
 
-        it("rolls back and keeps the crash retryable when a workspace write fails", async () => {
+        it("writes nothing for a captured workspace with no panel state", async () => {
+          crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA", "gone"]);
+          const { events } = trackWrites({
+            projA: { projectId: "projA", sidebarWidth: 350, terminals: [] },
+          });
+          registerCrashRecoveryHandlers();
+
+          await resolveFresh();
+
+          expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledTimes(2);
+          expect(events).toEqual(["reset", "clear-pending"]);
+        });
+
+        it("rolls back every cleared workspace when a later write fails", async () => {
           crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA", "projB"]);
           vi.spyOn(console, "error").mockImplementation(() => {});
-          const disk = trackWrites({ projA, projB }, "projB");
+          const { disk, events } = trackWrites({ projA, projB }, { projB: [1] });
           registerCrashRecoveryHandlers();
 
-          await expect(
-            Promise.resolve().then(() =>
-              getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, { kind: "fresh" })
-            )
-          ).rejects.toThrow("Crash recovery fresh start failed");
+          await expect(resolveFresh()).rejects.toThrow("Crash recovery fresh start failed");
 
           expect(disk.get("projA")).toEqual(projA);
           expect(disk.get("projB")).toEqual(projB);
-          expect(crashServiceMock.resetToFresh).not.toHaveBeenCalled();
-          expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+          expect(events).not.toContain("reset");
+          expect(events).not.toContain("clear-pending");
+        });
+
+        it("keeps rolling back past a workspace whose rollback fails", async () => {
+          crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA", "projB"]);
+          vi.spyOn(console, "error").mockImplementation(() => {});
+          const { disk, events } = trackWrites({ projA, projB }, { projB: [1], projA: [2] });
+          registerCrashRecoveryHandlers();
+
+          await expect(resolveFresh()).rejects.toThrow("Crash recovery fresh start failed");
+
+          expect(events).toEqual(["write:projA", "write:projB", "write:projA", "write:projB"]);
+          expect(disk.get("projB")).toEqual(projB);
         });
 
         it("rolls back the cleared workspaces when the global reset fails", async () => {
           crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA"]);
-          crashServiceMock.resetToFresh.mockReturnValue(false);
           vi.spyOn(console, "error").mockImplementation(() => {});
-          const disk = trackWrites({ projA });
+          const { disk, events } = trackWrites({ projA });
+          crashServiceMock.resetToFresh.mockReturnValue(false);
           registerCrashRecoveryHandlers();
 
-          await expect(
-            Promise.resolve().then(() =>
-              getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, { kind: "fresh" })
-            )
-          ).rejects.toThrow("Crash recovery fresh start failed");
+          await expect(resolveFresh()).rejects.toThrow("Crash recovery fresh start failed");
 
+          expect(events).toEqual(["write:projA", "write:projA"]);
           expect(disk.get("projA")).toEqual(projA);
           expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+        });
+
+        it("leaves captured workspaces alone on a restore", async () => {
+          crashServiceMock.getSnapshotWorkspaceIds.mockReturnValue(["projA"]);
+          crashServiceMock.restoreBackup.mockReturnValue(true);
+          const { disk, events } = trackWrites({ projA });
+          registerCrashRecoveryHandlers();
+
+          await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+            kind: "restore",
+            panelIds: ["a1", "a2", "late"],
+          });
+
+          expect(disk.get("projA")).toEqual(projA);
+          expect(events).toEqual(["clear-pending"]);
         });
       });
     });
