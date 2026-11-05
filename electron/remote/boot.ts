@@ -16,6 +16,7 @@ import { defaultCommandRunner } from "./client/commandRunner.js";
 import { closeSshMasters, exitStaleSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
+import { folderPackDir, sweepFolderPacks } from "./files/localFolderPack.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
@@ -127,6 +128,9 @@ function startClient(options: StartRemoteHostsOptions): void {
   // app runs; on stop, every master this process used is told to exit, so no
   // ssh outlives the app.
   teardowns.push(() => closeSshMasters(MASTER_EXIT_TIMEOUT_MS));
+  // Folder archives a crashed launch left behind, before this one packs any.
+  const packDir = folderPackDir(app.getPath("userData"));
+  void sweepFolderPacks(packDir).catch(() => {});
   let hostForView: (webContentsId: number) => string | null = () => null;
   let activated = false;
   // Tells each host which of its views a window is actually showing, so its
@@ -166,7 +170,7 @@ function startClient(options: StartRemoteHostsOptions): void {
     };
     teardowns.push(installHostFileClient(endpointFeed, hostForView));
     // Dropped, pasted and attached files, sent from this machine to the view's host.
-    teardowns.push(installHostUploadClient(endpointFeed, hostForView));
+    teardowns.push(installHostUploadClient(endpointFeed, hostForView, packDir));
     // Host plugins' prompts, consent and view bundles for the views driving their projects.
     teardowns.push(
       installPluginClient(endpointFeed, (webContentsId) => hostForView(webContentsId))
