@@ -540,6 +540,94 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
   });
 });
 
+describe("TerminalProcess settled-prompt-exact guard, widened for a Decisions answer (#16282)", () => {
+  const ANSWER: ExactPromptGuard = {
+    kind: "settled-prompt-exact",
+    acceptWorking: true,
+    acceptQuestion: true,
+  };
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-05T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** `patch` the pane settled at its prompt, submit the answer, and say what became of it. */
+  async function answerInto(patch: Partial<Internals["terminalInfo"]>, guard = ANSWER) {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), patch);
+    terminal.submit("answer", "tok-1", undefined, guard);
+    await vi.advanceTimersByTimeAsync(3_000);
+    return { terminal, phase: terminal.getSubmission("tok-1")?.phase };
+  }
+
+  it.each([
+    ["mid-turn, in a CLI that queues input", { agentState: "working" as const }],
+    ["at a question asked in prose", { waitingReason: "question" as const }],
+  ])("writes it %s", async (_label, patch) => {
+    const { phase } = await answerInto(patch);
+    expect(phase).toBe("pty_written");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["answer", "\r"]);
+  });
+
+  it.each([
+    [
+      "mid-turn, in a CLI that can't queue input",
+      { agentState: "working" as const, detectedAgentId: "gemini" },
+    ],
+    ["at an approval", { waitingReason: "approval" as const }],
+    ["at an error", { waitingReason: "error" as const }],
+  ])("refuses it %s", async (_label, patch) => {
+    const { phase } = await answerInto(patch);
+    expect(phase).toBe("cancelled");
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+  });
+
+  it("takes a question only when main asked for it, and mid-turn only when main allowed it", async () => {
+    const atQuestion = await answerInto(
+      { waitingReason: "question" },
+      { kind: "settled-prompt-exact", acceptWorking: true }
+    );
+    expect(atQuestion.phase).toBe("cancelled");
+    const midTurn = await answerInto(
+      { agentState: "working" },
+      { kind: "settled-prompt-exact", acceptQuestion: true }
+    );
+    expect(midTurn.phase).toBe("cancelled");
+  });
+
+  it("refuses it over something typed into the line since the turn began", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentState: "working", lastStateChange: Date.now() - 2_000 });
+    terminal.write("half a thought");
+    ptyWriteMock.mockClear();
+
+    terminal.submit("answer", "tok-1", undefined, ANSWER);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+  });
+
+  it("queues a second line behind a turn the lane already typed into", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentState: "working", lastStateChange: Date.now() - 2_000 });
+
+    terminal.submit("answer", "tok-1", undefined, ANSWER);
+    terminal.submit("follow-up", "tok-2", undefined, ANSWER);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "pty_written" });
+  });
+});
+
 describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
   const EXACT: ExactPromptGuard = { kind: "settled-prompt-exact" };
 

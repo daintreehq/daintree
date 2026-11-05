@@ -419,11 +419,14 @@ function setup(
     },
     isDirectory: async (path: string) => directories.has(path),
   };
+  /** Panes a view's hybrid input holds a draft for (#16282). */
+  const drafts = new Set<string>();
   const delivery = new AnswerDelivery({
     deps: {
       hostId: () => HOST,
       principalFor: (paneId) => principals.get(paneId) ?? null,
       getPtyClient: () => (pty.ready ? client : null),
+      hasComposerDraft: (paneId) => drafts.has(paneId),
       holdWakes: () => {
         holds.taken += 1;
         if (holds.taken === 1 && options.failFirstHold === "sync") throw new Error("no hold");
@@ -496,9 +499,16 @@ function setup(
     }
     signals_("settled");
   }
-  /** The agent's turn: it starts working, as main's state events say. */
-  const works = () => {
-    patch({ agentState: "working", lastStateChange: Date.now() });
+  /**
+   * The agent's turn: it starts working, as main's state events say. `typed`:
+   * someone has typed into its line since, which holds an answer.
+   */
+  const works = (options: { typed?: boolean } = {}) => {
+    patch({
+      agentState: "working",
+      lastStateChange: Date.now() - (options.typed ? 5_000 : 0),
+      ...(options.typed ? { lastTypedInputAt: Date.now() } : {}),
+    });
     for (const listener of stateListeners) {
       listener({
         terminalId: PANE,
@@ -527,6 +537,7 @@ function setup(
     patch,
     works,
     settles,
+    drafts,
     signal: signals_,
     watching: () => signals.size,
     question: (id: string) => store.getQuestion(id),
@@ -772,9 +783,38 @@ describe("AnswerDelivery", () => {
     await stopped(h.delivery);
   });
 
-  it("waits while the pane is busy, and types the answer once it settles at its prompt", async () => {
+  it("types an answer into a busy pane whose CLI queues it, without waiting for the turn (#16282)", async () => {
     const h = setup();
     h.works();
+    await answered(h.store, Q1, 1, "approve");
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1);
+    expect(h.client.terminals.get(PANE)?.agentState).toBe("working");
+    expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
+    await stopped(h.delivery);
+  });
+
+  it("holds an answer behind a hybrid-input draft, and types it once the draft empties", async () => {
+    const h = setup();
+    h.works();
+    h.drafts.add(PANE);
+    await answered(h.store, Q1, 1, "approve");
+
+    h.delivery.start();
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+
+    h.drafts.delete(PANE);
+    h.signal("composer");
+    await until(() => h.client.submitted.length === 1);
+    expect(h.client.terminals.get(PANE)?.agentState).toBe("working");
+    await stopped(h.delivery);
+  });
+
+  it("waits while a line typed into the busy pane may still be there, and types once it settles", async () => {
+    const h = setup();
+    h.works({ typed: true });
     await answered(h.store, Q1, 1, "approve");
 
     h.delivery.start();
@@ -1230,7 +1270,9 @@ describe("AnswerDelivery", () => {
         detectedAgentId: "codex",
         agentSessionId: "codex-learned-1",
         agentState: "working",
-        lastStateChange: Date.now(),
+        // Someone typed into its line since: the answer waits.
+        lastStateChange: Date.now() - 5_000,
+        lastTypedInputAt: Date.now(),
       });
 
       h.delivery.start();
@@ -1402,7 +1444,9 @@ describe("AnswerDelivery", () => {
       h.client.terminals.set("pane-live", {
         ...atPrompt(),
         agentState: "working",
-        lastStateChange: Date.now(),
+        // Typed into since its turn began, so the answer waits for the turn.
+        lastStateChange: Date.now() - 5_000,
+        lastTypedInputAt: Date.now(),
         launchGeneration: 3,
       });
       h.client.generations.set("pane-live", 3);
@@ -1638,12 +1682,12 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
     expect(h.client.submitted).toHaveLength(1);
   });
 
-  it("holds a follow-up while the agent works, and types it once it is back at its prompt", async () => {
+  it("holds a follow-up while a line typed mid-turn may be there, and types it once back at its prompt", async () => {
     const h = setup();
     await answeredAndTyped(h.store, Q1, 1);
     const before = (await h.question(Q1))!;
     await followedUp(h.store, Q1, M1, "One more thing.");
-    h.works();
+    h.works({ typed: true });
 
     h.delivery.start();
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
