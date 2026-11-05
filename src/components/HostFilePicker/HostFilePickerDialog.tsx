@@ -308,6 +308,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [pathDraft, setPathDraft] = useState("");
+  // The field holds what the user typed, not a path the dialog put there.
+  const [draftEdited, setDraftEdited] = useState(false);
   // The path field opens focused, so it opens as a field; once focus leaves it
   // the path reads as segments again.
   const [editingPath, setEditingPath] = useState(true);
@@ -408,6 +410,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         setListing(result);
         setListedDirectory(directory);
         setPathDraft(result.path);
+        setDraftEdited(false);
         setSelectedNames((current) =>
           sameFolder
             ? current.filter((name) =>
@@ -433,6 +436,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         if (confirmOwedRef.current === directory) confirmOwedRef.current = null;
         setLoadError(clientErrorText(cause, "Couldn't open that folder"));
         setPathDraft(directory);
+        setDraftEdited(false);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -468,19 +472,18 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     directory === null ? null : ready ? listing.parent : hostPathParent(directory);
   const shownPath = directory ?? listing?.path ?? "";
   const draftTarget = pathDraft.trim();
-  // A folder picker's field holds a path the folder on screen doesn't answer:
-  // the primary goes there and chooses it, rather than the folder it replaces.
+  // A folder picker's field holds a path the user typed that the folder on
+  // screen doesn't answer: the primary goes there (validating it, even when it
+  // is empty) and chooses it, rather than the folder it replaces.
   const draftPending =
-    request.mode === "directory" &&
-    editingPath &&
-    draftTarget !== "" &&
-    draftTarget !== (ready ? listing.path : directory);
+    request.mode === "directory" && draftEdited && pathDraft !== (ready ? listing.path : directory);
 
   const navigate = (target: string) => {
     confirmOwedRef.current = null;
     setLoadError(null);
     setPathError(null);
     setPathDraft(target);
+    setDraftEdited(false);
     if (target === directory) {
       setReloadKey((key) => key + 1);
       return;
@@ -521,7 +524,10 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   };
 
   const editPath = (draft?: string) => {
-    if (draft !== undefined) setPathDraft(draft);
+    if (draft !== undefined) {
+      setPathDraft(draft);
+      setDraftEdited(true);
+    }
     setEditingPath(true);
   };
 
@@ -606,11 +612,13 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       {pathError}
     </span>
   ) : draftPending ? (
-    <SummaryLines
-      label="Typed path"
-      name={<span className="truncate">{hostPathLeaf(draftTarget)}</span>}
-      detail={draftTarget}
-    />
+    draftTarget !== "" && (
+      <SummaryLines
+        label="Typed path"
+        name={<span className="truncate">{hostPathLeaf(draftTarget)}</span>}
+        detail={draftTarget}
+      />
+    )
   ) : loading ? (
     <span className="truncate">{showProgress ? openingText : ""}</span>
   ) : loadError !== null ? (
@@ -693,12 +701,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               onChange={(event) => {
                 confirmOwedRef.current = null;
                 setPathDraft(event.target.value);
+                setDraftEdited(true);
                 setPathError(null);
               }}
               onBlur={() => {
                 setEditingPath(false);
                 setPathError(null);
                 setPathDraft(shownPath);
+                setDraftEdited(false);
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
