@@ -165,7 +165,11 @@ export const FOLDER_UPLOAD_FAILURE_REASONS = [
 ] as const;
 export type FolderUploadFailureReason = (typeof FOLDER_UPLOAD_FAILURE_REASONS)[number];
 
-/** The archive has started arriving, or has arrived and is being verified. */
+/**
+ * Admitted, with the archive awaited, arriving or being verified. Only a
+ * status says so before any of it arrives; a prepare asked again then is
+ * `ready` once more.
+ */
 const receiving = z.object({ status: z.literal("receiving") });
 const unpacking = z
   .object({ status: z.literal("unpacking"), filesDone: count, filesTotal: count })
