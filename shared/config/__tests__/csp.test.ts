@@ -5,6 +5,7 @@ import {
   getDaintreeAppDevCSP,
   getDaintreeAppProdCSP,
 } from "../csp.js";
+import { getDevServerOrigins } from "../devServer.js";
 
 describe("Daintree app CSP", () => {
   it("requires Trusted Types for script in production", () => {
@@ -188,6 +189,18 @@ describe("Daintree app CSP", () => {
         const mediaSrc = csp.match(/media-src ([^;]*);/)?.[1] ?? "";
         expect(mediaSrc.split(" ")).toContain("plugin:");
         expect(mediaSrc).not.toMatch(/https:\/\/(?!cdn\.daintree\.org)/);
+      }
+    });
+
+    it("loads plugin-bundled fonts from plugin: and nothing new in both modes (#16286)", () => {
+      // A view's @font-face names a file under its own root. font-src gains the
+      // scheme and no other source, so no remote font host enters the policy.
+      for (const [csp, extra] of [
+        [getDaintreeAppProdCSP(), []],
+        [getDaintreeAppDevCSP(), getDevServerOrigins()],
+      ] as const) {
+        const fontSrc = csp.match(/font-src ([^;]*);/)?.[1] ?? "";
+        expect(fontSrc.split(" ").sort()).toEqual(["'self'", "data:", "plugin:", ...extra].sort());
       }
     });
 

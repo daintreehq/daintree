@@ -3667,6 +3667,85 @@ describe("createPluginProtocolHandler", () => {
       expect(fs.open).not.toHaveBeenCalled();
     });
   });
+
+  describe("bundled fonts (#16286)", () => {
+    // An @font-face load is a CORS request from the app document, and the
+    // response is nosniff: the view only gets its font if the type is a real
+    // font type and the trusted origin is echoed, on a fresh load and on the
+    // revalidation every non-fingerprinted font makes.
+    async function useRealMimeTypes(): Promise<void> {
+      const appProtocol = await import("../../utils/appProtocol.js");
+      const actual = await vi.importActual<typeof import("../../utils/appProtocol.js")>(
+        "../../utils/appProtocol.js"
+      );
+      vi.mocked(appProtocol.getMimeType).mockImplementation(actual.getMimeType);
+    }
+
+    it.each([
+      ["inter-latin.woff2", "font/woff2"],
+      ["inter-latin.woff", "font/woff"],
+      ["inter-latin.ttf", "font/ttf"],
+      ["inter-latin.otf", "font/otf"],
+    ])("serves %s as %s with the trusted document's grant", async (file, type) => {
+      const fs = await import("fs/promises");
+      const bytes = Buffer.from([0x77, 0x4f, 0x46, 0x32]);
+      const handle = makeFileHandle(bytes);
+      vi.mocked(fs.open).mockResolvedValue(
+        handle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+      await useRealMimeTypes();
+
+      const response = await buildHandler()(
+        makeRequest(`plugin://my-plugin/__dtv-3/view/fonts/${file}`, {
+          headers: { Origin: "app://daintree" },
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe(type);
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+      expect(response.headers.get("Vary")).toBe("Origin");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+      expect(handle.readFile).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fs.open).mock.calls[0]?.[0]).toBe(
+        path.join(PLUGIN_ROOT, "view", "fonts", file)
+      );
+    });
+
+    it("keeps the grant on a font's 304 revalidation", async () => {
+      const appProtocol = await import("../../utils/appProtocol.js");
+      await useRealMimeTypes();
+      vi.mocked(appProtocol.isNotModified).mockReturnValueOnce(true);
+
+      const response = await buildHandler()(
+        makeRequest("plugin://my-plugin/view/fonts/inter-latin.woff2", {
+          headers: { Origin: "app://daintree", "If-Modified-Since": PLUGIN_MTIME.toUTCString() },
+        })
+      );
+
+      expect(response.status).toBe(304);
+      expect(response.headers.get("Content-Type")).toBe("font/woff2");
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+      expect(response.headers.get("Vary")).toBe("Origin");
+    });
+
+    it("withholds the grant from a page that is not the app document", async () => {
+      await useRealMimeTypes();
+
+      const response = await buildHandler()(
+        makeRequest("plugin://my-plugin/view/fonts/inter-latin.woff2", {
+          headers: { Origin: "https://evil.example" },
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("font/woff2");
+      expect(await response.text()).toBe("data");
+      expect(response.headers.get("Vary")).toBe("Origin");
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+  });
 });
 
 describe("createAppProtocolHandler — ASAR-safe buffered read", () => {
