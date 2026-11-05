@@ -99,7 +99,10 @@ export function checkFolderUploadRootName(name: string): FolderUploadProblem | n
   return null;
 }
 
-function entryPathProblem(rootName: string, entry: FolderUploadEntry): FolderUploadPathProblem | null {
+function entryPathProblem(
+  rootName: string,
+  entry: FolderUploadEntry
+): FolderUploadPathProblem | null {
   const { path, kind } = entry;
   if (path === "") return "empty-name";
   if (path.startsWith("/")) return "absolute";

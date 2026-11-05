@@ -207,9 +207,9 @@ describe("classifyFolderUploadCallError", () => {
       code: "UNSUPPORTED",
     });
     expect(classifyFolderUploadCallError(rebuilt)).toBe("unsupported");
-    expect(
-      classifyFolderUploadCallError(new AppError({ code: "UNSUPPORTED", message: "x" }))
-    ).toBe("unsupported");
+    expect(classifyFolderUploadCallError(new AppError({ code: "UNSUPPORTED", message: "x" }))).toBe(
+      "unsupported"
+    );
   });
 
   it("keeps a host's refusal of the request apart from an outdated host", () => {

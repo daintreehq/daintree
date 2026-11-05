@@ -235,7 +235,11 @@ describe("FolderUploadTally", () => {
   });
 
   it.each([
-    ["case", [file("Root/README.md"), file("Root/readme.md")], ["Root/README.md", "Root/readme.md"]],
+    [
+      "case",
+      [file("Root/README.md"), file("Root/readme.md")],
+      ["Root/README.md", "Root/readme.md"],
+    ],
     [
       "Unicode normalization",
       [file("Root/caf\u00e9"), file("Root/cafe\u0301")],
@@ -249,11 +253,7 @@ describe("FolderUploadTally", () => {
       [file("Root/a"), file("Root/A/x.txt")],
       ["Root/a", "Root/A/"],
     ],
-    [
-      "a parent and a later file",
-      [file("Root/A/x.txt"), file("Root/a")],
-      ["Root/A/", "Root/a"],
-    ],
+    ["a parent and a later file", [file("Root/A/x.txt"), file("Root/a")], ["Root/A/", "Root/a"]],
     [
       "parents that fold together",
       [file("Root/Src/x.ts"), file("Root/src/y.ts")],
