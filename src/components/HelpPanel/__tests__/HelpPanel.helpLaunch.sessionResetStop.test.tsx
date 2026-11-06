@@ -191,6 +191,8 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuSeparator: () => <hr />,
   DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The real primitive drags the keybinding graph in behind these suites' partial
@@ -1521,6 +1523,31 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
     fireEvent.click(tabs[1]!);
     expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(2);
+  });
+
+  it("names the body a region after the picker's lane once the strip collapses (#16325)", () => {
+    setupTwoLanes();
+    // Two lanes need 192px as tabs; jsdom lays nothing out, so the strip is given less.
+    const clientWidth = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockImplementation(function (this: Element) {
+        return this.hasAttribute("data-session-strip") ? 150 : 0;
+      });
+    try {
+      const { container } = render(<HelpPanel width={380} />);
+
+      expect(container.querySelector(LANE_TABS)).toBeNull();
+      expect(container.querySelector('[role="tabpanel"]')).toBeNull();
+      const picker = container.querySelector<HTMLElement>("[data-session-picker]")!;
+      const region = Array.from(container.querySelectorAll<HTMLElement>('[role="region"]')).find(
+        (el) => el.hasAttribute("aria-labelledby")
+      )!;
+      const label = document.getElementById(region.getAttribute("aria-labelledby")!);
+      expect(label?.textContent).toBe("Session 1");
+      expect(picker.contains(label)).toBe(true);
+    } finally {
+      clientWidth.mockRestore();
+    }
   });
 
   it("tears down only the closed lane and leaves the panel open on the survivor", () => {

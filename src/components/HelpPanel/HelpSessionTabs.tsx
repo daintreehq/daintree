@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { LayoutGroup } from "framer-motion";
-import { ChevronDown, Plus, RotateCw, SquareTerminal, X } from "lucide-react";
+import { Plus, RotateCw, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, InteractingCircle } from "@/components/icons";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
@@ -20,10 +20,13 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { PICKER_TRIGGER_GROUP, PickerChevron } from "@/components/ui/PickerChevron";
 import {
   DocumentTabClose,
   DocumentTabIndicator,
@@ -33,6 +36,7 @@ import {
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { pluralize } from "@/lib/pluralize";
 import type { AgentState } from "@/types";
 import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
 
@@ -113,6 +117,27 @@ function agentDisplayName(agentId: string): string {
  * clipping every label, however many more lanes the strip may hold.
  */
 const CROWDED_TAB_COUNT = 3;
+
+/**
+ * The width a tab will not shrink below: room for the close it alone draws once
+ * crowded, beside an agent mark and a working spinner, and for the background lanes
+ * the portal strip's floor. Applied as the tabs' `min-width` and summed to decide when
+ * the strip collapses, so the two can never disagree.
+ */
+const SELECTED_TAB_FLOOR_PX = 104;
+const TAB_FLOOR_PX = 88;
+
+/**
+ * Whether `count` lanes fit as tabs in `availableWidth` px (#16325). Past this point
+ * the tabs would sit at their floors with their titles clipped and the strip would
+ * scroll, which is where the strip turns into one picker instead. Arithmetic rather
+ * than a measurement of the rendered tabs, so the answer is the same whichever form
+ * is on screen and a resize at the boundary can't flip the strip back and forth.
+ */
+export function sessionTabsFit(count: number, availableWidth: number): boolean {
+  if (count <= 1) return true;
+  return SELECTED_TAB_FLOOR_PX + (count - 1) * TAB_FLOOR_PX <= availableWidth;
+}
 
 /**
  * The label, split so the part that identifies the lane cannot be truncated away.
@@ -258,7 +283,6 @@ function SessionTabChip({
   const title = agentName
     ? `${tab.fullTitle ?? tab.label} — ${agentName}`
     : (tab.fullTitle ?? tab.label);
-  const hasAgentItems = !!onOpenSessionWithAgent && newSessionAgentIds.length > 1;
   const { ref: labelRef, isTruncated: isLabelTruncated } = useTruncationDetection();
 
   const chip = (
@@ -301,14 +325,12 @@ function SessionTabChip({
       className={cn(
         documentTabClassName(isActive),
         // Content-width, like every other tab strip in the app and every browser's. Tabs
-        // shrink when the strip is tight, down to the portal strip's floor, and past
-        // that the strip scrolls; `TabLabel` keeps the identifying numeral out of the
-        // part that gives way. The selected tab's floor keeps room for the close it
-        // alone draws once crowded, beside an agent mark and a working spinner. Three
-        // lanes still fit at the 320px minimum.
-        isActive ? "min-w-[104px]" : "min-w-[88px]",
+        // shrink when the strip is tight, down to their floor, and past that the strip
+        // collapses into a picker; `TabLabel` keeps the identifying numeral out of the
+        // part that gives way. Three lanes still fit at the 320px minimum.
         "shrink px-2 py-1.5"
       )}
+      style={{ minWidth: isActive ? SELECTED_TAB_FLOOR_PX : TAB_FLOOR_PX }}
     >
       {isActive && <DocumentTabIndicator inFocusedRegion={isRegionFocused} />}
       {agentName && tab.agentId && <TabAgentMark agentId={tab.agentId} />}
@@ -366,41 +388,21 @@ function SessionTabChip({
           closingFromMenuRef.current = false;
         }}
       >
-        {onOpenSession && (
-          <ContextMenuItem disabled={!canOpenSession} onSelect={onOpenSession}>
-            <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            New session
-          </ContextMenuItem>
-        )}
-        {hasAgentItems &&
-          newSessionAgentIds.map((agentId) => (
-            <ContextMenuItem
-              key={agentId}
-              disabled={!canOpenSessionWithAgent}
-              onSelect={() => onOpenSessionWithAgent?.(agentId)}
-            >
-              <NewSessionWithAgentLabel agentId={agentId} />
-            </ContextMenuItem>
-          ))}
-        {(onOpenSession || hasAgentItems) && <ContextMenuSeparator />}
-        {/* Hidden rather than disabled where the lane has nothing to restart, as the
-            header's overflow item is. The tab survives a restart, so the menu hands
-            focus back to it as usual. */}
-        {onRestart && tab.canRestart && (
-          <ContextMenuItem destructive onSelect={() => onRestart(tab.slot)}>
-            <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Restart conversation
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem
-          onSelect={() => {
+        <SessionActionItems
+          Item={ContextMenuItem}
+          Separator={ContextMenuSeparator}
+          tab={tab}
+          canOpenSession={canOpenSession}
+          onOpenSession={onOpenSession}
+          newSessionAgentIds={newSessionAgentIds}
+          canOpenSessionWithAgent={canOpenSessionWithAgent}
+          onOpenSessionWithAgent={onOpenSessionWithAgent}
+          onRestart={onRestart}
+          onCloseSession={() => {
             closingFromMenuRef.current = true;
             onMenuClose(tab.slot);
           }}
-        >
-          <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Close session
-        </ContextMenuItem>
+        />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -430,70 +432,266 @@ interface HelpSessionTabsProps {
    * underline takes the accent only then, as a grid pane's strip does.
    */
   isRegionFocused?: boolean;
+  /**
+   * Told whether the strip is drawn as one picker rather than tabs, so the body it
+   * drives stops claiming to be a `tabpanel` when there is no tablist.
+   */
+  onCollapsedChange?: (collapsed: boolean) => void;
+}
+
+/** A menu row component, so one action list renders in a tab's context menu and in the picker. */
+type SessionMenuItem = React.ComponentType<{
+  children?: React.ReactNode;
+  disabled?: boolean;
+  destructive?: boolean;
+  onSelect?: (event: Event) => void;
+}>;
+
+/**
+ * One lane's actions, whichever menu carries them: a tab's own context menu, or the
+ * picker's once the strip has collapsed and the lanes have no tabs to right-click.
+ */
+function SessionActionItems({
+  Item,
+  Separator,
+  tab,
+  canOpenSession,
+  onOpenSession,
+  newSessionAgentIds,
+  canOpenSessionWithAgent,
+  onOpenSessionWithAgent,
+  onRestart,
+  onCloseSession,
+}: {
+  Item: SessionMenuItem;
+  Separator: React.ComponentType;
+  tab: HelpSessionTab;
+  canOpenSession: boolean;
+  onOpenSession?: () => void;
+  newSessionAgentIds: readonly string[];
+  canOpenSessionWithAgent: boolean;
+  onOpenSessionWithAgent?: (agentId: string) => void;
+  onRestart?: (slot: number) => void;
+  onCloseSession: () => void;
+}) {
+  const hasAgentItems = !!onOpenSessionWithAgent && newSessionAgentIds.length > 1;
+  return (
+    <>
+      {onOpenSession && (
+        <Item disabled={!canOpenSession} onSelect={onOpenSession}>
+          <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          New session
+        </Item>
+      )}
+      {hasAgentItems &&
+        newSessionAgentIds.map((agentId) => (
+          <Item
+            key={agentId}
+            disabled={!canOpenSessionWithAgent}
+            onSelect={() => onOpenSessionWithAgent?.(agentId)}
+          >
+            <NewSessionWithAgentLabel agentId={agentId} />
+          </Item>
+        ))}
+      {(onOpenSession || hasAgentItems) && <Separator />}
+      {/* Hidden rather than disabled where the lane has nothing to restart, as the
+          header's overflow item is. The lane survives a restart, so the menu hands
+          focus back to its trigger as usual. */}
+      {onRestart && tab.canRestart && (
+        <Item destructive onSelect={() => onRestart(tab.slot)}>
+          <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Restart conversation
+        </Item>
+      )}
+      <Item onSelect={onCloseSession}>
+        <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+        Close session
+      </Item>
+    </>
+  );
 }
 
 /**
- * Every lane, offered while the strip can't show them all at once: with the scrollbar
- * hidden, a pointer without a horizontal wheel has no other way to one. The
- * same radio list of every tab the portal strip keeps, rather than the hidden ones
- * alone, so a lane half under the edge is never missing from both places.
+ * How many lanes other than the selected one each marker covers. What a tab says
+ * about a background lane, said once for all of them on the collapsed picker.
  */
-function AllSessionsMenu({
-  tabs,
-  activeSlot,
-  showAgent,
-  onSelect,
-}: {
+function backgroundMarkerCounts(tabs: readonly HelpSessionTab[], activeSlot: number) {
+  const counts: Record<TabMarkerState, number> = { working: 0, directing: 0 };
+  for (const tab of tabs) {
+    if (tab.slot === activeSlot) continue;
+    const marker = tabMarkerState(tab.agentState);
+    if (marker) counts[marker] += 1;
+  }
+  return counts;
+}
+
+const BACKGROUND_MARKERS: readonly TabMarkerState[] = ["working", "directing"];
+
+interface SessionPickerProps {
   tabs: readonly HelpSessionTab[];
-  activeSlot: number;
+  activeTab: HelpSessionTab;
   showAgent: boolean;
+  /** The selected lane's derived tab id, which the body names itself from. */
+  labelId: string;
+  isRegionFocused: boolean;
   onSelect: (slot: number) => void;
-}) {
+  onKeyboardClose: (slot: number) => void;
+  onMenuClose: (slot: number) => void;
+  onTriggerFocus: () => void;
+  onOpenChange: (open: boolean) => void;
+  canOpenSession: boolean;
+  onOpenSession?: () => void;
+  newSessionAgentIds: readonly string[];
+  canOpenSessionWithAgent: boolean;
+  onOpenSessionWithAgent?: (agentId: string) => void;
+  onRestart?: (slot: number) => void;
+}
+
+/**
+ * The strip once its lanes no longer fit as tabs (#16325): one menu button that
+ * names the selected lane and lists every lane when opened, in place of a row of
+ * chips truncated past reading and scrolled past reach.
+ *
+ * It keeps what the tabs carried. The selected lane's agent mark and state lead its
+ * title, and every background lane at work is still visible without opening anything,
+ * as one glyph per marker with a count. The selected lane's own menu moves into the
+ * picker under the list, since there is no tab left to right-click, and Delete closes
+ * the selected lane from the closed trigger as it does from its tab.
+ *
+ * A menu button rather than a one-tab tablist: Radix owns Enter, Space and the arrow
+ * keys, the menu's radio items announce which lane is checked, and typeahead finds a
+ * lane by its title.
+ */
+function SessionPicker({
+  tabs,
+  activeTab,
+  showAgent,
+  labelId,
+  isRegionFocused,
+  onSelect,
+  onKeyboardClose,
+  onMenuClose,
+  onTriggerFocus,
+  onOpenChange,
+  canOpenSession,
+  onOpenSession,
+  newSessionAgentIds,
+  canOpenSessionWithAgent,
+  onOpenSessionWithAgent,
+  onRestart,
+}: SessionPickerProps) {
+  const descriptionId = `${labelId}-picker-state`;
+  const agentName = showAgent && activeTab.agentId ? agentDisplayName(activeTab.agentId) : null;
+  const title = agentName
+    ? `${activeTab.fullTitle ?? activeTab.label} — ${agentName}`
+    : (activeTab.fullTitle ?? activeTab.label);
+  const marker = tabMarkerState(activeTab.agentState);
+  const background = backgroundMarkerCounts(tabs, activeTab.slot);
+  const description = [
+    marker,
+    ...BACKGROUND_MARKERS.map((kind) =>
+      background[kind] > 0 ? `${pluralize(background[kind], "other session")} ${kind}` : null
+    ),
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              // ml-1: the step the panel strips leave between "+" and their chevron, so
-              // the two read as two targets rather than one wide one.
-              className="ml-1 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
-              aria-label="All sessions"
-              data-testid="assistant-sessions-overflow"
-              data-sessions-overflow=""
-            >
-              <ChevronDown aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">All sessions</TooltipContent>
-      </Tooltip>
+    <DropdownMenu onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-session-picker=""
+          data-testid="assistant-session-picker"
+          // The lane's name, as its tab gave it; the menu button role says the rest.
+          aria-label={title}
+          aria-describedby={description ? descriptionId : undefined}
+          aria-keyshortcuts="Delete"
+          onFocus={onTriggerFocus}
+          onKeyDown={(e) => {
+            if (!isTabCloseKey(e.key)) return;
+            e.preventDefault();
+            onKeyboardClose(activeTab.slot);
+          }}
+          className={cn(
+            documentTabClassName(true),
+            PICKER_TRIGGER_GROUP,
+            // The whole strip up to the "+": one selected lane drawn as its tab was,
+            // underline included, so the switch reads as the same strip narrowing.
+            "flex-1 min-w-0 border-r-0 px-2 py-1.5"
+          )}
+        >
+          <DocumentTabIndicator inFocusedRegion={isRegionFocused} />
+          {agentName && activeTab.agentId && <TabAgentMark agentId={activeTab.agentId} />}
+          <TabStateIndicator agentState={activeTab.agentState} />
+          <span className="flex min-w-0 flex-1 items-center">
+            <TabLabel label={activeTab.label} isTaskTitle={activeTab.fullTitle !== undefined} />
+          </span>
+          {BACKGROUND_MARKERS.map((kind) =>
+            background[kind] > 0 ? (
+              <span
+                key={kind}
+                data-testid="assistant-session-picker-background"
+                data-marker={kind}
+                aria-hidden="true"
+                className="flex shrink-0 items-center gap-0.5 tabular-nums text-text-secondary"
+              >
+                <TabStateIndicator agentState={kind} />
+                {background[kind] > 1 && background[kind]}
+              </span>
+            ) : null
+          )}
+          <PickerChevron />
+          {/* The body's name while there is no tab to take it from. */}
+          <span id={labelId} className="sr-only">
+            {title}
+          </span>
+          {description && (
+            <span id={descriptionId} className="sr-only">
+              {description}
+            </span>
+          )}
+        </button>
+      </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="end"
+        align="start"
         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
       >
         <DropdownMenuRadioGroup
-          value={String(activeSlot)}
+          value={String(activeTab.slot)}
           onValueChange={(value) => onSelect(Number(value))}
         >
           {tabs.map((tab) => {
-            const marker = tabMarkerState(tab.agentState);
-            const agentName = showAgent && tab.agentId ? agentDisplayName(tab.agentId) : null;
+            const itemMarker = tabMarkerState(tab.agentState);
+            const itemAgent = showAgent && tab.agentId ? agentDisplayName(tab.agentId) : null;
+            const itemTitle = tab.fullTitle ?? tab.label;
             return (
-              <DropdownMenuRadioItem key={tab.slot} value={String(tab.slot)}>
+              <DropdownMenuRadioItem key={tab.slot} value={String(tab.slot)} textValue={itemTitle}>
                 <span className="flex min-w-0 items-center gap-1.5">
-                  {agentName && tab.agentId && <TabAgentMark agentId={tab.agentId} />}
+                  {itemAgent && tab.agentId && <TabAgentMark agentId={tab.agentId} />}
                   <TabStateIndicator agentState={tab.agentState} />
-                  <span className="truncate">{tab.fullTitle ?? tab.label}</span>
-                  {agentName && <span className="sr-only">, {agentName}</span>}
-                  {marker && <span className="sr-only">, {marker}</span>}
+                  {/* Wrapped, never truncated: this list is where a title is read whole. */}
+                  <span className="min-w-0 whitespace-normal break-words">{itemTitle}</span>
+                  {itemAgent && <span className="sr-only">, {itemAgent}</span>}
+                  {itemMarker && <span className="sr-only">, {itemMarker}</span>}
                 </span>
               </DropdownMenuRadioItem>
             );
           })}
         </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <SessionActionItems
+          Item={DropdownMenuItem}
+          Separator={DropdownMenuSeparator}
+          tab={activeTab}
+          canOpenSession={canOpenSession}
+          onOpenSession={onOpenSession}
+          newSessionAgentIds={newSessionAgentIds}
+          canOpenSessionWithAgent={canOpenSessionWithAgent}
+          onOpenSessionWithAgent={onOpenSessionWithAgent}
+          onRestart={onRestart}
+          onCloseSession={() => onMenuClose(activeTab.slot)}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -516,10 +714,10 @@ function AllSessionsMenu({
  *
  * Tabs are content-width and sit at the leading edge with the new-session control
  * directly after the last one, which is how the panel, dock and portal strips in this
- * app lay out and how a browser does. Past three lanes at the narrow widths the
- * tablist scrolls: the selected lane and the one the keyboard reaches are scrolled
- * into view, and while any lane is clipped an "All sessions" menu after the "+" lists
- * every one, which is the pointer's way to a lane the strip has scrolled away.
+ * app lay out and how a browser does. Once the lanes no longer fit at their floors the
+ * tabs give way to one {@link SessionPicker} (#16325), and come back when lanes close
+ * or the panel widens: past that point a tab row only clipped titles to a few letters
+ * and scrolled lanes out of reach.
  *
  * The keyboard contract is the family's: the APG tabs pattern with MANUAL activation.
  * Arrow keys and Home/End move focus along the strip, Enter or Space selects, Delete
@@ -542,9 +740,11 @@ export function HelpSessionTabs({
   idBase,
   panelId,
   isRegionFocused = true,
+  onCollapsedChange,
 }: HelpSessionTabsProps) {
-  // State rather than a ref, so the overflow observer is rebuilt when the list mounts.
-  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  // State rather than a ref, so the width observer is rebuilt when the row mounts. The
+  // row outlives both forms, which is what lets one measurement serve both.
+  const [rowEl, setRowEl] = useState<HTMLDivElement | null>(null);
   const layoutGroupId = useId();
   // Lanes on one agent look exactly as they always did; only a mix is marked.
   const showAgent = new Set(tabs.flatMap((t) => (t.agentId ? [t.agentId] : []))).size > 1;
@@ -552,71 +752,83 @@ export function HelpSessionTabs({
   /**
    * Find one lane by DOM query rather than by holding a ref per tab. One element on
    * the container does the same job, and a ref handed down to a subcomponent as a prop
-   * is a silent React Compiler bailout in this repo.
+   * is a silent React Compiler bailout in this repo. Queried off the row, not the
+   * tablist, so it works in the commit that brings the tabs back.
    */
   const tabElement = useCallback(
     (slot: number) =>
-      listEl?.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`) ?? null,
-    [listEl]
+      rowEl?.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`) ?? null,
+    [rowEl]
   );
 
   /** Scroll the strip, and only the strip, so one lane is fully in view. */
   const revealSlot = useCallback(
     (slot: number) => {
+      const list = rowEl?.querySelector<HTMLElement>('[role="tablist"]');
       const tab = tabElement(slot);
-      if (listEl && tab) {
-        revealTabInStrip(listEl, tab, prefersReducedMotion() ? "auto" : "smooth");
+      if (list && tab) {
+        revealTabInStrip(list, tab, prefersReducedMotion() ? "auto" : "smooth");
       }
     },
-    [listEl, tabElement]
+    [rowEl, tabElement]
   );
 
   // `preventScroll`: the focus handler reveals the lane inside the strip, where a
-  // focus's own scroll would move every scrollable ancestor too.
+  // focus's own scroll would move every scrollable ancestor too. Collapsed, every
+  // lane is reached through the picker, so it takes the focus a lane would.
   const focusSlot = useCallback(
-    (slot: number) => tabElement(slot)?.focus({ preventScroll: true }),
-    [tabElement]
+    (slot: number) =>
+      (
+        tabElement(slot) ?? rowEl?.querySelector<HTMLElement>("[data-session-picker]")
+      )?.focus({ preventScroll: true }),
+    [rowEl, tabElement]
   );
 
   const slots = useMemo(() => tabs.map((t) => t.slot), [tabs]);
-  // Membership alone: `tabs` is rebuilt on every state transition.
-  const slotsKey = slots.join(",");
-  const hasActiveTab = slots.includes(activeSlot);
+  const activeTab = tabs.find((t) => t.slot === activeSlot);
+  const hasActiveTab = activeTab !== undefined;
 
-  // Measured off the strip rather than per tab: a lane half under the edge is clipped
-  // too, and an intersection observer still reports it as intersecting. Tabs are
-  // observed as well as the strip, because a title that grows a tab past the edge
-  // leaves the strip's own box the same size.
-  const [isOverflowing, setIsOverflowing] = useState(false);
-  useEffect(() => {
-    if (!listEl || !slotsKey) return;
-    // The trigger's own room counts as the strip's: it is there only while the strip
-    // overflows, so measured without it three lanes that fit once it goes would keep it.
+  // The room the tabs have: the row's content box less the "+" and the gap before it.
+  // A zero-width row is a hidden panel (or a test without layout), which says nothing
+  // about whether lanes fit, so it keeps the last answer rather than collapsing.
+  const [availableWidth, setAvailableWidth] = useState<number | null>(null);
+  const hasNewSessionControl = !!onOpenSession;
+  useLayoutEffect(() => {
+    if (!rowEl) return;
     const measure = () => {
-      const trigger = listEl.parentElement?.querySelector<HTMLElement>("[data-sessions-overflow]");
-      const reclaimed = trigger
-        ? trigger.offsetWidth +
-          (parseFloat(getComputedStyle(trigger).marginLeft) || 0) +
-          (parseFloat(getComputedStyle(trigger.parentElement ?? trigger).columnGap) || 0)
-        : 0;
-      setIsOverflowing(listEl.scrollWidth > listEl.clientWidth + reclaimed + 1);
+      const style = getComputedStyle(rowEl);
+      const content =
+        rowEl.clientWidth -
+        (parseFloat(style.paddingLeft) || 0) -
+        (parseFloat(style.paddingRight) || 0);
+      if (content <= 0) return;
+      const control = rowEl.querySelector<HTMLElement>("[data-new-session]");
+      const reserved = control ? control.offsetWidth + (parseFloat(style.columnGap) || 0) : 0;
+      setAvailableWidth(content - reserved);
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
-    observer.observe(listEl);
-    for (const child of Array.from(listEl.children)) observer.observe(child);
+    observer.observe(rowEl);
     return () => observer.disconnect();
-  }, [listEl, slotsKey]);
+  }, [rowEl, hasNewSessionControl]);
+
+  const collapsed =
+    hasActiveTab && availableWidth !== null && !sessionTabsFit(tabs.length, availableWidth);
+
+  // The body below is the tablist's `tabpanel` only while there is a tablist.
+  useLayoutEffect(() => {
+    onCollapsedChange?.(collapsed);
+  }, [collapsed, onCollapsedChange]);
 
   // The selected lane in view when it changes, when it first has a tab (a restore can
-  // select a lane before its tab arrives), and when the menu's trigger mounts or goes,
-  // which narrows or widens the strip under it. Not when another lane opens or closes,
-  // nor when one changes state: the keyboard's close handoff scrolls to the lane it
-  // focuses, and a strip the user scrolled stays where they put it.
+  // select a lane before its tab arrives), and when the tabs come back from the picker.
+  // Not when another lane opens or closes, nor when one changes state: the keyboard's
+  // close handoff scrolls to the lane it focuses, and a strip the user scrolled stays
+  // where they put it.
   useLayoutEffect(() => {
-    if (hasActiveTab) revealSlot(activeSlot);
-  }, [activeSlot, hasActiveTab, isOverflowing, revealSlot]);
+    if (hasActiveTab && !collapsed) revealSlot(activeSlot);
+  }, [activeSlot, hasActiveTab, collapsed, revealSlot]);
 
   /**
    * Closing a lane with a working agent raises a confirm dialog first, and `tabs` is
@@ -629,6 +841,55 @@ export function HelpSessionTabs({
     activeId: activeSlot,
     focusTab: focusSlot,
   });
+
+  /**
+   * Whether the keyboard is in the strip, so the form that replaces the one holding
+   * focus can take it. The picker's menu is portalled outside the row, so an open menu
+   * counts on its own. A blur with nowhere to go is settled a task later: removing the
+   * focused element can blur it too, and that must not clear the flag before the
+   * replacement form's layout effect has read it.
+   */
+  const ownsFocusRef = useRef(false);
+  const pickerMenuOpenRef = useRef(false);
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(blurTimerRef.current), []);
+
+  const handleRowFocus = useCallback(() => {
+    clearTimeout(blurTimerRef.current);
+    ownsFocusRef.current = true;
+  }, []);
+
+  const handleRowBlur = useCallback((e: React.FocusEvent<HTMLDivElement>) => {
+    const next = e.relatedTarget;
+    const row = e.currentTarget;
+    if (next instanceof Node && row.contains(next)) return;
+    clearTimeout(blurTimerRef.current);
+    if (next) {
+      ownsFocusRef.current = false;
+      return;
+    }
+    blurTimerRef.current = setTimeout(() => {
+      ownsFocusRef.current = row.contains(document.activeElement);
+    }, 0);
+  }, []);
+
+  const handlePickerOpenChange = useCallback((open: boolean) => {
+    pickerMenuOpenRef.current = open;
+  }, []);
+
+  // Switching forms unmounts whatever held focus. Hand it to the new form's lane, but
+  // only when the strip had it and nothing else has taken it since: a focused "+"
+  // survives the switch, and a terminal or dialog elsewhere keeps its focus.
+  const shownCollapsedRef = useRef(collapsed);
+  useLayoutEffect(() => {
+    if (shownCollapsedRef.current === collapsed) return;
+    shownCollapsedRef.current = collapsed;
+    const owned = ownsFocusRef.current || pickerMenuOpenRef.current;
+    pickerMenuOpenRef.current = false;
+    const current = document.activeElement;
+    if (!owned || (current && current !== document.body && current.isConnected)) return;
+    focusSlot(activeSlot);
+  }, [collapsed, activeSlot, focusSlot]);
 
   /**
    * A cancelled confirm dialog hands focus back to the tab it was opened from, so focus
@@ -645,17 +906,11 @@ export function HelpSessionTabs({
   );
 
   /**
-   * A lane picked from the menu is brought into view here as well as through the
-   * selection: picking the lane already selected changes no selection, and it is
-   * just as likely the one the strip has scrolled away.
+   * The picker is where focus lands after any close while collapsed, confirmed or
+   * cancelled, and it outlives the lane: nothing is left for a pending handoff to do,
+   * and leaving one armed would pull focus back here when that lane closes later.
    */
-  const handleMenuPick = useCallback(
-    (slot: number) => {
-      onSelect(slot);
-      revealSlot(slot);
-    },
-    [onSelect, revealSlot]
-  );
+  const handlePickerFocus = useCallback(() => disarmKeyboardClose(), [disarmKeyboardClose]);
 
   /** A pointer close leaves focus where it was; an armed keyboard close must not fire on it. */
   const handlePointerClose = useCallback(
@@ -725,48 +980,76 @@ export function HelpSessionTabs({
   return (
     // No bottom padding: the selected tab's underline sits on the strip's bottom
     // rule, as it does on every document tab strip.
-    <div className="flex items-center gap-0.5 px-1 pt-1 border-b border-border-default shrink-0">
-      {/* The tablist is its own element so that it owns nothing but tabs. With the
-          new-session button inside it, axe's `aria-required-children` rejects the
-          stray `button` in a `tablist`; as a sibling it is simply the next control. */}
-      <div
-        ref={setListEl}
-        role="tablist"
-        aria-label="Assistant sessions"
-        aria-orientation="horizontal"
-        onKeyDown={handleKeyDown}
-        // Tabs shrink to their floor before the strip scrolls. The scrollbar is hidden
-        // because a scrollbar inside a 33px strip is louder than the tabs it scrolls;
-        // the "All sessions" menu is the pointer's way past it.
-        className="flex items-stretch min-w-0 overflow-x-auto [scrollbar-width:none]"
-      >
-        <LayoutGroup id={layoutGroupId}>
-          {tabs.map((tab) => (
-            <SessionTabChip
-              key={tab.slot}
-              tab={tab}
-              agentState={tab.agentState}
-              isActive={tab.slot === activeSlot}
-              tabId={helpSessionTabId(idBase, tab.slot)}
-              panelId={panelId}
-              onSelect={onSelect}
-              onClose={handlePointerClose}
-              onFocusTab={handleTabFocus}
-              onMenuClose={handleMenuClose}
-              onRestart={onRestart}
-              isSoleLane={tabs.length === 1}
-              canOpenSession={canOpenSession}
-              onOpenSession={onOpenSession}
-              showAgent={showAgent}
-              isCrowded={tabs.length >= CROWDED_TAB_COUNT}
-              newSessionAgentIds={newSessionAgentIds}
-              canOpenSessionWithAgent={canOpenSessionWithAgent}
-              onOpenSessionWithAgent={onOpenSessionWithAgent}
-              isRegionFocused={isRegionFocused}
-            />
-          ))}
-        </LayoutGroup>
-      </div>
+    <div
+      ref={setRowEl}
+      data-session-strip=""
+      onFocus={handleRowFocus}
+      onBlur={handleRowBlur}
+      className="flex min-w-0 items-center gap-0.5 px-1 pt-1 border-b border-border-default shrink-0"
+    >
+      {/* One group for both forms, so the underline is this strip's alone and moves
+          with the selection from a tab to the picker and back. */}
+      <LayoutGroup id={layoutGroupId}>
+        {collapsed && activeTab ? (
+          <SessionPicker
+            tabs={tabs}
+            activeTab={activeTab}
+            showAgent={showAgent}
+            labelId={helpSessionTabId(idBase, activeSlot)}
+            isRegionFocused={isRegionFocused}
+            onSelect={onSelect}
+            onKeyboardClose={handleMenuClose}
+            onMenuClose={handleMenuClose}
+            onTriggerFocus={handlePickerFocus}
+            onOpenChange={handlePickerOpenChange}
+            canOpenSession={canOpenSession}
+            onOpenSession={onOpenSession}
+            newSessionAgentIds={newSessionAgentIds}
+            canOpenSessionWithAgent={canOpenSessionWithAgent}
+            onOpenSessionWithAgent={onOpenSessionWithAgent}
+            onRestart={onRestart}
+          />
+        ) : (
+          /* The tablist is its own element so that it owns nothing but tabs. With the
+             new-session button inside it, axe's `aria-required-children` rejects the
+             stray `button` in a `tablist`; as a sibling it is simply the next control. */
+          <div
+            role="tablist"
+            aria-label="Assistant sessions"
+            aria-orientation="horizontal"
+            onKeyDown={handleKeyDown}
+            // Tabs shrink to their floor, and past that the strip collapses, so this
+            // scrolls only by a rounding pixel. The scrollbar is hidden because a
+            // scrollbar inside a 33px strip is louder than the tabs it scrolls.
+            className="flex items-stretch min-w-0 overflow-x-auto [scrollbar-width:none]"
+          >
+            {tabs.map((tab) => (
+              <SessionTabChip
+                key={tab.slot}
+                tab={tab}
+                agentState={tab.agentState}
+                isActive={tab.slot === activeSlot}
+                tabId={helpSessionTabId(idBase, tab.slot)}
+                panelId={panelId}
+                onSelect={onSelect}
+                onClose={handlePointerClose}
+                onFocusTab={handleTabFocus}
+                onMenuClose={handleMenuClose}
+                onRestart={onRestart}
+                isSoleLane={tabs.length === 1}
+                canOpenSession={canOpenSession}
+                onOpenSession={onOpenSession}
+                showAgent={showAgent}
+                isCrowded={tabs.length >= CROWDED_TAB_COUNT}
+                newSessionAgentIds={newSessionAgentIds}
+                canOpenSessionWithAgent={canOpenSessionWithAgent}
+                onOpenSessionWithAgent={onOpenSessionWithAgent}
+                isRegionFocused={isRegionFocused}
+              />
+            ))}
+          </div>
+        )}
+      </LayoutGroup>
       {/* The one way to another session, directly after the last tab where a tab set
           keeps it. Parked rather than removed at the ceiling: a control that vanishes
           takes its own explanation with it. */}
@@ -776,6 +1059,7 @@ export function HelpSessionTabs({
             <Button
               variant="ghost"
               size="icon-xs"
+              data-new-session=""
               onClick={canOpenSession ? onOpenSession : undefined}
               // `aria-disabled`, not `disabled`. A truly disabled button is removed from
               // the tab order and stops firing pointer events, which takes its tooltip
@@ -799,14 +1083,6 @@ export function HelpSessionTabs({
               : `${MAX_ASSISTANT_SLOTS} sessions is the maximum for one project`}
           </TooltipContent>
         </Tooltip>
-      )}
-      {isOverflowing && (
-        <AllSessionsMenu
-          tabs={tabs}
-          activeSlot={activeSlot}
-          showAgent={showAgent}
-          onSelect={handleMenuPick}
-        />
       )}
     </div>
   );

@@ -535,13 +535,17 @@ export function useHelpSessionLanes({
     setPendingRestart(null);
   }, []);
 
+  // A strip collapsed into its picker has no tab per lane; the picker stands in for
+  // every one of them (#16325).
   const resolveRestartFocusTarget = useCallback(
     () =>
       restartFocusSlotRef.current === null
         ? null
         : (panelRef.current?.querySelector<HTMLElement>(
             `[role="tab"][data-slot="${restartFocusSlotRef.current}"]`
-          ) ?? null),
+          ) ??
+          panelRef.current?.querySelector<HTMLElement>("[data-session-picker]") ??
+          null),
     [panelRef]
   );
 
@@ -561,7 +565,11 @@ export function useHelpSessionLanes({
       pendingCloseSuccessor === null
         ? null
         : panel.querySelector<HTMLElement>(`[role="tab"][data-slot="${pendingCloseSuccessor}"]`);
-    return successor ?? panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    return (
+      successor ??
+      panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ??
+      panel.querySelector<HTMLElement>("[data-session-picker]")
+    );
   }, [panelRef, pendingCloseSuccessor]);
 
   return {
