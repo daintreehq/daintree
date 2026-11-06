@@ -509,11 +509,19 @@ describe("ActionPaletteItem", () => {
             onSelect={onSelect}
           />
         );
-        expect(
-          screen.getByRole("option", {
-            name: `Test Action terminal Test description ${shortcutLabel}`,
-          })
-        ).toBeTruthy();
+        const option = screen.getByRole("option", {
+          name: `Test Action terminal ${shortcutLabel} Test description`,
+        });
+        const labels = option
+          .getAttribute("aria-labelledby")!
+          .split(" ")
+          .map((id) => document.getElementById(id)!);
+        for (let index = 1; index < labels.length; index++) {
+          expect(
+            labels[index - 1]!.compareDocumentPosition(labels[index]!) &
+              Node.DOCUMENT_POSITION_FOLLOWING
+          ).toBeTruthy();
+        }
       } finally {
         platformMock.mockRestore();
       }
