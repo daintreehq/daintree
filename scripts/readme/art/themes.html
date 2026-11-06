@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="variants" content="wide narrow" />
+    <meta name="variants" content="dark-wide dark-narrow light-wide light-narrow" />
     <meta name="format" content="webp" />
     <link rel="stylesheet" href="base.css" />
     <style>
@@ -118,8 +118,8 @@
   </head>
   <body>
     <div id="art"><div class="grid" id="grid"></div></div>
+    <script src="frame.js"></script>
     <script>
-      document.body.dataset.layout = window.__ART__.scheme;
       const { data, shots, themeArt } = window.__ART__;
       // Daintree first, then the dark cohort, then the light one, as the picker groups them.
       const themes = [

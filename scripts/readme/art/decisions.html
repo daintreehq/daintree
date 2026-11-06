@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="variants" content="wide narrow" />
+    <meta name="variants" content="dark-wide dark-narrow light-wide light-narrow" />
     <meta name="format" content="webp-lossless" />
     <link rel="stylesheet" href="base.css" />
     <style>
@@ -96,6 +96,9 @@
         padding: 10px 18px 10px 16px;
         font: 400 13px/1.7 var(--mono);
       }
+      body[data-scheme="light"] .answer {
+        background: rgba(20, 147, 106, 0.05);
+      }
       .answer .tag {
         color: var(--accent);
       }
@@ -112,7 +115,7 @@
       .phone {
         width: 254px;
         padding: 9px;
-        background: #0c0b0a;
+        background: var(--bezel);
         border: 1px solid var(--border-strong);
         border-radius: 34px;
         position: relative;
@@ -130,7 +133,7 @@
         width: 70px;
         height: 18px;
         margin: 0 auto 2px;
-        background: #0c0b0a;
+        background: var(--bezel);
         border-radius: 10px;
       }
       .notice {
@@ -247,13 +250,26 @@
         width: 400px;
         padding: 18px 16px 22px;
       }
+      /* Phone: read top to bottom in time order. The question leaves the
+         terminal, is answered on the phone, and lands back in the terminal,
+         drawn as a second card for the same pane. */
       body[data-layout="narrow"] .stage {
         flex-direction: column;
         align-items: stretch;
-        gap: 64px;
+        gap: 60px;
       }
       body[data-layout="narrow"] .term {
         width: 100%;
+      }
+      .term.again,
+      body[data-layout="narrow"] #term .reply {
+        display: none;
+      }
+      body[data-layout="narrow"] .term.again {
+        display: block;
+      }
+      .term.again .later {
+        margin-top: 14px;
       }
       body[data-layout="narrow"] .lines,
       body[data-layout="narrow"] .answer {
@@ -282,19 +298,7 @@
             <span></span><span>“Split billing into its own tab?”</span> <span></span
             ><span class="muted">⎿ Queued. Ending my turn.</span>
           </div>
-          <div class="later">2 hours later</div>
-          <div class="answer" id="answer">
-            <div class="tag">[DAINTREE DECISION ANSWER]</div>
-            <div><span class="key">choice_label:</span> <span class="val">Approve</span></div>
-            <div>
-              <span class="key">comment:</span>
-              <span class="val">Keep the old link redirecting.</span>
-            </div>
-            <div class="tag">[END DAINTREE DECISION ANSWER]</div>
-          </div>
-          <div class="lines after">
-            <span class="dot"></span><span>Approved. Moving billing, with a redirect.</span>
-          </div>
+          <div class="reply" id="reply"></div>
         </div>
         <div class="phone" id="phone">
           <div class="screen">
@@ -316,18 +320,42 @@
             </div>
           </div>
         </div>
+        <div class="term again" id="term2">
+          <header>
+            <span class="mark" id="agent2"></span>Claude Code
+            <span class="chip">feat/billing-tab</span>
+          </header>
+          <div class="reply" id="reply2"></div>
+        </div>
         <span class="label" id="l-ask">encrypted</span>
         <span class="label signed" id="l-answer">signed</span>
       </div>
     </div>
+    <script src="frame.js"></script>
     <script>
-      const { data, scheme: layout } = window.__ART__;
-      document.body.dataset.layout = layout;
+      const { data } = window.__ART__;
+      const { layout } = ART;
       document.getElementById("mark").innerHTML = data.daintreeMark;
       const claude = data.agents.find((a) => a.id === "claude");
-      const agentMark = document.getElementById("agent");
-      agentMark.style.color = claude.ink;
-      agentMark.innerHTML = claude.svg;
+      for (const id of ["agent", "agent2"]) {
+        const agentMark = document.getElementById(id);
+        agentMark.style.color = ART.ink(claude);
+        agentMark.innerHTML = claude.svg;
+      }
+      // The answer as Daintree types it, in the block format the agent reads.
+      const REPLY = `
+        <div class="later">2 hours later</div>
+        <div class="answer">
+          <div class="tag">[DAINTREE DECISION ANSWER]</div>
+          <div><span class="key">choice_label:</span> <span class="val">Approve</span></div>
+          <div><span class="key">comment:</span> <span class="val">Keep the old link redirecting.</span></div>
+          <div class="tag">[END DAINTREE DECISION ANSWER]</div>
+        </div>
+        <div class="lines after">
+          <span class="dot"></span><span>Approved. Moving billing, with a redirect.</span>
+        </div>`;
+      document.getElementById("reply").innerHTML = REPLY;
+      document.getElementById("reply2").innerHTML = REPLY;
 
       // Two rails: the question leaves the terminal for the phone, the answer
       // comes back from the composer into the answer block.
@@ -345,14 +373,20 @@
       };
       const term = box("term");
       const phone = box("phone");
-      const answer = box("answer");
+      const answer = {
+        cy: (() => {
+          const r = document.querySelector("#reply .answer").getBoundingClientRect();
+          return r.top - stage.top + r.height / 2;
+        })(),
+      };
       const compose = box("compose");
       const ask = box("ask");
       const notice = box("notice");
       const ns = "http://www.w3.org/2000/svg";
       const svg = document.getElementById("rails");
-      const STEM = "#4a4846";
-      const ACCENT = "#36ce94";
+      const STEM = ART.token("--stem");
+      const ACCENT = ART.token("--accent");
+      const NODE = ART.token("--bg");
       const line = (d, color) => {
         const p = document.createElementNS(ns, "path");
         p.setAttribute("d", d);
@@ -368,7 +402,7 @@
         c.setAttribute("cx", x);
         c.setAttribute("cy", y);
         c.setAttribute("r", "4");
-        c.setAttribute("fill", "#1a1918");
+        c.setAttribute("fill", NODE);
         c.setAttribute("stroke", color);
         c.setAttribute("stroke-width", "1.5");
         svg.append(c);
@@ -380,18 +414,18 @@
       };
 
       if (layout === "narrow") {
-        // Down from the terminal into the phone, and back up beside it.
-        const top = term.bottom;
-        const bottom = phone.top;
-        const askX = phone.left + 70;
-        const ansX = phone.right - 70;
-        line(`M ${askX} ${top + 9} V ${bottom - 8} m -5 -6 l 5 6 l 5 -6`, STEM);
-        node(askX, top + 5, STEM);
-        line(`M ${ansX} ${bottom - 9} V ${top + 8} m -5 6 l 5 -6 l 5 6`, ACCENT);
-        node(ansX, bottom - 5, ACCENT);
-        const mid = (top + bottom) / 2;
-        label("l-ask", askX, mid);
-        label("l-answer", ansX, mid);
+        // Down from the terminal into the phone, then down again into the
+        // terminal card the answer is typed into.
+        const term2 = box("term2");
+        const x = phone.cx;
+        const down = (top, bottom, color) => {
+          line(`M ${x} ${top + 9} V ${bottom - 8} m -5 -6 l 5 6 l 5 -6`, color);
+          node(x, top + 5, color);
+        };
+        down(term.bottom, phone.top, STEM);
+        down(phone.bottom, term2.top, ACCENT);
+        label("l-ask", x, (term.bottom + phone.top) / 2);
+        label("l-answer", x, (phone.bottom + term2.top) / 2);
       } else {
         const gapMid = (term.right + phone.left) / 2;
         const r = 14;

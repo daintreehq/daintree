@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="variants" content="wide narrow" />
+    <meta name="variants" content="dark-wide dark-narrow light-wide light-narrow" />
     <meta name="format" content="webp-lossless" />
     <link rel="stylesheet" href="base.css" />
     <style>
@@ -58,8 +58,8 @@
   </head>
   <body>
     <div id="art"><div class="grid" id="grid"></div></div>
+    <script src="frame.js"></script>
     <script>
-      document.body.dataset.layout = window.__ART__.scheme;
       const { agents } = window.__ART__.data;
       // The products are known by these names; the registry keeps the short form.
       const DISPLAY = { claude: "Claude Code", gemini: "Gemini CLI" };
@@ -92,7 +92,7 @@
         const a = byId.get(id);
         const el = document.createElement("div");
         el.className = "agent";
-        el.innerHTML = `<span class="mark" style="color:${a.ink}">${a.svg}</span><span class="name">${DISPLAY[id] ?? a.name}</span>`;
+        el.innerHTML = `<span class="mark" style="color:${ART.ink(a)}">${a.svg}</span><span class="name">${DISPLAY[id] ?? a.name}</span>`;
         grid.append(el);
       }
       window.__artReady = true;

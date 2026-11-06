@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="variants" content="wide narrow" />
+    <meta name="variants" content="dark-wide dark-narrow light-wide light-narrow" />
     <meta name="format" content="webp-lossless" />
     <link rel="stylesheet" href="base.css" />
     <style>
@@ -22,7 +22,7 @@
       }
 
       .chat {
-        width: 404px;
+        width: 392px;
         background: var(--bg-grid);
         border: 1px solid var(--border-strong);
         border-radius: 12px;
@@ -30,19 +30,27 @@
         position: relative;
         z-index: 1;
       }
+      /* The same terminal header as the Decisions drawing: the agent CLI by
+         name, then what it is running as. */
       .chat header {
         display: flex;
         align-items: center;
         gap: 9px;
         padding: 12px 16px;
         border-bottom: 1px solid var(--border);
-        font: 400 12.5px/1 var(--mono);
-        color: var(--text-ter);
+        font: 500 13px/1 var(--sans);
+        color: var(--text);
       }
       .chat header .mark {
-        width: 16px;
-        height: 12px;
-        color: var(--accent);
+        width: 15px;
+        height: 15px;
+      }
+      .chat header .role {
+        font: 400 12px/1 var(--mono);
+        color: var(--text-sec);
+        background: var(--bg-elevated);
+        border-radius: 4px;
+        padding: 4px 7px;
       }
       .chat .body {
         padding: 18px 18px 20px;
@@ -89,7 +97,7 @@
       }
 
       .fleet {
-        width: 330px;
+        width: 300px;
         display: flex;
         flex-direction: column;
         gap: 10px;
@@ -142,7 +150,7 @@
         vertical-align: -1px;
       }
       .waiting {
-        border-color: rgba(197, 154, 78, 0.55);
+        border-color: var(--warning-border);
       }
       .waiting .state {
         color: var(--warning);
@@ -151,6 +159,17 @@
         color: var(--warning);
       }
 
+      .label {
+        position: absolute;
+        z-index: 2;
+        transform: translate(-50%, -50%);
+        font: 400 11.5px/1 var(--mono);
+        color: var(--text-sec);
+        background: var(--bg);
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        padding: 5px 9px;
+      }
       svg.stems {
         position: absolute;
         inset: 0;
@@ -176,7 +195,7 @@
       }
       body[data-layout="narrow"] .fleet {
         width: auto;
-        margin: 22px 0 0 36px;
+        margin: 44px 0 0 48px;
         gap: 8px;
       }
       body[data-layout="narrow"] .pane {
@@ -196,9 +215,12 @@
       <div class="stage" id="stage">
         <svg class="stems" id="stems"></svg>
         <div class="chat" id="chat">
-          <header><span class="mark" id="mark"></span>Daintree Assistant</header>
+          <header>
+            <span class="mark" id="mark"></span>Claude Code
+            <span class="role">Daintree Assistant</span>
+          </header>
           <div class="body">
-            <span class="lead you">you</span><span>ship the auth fix to all five worktrees</span>
+            <span class="lead you">›</span><span>ship the auth fix to every worktree</span>
             <span class="gap"></span>
             <span class="lead">▸</span><span>Spawned 5 agents, one per worktree</span>
             <span class="lead">▸</span><span>Watching their terminals</span>
@@ -209,13 +231,18 @@
           </div>
         </div>
         <div class="fleet" id="fleet"></div>
+        <span class="label" id="l-mcp">MCP</span>
       </div>
     </div>
+    <script src="frame.js"></script>
     <script>
-      const { data, scheme: layout } = window.__ART__;
-      document.body.dataset.layout = layout;
-      document.getElementById("mark").innerHTML = data.daintreeMark;
+      const { data } = window.__ART__;
+      const { layout } = ART;
       const byId = new Map(data.agents.map((a) => [a.id, a]));
+      const claude = byId.get("claude");
+      const agentMark = document.getElementById("mark");
+      agentMark.style.color = ART.ink(claude);
+      agentMark.innerHTML = claude.svg;
       const FLEET = [
         ["claude", "fix/auth-session", "working"],
         ["codex", "fix/auth-refresh", "working"],
@@ -229,7 +256,7 @@
         const row = document.createElement("div");
         row.className = `pane ${state}`;
         row.innerHTML =
-          `<span class="mark" style="color:${a.ink}">${a.svg}</span><span class="branch">${branch}</span>` +
+          `<span class="mark" style="color:${ART.ink(a)}">${a.svg}</span><span class="branch">${branch}</span>` +
           `<span class="state"><span class="ring"></span>${state === "waiting" ? "waiting on you" : "working"}</span>`;
         fleet.append(row);
       }
@@ -241,7 +268,9 @@
       const panes = [...fleet.children].map((el) => el.getBoundingClientRect());
       const rel = (x, y) => [x - stage.left, y - stage.top];
       const [sx, sy] = rel(chat.right, chat.top + chat.height / 2);
-      const splitX = sx + 34;
+      // The Assistant drives the fleet through Daintree's MCP tools; the label
+      // sits on the stem before it splits.
+      const splitX = sx + 74;
       const ns = "http://www.w3.org/2000/svg";
       const svg = document.getElementById("stems");
       const line = (d, color) => {
@@ -263,11 +292,17 @@
         c.setAttribute("stroke-width", "1.5");
         svg.append(c);
       };
-      const STEM = "#4a4846";
-      const WAIT = "#c59a4e";
+      const STEM = ART.token("--stem");
+      const WAIT = ART.token("--warning");
+      const NODE = ART.token("--bg");
+      const label = (x, y) => {
+        const el = document.getElementById("l-mcp");
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+      };
       if (layout === "narrow") {
         // A trunk drops from under the chat and feeds each pane from the left.
-        const tx = chat.left - stage.left + 18;
+        const tx = chat.left - stage.left + 30;
         const top = chat.bottom - stage.top;
         const ys = panes.map((r) => r.top - stage.top + r.height / 2);
         line(`M ${tx} ${top} V ${ys[ys.length - 1]}`, STEM);
@@ -275,12 +310,18 @@
           const color = FLEET[i][2] === "waiting" ? WAIT : STEM;
           const ex = r.left - stage.left;
           line(`M ${tx} ${ys[i]} H ${ex - 6}`, color);
-          node(ex - 6, ys[i], color, "#1a1918");
+          node(ex - 6, ys[i], color, NODE);
         });
-        node(tx, top + 4, STEM, "#1a1918");
+        node(tx, top + 4, STEM, NODE);
+        label(tx, top + 22);
       } else {
         line(`M ${sx + 9} ${sy} H ${splitX}`, STEM);
-        panes.forEach((r, i) => {
+        // The waiting branch is drawn last so it sits over the grey ones.
+        const order = panes
+          .map((_, i) => i)
+          .sort((a, b) => (FLEET[a][2] === "waiting") - (FLEET[b][2] === "waiting"));
+        order.forEach((i) => {
+          const r = panes[i];
           const [ex, ey] = rel(r.left, r.top + r.height / 2);
           const color = FLEET[i][2] === "waiting" ? WAIT : STEM;
           const bend = (ex - splitX) * 0.55;
@@ -288,10 +329,10 @@
             `M ${splitX} ${sy} C ${splitX + bend} ${sy}, ${ex - bend} ${ey}, ${ex - 6} ${ey}`,
             color
           );
-          node(ex - 6, ey, color, "#1a1918");
+          node(ex - 6, ey, color, NODE);
         });
-        node(sx + 4, sy, STEM, "#1a1918");
-        node(splitX, sy, STEM, "#1a1918");
+        node(sx + 4, sy, STEM, NODE);
+        label(splitX - 10, sy);
       }
       window.__artReady = true;
     </script>

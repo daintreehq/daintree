@@ -23,6 +23,45 @@
   --mono: "IBM Plex Mono", ui-monospace, monospace;
   --radius-card: 16px;
   --radius-control: 6px;
+  --warning-border: rgba(197, 154, 78, 0.5);
+  --stem: #6b6864;
+  --bezel: #0c0b0a;
+  --add-bg: rgba(54, 206, 148, 0.08);
+  --add-ink: #9fd8bf;
+  --del-bg: rgba(200, 116, 108, 0.1);
+  --del-ink: #d99a93;
+  --plus: #6fcf9f;
+  --minus: #d98a82;
+}
+
+/* On GitHub's light page the same drawings sit on daintree.org's light
+   surfaces, with the accent and status colours darkened to hold on white. */
+body[data-scheme="light"] {
+  --bg: #f7f6f4;
+  --bg-grid: #ffffff;
+  --bg-card: #ffffff;
+  --bg-elevated: #efede9;
+  --border: #e6e3de;
+  --border-strong: #d6d2cc;
+  --text: #1f1d1b;
+  --text-sec: #4f4b46;
+  --text-ter: #6f6a64;
+  --muted: #9a958f;
+  --accent: #14936a;
+  --accent-subtle: rgba(20, 147, 106, 0.08);
+  --accent-border: rgba(20, 147, 106, 0.32);
+  --on-accent: #ffffff;
+  --warning: #a8701c;
+  --warning-border: rgba(168, 112, 28, 0.45);
+  --success: #4f7a58;
+  --error: #b3554b;
+  --stem: #948e86;
+  --add-bg: rgba(20, 147, 106, 0.08);
+  --add-ink: #11704f;
+  --del-bg: rgba(179, 85, 75, 0.08);
+  --del-ink: #9e4339;
+  --plus: #14936a;
+  --minus: #b3554b;
 }
 
 * {
