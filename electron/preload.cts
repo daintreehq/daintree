@@ -3353,6 +3353,7 @@ function buildElectronApi(): ElectronAPI {
           actionId: string;
           args?: unknown;
           pluginId?: string;
+          approvedPresetLaunch?: { agentId: string; presetId: string; content: string };
         }) => void
       ) => _typedOn(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, callback),
 

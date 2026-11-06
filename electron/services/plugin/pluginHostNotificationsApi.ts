@@ -17,6 +17,10 @@ import type { PluginTaskRecord } from "./PluginTaskRegistry.js";
 
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import {
+  pluginPresetLaunchRequest,
+  type HostApprovedPluginPresetLaunch,
+} from "../../../shared/utils/agentPresetLaunchConsent.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
@@ -423,10 +427,49 @@ export function buildNotificationsHostApi(
     args: unknown,
     projectId: string | null
   ): Promise<ActionDispatchResult> => {
-    const result = await dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId);
+    let approval: HostApprovedPluginPresetLaunch | undefined;
+    // A launch that names a preset and nothing else asks the person about that
+    // preset first (#16324); every other dispatch goes straight on.
+    if (pluginPresetLaunchRequest(actionId, args) !== null) {
+      const plugin = deps.plugins.get(pluginId);
+      if (!plugin) return pluginUnloaded();
+      const { createPluginPresetLaunchGateDeps, gatePluginPresetLaunch } =
+        await import("./pluginPresetLaunchGate.js");
+      const gated = await gatePluginPresetLaunch(
+        {
+          pluginId,
+          displayName: plugin.manifest.displayName ?? plugin.manifest.name,
+          declaredCapabilities: plugin.manifest.capabilities ?? [],
+          // The instance's own binding, as every capability grant is keyed.
+          scopeKey: plugin.binding?.projectId ?? "global",
+        },
+        actionId,
+        args,
+        projectId,
+        await createPluginPresetLaunchGateDeps()
+      );
+      if (gated.kind === "refused") return gated.result;
+      if (gated.kind === "approved") {
+        // The person may have taken minutes; an approval for a plugin that
+        // unloaded meanwhile launches nothing.
+        if (!deps.plugins.has(pluginId)) return pluginUnloaded();
+        approval = gated.approval;
+      }
+    }
+    const result = await dispatcher.sendDispatchToRenderer(
+      actionId,
+      args,
+      projectId,
+      pluginId,
+      approval
+    );
     if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
     return result;
   };
+  const pluginUnloaded = (): ActionDispatchResult => ({
+    ok: false,
+    error: { code: "PLUGIN_UNLOADED", message: `Plugin "${pluginId}" is no longer loaded` },
+  });
   /**
    * Hold one of the caller's actions, written in its manifest namespace, to
    * that namespace and rewrite it to its instance's — the same rule as

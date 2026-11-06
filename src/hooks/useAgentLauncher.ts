@@ -53,6 +53,7 @@ import {
 } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { buildFirstPrompt } from "@shared/utils/firstPrompt";
+import { presetLaunchContent, type HostApprovedPluginPresetLaunch } from "@shared/utils/agentPresetLaunchConsent";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 export { buildLaunchIdentity, type LaunchAgentIdentity };
@@ -233,6 +234,12 @@ export interface LaunchAgentOptions {
    * pane's `launchedByPluginId`. Only ever `ActionContext.callerPluginId`.
    */
   launchedByPluginId?: string;
+  /**
+   * The preset a person approved this plugin launch on (#16324). Only ever
+   * `ActionContext.hostApprovedPluginPresetLaunch`. The launch refuses unless
+   * the preset it resolves has exactly the approved content.
+   */
+  approvedPluginPreset?: HostApprovedPluginPresetLaunch;
   /**
    * Focus policy for the new panel. `"preserve"` keeps focus where it is
    * (background/MCP spawns). Omitted defaults to the resolved policy from
@@ -615,6 +622,20 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           },
         });
         if (plan.unloadedPresetId !== undefined) return declinePresetsLoading();
+        // Checked after every await the plan makes, against the preset it will
+        // launch on: the person approved that content, and a preset that
+        // changed since, or a different one, runs on nobody's say-so (#16324).
+        const approvedPreset = launchOptions?.approvedPluginPreset;
+        if (
+          approvedPreset !== undefined &&
+          (approvedPreset.agentId !== agentId ||
+            plan.preset?.id !== approvedPreset.presetId ||
+            presetLaunchContent(plan.preset) !== approvedPreset.content)
+        ) {
+          throw new Error(
+            `The preset "${approvedPreset.presetId}" isn't the one that was approved for this plugin: it changed or isn't available here. Launch again to be asked about it as it is now.`
+          );
+        }
         if (plan.missingAccountId !== undefined) {
           logWarn(`Declined a launch of ${agentId}: its account no longer exists`);
           notifyAccountMissing(agentId, agentConfig?.name ?? agentId, effectiveWorktreeId);

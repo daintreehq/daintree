@@ -36,6 +36,7 @@ import {
   elevatedDangerRationale,
   resolveEffectiveActionDanger,
 } from "./actions/effectiveDanger";
+import { hostApprovalCoversPresetLaunch } from "@shared/utils/agentPresetLaunchConsent";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
@@ -687,8 +688,20 @@ export class ActionService {
       source,
       validatedArgs
     );
+    // The one configured plugin launch the host can approve (#16324): a preset
+    // and nothing else, approved by the person in main for this very agent and
+    // preset. Anything more on the launch keeps it refused.
+    const pluginPresetApproved =
+      source === "plugin" &&
+      definition.danger === "safe" &&
+      hostApprovalCoversPresetLaunch(
+        options?.hostApprovedPluginPresetLaunch,
+        actionId,
+        validatedArgs
+      );
     if (
       effectiveDanger === "confirm" &&
+      !pluginPresetApproved &&
       (source === "plugin" || (source === "agent" && !options?.confirmed))
     ) {
       // A plugin has no confirmation to give, so the configured-launch refusal
@@ -761,6 +774,11 @@ export class ActionService {
         // Same unconditional stamp: a plugin's identity comes from the host's
         // own bridge closure, never from a context the caller could shape.
         callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,
+        // Same unconditional stamp: only main's envelope carries a preset
+        // approval, and only for a dispatch the gate above let through on it.
+        hostApprovedPluginPresetLaunch: pluginPresetApproved
+          ? options?.hostApprovedPluginPresetLaunch
+          : undefined,
         // Same unconditional stamp: it is what makes a launch a scheduled
         // run's, so a `contextOverride` must not be able to plant one (#15977).
         scheduledRun: options?.scheduledRun,

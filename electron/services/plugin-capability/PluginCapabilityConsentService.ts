@@ -3,9 +3,15 @@ import {
   EXTERNAL_LINK_CONSENT,
   type PluginCapabilityConsentOutcome,
   type PluginCapabilityIdentity,
+  type PluginPresetGrantEntry,
   type PluginRestorableGrant,
   type PluginConsentSubject,
 } from "../../../shared/types/pluginCapabilityConsent.js";
+import {
+  AGENT_LAUNCH_PRESET_CAPABILITY,
+  type PluginPresetLaunchSummary,
+  type PluginPresetLaunchTarget,
+} from "../../../shared/utils/agentPresetLaunchConsent.js";
 import type { PluginCapabilityConsentStore } from "./PluginCapabilityConsentStore.js";
 
 /** Prefix on the thrown error so a plugin view can recognise a denial. */
@@ -22,6 +28,8 @@ export interface PluginCapabilityFirstUseRequest {
   capability: PluginConsentSubject;
   /** Hostname the plugin wants to open links to; set only for {@link EXTERNAL_LINK_CONSENT}. */
   site?: string;
+  /** What the preset turns on; set only for `agent:launch-preset` (#16324). */
+  preset?: PluginPresetLaunchSummary;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
   declaredCapabilities: readonly BuiltInPluginCapability[];
   restore?: undefined;
@@ -36,6 +44,7 @@ export interface PluginCapabilityRestoreRequest {
   declaredCapabilities: readonly BuiltInPluginCapability[];
   capability?: undefined;
   site?: undefined;
+  preset?: undefined;
 }
 
 export type PluginCapabilityConsentRequest =
@@ -141,7 +150,11 @@ export class PluginCapabilityConsentService {
    */
   async offerRestore(offer: PluginCapabilityRestoreOffer): Promise<boolean> {
     const { pluginId } = offer;
-    const grants = offer.grants.filter((grant) => grant.capability !== EXTERNAL_LINK_CONSENT);
+    const grants = offer.grants.filter(
+      (grant) =>
+        grant.capability !== EXTERNAL_LINK_CONSENT &&
+        grant.capability !== AGENT_LAUNCH_PRESET_CAPABILITY
+    );
     if (grants.length === 0) return false;
     const bridge = this.bridge;
     if (bridge === null) {
@@ -238,15 +251,81 @@ export class PluginCapabilityConsentService {
     );
   }
 
+  /**
+   * Gate launching an agent on one preset (#16324). The grant is for that
+   * preset as it is now: `fingerprint` covers its source and content, and a
+   * stored grant for an older fingerprint is removed before asking, so an edit
+   * ends the grant and a later revert does not bring it back unasked.
+   */
+  async ensurePresetLaunchAllowed(
+    pluginId: string,
+    pluginDisplayName: string,
+    summary: PluginPresetLaunchSummary,
+    fingerprint: string,
+    declaredCapabilities: readonly BuiltInPluginCapability[],
+    scopeKey?: PluginScopeKey
+  ): Promise<void> {
+    const identity = {
+      pluginId,
+      capability: AGENT_LAUNCH_PRESET_CAPABILITY,
+      preset: { agentId: summary.agentId, presetId: summary.presetId, source: summary.source },
+      scopeKey,
+    };
+    const stored = this.consentStore.getGrant(identity);
+    if (stored?.preset?.fingerprint === fingerprint) return;
+    if (stored) this.consentStore.revoke(identity);
+    return this.ensureSubjectAllowed(identity, pluginDisplayName, declaredCapabilities, {
+      summary,
+      fingerprint,
+    });
+  }
+
+  /** The preset grants a plugin holds, in every scope (#16324). */
+  listPresetGrants(pluginId: string): PluginPresetGrantEntry[] {
+    const entries: PluginPresetGrantEntry[] = [];
+    for (const record of this.consentStore.listForPlugin(pluginId)) {
+      if (record.capability !== AGENT_LAUNCH_PRESET_CAPABILITY || !record.preset) continue;
+      const { agentId, presetId, source, presetName } = record.preset;
+      entries.push({
+        agentId,
+        presetId,
+        source,
+        presetName,
+        scopeKey: record.scopeKey,
+        approvedAt: record.approvedAt,
+      });
+    }
+    return entries;
+  }
+
+  /** Withdraw one preset grant; the next launch on it asks again. */
+  revokePresetGrant(
+    pluginId: string,
+    target: PluginPresetLaunchTarget,
+    scopeKey: PluginScopeKey
+  ): boolean {
+    return this.consentStore.setGrant(
+      {
+        pluginId,
+        capability: AGENT_LAUNCH_PRESET_CAPABILITY,
+        preset: { agentId: target.agentId, presetId: target.presetId, source: target.source },
+        scopeKey,
+      },
+      false
+    );
+  }
+
   private async ensureSubjectAllowed(
     // Only what a prompt can ask about: a user switch with no token of its own
     // is never asked for (#13821).
     identity: PluginCapabilityIdentity & { capability: PluginConsentSubject },
     pluginDisplayName: string,
-    declaredCapabilities: readonly BuiltInPluginCapability[]
+    declaredCapabilities: readonly BuiltInPluginCapability[],
+    preset?: { summary: PluginPresetLaunchSummary; fingerprint: string }
   ): Promise<void> {
     const { pluginId, capability, scopeKey, site } = identity;
-    if (this.consentStore.hasGrant(identity)) return;
+    // A preset grant answers only through its fingerprint, checked by the caller.
+    if (preset === undefined && this.consentStore.hasGrant(identity)) return;
 
     const epoch = this.purgeEpochs.get(pluginId) ?? 0;
     const outcome = await this.requestOutcome(
@@ -255,7 +334,8 @@ export class PluginCapabilityConsentService {
       capability,
       declaredCapabilities,
       scopeKey,
-      site
+      site,
+      preset
     );
 
     if (
@@ -267,7 +347,10 @@ export class PluginCapabilityConsentService {
       );
     }
     if (outcome === "approved-and-pin") {
-      this.consentStore.grant(identity);
+      this.consentStore.grant(
+        identity,
+        preset ? { fingerprint: preset.fingerprint, presetName: preset.summary.presetName } : undefined
+      );
       return;
     }
     if (outcome === "approved-once") return;
@@ -318,7 +401,8 @@ export class PluginCapabilityConsentService {
     capability: PluginConsentSubject,
     declaredCapabilities: readonly BuiltInPluginCapability[],
     scopeKey?: PluginScopeKey,
-    site?: string
+    site?: string,
+    preset?: { summary: PluginPresetLaunchSummary; fingerprint: string }
   ): Promise<PluginCapabilityConsentOutcome> {
     if (this.bridge === null) {
       // Fail closed — no UI to approve through.
@@ -332,6 +416,9 @@ export class PluginCapabilityConsentService {
       pluginId,
       capability,
       site ?? null,
+      // Two contents of one preset are two decisions; the fingerprint keeps
+      // a launch on the edited preset from joining the old one's dialog.
+      preset ? [preset.summary.agentId, preset.summary.presetId, preset.fingerprint] : null,
       this.purgeEpochs.get(pluginId) ?? 0,
     ]);
     const existing = this.inFlight.get(key);
@@ -349,6 +436,7 @@ export class PluginCapabilityConsentService {
         pluginDisplayName,
         capability,
         ...(site !== undefined ? { site } : {}),
+        ...(preset !== undefined ? { preset: preset.summary } : {}),
         declaredCapabilities,
       });
     const promise = invoke()

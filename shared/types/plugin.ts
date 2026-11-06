@@ -961,6 +961,10 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "agent:read",
   "agent:register",
   "agent:input",
+  // Launch an agent on one of the person's presets (`host.dispatch("agent.launch",
+  // { agentId, presetId })`, #16324). Declaring it enables nothing: each preset
+  // asks once on first use, and the grant ends when the preset changes.
+  "agent:launch-preset",
   // Read a terminal's current screen as plain text (`host.terminals.readScreen`).
   // Separate from `agent:read` on purpose: what a terminal shows routinely
   // includes tokens and env dumps, so it carries its own first-use consent.

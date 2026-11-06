@@ -37,4 +37,7 @@ export const CONFIRM_TRIGGERING_CAPABILITIES: ReadonlySet<BuiltInPluginCapabilit
   // ranks with `agent:invoke`: actions elevate to "confirm" and the MCP tool
   // surface may reach D2 (#10558).
   "agent:input",
+  // Choosing which of the person's presets an agent runs on can choose the one
+  // that turns bypass on, so it ranks with `agent:invoke` too (#16324).
+  "agent:launch-preset",
 ]);

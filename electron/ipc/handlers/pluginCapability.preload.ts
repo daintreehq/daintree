@@ -12,6 +12,8 @@ export const PLUGIN_CAPABILITY_METHOD_CHANNELS = {
   getPanelAttention: "plugin-capability:get-panel-attention",
   setPanelAttention: "plugin-capability:set-panel-attention",
   listPanelAttention: "plugin-capability:list-panel-attention",
+  listPresetGrants: "plugin-capability:list-preset-grants",
+  revokePresetGrant: "plugin-capability:revoke-preset-grant",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_CAPABILITY_METHOD_CHANNELS;

@@ -96,6 +96,8 @@ export interface ActionCallbacks {
       scheduledRun?: ScheduledRunRef;
       /** The plugin behind a plugin dispatch, from `ActionContext.callerPluginId` only. */
       launchedByPluginId?: string;
+      /** The preset a person approved for this plugin launch, from the context only (#16324). */
+      approvedPluginPreset?: import("@shared/utils/agentPresetLaunchConsent").HostApprovedPluginPresetLaunch;
       focusPolicy?: AddPanelFocusPolicy;
       requestedId?: string;
       force?: boolean;

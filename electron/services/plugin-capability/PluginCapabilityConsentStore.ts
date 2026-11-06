@@ -4,7 +4,9 @@ import {
   type PluginCapabilityConsentRecord,
   type PluginCapabilityIdentity,
   type PluginGrantKey,
+  type PluginPresetGrant,
 } from "../../../shared/types/pluginCapabilityConsent.js";
+import { AGENT_LAUNCH_PRESET_CAPABILITY } from "../../../shared/utils/agentPresetLaunchConsent.js";
 
 /**
  * Just-in-time (JIT) grant store for plugin host capabilities (#10524).
@@ -31,25 +33,37 @@ export class PluginCapabilityConsentStore {
     private readonly readConfig: () => Record<string, unknown>
   ) {}
 
-  /** Whether the user has an active grant for this identity. */
+  /**
+   * Whether the user has an active grant for this identity. A preset grant is
+   * only ever answered by {@link getGrant}, which hands back the fingerprint to
+   * check; here it reads as present, which no gate relies on.
+   */
   hasGrant(identity: PluginCapabilityIdentity): boolean {
     this.hydrate();
     return this.grants.has(makeKey(identity));
   }
 
+  /** The grant stored for this identity, if any. */
+  getGrant(identity: PluginCapabilityIdentity): PluginCapabilityConsentRecord | undefined {
+    this.hydrate();
+    return this.grants.get(makeKey(identity));
+  }
+
   /**
    * Mint or refresh a grant for an identity. Idempotent — a re-approval just
-   * refreshes `approvedAt`.
+   * refreshes `approvedAt`. A preset grant needs `preset`, the content it was
+   * approved for; without it the grant would answer for nothing, so none is
+   * minted.
    */
-  grant(identity: PluginCapabilityIdentity): PluginCapabilityConsentRecord {
+  grant(
+    identity: PluginCapabilityIdentity,
+    preset?: Pick<PluginPresetGrant, "fingerprint" | "presetName">
+  ): PluginCapabilityConsentRecord {
     this.hydrate();
-    const record: PluginCapabilityConsentRecord = {
-      pluginId: identity.pluginId,
-      capability: identity.capability,
-      ...(identity.site !== undefined ? { site: identity.site } : {}),
-      scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
-      approvedAt: Date.now(),
-    };
+    const record = recordFor(identity, Date.now(), preset);
+    if (record.capability === AGENT_LAUNCH_PRESET_CAPABILITY && record.preset === undefined) {
+      throw new Error("A preset grant needs the preset it is for");
+    }
     this.grants.set(makeKey(identity), record);
     this.flush();
     return record;
@@ -81,13 +95,9 @@ export class PluginCapabilityConsentStore {
     const key = makeKey(identity);
     const previous = this.grants.get(key);
     if (enabled) {
-      this.grants.set(key, {
-        pluginId: identity.pluginId,
-        capability: identity.capability,
-        ...(identity.site !== undefined ? { site: identity.site } : {}),
-        scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
-        approvedAt: previous?.approvedAt ?? Date.now(),
-      });
+      // A switch never mints a preset grant: it has no content to approve.
+      if (identity.capability === AGENT_LAUNCH_PRESET_CAPABILITY) return false;
+      this.grants.set(key, recordFor(identity, previous?.approvedAt ?? Date.now()));
     } else {
       this.grants.delete(key);
     }
@@ -109,15 +119,11 @@ export class PluginCapabilityConsentStore {
     const previous = new Map<string, PluginCapabilityConsentRecord | undefined>();
     const approvedAt = Date.now();
     for (const identity of identities) {
+      // Never offered back, so never restored (#16324): see PluginRestorableGrant.
+      if (identity.capability === AGENT_LAUNCH_PRESET_CAPABILITY) continue;
       const key = makeKey(identity);
       if (!previous.has(key)) previous.set(key, this.grants.get(key));
-      this.grants.set(key, {
-        pluginId: identity.pluginId,
-        capability: identity.capability,
-        ...(identity.site !== undefined ? { site: identity.site } : {}),
-        scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
-        approvedAt,
-      });
+      this.grants.set(key, recordFor(identity, approvedAt));
     }
     if (previous.size === 0) return true;
     if (this.flush() || this.flush()) return true;
@@ -216,10 +222,75 @@ export class PluginCapabilityConsentStore {
  */
 function makeKey(identity: PluginCapabilityIdentity): string {
   const base = [identity.scopeKey ?? DEFAULT_SCOPE_KEY, identity.pluginId, identity.capability];
-  // A site grant carries a fourth element, so it can collide with no capability key.
-  return JSON.stringify(
-    identity.capability === EXTERNAL_LINK_CONSENT ? [...base, identity.site ?? ""] : base
-  );
+  // A site or preset grant carries a fourth element, so it can collide with no
+  // capability key, and a capability with no target names no preset at all.
+  if (identity.capability === EXTERNAL_LINK_CONSENT) {
+    return JSON.stringify([...base, identity.site ?? ""]);
+  }
+  if (identity.capability === AGENT_LAUNCH_PRESET_CAPABILITY) {
+    const preset = identity.preset;
+    return JSON.stringify([
+      ...base,
+      preset ? [preset.agentId, preset.presetId, preset.source] : null,
+    ]);
+  }
+  return JSON.stringify(base);
+}
+
+/** The record an identity is stored as, its site or preset carried over. */
+function recordFor(
+  identity: PluginCapabilityIdentity,
+  approvedAt: number,
+  preset?: Pick<PluginPresetGrant, "fingerprint" | "presetName">
+): PluginCapabilityConsentRecord {
+  return {
+    pluginId: identity.pluginId,
+    capability: identity.capability,
+    ...(identity.site !== undefined ? { site: identity.site } : {}),
+    ...(identity.capability === AGENT_LAUNCH_PRESET_CAPABILITY &&
+    identity.preset !== undefined &&
+    preset !== undefined
+      ? {
+          preset: {
+            agentId: identity.preset.agentId,
+            presetId: identity.preset.presetId,
+            source: identity.preset.source,
+            fingerprint: preset.fingerprint,
+            presetName: preset.presetName,
+          },
+        }
+      : {}),
+    scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
+    approvedAt,
+  };
+}
+
+const PRESET_SOURCES: ReadonlySet<string> = new Set(["custom", "project", "ccr", "registry"]);
+
+/** A stored preset grant's target, or null when any part of it is unreadable. */
+function normalizePresetGrant(raw: unknown): PluginPresetGrant | null {
+  if (!raw || typeof raw !== "object") return null;
+  const p = raw as Record<string, unknown>;
+  if (
+    typeof p.agentId !== "string" ||
+    p.agentId === "" ||
+    typeof p.presetId !== "string" ||
+    p.presetId === "" ||
+    typeof p.source !== "string" ||
+    !PRESET_SOURCES.has(p.source) ||
+    typeof p.fingerprint !== "string" ||
+    p.fingerprint === "" ||
+    typeof p.presetName !== "string"
+  ) {
+    return null;
+  }
+  return {
+    agentId: p.agentId,
+    presetId: p.presetId,
+    source: p.source as PluginPresetGrant["source"],
+    fingerprint: p.fingerprint,
+    presetName: p.presetName,
+  };
 }
 
 /**
@@ -251,6 +322,19 @@ function normalizeRecord(raw: unknown): PluginCapabilityConsentRecord | null {
       pluginId: r.pluginId,
       capability: EXTERNAL_LINK_CONSENT,
       site: r.site,
+      scopeKey: scopeKey ?? DEFAULT_SCOPE_KEY,
+      approvedAt: r.approvedAt,
+    };
+  }
+  // A preset grant without a readable preset and fingerprint would answer for
+  // a preset nobody approved, so it is dropped like a link grant with no site.
+  if (r.capability === AGENT_LAUNCH_PRESET_CAPABILITY) {
+    const preset = normalizePresetGrant(r.preset);
+    if (!preset) return null;
+    return {
+      pluginId: r.pluginId,
+      capability: AGENT_LAUNCH_PRESET_CAPABILITY,
+      preset,
       scopeKey: scopeKey ?? DEFAULT_SCOPE_KEY,
       approvedAt: r.approvedAt,
     };

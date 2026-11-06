@@ -1,4 +1,9 @@
 import type { BuiltInPluginCapability, PluginScopeKey } from "./plugin.js";
+import type {
+  AGENT_LAUNCH_PRESET_CAPABILITY,
+  PluginPresetLaunchSummary,
+  PluginPresetLaunchTarget,
+} from "../utils/agentPresetLaunchConsent.js";
 
 /**
  * Just-in-time (JIT) capability consent for plugin host-API surfaces (#10524).
@@ -69,10 +74,27 @@ export interface PluginCapabilityIdentity {
    */
   site?: string;
   /**
+   * The preset an `agent:launch-preset` grant is for (#16324). Required for
+   * that capability and absent for every other, so a grant for the capability
+   * alone answers for no preset.
+   */
+  preset?: PluginPresetLaunchTarget;
+  /**
    * Scope the grant belongs to. Omitted means `"global"` — the app-wide scope
    * every installed and builtin plugin loads into.
    */
   scopeKey?: PluginScopeKey;
+}
+
+/**
+ * What an `agent:launch-preset` grant holds beyond its key: the fingerprint of
+ * the preset's content as approved, checked again at every launch, and the
+ * name it had, so the revoke row reads even once the preset is gone.
+ */
+export interface PluginPresetGrant extends PluginPresetLaunchTarget {
+  /** SHA-256 of the source and the preset's content as approved. */
+  fingerprint: string;
+  presetName: string;
 }
 
 /**
@@ -84,6 +106,8 @@ export interface PluginCapabilityConsentRecord {
   capability: PluginGrantKey;
   /** Hostname of an {@link EXTERNAL_LINK_CONSENT} grant; absent otherwise. */
   site?: string;
+  /** The preset an `agent:launch-preset` grant is for; absent otherwise. */
+  preset?: PluginPresetGrant;
   /**
    * Scope the grant was minted in. Records written before the key widened have
    * no `scopeKey` on disk and read back as `"global"`.
@@ -187,9 +211,13 @@ export const PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS = 2 * 1000;
 /**
  * What a replacing install can offer back (#14019): anything a manifest asks
  * for. A site is never one — no manifest declares the sites it opens, so each
- * asks again on first use.
+ * asks again on first use — and neither is a preset: declaring the capability
+ * says nothing about which presets the new code may use.
  */
-export type PluginRestorableGrant = Exclude<PluginGrantKey, typeof EXTERNAL_LINK_CONSENT>;
+export type PluginRestorableGrant = Exclude<
+  PluginGrantKey,
+  typeof EXTERNAL_LINK_CONSENT | typeof AGENT_LAUNCH_PRESET_CAPABILITY
+>;
 
 /**
  * Display-safe consent prompt pushed from main to the renderer over the typed
@@ -209,6 +237,8 @@ export interface PluginCapabilityFirstUseRequestEvent {
   capability: PluginConsentSubject;
   /** Hostname the plugin wants to open links to; set only for {@link EXTERNAL_LINK_CONSENT}. */
   site?: string;
+  /** What the preset turns on; set only for `agent:launch-preset` (#16324). */
+  preset?: PluginPresetLaunchSummary;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
   declaredCapabilities: readonly BuiltInPluginCapability[];
   restore?: undefined;
@@ -230,6 +260,7 @@ export interface PluginCapabilityRestoreRequestEvent {
   declaredCapabilities: readonly BuiltInPluginCapability[];
   capability?: undefined;
   site?: undefined;
+  preset?: undefined;
 }
 
 export type PluginCapabilityConsentRequestEvent =
@@ -311,4 +342,22 @@ export interface PluginPanelAttentionQuery {
 export interface PluginPanelAttentionUpdate {
   pluginId: string;
   enabled: boolean;
+}
+
+/** Renderer → main read of the preset grants a plugin holds (#16324). */
+export interface PluginPresetGrantsQuery {
+  pluginId: string;
+}
+
+/** One preset grant, as the Permissions tab lists it. */
+export interface PluginPresetGrantEntry extends PluginPresetLaunchTarget {
+  presetName: string;
+  scopeKey: PluginScopeKey;
+  approvedAt: number;
+}
+
+/** Renderer → main revoke of one preset grant (#16324). */
+export interface PluginPresetGrantRevoke extends PluginPresetLaunchTarget {
+  pluginId: string;
+  scopeKey: PluginScopeKey;
 }

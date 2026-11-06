@@ -2723,8 +2723,16 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: string[];
   };
+  "plugin-capability:list-preset-grants": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPresetGrantsQuery];
+    result: import("../pluginCapabilityConsent.js").PluginPresetGrantEntry[];
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
+    result: void;
+  };
+  "plugin-capability:revoke-preset-grant": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPresetGrantRevoke];
     result: void;
   };
   "plugin-capability:set-os-notifications": {

@@ -78,11 +78,16 @@ export function usePluginBridge(): void {
     let disposed = false;
 
     const cleanupDispatch = window.electron.pluginBridge.onDispatchActionRequest(
-      async ({ requestId, actionId, args, pluginId }) => {
+      async ({ requestId, actionId, args, pluginId, approvedPresetLaunch }) => {
         try {
           const result = await actionService.dispatch(actionId as ActionId, args, {
             source: "plugin",
             callerPluginId: pluginId,
+            // Main's consent for one preset (#16324), from the envelope main
+            // built, never from the plugin's arguments.
+            ...(approvedPresetLaunch !== undefined
+              ? { hostApprovedPluginPresetLaunch: approvedPresetLaunch }
+              : {}),
           });
           if (disposed) return;
           window.electron.pluginBridge.sendDispatchActionResponse({ requestId, result });
