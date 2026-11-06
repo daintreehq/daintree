@@ -327,7 +327,10 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async resolveIssueRepo(projectPath: string): Promise<RepoRef | null> {
-    const serverUrl = await resolveServerUrl(projectPath, await serverUrlSettingReader?.(projectPath));
+    const serverUrl = await resolveServerUrl(
+      projectPath,
+      await serverUrlSettingReader?.(projectPath)
+    );
     if (!serverUrl) return null;
     const op = beginOp();
     const cacheKey = `${op.version}\u0000${serverUrl}`;

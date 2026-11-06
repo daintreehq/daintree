@@ -48,7 +48,11 @@ function json(data: unknown, status = 200) {
 }
 
 function page(items: unknown[], nextCursor?: string) {
-  return json({ items, has_more: Boolean(nextCursor), ...(nextCursor ? { next_cursor: nextCursor } : {}) });
+  return json({
+    items,
+    has_more: Boolean(nextCursor),
+    ...(nextCursor ? { next_cursor: nextCursor } : {}),
+  });
 }
 
 function problem(status: number, code: string, extra: Record<string, unknown> = {}) {
@@ -59,7 +63,11 @@ function fetchMock(): Mock {
   return globalThis.fetch as unknown as Mock;
 }
 
-function call(index: number): { url: URL; init: RequestInit; body: Record<string, unknown> | null } {
+function call(index: number): {
+  url: URL;
+  init: RequestInit;
+  body: Record<string, unknown> | null;
+} {
   const [url, init] = fetchMock().mock.calls[index] as [string, RequestInit];
   return {
     url: new URL(url),
@@ -255,7 +263,11 @@ describe("resolveIssueRepo", () => {
     setServerUrlSettingReader(async () => "");
     fetchMock().mockResolvedValueOnce(json({ database: "dfat", project_id: "proj-1" }));
     const repo = await beadsForgeProvider.resolveIssueRepo!(projectPath);
-    expect(repo).toMatchObject({ host: "127.0.0.1:7357", owner: "http://127.0.0.1:7357", repo: "dfat" });
+    expect(repo).toMatchObject({
+      host: "127.0.0.1:7357",
+      owner: "http://127.0.0.1:7357",
+      repo: "dfat",
+    });
     expect(call(0).url.pathname).toBe("/v0/beads/context");
   });
 
@@ -299,7 +311,9 @@ describe("mutations", () => {
     const n = beadNumber("dfat-1");
     fetchMock()
       .mockResolvedValueOnce(json(bead("dfat-1", { assignee: "grace" })))
-      .mockResolvedValueOnce(json({ issue: bead("dfat-1", { assignee: "ada" }), changed: true, revision: "2" }));
+      .mockResolvedValueOnce(
+        json({ issue: bead("dfat-1", { assignee: "ada" }), changed: true, revision: "2" })
+      );
     await expect(beadsForgeProvider.assignIssue(REPO, n, "ada")).resolves.toEqual([
       expect.objectContaining({ login: "ada" }),
     ]);
@@ -308,7 +322,9 @@ describe("mutations", () => {
 
     fetchMock()
       .mockResolvedValueOnce(json(bead("dfat-1", { assignee: "ada" })))
-      .mockResolvedValueOnce(json({ issue: bead("dfat-1", { assignee: "grace" }), changed: true, revision: "3" }));
+      .mockResolvedValueOnce(
+        json({ issue: bead("dfat-1", { assignee: "grace" }), changed: true, revision: "3" })
+      );
     await beadsForgeProvider.unassignIssue(REPO, n, "ada");
     expect(call(3).body).toEqual({
       actor: "ada",
@@ -325,7 +341,9 @@ describe("mutations", () => {
     fetchMock().mockResolvedValueOnce(json(bead("dfat-1", { assignee: "ada" })));
     await beadsForgeProvider.unassignIssue(REPO, n, "ada");
     expect(fetchMock()).toHaveBeenCalledTimes(2);
-    expect(fetchMock().mock.calls.every(([, init]) => (init as RequestInit).method === "GET")).toBe(true);
+    expect(fetchMock().mock.calls.every(([, init]) => (init as RequestInit).method === "GET")).toBe(
+      true
+    );
   });
 
   it("reads the bead back when someone else took it before Undo landed", async () => {
@@ -344,8 +362,23 @@ describe("mutations", () => {
     await seen("dfat-1");
     const n = beadNumber("dfat-1");
     fetchMock()
-      .mockResolvedValueOnce(json({ issue: bead("dfat-1", { status: "closed" }), already_closed: false, open_children: [], revision: "4" }))
-      .mockResolvedValueOnce(json({ id: "c1", issue_id: "dfat-1", author: "ada", text: "Done", created_at: "2026-10-03T00:00:00Z" }));
+      .mockResolvedValueOnce(
+        json({
+          issue: bead("dfat-1", { status: "closed" }),
+          already_closed: false,
+          open_children: [],
+          revision: "4",
+        })
+      )
+      .mockResolvedValueOnce(
+        json({
+          id: "c1",
+          issue_id: "dfat-1",
+          author: "ada",
+          text: "Done",
+          created_at: "2026-10-03T00:00:00Z",
+        })
+      );
     await expect(beadsForgeProvider.closeIssue(REPO, n, "not_planned")).resolves.toMatchObject({
       state: "closed",
     });
@@ -361,7 +394,11 @@ describe("mutations", () => {
 
   it("creates a task with an explicit type and priority", async () => {
     fetchMock().mockResolvedValueOnce(json(bead("dfat-new")));
-    const issue = await beadsForgeProvider.createIssue(REPO, { title: "New", body: "B", labels: ["x"] });
+    const issue = await beadsForgeProvider.createIssue(REPO, {
+      title: "New",
+      body: "B",
+      labels: ["x"],
+    });
     expect(call(0).body).toEqual({
       actor: "ada",
       title: "New",
@@ -387,7 +424,9 @@ describe("mutations", () => {
 
   it("edits title and body as title and description", async () => {
     await seen("dfat-1");
-    fetchMock().mockResolvedValueOnce(json({ issue: bead("dfat-1", { title: "T2" }), changed: true, revision: "5" }));
+    fetchMock().mockResolvedValueOnce(
+      json({ issue: bead("dfat-1", { title: "T2" }), changed: true, revision: "5" })
+    );
     await beadsForgeProvider.editIssue(REPO, beadNumber("dfat-1"), { title: "T2", body: "" });
     expect(call(0).body).toEqual({ actor: "ada", patch: { title: "T2", description: "" } });
   });

@@ -1,6 +1,10 @@
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import { setMemoryToken } from "./BeadsClient.js";
-import { beadsForgeProvider, clearBeadsCaches, setServerUrlSettingReader } from "./forgeProvider.js";
+import {
+  beadsForgeProvider,
+  clearBeadsCaches,
+  setServerUrlSettingReader,
+} from "./forgeProvider.js";
 
 const PLUGIN_ID = "daintree.beads";
 const SERVER_URL_SETTING = "serverUrl";
