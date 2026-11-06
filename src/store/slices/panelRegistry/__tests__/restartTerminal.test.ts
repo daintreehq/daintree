@@ -830,11 +830,16 @@ describe("restartTerminal and panes that run away from their conversation (#1243
       getMergedPresetMock.mockReturnValue({ ...amber, dangerousMode: "on" });
       const pane = { ...movedPane, agentPresetId: "blue-provider" };
       usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+      mockKill.mockClear();
+      mockGracefulKill.mockClear();
 
       const refused = await usePanelStore
         .getState()
         .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
       expect(refused.success).toBe(false);
+      // Refused before anything was torn down: the running session is untouched.
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mockGracefulKill).not.toHaveBeenCalled();
       expect(mockSpawn).not.toHaveBeenCalled();
       expect(ptyAfterRestart().isRestarting).toBeFalsy();
 
@@ -2169,6 +2174,32 @@ describe("restartTerminalOnPreset", () => {
     expect(pane().env).toEqual({ CODEX_HOME: "/home/me/.codex-2" });
     expect(pane().agentPresetId).toBe("work");
     expect(pane().agentPresetColor).toBe("#3366ff");
+  });
+
+  it("lets go of a plugin's preset approval only once the person's switch took (#16324)", async () => {
+    const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+    approvals.rememberApprovedPresetLaunch("test-1", {
+      agentId: "codex",
+      presetId: "personal",
+      source: "custom",
+      content: "[]",
+      fallbacks: [["backup", "approved"]],
+    });
+    try {
+      seed();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+      const failed = await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      expect(failed.success).toBe(false);
+      // Rolled back onto the approved preset, so still held to its approval.
+      expect(approvals.fallbackHopApproved("test-1", "backup", "edited")).toBe(false);
+
+      const switched = await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      expect(switched).toEqual({ success: true });
+      expect(approvals.fallbackHopApproved("test-1", "backup", "edited")).toBe(true);
+    } finally {
+      approvals.forgetApprovedPresetLaunch("test-1");
+    }
   });
 
   it("starts a new conversation: no session id survives into the new home", async () => {

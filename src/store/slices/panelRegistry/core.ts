@@ -249,6 +249,7 @@ export const createCorePanelActions = (
     for (const id of idSet) {
       clearTrashExpiryTimer(id);
       cancelReconnectErrorDebounce(id);
+      forgetApprovedPresetLaunch(id);
       const terminal = state.panelsById[id];
       if (!terminal) continue;
 

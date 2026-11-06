@@ -1868,9 +1868,6 @@ async function respawnAgentOnPreset(
         `fallback preset "${nextPreset.id}" changed since the plugin's launch was approved`
       );
     }
-    // The person chose this preset themselves; the plugin's approval no longer
-    // describes the pane.
-    if (mode.kind === "switch") forgetApprovedPresetLaunch(id);
     const presetKept = mode.kind === "account" && nextPreset !== undefined;
     // A switch makes the chosen preset the pane's own: the chain it was
     // walking, and the tooltip that says so, belong to the preset it left.
@@ -2249,6 +2246,10 @@ async function respawnAgentOnPreset(
 
     unmarkTerminalRestarting(id);
     set((state) => updateTerminal(state, id, respawned));
+    // The person chose this preset themselves, so the plugin's approval no
+    // longer describes the pane. Only once the switch took: a failed one rolls
+    // the pane back to the approved preset, which stays held to it.
+    if (mode.kind === "switch") forgetApprovedPresetLaunch(id);
     return keptSessionId ? { success: true, resumedSessionId: keptSessionId } : { success: true };
   } catch (error) {
     const appError = isClientAppError(error) ? error : null;
