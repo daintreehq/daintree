@@ -332,11 +332,10 @@ export function HelpSessionTabs({
                   // with a chevron after it. The transparent border is the boundary
                   // forced colours draw once the fill is gone.
                   // Open is read from the menu's own state: the tooltip trigger sets
-                  // its own `data-state` on the same element.
+                  // its own `data-state` on the same element. A control's hover step,
+                  // not the highlighted-row fill: this is a button, not a row.
                   "border border-transparent transition-colors duration-150 ease-out",
-                  isMenuOpen
-                    ? "bg-overlay-highlight"
-                    : "bg-overlay-soft hover:bg-overlay-highlight",
+                  isMenuOpen ? "bg-overlay-hover" : "bg-overlay-soft hover:bg-overlay-hover",
                   "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                 )}
               >
