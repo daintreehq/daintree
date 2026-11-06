@@ -1118,19 +1118,28 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
 
   // jsdom has no ResizeObserver and lays nothing out: the strip's overflow is measured
   // when a test says the layout changed.
-  const resizes: Array<() => void> = [];
+  // Each observer remembers what it watches, so a row resize reaches only the observers
+  // watching the row: one that forgot to observe it would miss the resize, as it would in
+  // a real layout.
+  const observers = new Set<ManualResizeObserver>();
   class ManualResizeObserver {
     private readonly callback: (entries: ResizeObserverEntry[]) => void;
+    readonly targets = new Set<Element>();
     constructor(callback: (entries: ResizeObserverEntry[]) => void) {
       this.callback = callback;
-      resizes.push(this.notify);
+      observers.add(this);
+    }
+    observe(target: Element) {
+      this.targets.add(target);
+    }
+    disconnect() {
+      this.targets.clear();
+      observers.delete(this);
     }
     // No entries: every observer here re-reads its element, and a tooltip's floating-ui
     // observer destructures the list.
-    private readonly notify = () => this.callback([]);
-    observe() {}
-    disconnect() {
-      resizes.splice(resizes.indexOf(this.notify), 1);
+    notify() {
+      this.callback([]);
     }
   }
   beforeAll(() => {
@@ -1139,7 +1148,13 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
   afterAll(() => {
     vi.unstubAllGlobals();
   });
-  const relayout = () => act(() => resizes.forEach((notify) => notify()));
+  const relayout = () => act(() => observers.forEach((observer) => observer.notify()));
+  const resized = (el: Element) =>
+    act(() =>
+      observers.forEach((observer) => {
+        if (observer.targets.has(el)) observer.notify();
+      })
+    );
 
   const strip = (props: Partial<Parameters<typeof HelpSessionTabs>[0]> = {}) => (
     <HelpSessionTabs
@@ -1247,8 +1262,38 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
   function setRowWidth(container: HTMLElement, width: number) {
     const row = container.querySelector<HTMLElement>("[data-session-strip]")!;
     Object.defineProperty(row, "clientWidth", { configurable: true, value: width });
-    relayout();
+    resized(row);
   }
+  /** The width the rendered tabs will not shrink below, read off the tabs themselves. */
+  const floorsOf = (container: HTMLElement) =>
+    tabs(container).reduce((sum, tab) => sum + parseFloat(tab.style.minWidth), 0);
+
+  /** A host that closes and selects as the panel does: a closed selected lane hands on to its neighbour. */
+  function Host({
+    initial = SIX,
+    initialActive,
+    onClose,
+  }: {
+    initial?: HelpSessionTab[];
+    initialActive: number;
+    onClose?: (slot: number) => void;
+  }) {
+    const [lanes, setLanes] = useState(initial);
+    const [active, setActive] = useState(initialActive);
+    return strip({
+      tabs: lanes,
+      activeSlot: active,
+      onSelect: setActive,
+      onClose: (slot) => {
+        onClose?.(slot);
+        const index = lanes.findIndex((t) => t.slot === slot);
+        const next = lanes.filter((t) => t.slot !== slot);
+        setLanes(next);
+        if (slot === active) setActive((next[index] ?? next[index - 1])!.slot);
+      },
+    });
+  }
+  const flushTimers = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
   const picker = () => screen.queryByTestId("assistant-session-picker");
   const openPicker = async () => {
     fireEvent.keyDown(picker()!, { key: "Enter" });
@@ -1285,23 +1330,35 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
   });
 
   it("keeps tabs while the lanes fit at their floors, and collapses one pixel short", () => {
-    const four = SIX.slice(0, 4);
-    const { container } = render(strip({ tabs: four }));
-    setRowWidth(container, 104 + 3 * 88);
+    const { container } = render(strip({ tabs: SIX.slice(0, 4) }));
+    // The boundary is whatever the rendered tabs refuse to shrink below.
+    const floors = floorsOf(container);
+    expect(floors).toBeGreaterThan(0);
+
+    setRowWidth(container, floors);
     expect(tabs(container)).toHaveLength(4);
     expect(picker()).toBeNull();
 
-    setRowWidth(container, 104 + 3 * 88 - 1);
+    setRowWidth(container, floors - 1);
     expect(tabs(container)).toHaveLength(0);
     expect(picker()).toBeTruthy();
   });
 
-  it("counts the new-session control's room against the tabs", () => {
+  it("counts the row's padding, the gap and the new-session control against the tabs", () => {
     const { container } = render(strip({ tabs: SIX.slice(0, 3), onOpenSession: vi.fn() }));
+    const floors = floorsOf(container);
+    const row = container.querySelector<HTMLElement>("[data-session-strip]")!;
     const plus = screen.getByRole("button", { name: "New session" });
     Object.defineProperty(plus, "offsetWidth", { configurable: true, value: 24 });
-    // 290px of row less the 24px "+" leaves 266, short of three lanes' 280.
-    setRowWidth(container, 290);
+    // jsdom applies no stylesheet, but computes inline styles.
+    row.style.paddingLeft = "4px";
+    row.style.paddingRight = "4px";
+    row.style.setProperty("column-gap", "2px");
+    expect(window.getComputedStyle(row).columnGap).toBe("2px");
+    // 4 + 4 of padding, a 24px "+" and the 2px gap before it: 34px the tabs can't use.
+    setRowWidth(container, floors + 34);
+    expect(tabs(container)).toHaveLength(3);
+    setRowWidth(container, floors + 33);
     expect(picker()).toBeTruthy();
     // The "+" stays beside the picker, still the way to another lane.
     expect(screen.getByRole("button", { name: "New session" })).toBeTruthy();
@@ -1329,11 +1386,19 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
     setRowWidth(container, 40);
     expect(tabs(container)).toHaveLength(1);
 
+    // A hidden panel measures zero, which says nothing about whether lanes fit: tabs
+    // that fit stay tabs, and a collapsed strip stays collapsed.
+    rerender(strip({ tabs: SIX.slice(0, 3) }));
+    setRowWidth(container, 600);
+    setRowWidth(container, 0);
+    expect(tabs(container)).toHaveLength(3);
+
     rerender(strip());
-    expect(picker()).toBeTruthy();
-    // A hidden panel measures zero, which says nothing about whether lanes fit.
+    setRowWidth(container, 320);
     setRowWidth(container, 0);
     expect(picker()).toBeTruthy();
+    setRowWidth(container, 600);
+    expect(tabs(container)).toHaveLength(6);
   });
 
   it("shows background lanes at work on the closed picker, without opening it", () => {
@@ -1411,21 +1476,112 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
     expect(actions[0]!.hasAttribute("data-disabled")).toBe(true);
     expect(actions[2]!.hasAttribute("data-disabled")).toBe(false);
 
-    fireEvent.click(actions[3]!);
+    // A parked item does nothing, and leaves the menu open.
+    fireEvent.click(actions[0]!);
+    expect(onOpenSession).not.toHaveBeenCalled();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "New session with Codex" }));
+    expect(onOpenSessionWithAgent).toHaveBeenCalledWith("codex");
+
+    fireEvent.click(
+      within(await openPicker()).getByRole("menuitem", { name: "Restart conversation" })
+    );
     expect(onRestart).toHaveBeenCalledWith(1);
 
     fireEvent.click(within(await openPicker()).getByRole("menuitem", { name: "Close session" }));
     expect(onClose).toHaveBeenCalledWith(1);
   });
 
-  it("closes the selected lane with Delete from the closed picker", () => {
+  it("gates the picker's actions on the selected lane and on what is free", async () => {
+    const onOpenSession = vi.fn();
+    const restartable = SIX.map((t) => ({ ...t, canRestart: t.slot === 1 }));
+    const { container } = render(
+      strip({
+        tabs: restartable,
+        activeSlot: 2,
+        onRestart: vi.fn(),
+        onOpenSession,
+        canOpenSession: true,
+      })
+    );
+    setRowWidth(container, 320);
+
+    const menu = await openPicker();
+    // Nothing to restart in the lane on screen, and one agent offers no choice of agent.
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((a) => a.textContent)
+    ).toEqual(["New session", "Close session"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "New session" }));
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows the selection made from the picker", async () => {
+    const { container } = render(<Host initialActive={3} />);
+    setRowWidth(container, 320);
+    expect(picker()!.getAttribute("aria-label")).toBe("Session 4");
+
+    fireEvent.click(within(await openPicker()).getAllByRole("menuitemradio")[1]!);
+    expect(picker()!.getAttribute("aria-label")).toBe("Session 2");
+    const checked = within(await openPicker())
+      .getAllByRole("menuitemradio")
+      .map((item) => item.getAttribute("aria-checked"));
+    expect(checked).toEqual(["false", "true", "false", "false", "false", "false"]);
+
+    fireEvent.click(within(screen.getByRole("menu")).getAllByRole("menuitemradio")[5]!);
+    expect(picker()!.getAttribute("aria-label")).toBe("Session 6");
+    expect(document.getElementById(helpSessionTabId("six", 5))?.textContent).toBe("Session 6");
+  });
+
+  it("closes the selected lane with Delete from the closed picker, which keeps focus", () => {
     const onClose = vi.fn();
-    const { container } = render(strip({ activeSlot: 3, onClose }));
+    const { container } = render(<Host initialActive={3} onClose={onClose} />);
     setRowWidth(container, 320);
     expect(picker()!.getAttribute("aria-keyshortcuts")).toBe("Delete");
+    act(() => picker()!.focus());
+
+    // Handled, so nothing above the strip reads the key as well.
+    expect(fireEvent.keyDown(picker()!, { key: "Delete" })).toBe(false);
+    expect(onClose).toHaveBeenCalledWith(3);
+    // The neighbour that follows takes the selection, and the picker keeps the keyboard.
+    expect(picker()!.getAttribute("aria-label")).toBe("Session 5");
+    expect(document.activeElement).toBe(picker());
+
+    fireEvent.keyDown(picker()!, { key: "Backspace" });
+    expect(onClose).toHaveBeenLastCalledWith(4);
+    fireEvent.keyDown(picker()!, { key: "x" });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands focus to the new selected tab when a close brings the tabs back", () => {
+    // Four lanes don't fit in 300px; three do.
+    const { container } = render(<Host initial={SIX.slice(0, 4)} initialActive={1} />);
+    setRowWidth(container, 300);
+    act(() => picker()!.focus());
 
     fireEvent.keyDown(picker()!, { key: "Delete" });
-    expect(onClose).toHaveBeenCalledWith(3);
+
+    expect(picker()).toBeNull();
+    expect(document.activeElement?.getAttribute("data-slot")).toBe("2");
+    expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("hands focus to the new selected tab when the picker's own Close brings the tabs back", async () => {
+    const { container } = render(<Host initial={SIX.slice(0, 4)} initialActive={1} />);
+    setRowWidth(container, 300);
+    act(() => picker()!.focus());
+
+    const menu = await openPicker();
+    await act(async () => {
+      fireEvent.keyDown(within(menu).getByRole("menuitem", { name: "Close session" }), {
+        key: "Enter",
+      });
+    });
+    await flushTimers();
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement?.getAttribute("data-slot")).toBe("2");
   });
 
   it("hands focus to the other form when the strip switches under it", () => {
@@ -1438,6 +1594,33 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
 
     setRowWidth(container, 600);
     expect(document.activeElement?.getAttribute("data-slot")).toBe("2");
+  });
+
+  it("hands focus to the selected tab when the strip widens with the picker's menu open", async () => {
+    const { container } = render(strip({ activeSlot: 2 }));
+    setRowWidth(container, 320);
+    act(() => picker()!.focus());
+    const menu = await openPicker();
+    expect(menu.contains(document.activeElement)).toBe(true);
+
+    setRowWidth(container, 600);
+    // Still there once the menu's own deferred focus restore has had its turn.
+    await flushTimers();
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement?.getAttribute("data-slot")).toBe("2");
+  });
+
+  it("takes no focus when the strip switches after the keyboard has left it", async () => {
+    const { container } = render(strip({ activeSlot: 2 }));
+    const tab = tabs(container).find((t) => t.getAttribute("data-slot") === "2")!;
+    act(() => tab.focus());
+    act(() => tab.blur());
+    await flushTimers();
+    expect(document.activeElement).toBe(document.body);
+
+    setRowWidth(container, 320);
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("leaves focus alone when it is not on the form that goes", () => {
