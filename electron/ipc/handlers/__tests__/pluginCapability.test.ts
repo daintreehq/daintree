@@ -898,6 +898,40 @@ describe("pluginCapability consent bridge — Host mode routing", () => {
     dispose();
   });
 
+  it("never asks a remote frontend about a preset, whose wire can't carry its summary (#16324)", async () => {
+    const request = vi.fn(async () => "approved-and-pin");
+    frontend = {
+      kind: "remote",
+      endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const dispose = registerPluginCapabilityHandlers();
+    await expect(
+      getPluginCapabilityConsentService().ensurePresetLaunchAllowed(
+        "acme.x",
+        "Acme",
+        {
+          agentId: "claude",
+          agentName: "Claude",
+          presetId: "zai",
+          presetName: "Z.ai",
+          source: "custom",
+          args: [],
+          dangerousMode: "on",
+          skipsPermissions: true,
+          envNames: [],
+          fallbackNames: [],
+          fallbackOnRateLimit: false,
+        },
+        "f1",
+        ["agent:launch-preset"],
+        "global"
+      )
+    ).rejects.toThrow(/^PERMISSION_REQUIRED:/);
+    expect(request).not.toHaveBeenCalled();
+    expect(getPluginCapabilityConsentStore().list()).toEqual([]);
+    dispose();
+  });
+
   it("treats a remote answer it can't read, or a lost link, as undeliverable", async () => {
     frontend = {
       kind: "remote",

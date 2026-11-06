@@ -456,13 +456,9 @@ export function buildNotificationsHostApi(
         approval = gated.approval;
       }
     }
-    const result = await dispatcher.sendDispatchToRenderer(
-      actionId,
-      args,
-      projectId,
-      pluginId,
-      approval
-    );
+    const result = await (approval === undefined
+      ? dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId)
+      : dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId, approval));
     if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
     return result;
   };

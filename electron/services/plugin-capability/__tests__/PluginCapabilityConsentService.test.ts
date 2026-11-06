@@ -580,4 +580,108 @@ describe("PluginCapabilityConsentService", () => {
       expect(service.listGrantsForPlugin("acme.x")).toHaveLength(GRANTS.length);
     });
   });
+
+  describe("ensurePresetLaunchAllowed (#16324)", () => {
+    const summary = {
+      agentId: "claude",
+      agentName: "Claude",
+      presetId: "zai",
+      presetName: "Z.ai",
+      source: "custom" as const,
+      args: [],
+      dangerousMode: "inherit" as const,
+      skipsPermissions: false,
+      envNames: ["TOKEN"],
+      fallbackNames: [],
+      fallbackOnRateLimit: false,
+    };
+    const PRESET_CAPS = ["agent:launch-preset"] as const;
+    const identity = {
+      pluginId: "acme.x",
+      capability: "agent:launch-preset" as const,
+      preset: { agentId: "claude", presetId: "zai", source: "custom" as const },
+      scopeKey: "global",
+    };
+
+    it("asks with the preset's summary, then stays silent for the same content", async () => {
+      const { service, store } = makeService();
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+
+      await service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f1", PRESET_CAPS, "global");
+      expect(bridge).toHaveBeenCalledWith(
+        expect.objectContaining({ capability: "agent:launch-preset", preset: summary })
+      );
+      expect(store.getGrant(identity)?.preset?.fingerprint).toBe("f1");
+
+      await service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f1", PRESET_CAPS, "global");
+      expect(bridge).toHaveBeenCalledTimes(1);
+    });
+
+    it("ends the grant when the preset changes, even if the new content is refused", async () => {
+      const { service, store } = makeService();
+      store.grant(identity, { fingerprint: "f1", presetName: "Z.ai" });
+      service.setConsentBridge(async () => "rejected");
+
+      await expect(
+        service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f2", PRESET_CAPS, "global")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      // Reverting to the old content asks again rather than reviving the grant.
+      expect(store.getGrant(identity)).toBe(undefined);
+    });
+
+    it("does not join a launch on edited content to the old content's open dialog", async () => {
+      const { service } = makeService();
+      const releases: Array<(d: PluginCapabilityConsentDecision) => void> = [];
+      const bridge = vi.fn(
+        () => new Promise<PluginCapabilityConsentDecision>((resolve) => releases.push(resolve))
+      );
+      service.setConsentBridge(bridge);
+      const first = service.ensurePresetLaunchAllowed(
+        "acme.x", "Acme", summary, "f1", PRESET_CAPS, "global"
+      );
+      const again = service.ensurePresetLaunchAllowed(
+        "acme.x", "Acme", summary, "f1", PRESET_CAPS, "global"
+      );
+      const edited = service.ensurePresetLaunchAllowed(
+        "acme.x", "Acme", summary, "f2", PRESET_CAPS, "global"
+      );
+      await Promise.resolve();
+      expect(bridge).toHaveBeenCalledTimes(2);
+      for (const release of releases) release("approved-once");
+      await expect(Promise.all([first, again, edited])).resolves.toBeDefined();
+    });
+
+    it("lists each preset grant and revokes one without touching the others", async () => {
+      const { service, store } = makeService();
+      store.grant(identity, { fingerprint: "f1", presetName: "Z.ai" });
+      const other = { ...identity, preset: { ...identity.preset, presetId: "codex-alt" } };
+      store.grant(other, { fingerprint: "f2", presetName: "Alt" });
+      store.grant({ pluginId: "acme.x", capability: "shell:exec" });
+
+      expect(service.listPresetGrants("acme.x").map((g) => g.presetName).sort()).toEqual([
+        "Alt",
+        "Z.ai",
+      ]);
+      expect(service.revokePresetGrant("acme.x", identity.preset, "global")).toBe(true);
+      expect(service.listPresetGrants("acme.x").map((g) => g.presetId)).toEqual(["codex-alt"]);
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(true);
+    });
+
+    it("is never offered back after a replacing install", async () => {
+      const { service } = makeService();
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+      await expect(
+        service.offerRestore({
+          pluginId: "acme.x",
+          pluginDisplayName: "Acme",
+          grants: [identity],
+          declaredCapabilities: PRESET_CAPS,
+          isCurrent: () => true,
+        })
+      ).resolves.toBe(false);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+  });
 });

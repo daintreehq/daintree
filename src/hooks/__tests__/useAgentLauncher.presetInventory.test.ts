@@ -321,3 +321,55 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
     expect(updateWorktreePreset).not.toHaveBeenCalled();
   });
 });
+
+const { getMergedPreset } = await import("@shared/utils/agentPresets");
+const { presetLaunchContent } = await import("@shared/utils/agentPresetLaunchConsent");
+
+describe("useAgentLauncher — a plugin launch on an approved preset (#16324)", () => {
+  const approvedContent = presetLaunchContent(getMergedPreset("claude", "mine", [MINE])!);
+
+  beforeEach(() => {
+    addPanel.mockReset().mockResolvedValue("terminal-1");
+    Reflect.set(window, "electron", {});
+    useCcrPresetsStore.setState({ ccrPresetsByAgent: {}, isInitialized: true });
+    useProjectPresetsStore.getState().setPresetsByAgent("proj-1", {});
+  });
+
+  afterEach(() => {
+    Reflect.set(window, "electron", undefined);
+  });
+
+  async function launchApproved(content: string, presetId = "mine") {
+    const { result } = renderHook(() => useAgentLauncher());
+    let outcome: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      outcome = result.current.launchAgent("claude", {
+        force: true,
+        presetId,
+        approvedPluginPreset: { agentId: "claude", presetId: "mine", content },
+      });
+      await outcome.catch(() => {});
+    });
+    return outcome;
+  }
+
+  it("launches when the preset is exactly what was approved", async () => {
+    saveChoices({ customPresets: [MINE] });
+    await expect(launchApproved(approvedContent)).resolves.toMatchObject({
+      terminalId: "terminal-1",
+    });
+    expect(launchedPresetIds()).toEqual(["mine"]);
+  });
+
+  it("refuses, launching nothing, when the preset changed after it was approved", async () => {
+    saveChoices({ customPresets: [{ ...MINE, env: { WHO: "someone else" } }] });
+    await expect(launchApproved(approvedContent)).rejects.toThrow(/isn't the one that was approved/);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses rather than launching without the preset when it is gone", async () => {
+    saveChoices({ customPresets: [] });
+    await expect(launchApproved(approvedContent)).rejects.toThrow(/isn't the one that was approved/);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+});

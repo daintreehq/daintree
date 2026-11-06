@@ -517,6 +517,69 @@ describe("ActionService", () => {
       ).toBe("safe");
     });
 
+    it("lets a plugin launch on a preset main approved, and only that launch (#16324)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "agent.launch" as ActionId,
+        title: "Launch agent",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "agent",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({
+          agentId: z.string(),
+          prompt: z.string().optional(),
+          presetId: z.string().nullable().optional(),
+          env: z.record(z.string(), z.string()).optional(),
+          agentLaunchFlags: z.array(z.string()).optional(),
+        }),
+        run: mockRun,
+      });
+      const approval = { agentId: "claude", presetId: "zai", content: "[1]" };
+
+      const approved = await service.dispatch(
+        "agent.launch",
+        { agentId: "claude", presetId: "zai", prompt: "Plan it" },
+        { source: "plugin", callerPluginId: "beads", hostApprovedPluginPresetLaunch: approval }
+      );
+      expect(approved.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalledTimes(1);
+      // The run sees the approval it is held to, stamped by the dispatch.
+      expect(mockRun.mock.calls[0]![1].hostApprovedPluginPresetLaunch).toEqual(approval);
+
+      const refusedVariants = [
+        // No approval: today's refusal, word for word.
+        { args: { agentId: "claude", presetId: "zai" }, approval: undefined },
+        { args: { agentId: "claude", presetId: "other" }, approval },
+        { args: { agentId: "codex", presetId: "zai" }, approval },
+        { args: { agentId: "claude", presetId: "zai", env: { X: "1" } }, approval },
+        { args: { agentId: "claude", presetId: "zai", agentLaunchFlags: ["--yolo"] }, approval },
+        { args: { agentId: "claude", presetId: null }, approval },
+      ];
+      for (const { args, approval: offered } of refusedVariants) {
+        const blocked = await service.dispatch("agent.launch", args, {
+          source: "plugin",
+          ...(offered ? { hostApprovedPluginPresetLaunch: offered } : {}),
+        });
+        expect(blocked.ok).toBe(false);
+        if (!blocked.ok) {
+          expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+          expect(blocked.error.message).toMatch(/agentLaunchFlags, env, systemPrompt, presetId/);
+        }
+      }
+      expect(mockRun).toHaveBeenCalledTimes(1);
+
+      // Another source never carries the plugin approval into the run.
+      await service.dispatch(
+        "agent.launch",
+        { agentId: "claude", presetId: "zai" },
+        { source: "user", hostApprovedPluginPresetLaunch: approval }
+      );
+      expect(mockRun.mock.calls[1]![1].hostApprovedPluginPresetLaunch).toBeUndefined();
+    });
+
     it("leaves the same action ungated for an agent dispatch that names no recipe (#11860)", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       service.register({
