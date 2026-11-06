@@ -5,7 +5,6 @@ const { rebuild } = require("@electron/rebuild");
 const { version: electronVersion } = require("electron/package.json");
 const { patchNodePtyBindingGyp } = require("./patchNodePtyBinding.cjs");
 const { patchNodePtyConptySource } = require("./patchNodePtyConpty.cjs");
-const { patchNodePtyConsoleListSource } = require("./patchNodePtyConsoleList.cjs");
 
 const NATIVE_MODULES = ["node-pty", "win-job-object", "posix-pty-reaper", "mac-phys-footprint"];
 
@@ -25,13 +24,6 @@ function patchNodePtyConpty() {
   if (patched !== source) fs.writeFileSync(conptyPath, patched);
 }
 
-function patchNodePtyConsoleList() {
-  const agentPath = path.join(buildPath, "node_modules", "node-pty", "lib", "windowsPtyAgent.js");
-  const source = fs.readFileSync(agentPath, "utf8");
-  const patched = patchNodePtyConsoleListSource(source);
-  if (patched !== source) fs.writeFileSync(agentPath, patched);
-}
-
 async function runPostinstall() {
   const failures = [];
 
@@ -48,11 +40,6 @@ async function runPostinstall() {
     patchNodePtyConpty();
   } catch (err) {
     failures.push({ module: "node-pty conpty.cc patch", error: err });
-  }
-  try {
-    patchNodePtyConsoleList();
-  } catch (err) {
-    failures.push({ module: "node-pty windowsPtyAgent.js patch", error: err });
   }
 
   // better-sqlite3 is intentionally NOT rebuilt: since v13 it is an N-API

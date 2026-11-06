@@ -238,14 +238,6 @@ npm error gyp ERR! System Windows_NT 10.0.20348
       );
     });
 
-    it("never retries a failed node-pty windowsPtyAgent.js patch", () => {
-      const patchFailure =
-        "  node-pty windowsPtyAgent.js patch: node-pty's windowsPtyAgent.js no longer matches the console-list fork edit\n";
-      expect(classifyFailure(`npm warn fetch failed ECONNRESET\n${patchFailure}`)).toBe(
-        "deterministic"
-      );
-    });
-
     it("keeps a failed binding.gyp patch deterministic beside a node-gyp network timeout", () => {
       const stderr = `
 ConnectTimeoutError: Connect Timeout Error (attempted addresses: 104.18.17.205:443, timeout: 10000ms)
