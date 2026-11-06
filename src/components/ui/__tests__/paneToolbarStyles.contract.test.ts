@@ -44,6 +44,9 @@ const RADIUS_EXCEPTIONS: Record<string, number> = {
 
 function classStrings(file: string): string[] {
   const text = readFileSync(file, "utf8");
+  // Parsing all ~3,000 source files ran past the 15 s test timeout on Windows runners;
+  // only a file containing the token can yield a matching string.
+  if (!text.includes("toolbar-icon-button")) return [];
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const out: string[] = [];
   const visit = (node: ts.Node) => {
