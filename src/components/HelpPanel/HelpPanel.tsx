@@ -833,6 +833,8 @@ export function HelpPanel({
     handleCancelCloseSlot,
     resolveCloseFocusTarget,
   } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId, pausedLane });
+  // Whether the strip has collapsed its tabs into one picker (#16325).
+  const [sessionStripCollapsed, setSessionStripCollapsed] = useState(false);
   // A restart can target a background lane, whose agent may not be the one on
   // screen: read from the same lane record the confirm gate reads. A paused lane
   // has no agent bound, so its captured one names the conversation instead.
@@ -1235,6 +1237,7 @@ export function HelpPanel({
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
           panelId={sessionBodyId}
+          onCollapsedChange={setSessionStripCollapsed}
         />
       )}
 
@@ -1268,8 +1271,10 @@ export function HelpPanel({
           keyboard user an extra stop on the way past the terminal, forever. */}
       <div
         id={sessionBodyId}
-        // The strip's panel only while the strip is there; the global run has no tab.
-        role={globalSelected ? "region" : "tabpanel"}
+        // The strip's panel only while the strip draws tabs. The global run has no tab,
+        // and a strip collapsed into its picker has none either: there the body is a
+        // region named by the session the picker shows, under the same id.
+        role={globalSelected || sessionStripCollapsed ? "region" : "tabpanel"}
         aria-label={globalSelected ? globalAssistantName : undefined}
         aria-labelledby={globalSelected ? undefined : helpSessionTabId(tabIdBase, activeSlot)}
         className="flex-1 flex flex-col min-h-0 relative"

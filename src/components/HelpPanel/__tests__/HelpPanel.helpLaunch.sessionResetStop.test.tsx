@@ -191,6 +191,8 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuSeparator: () => <hr />,
   DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The real primitive drags the keybinding graph in behind these suites' partial
@@ -457,6 +459,11 @@ vi.mock("@/lib/sidebarToggle", () => ({
   suppressSidebarResizes: vi.fn(),
 }));
 
+// Where the open confirm would hand focus back, kept so a test can ask it.
+const confirmFocus = vi.hoisted(() => ({
+  restore: null as (() => HTMLElement | null) | null,
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -466,6 +473,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     cancelLabel = "Cancel",
     onConfirm,
     onClose,
+    restoreFocusTo,
   }: {
     isOpen: boolean;
     title: React.ReactNode;
@@ -474,8 +482,10 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     cancelLabel?: string;
     onConfirm: () => void;
     onClose?: () => void;
-  }) =>
-    isOpen ? (
+    restoreFocusTo?: () => HTMLElement | null;
+  }) => {
+    if (isOpen) confirmFocus.restore = restoreFocusTo ?? null;
+    return isOpen ? (
       <div role="dialog" data-testid="confirm-dialog">
         <h2 data-testid="dialog-title">{title}</h2>
         <p data-testid="dialog-description">{description}</p>
@@ -486,7 +496,8 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
           {confirmLabel}
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 vi.mock("@/hooks/useEscapeStack", () => ({
@@ -1521,6 +1532,63 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
     fireEvent.click(tabs[1]!);
     expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(2);
+  });
+
+  it("names the body a region after the picker's lane once the strip collapses (#16325)", () => {
+    setupTwoLanes();
+    // Two lanes need 192px as tabs; jsdom lays nothing out, so the strip is given less.
+    const clientWidth = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockImplementation(function (this: Element) {
+        return this.hasAttribute("data-session-strip") ? 150 : 0;
+      });
+    try {
+      const { container } = render(<HelpPanel width={380} />);
+
+      expect(container.querySelector(LANE_TABS)).toBeNull();
+      expect(container.querySelector('[role="tabpanel"]')).toBeNull();
+      const picker = container.querySelector<HTMLElement>("[data-session-picker]")!;
+      const region = Array.from(container.querySelectorAll<HTMLElement>('[role="region"]')).find(
+        (el) => el.hasAttribute("aria-labelledby")
+      )!;
+      const label = document.getElementById(region.getAttribute("aria-labelledby")!);
+      expect(label?.textContent).toBe("Session 1");
+      expect(picker.contains(label)).toBe(true);
+    } finally {
+      clientWidth.mockRestore();
+    }
+  });
+
+  it("hands a collapsed strip's close and restart confirms back to the picker (#16325)", () => {
+    setupTwoLanes({ frontAgentState: "working" });
+    onUnlistedAgent();
+    const clientWidth = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockImplementation(function (this: Element) {
+        return this.hasAttribute("data-session-strip") ? 150 : 0;
+      });
+    try {
+      const { container, getByTestId } = render(<HelpPanel width={380} />);
+      const picker = container.querySelector<HTMLElement>("[data-session-picker]")!;
+      const strip = picker.closest<HTMLElement>("[data-session-strip]")!;
+      // The menu primitives render inline here, their items as plain buttons.
+      const pickerItem = (label: string) =>
+        Array.from(strip.querySelectorAll<HTMLButtonElement>("button")).find(
+          (b) => b.textContent === label
+        )!;
+
+      // No tab for the lane to come back to, cancelled or confirmed: the picker stands in.
+      fireEvent.click(pickerItem("Close session"));
+      expect(getByTestId("dialog-title").textContent).toBe("Close Session 1?");
+      expect(confirmFocus.restore?.()).toBe(picker);
+      fireEvent.click(getByTestId("dialog-cancel"));
+
+      fireEvent.click(pickerItem("Restart conversation"));
+      expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
+      expect(confirmFocus.restore?.()).toBe(picker);
+    } finally {
+      clientWidth.mockRestore();
+    }
   });
 
   it("tears down only the closed lane and leaves the panel open on the survivor", () => {
