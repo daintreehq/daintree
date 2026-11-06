@@ -13,6 +13,7 @@ import type { BuiltInPluginCapability } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { useHostConnection } from "@/hooks/useHostConnection";
+import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
 
 /**
  * Singleton dialog driven by the just-in-time capability consent queue (#10524).
@@ -118,6 +119,32 @@ export function PluginCapabilityConfirmDialog() {
     );
   }
 
+  if (current.preset !== undefined) {
+    const preset = current.preset;
+    return (
+      <ErrorBoundary
+        variant="component"
+        componentName="PluginCapabilityConfirmDialog"
+        resetKeys={[resetKey]}
+      >
+        <ConfirmDialog
+          isOpen={true}
+          onClose={() => resolveOnce(current.requestId, "rejected")}
+          title={presetLaunchTitleFor(current.pluginDisplayName, preset)}
+          description={`'${current.pluginDisplayName}' is asking to start ${preset.agentName} on your preset '${preset.presetName}'${onHost}, with the settings below. Allowing remembers this preset for the plugin until the preset changes or you revoke it in the plugin's permissions.`}
+          confirmLabel="Allow and remember"
+          cancelLabel="Deny"
+          onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
+          variant="destructive"
+          hasPreview={true}
+          hint={<span className="min-w-0 leading-tight">Only this preset, as it is now</span>}
+        >
+          <PresetLaunchDetails preset={preset} />
+        </ConfirmDialog>
+      </ErrorBoundary>
+    );
+  }
+
   // A host's plugin reaching this computer's clipboard is the one question
   // about this machine rather than the host, so the host names the plugin.
   const forThisComputer = hostLabel !== null && reachesThisComputer(current.capability);
@@ -181,6 +208,89 @@ export function PluginCapabilityConfirmDialog() {
       </ConfirmDialog>
     </ErrorBoundary>
   );
+}
+
+/** Where a preset came from, as the person would recognise it. Exported for tests. */
+export function presetSourceLabel(source: PluginPresetLaunchSummary["source"]): string {
+  switch (source) {
+    case "custom":
+      return "Your preset, from Settings";
+    case "project":
+      return "This repository's .daintree/presets folder";
+    case "ccr":
+      return "Claude Code Router config";
+    case "registry":
+      return "Built into Daintree";
+  }
+}
+
+/** Whether a launch on the preset skips permission prompts, and why. Exported for tests. */
+export function presetBypassLabel(preset: PluginPresetLaunchSummary): string {
+  if (preset.dangerousMode === "on") return "Skipped: the preset turns bypass on";
+  if (preset.dangerousMode === "off") return "Asked: the preset turns bypass off";
+  return preset.skipsPermissions
+    ? `Skipped: from ${preset.agentName}'s settings`
+    : `Asked: from ${preset.agentName}'s settings`;
+}
+
+/** What launching on a preset turns on. Env values are never sent here, only names. */
+function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) {
+  const rows: Array<{ label: string; value: string; mono?: boolean }> = [
+    { label: "Source", value: presetSourceLabel(preset.source) },
+    { label: "Permission prompts", value: presetBypassLabel(preset) },
+    {
+      label: "Arguments",
+      value: preset.args.length > 0 ? preset.args.join(" ") : "None",
+      mono: preset.args.length > 0,
+    },
+  ];
+  if (preset.customFlags !== undefined) {
+    rows.push({
+      label: "Extra flags",
+      value: preset.customFlags.trim() === "" ? "None (replaces the agent's)" : preset.customFlags,
+      mono: preset.customFlags.trim() !== "",
+    });
+  }
+  if (preset.accountName !== undefined) rows.push({ label: "Account", value: preset.accountName });
+  rows.push({
+    label: "Environment",
+    value:
+      preset.envNames.length > 0
+        ? preset.envNames.map((name) => `${name}=••••`).join("  ")
+        : "None",
+    mono: preset.envNames.length > 0,
+  });
+  if (preset.fallbackNames.length > 0) {
+    rows.push({
+      label: preset.fallbackOnRateLimit ? "Falls back to, on errors and limits" : "Falls back to",
+      value: preset.fallbackNames.join(", "),
+    });
+  }
+  return (
+    <div>
+      <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>
+        {preset.agentName} · {preset.presetName}
+      </div>
+      <dl className="space-y-1.5">
+        {rows.map((row) => (
+          <div key={row.label} className="grid grid-cols-[9rem_1fr] gap-2 text-xs">
+            <dt className="text-text-secondary">{row.label}</dt>
+            <dd className={cn("min-w-0 break-words text-text-primary", row.mono && "font-mono")}>
+              {row.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/** Title of a preset launch prompt. Exported for tests. */
+export function presetLaunchTitleFor(
+  pluginDisplayName: string,
+  preset: Pick<PluginPresetLaunchSummary, "agentName" | "presetName">
+): string {
+  return `Allow '${pluginDisplayName}' to launch ${preset.agentName} on '${preset.presetName}'?`;
 }
 
 /** One permission offered back. "Show in attention views" has no capability token, so no capability row. */
