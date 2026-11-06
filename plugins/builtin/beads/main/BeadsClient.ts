@@ -50,6 +50,10 @@ export interface BeadsRequest {
   body?: unknown;
   /** The operation's token, captured once. `null` sends none: `bd serve` may run without auth. */
   token: string | null;
+  /** Workspace the caller expects; a server serving another one refuses the request. */
+  projectId?: string;
+  /** Why no token is sent to a server that turns out to need one. */
+  withheldTokenHint?: string;
   timeoutMs?: number;
 }
 
@@ -89,6 +93,7 @@ function problemMessage(problem: Problem | null, status: number): string {
 export async function beadsRequest<T>(baseUrl: string, request: BeadsRequest): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (request.token) headers.Authorization = `Bearer ${request.token}`;
+  if (request.projectId) headers["Bd-Project-Id"] = request.projectId;
   if (request.body !== undefined) headers["Content-Type"] = "application/json";
 
   let response: Response;
@@ -109,7 +114,24 @@ export async function beadsRequest<T>(baseUrl: string, request: BeadsRequest): P
     );
   }
 
-  const payload = (await response.json().catch(() => null)) as unknown;
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (err) {
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
+    throw new BeadsApiError(
+      timedOut
+        ? "The Beads server didn't respond in time"
+        : "The Beads server's response was cut off",
+      { status: response.status }
+    );
+  }
+  let payload: unknown = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    // A body that isn't JSON (a proxy's error page) reads as no payload.
+  }
 
   if (!response.ok) {
     const problem = (payload && typeof payload === "object" ? payload : null) as Problem | null;
@@ -119,7 +141,8 @@ export async function beadsRequest<T>(baseUrl: string, request: BeadsRequest): P
       throw new BeadsApiError(
         request.token
           ? "The Beads server rejected the token"
-          : "The Beads server needs a token. Add one in Settings → Code forge.",
+          : (request.withheldTokenHint ??
+              "The Beads server needs a token. Add one in Settings → Code forge."),
         { status: response.status, code, reason, credentialRejected: true }
       );
     }

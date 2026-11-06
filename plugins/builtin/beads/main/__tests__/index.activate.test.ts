@@ -60,10 +60,12 @@ describe("activate", () => {
     dispose();
   });
 
-  it("forgets the token and the settings reader on dispose", async () => {
-    const dispose = await activate(makeHost().host);
+  it("unregisters, and forgets the token and the settings reader, on dispose", async () => {
+    const unregister = vi.fn();
+    const dispose = await activate(makeHost(vi.fn(async () => unregister)).host);
     beadsForgeProvider.setCredentials!({ kind: "bearer", value: "tok" });
     dispose();
+    expect(unregister).toHaveBeenCalledTimes(1);
     expect(getToken()).toBeNull();
     await expect(beadsForgeProvider.resolveIssueRepo!("/no/such/project")).resolves.toBeNull();
     expect(getProjectByPath).not.toHaveBeenCalled();

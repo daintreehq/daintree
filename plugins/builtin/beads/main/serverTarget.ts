@@ -40,6 +40,27 @@ async function readTargetFileUrl(projectPath: string): Promise<string | null> {
   }
 }
 
+export interface ServerTarget {
+  url: string;
+  /** Whether the address is one the user chose, which decides if the token may go to it. */
+  source: "setting" | "file";
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "[::1]", "::1"]);
+
+/** A loopback address can only reach this machine, whoever wrote it down. */
+export function isLoopbackUrl(serverUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(serverUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return (
+    LOOPBACK_HOSTS.has(host) || host.endsWith(".localhost") || /^127(\.\d{1,3}){3}$/.test(host)
+  );
+}
+
 /**
  * The server a project's beads come from: its `serverUrl` project setting, or
  * else the address `bd connect` wrote into its `.beads/`. A setting that is
@@ -49,7 +70,7 @@ async function readTargetFileUrl(projectPath: string): Promise<string | null> {
 export async function resolveServerUrl(
   projectPath: string,
   settingValue: string | undefined
-): Promise<string | null> {
+): Promise<ServerTarget | null> {
   if (settingValue !== undefined && settingValue.trim() !== "") {
     const fromSetting = normalizeServerUrl(settingValue);
     if (!fromSetting) {
@@ -57,7 +78,8 @@ export async function resolveServerUrl(
         `The Beads server URL "${settingValue.trim()}" isn't an http(s) address. Fix it in Project settings.`
       );
     }
-    return fromSetting;
+    return { url: fromSetting, source: "setting" };
   }
-  return readTargetFileUrl(projectPath);
+  const fromFile = await readTargetFileUrl(projectPath);
+  return fromFile ? { url: fromFile, source: "file" } : null;
 }

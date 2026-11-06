@@ -26,9 +26,9 @@ import {
   setMemoryToken,
   type QueryValue,
 } from "./BeadsClient.js";
-import { IssueNumberIndex } from "./issueNumbers.js";
+import { IssueNumberIndex, beadNumber } from "./issueNumbers.js";
 import { mapActor, mapBead, mapComment, type BeadComment, type BeadNode } from "./mappers.js";
-import { resolveServerUrl } from "./serverTarget.js";
+import { isLoopbackUrl, resolveServerUrl } from "./serverTarget.js";
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
@@ -40,8 +40,22 @@ const COUNT_PAGE_SIZE = 200;
 const COUNT_PAGE_LIMIT = 5;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
 const PREVIOUS_ASSIGNEES_LIMIT = 50;
+const ID_FORBIDDEN = new Set(["/", "\\", "?", "#", "%"]);
+
+function hasControlOrSpace(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0)!;
+    if (code < 0x20 || code === 0x7f || /\s/.test(char)) return true;
+  }
+  return false;
+}
+
 /** Bead ids are short; anything outside this isn't one, and never reaches a URL path. */
-const BEAD_ID_PATTERN = /^[^\s/\\?#%\u0000-\u001f\u007f]{1,255}$/;
+function isBeadId(id: string): boolean {
+  if (id.length === 0 || id.length > 255 || hasControlOrSpace(id)) return false;
+  for (const char of id) if (ID_FORBIDDEN.has(char)) return false;
+  return true;
+}
 
 interface IssuesPage {
   items: BeadNode[];
@@ -71,47 +85,108 @@ export function setServerUrlSettingReader(
 interface Op {
   token: string | null;
   version: number;
+  generation: number;
 }
 
+/** Bumps when the caches are reset, so work started before can't refill them. */
+let generation = 0;
+
 function beginOp(): Op {
-  return { token: getToken(), version: getTokenVersion() };
+  return { token: getToken(), version: getTokenVersion(), generation };
 }
 
 function isCurrent(op: Op): boolean {
-  return op.version === getTokenVersion();
+  return op.version === getTokenVersion() && op.generation === generation;
 }
 
 const numbers = new IssueNumberIndex();
 const contextCache = new Map<string, ContextResponse>();
 const statsCache = new Map<string, { version: number; at: number; issueCount: number | null }>();
-/** Who a bead was assigned to before "Assign to me", so Undo can put them back. */
+/** Who a bead was assigned to before "Assign to me", per server and bead, so Undo can put them back. */
 const previousAssignees = new Map<string, string | null>();
+/**
+ * Servers the token may be sent to: one a project setting named, or a loopback
+ * address. An address read from a repository's `.beads/` alone is not one,
+ * since a cloned repo can name any server.
+ */
+const trustedServers = new Set<string>();
+/** The workspace each server answered for, stamped on requests so a swapped server refuses them. */
+const serverProjects = new Map<string, string>();
 
 export function clearBeadsCaches(): void {
+  generation++;
   numbers.clear();
   contextCache.clear();
   statsCache.clear();
   previousAssignees.clear();
+  trustedServers.clear();
+  serverProjects.clear();
   clearActorCache();
 }
+
+function forgetServer(server: string): void {
+  numbers.forget(server);
+  serverProjects.delete(server);
+  for (const key of [...contextCache.keys()]) {
+    if (key.endsWith(`\u0000${server}`)) contextCache.delete(key);
+  }
+  for (const key of [...statsCache.keys()]) {
+    if (key.startsWith(`${server}\u0000`)) statsCache.delete(key);
+  }
+  for (const key of [...previousAssignees.keys()]) {
+    if (key.startsWith(`${server}\u0000`)) previousAssignees.delete(key);
+  }
+}
+
+function tokenFor(server: string, op: Op): string | null {
+  return trustedServers.has(server) ? op.token : null;
+}
+
+const WITHHELD_TOKEN_HINT =
+  "This Beads server's address came from the project's .beads/http_target.json, so the saved token isn't sent to it. Enter the address as the Beads server URL in Project settings to use the token.";
 
 /** The server a ref addresses. `owner` carries it, since `rawData` is opaque to the host. */
 function serverOf(repo: RepoRef): string {
   return repo.owner;
 }
 
-function request<T>(repo: RepoRef, op: Op, req: Omit<Parameters<typeof beadsRequest>[1], "token">) {
-  return beadsRequest<T>(serverOf(repo), { ...req, token: op.token });
+async function request<T>(
+  repo: RepoRef,
+  op: Op,
+  req: Omit<Parameters<typeof beadsRequest>[1], "token">
+): Promise<T> {
+  const server = serverOf(repo);
+  const token = tokenFor(server, op);
+  try {
+    return await beadsRequest<T>(server, {
+      ...req,
+      token,
+      projectId: serverProjects.get(server),
+      ...(op.token && !token ? { withheldTokenHint: WITHHELD_TOKEN_HINT } : {}),
+    });
+  } catch (err) {
+    if (err instanceof BeadsApiError && err.reason === "project_mismatch") {
+      // Something else answers at this address now; nothing learned from the
+      // old workspace may address the new one's beads.
+      forgetServer(server);
+      throw new BeadsApiError(
+        `The Beads server at ${server} now serves a different workspace. Try again.`,
+        { status: err.status, code: err.code, reason: err.reason }
+      );
+    }
+    throw err;
+  }
 }
 
 function beadPath(id: string, suffix = ""): string {
-  if (!BEAD_ID_PATTERN.test(id)) throw new Error(`"${id}" isn't a bead id`);
+  if (!isBeadId(id)) throw new Error(`"${id}" isn't a bead id`);
   return `/v0/beads/issues/${encodeURIComponent(id)}${suffix}`;
 }
 
 function remember(repo: RepoRef, node: BeadNode): Issue {
-  numbers.remember(serverOf(repo), node.id);
-  return mapBead(node);
+  const issue = mapBead(node);
+  numbers.remember(serverOf(repo), node.id, issue.number);
+  return issue;
 }
 
 /**
@@ -154,28 +229,35 @@ async function getBead(repo: RepoRef, id: string, op: Op): Promise<Issue | null>
 
 /**
  * The bead behind a number. Numbers are learned from every bead this provider
- * maps; one it hasn't seen is looked for by listing every bead on the server,
- * which only a link from before a restart or another window needs.
+ * maps, by list or by id; one it hasn't seen is looked for by listing, the
+ * picker's open set first and then every status, within a fixed budget.
  */
 async function resolveBeadId(repo: RepoRef, number: number, op: Op): Promise<string | null> {
   const server = serverOf(repo);
   const known = numbers.lookup(server, number);
   if (known) return known;
-  let cursor: string | undefined;
-  for (let page = 0; page < LOOKUP_PAGE_LIMIT; page++) {
-    const data = await request<IssuesPage>(repo, op, {
-      path: "/v0/beads/issues",
-      query: { all: true, limit: LOOKUP_PAGE_SIZE, cursor },
-    });
-    for (const item of data.items) numbers.remember(server, item.id);
-    if (!data.has_more || !data.next_cursor) return numbers.lookup(server, number);
-    cursor = data.next_cursor;
+  let pages = 0;
+  for (const query of [{}, { all: true }]) {
+    let cursor: string | undefined;
+    for (;;) {
+      if (pages === LOOKUP_PAGE_LIMIT) {
+        throw new Error(
+          `Couldn't find Beads issue #${number} within the first ${LOOKUP_PAGE_LIMIT * LOOKUP_PAGE_SIZE} beads. Open it by its id instead.`
+        );
+      }
+      pages++;
+      const data = await request<IssuesPage>(repo, op, {
+        path: "/v0/beads/issues",
+        query: { ...query, limit: LOOKUP_PAGE_SIZE, cursor },
+      });
+      for (const item of data.items) numbers.remember(server, item.id, beadNumber(item.id));
+      const found = numbers.lookup(server, number);
+      if (found) return found;
+      if (!data.has_more || !data.next_cursor) break;
+      cursor = data.next_cursor;
+    }
   }
-  const found = numbers.lookup(server, number);
-  if (found) return found;
-  throw new Error(
-    `Couldn't find Beads issue #${number} within the first ${LOOKUP_PAGE_LIMIT * LOOKUP_PAGE_SIZE} beads. Open it by its id instead.`
-  );
+  return null;
 }
 
 async function requireBeadId(repo: RepoRef, number: number, op: Op): Promise<string> {
@@ -207,10 +289,14 @@ async function patchBead(
   return remember(repo, data.issue);
 }
 
-function rememberPreviousAssignee(op: Op, id: string, assignee: string | null): void {
+function undoKey(repo: RepoRef, id: string): string {
+  return `${serverOf(repo)}\u0000${id}`;
+}
+
+function rememberPreviousAssignee(op: Op, key: string, assignee: string | null): void {
   if (!isCurrent(op)) return;
-  previousAssignees.delete(id);
-  previousAssignees.set(id, assignee);
+  previousAssignees.delete(key);
+  previousAssignees.set(key, assignee);
   if (previousAssignees.size > PREVIOUS_ASSIGNEES_LIMIT) {
     const oldest = previousAssignees.keys().next().value;
     if (oldest !== undefined) previousAssignees.delete(oldest);
@@ -236,7 +322,7 @@ async function countOpenBeads(repo: RepoRef, op: Op): Promise<number | null> {
       query: { limit: COUNT_PAGE_SIZE, cursor },
     });
     count += data.items.length;
-    for (const item of data.items) numbers.remember(serverOf(repo), item.id);
+    for (const item of data.items) numbers.remember(serverOf(repo), item.id, beadNumber(item.id));
     if (!data.has_more || !data.next_cursor) return count;
     cursor = data.next_cursor;
   }
@@ -299,6 +385,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
       contextCache.clear();
       statsCache.clear();
       previousAssignees.clear();
+      serverProjects.clear();
     }
   },
 
@@ -320,27 +407,32 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   async validateToken(token: string): Promise<AuthValidation> {
     const trimmed = token?.trim() ?? "";
     if (!trimmed) return { valid: false, error: "Token is required" };
-    if (/[\s\u0000-\u001f\u007f]/.test(trimmed)) {
+    if (hasControlOrSpace(trimmed)) {
       return { valid: false, error: "A Beads token can't contain spaces or control characters" };
     }
     return { valid: true };
   },
 
   async resolveIssueRepo(projectPath: string): Promise<RepoRef | null> {
-    const serverUrl = await resolveServerUrl(
-      projectPath,
-      await serverUrlSettingReader?.(projectPath)
-    );
-    if (!serverUrl) return null;
+    const target = await resolveServerUrl(projectPath, await serverUrlSettingReader?.(projectPath));
+    if (!target) return null;
+    const serverUrl = target.url;
     const op = beginOp();
+    if (target.source === "setting" || isLoopbackUrl(serverUrl)) trustedServers.add(serverUrl);
     const cacheKey = `${op.version}\u0000${serverUrl}`;
     let context = contextCache.get(cacheKey);
     if (!context) {
+      const token = tokenFor(serverUrl, op);
       context = await beadsRequest<ContextResponse>(serverUrl, {
         path: "/v0/beads/context",
-        token: op.token,
+        token,
+        ...(op.token && !token ? { withheldTokenHint: WITHHELD_TOKEN_HINT } : {}),
       });
-      if (isCurrent(op)) contextCache.set(cacheKey, context);
+      if (isCurrent(op)) {
+        contextCache.set(cacheKey, context);
+        if (context.project_id) serverProjects.set(serverUrl, context.project_id);
+        else serverProjects.delete(serverUrl);
+      }
     }
     const url = new URL(serverUrl);
     return {
@@ -380,7 +472,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async getIssueById(repo: RepoRef, id: string, _options?: FetchOptions): Promise<Issue | null> {
-    if (!BEAD_ID_PATTERN.test(id)) return null;
+    if (!isBeadId(id)) return null;
     return getBead(repo, id, beginOp());
   },
 
@@ -414,27 +506,52 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   /**
    * A bead has one assignee. A live claim by someone else is left to the
    * server to refuse, never forced: taking work an agent holds is `bd`'s
-   * call, not a click's.
+   * call, not a click's. The write is fenced on the revision it was read at,
+   * so the assignee Undo restores is the one the write actually replaced.
    */
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = beginOp();
-    const issue = await requireBead(repo, issueNumber, op);
-    const before = assigneeOf(issue);
-    rememberPreviousAssignee(op, issue.id, before);
-    if (before === username) return issue.assignees;
-    return (await patchBead(repo, issue.id, op, { assignee: username })).assignees;
+    for (let attempt = 0; ; attempt++) {
+      const issue = await requireBead(repo, issueNumber, op);
+      const key = undoKey(repo, issue.id);
+      const before = assigneeOf(issue);
+      if (before === username) {
+        // Already theirs: Undo then has nothing to hand back, unless an
+        // earlier assignment's record is still waiting for its Undo.
+        if (!previousAssignees.has(key)) rememberPreviousAssignee(op, key, before);
+        return issue.assignees;
+      }
+      const revision = (issue.rawData as { revision?: unknown }).revision;
+      try {
+        const updated = await patchBead(
+          repo,
+          issue.id,
+          op,
+          { assignee: username },
+          typeof revision === "string" ? { expected_version: revision } : {}
+        );
+        rememberPreviousAssignee(op, key, before);
+        return updated.assignees;
+      } catch (err) {
+        if (attempt === 0 && err instanceof BeadsApiError && err.code === "precondition_failed") {
+          continue;
+        }
+        throw err;
+      }
+    }
   },
 
   async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = beginOp();
     const current = await requireBead(repo, issueNumber, op);
-    const previous = previousAssignees.has(current.id)
-      ? (previousAssignees.get(current.id) ?? null)
-      : null;
-    previousAssignees.delete(current.id);
+    const key = undoKey(repo, current.id);
+    const previous = previousAssignees.has(key) ? (previousAssignees.get(key) ?? null) : null;
     // Only take the bead off this user, and hand it back to whoever "Assign to
     // me" took it from; if it was already theirs there is nothing to undo.
-    if (assigneeOf(current) !== username || previous === username) return current.assignees;
+    if (assigneeOf(current) !== username || previous === username) {
+      previousAssignees.delete(key);
+      return current.assignees;
+    }
     try {
       const updated = await patchBead(
         repo,
@@ -443,12 +560,15 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
         { assignee: previous ?? "" },
         { expected_assignee: username }
       );
+      previousAssignees.delete(key);
       return updated.assignees;
     } catch (err) {
       // Someone else took it between the read and the write: theirs now.
       if (err instanceof BeadsApiError && err.code === "precondition_failed") {
+        previousAssignees.delete(key);
         return (await getBead(repo, current.id, op))?.assignees ?? [];
       }
+      // Kept on any other failure, so a retried Undo still knows whom to restore.
       throw err;
     }
   },

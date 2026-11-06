@@ -26,29 +26,43 @@ type Entry = string | typeof AMBIGUOUS;
  */
 export class IssueNumberIndex {
   private readonly servers = new Map<string, Map<number, Entry>>();
+  /**
+   * Numbers known to be shared, kept apart from the evictable entries: an
+   * evicted collision relearned from one side would otherwise resolve again.
+   */
+  private readonly ambiguous = new Map<string, Set<number>>();
 
-  remember(server: string, id: string): number {
-    const number = beadNumber(id);
+  remember(server: string, id: string, number: number): void {
     let entries = this.servers.get(server);
     if (!entries) {
       entries = new Map();
       this.servers.set(server, entries);
     }
     const existing = entries.get(number);
-    const next: Entry = existing === undefined || existing === id ? id : AMBIGUOUS;
+    const next: Entry =
+      this.ambiguous.get(server)?.has(number) || (existing !== undefined && existing !== id)
+        ? AMBIGUOUS
+        : id;
+    if (next === AMBIGUOUS) {
+      let shared = this.ambiguous.get(server);
+      if (!shared) {
+        shared = new Set();
+        this.ambiguous.set(server, shared);
+      }
+      shared.add(number);
+    }
     entries.delete(number);
     entries.set(number, next);
     if (entries.size > MAX_ENTRIES_PER_SERVER) {
       const oldest = entries.keys().next().value;
       if (oldest !== undefined) entries.delete(oldest);
     }
-    return number;
   }
 
   /** The id for a number, `null` when none is known, or throws when two ids share it. */
   lookup(server: string, number: number): string | null {
     const entry = this.servers.get(server)?.get(number);
-    if (entry === AMBIGUOUS) {
+    if (entry === AMBIGUOUS || this.ambiguous.get(server)?.has(number)) {
       throw new Error(
         `Two beads on this server share issue number ${number}. Open the bead by its id instead.`
       );
@@ -56,7 +70,14 @@ export class IssueNumberIndex {
     return entry ?? null;
   }
 
+  /** Forget one server, as when it turns out to serve another workspace now. */
+  forget(server: string): void {
+    this.servers.delete(server);
+    this.ambiguous.delete(server);
+  }
+
   clear(): void {
     this.servers.clear();
+    this.ambiguous.clear();
   }
 }
