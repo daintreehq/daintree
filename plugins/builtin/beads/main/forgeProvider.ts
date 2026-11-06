@@ -86,17 +86,36 @@ interface Op {
   token: string | null;
   version: number;
   generation: number;
+  server: string | null;
+  serverGeneration: number;
 }
 
 /** Bumps when the caches are reset, so work started before can't refill them. */
 let generation = 0;
+/** Per server: bumps when one is forgotten, leaving work on other servers alone. */
+const serverGenerations = new Map<string, number>();
 
-function beginOp(): Op {
-  return { token: getToken(), version: getTokenVersion(), generation };
+function serverGeneration(server: string): number {
+  return serverGenerations.get(server) ?? 0;
+}
+
+function beginOp(repo?: RepoRef): Op {
+  const server = repo ? serverOf(repo) : null;
+  return {
+    token: getToken(),
+    version: getTokenVersion(),
+    generation,
+    server,
+    serverGeneration: server ? serverGeneration(server) : 0,
+  };
 }
 
 function isCurrent(op: Op): boolean {
-  return op.version === getTokenVersion() && op.generation === generation;
+  return (
+    op.version === getTokenVersion() &&
+    op.generation === generation &&
+    (op.server === null || serverGeneration(op.server) === op.serverGeneration)
+  );
 }
 
 const numbers = new IssueNumberIndex();
@@ -126,7 +145,7 @@ export function clearBeadsCaches(): void {
 
 function forgetServer(server: string): void {
   // Work in flight learned from the old workspace; none of it may land.
-  generation++;
+  serverGenerations.set(server, serverGeneration(server) + 1);
   numbers.forget(server);
   serverProjects.delete(server);
   for (const key of [...contextCache.keys()]) {
@@ -355,7 +374,7 @@ async function countOpenBeads(repo: RepoRef, op: Op): Promise<number | null> {
 const repoStatsCapability: RepoStatsCapability = {
   async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
     const key = `${serverOf(repo)}\u0000${repo.repo}`;
-    const op = beginOp();
+    const op = beginOp(repo);
     const now = Date.now();
     const cached = statsCache.get(key);
     if (
@@ -441,12 +460,13 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
     let context = contextCache.get(cacheKey);
     if (!context) {
       const token = tokenFor(serverUrl, op);
+      const serverGen = serverGeneration(serverUrl);
       context = await beadsRequest<ContextResponse>(serverUrl, {
         path: "/v0/beads/context",
         token,
         ...(op.token && !token ? { withheldTokenHint: WITHHELD_TOKEN_HINT } : {}),
       });
-      if (isCurrent(op)) {
+      if (isCurrent(op) && serverGeneration(serverUrl) === serverGen) {
         contextCache.set(cacheKey, context);
         if (context.project_id) serverProjects.set(serverUrl, context.project_id);
         else serverProjects.delete(serverUrl);
@@ -463,7 +483,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
 
   async listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
     checkOrder(opts);
-    const op = beginOp();
+    const op = beginOp(repo);
     const limit = Math.min(Math.max(opts.perPage ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     const search = opts.search?.trim();
     const data = await request<IssuesPage>(repo, op, {
@@ -485,14 +505,14 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async getIssue(repo: RepoRef, number: number, _options?: FetchOptions): Promise<Issue | null> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const id = await resolveBeadId(repo, number, op);
     return id ? getBead(repo, id, op) : null;
   },
 
   async getIssueById(repo: RepoRef, id: string, _options?: FetchOptions): Promise<Issue | null> {
     if (!isBeadId(id)) return null;
-    return getBead(repo, id, beginOp());
+    return getBead(repo, id, beginOp(repo));
   },
 
   buildIssueUrl(): string {
@@ -504,7 +524,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const actor = await resolveActor();
     const node = await request<BeadNode>(repo, op, {
       method: "POST",
@@ -529,7 +549,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
    * so the assignee Undo restores is the one the write actually replaced.
    */
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
-    const op = beginOp();
+    const op = beginOp(repo);
     for (let attempt = 0; ; attempt++) {
       const issue = await requireBead(repo, issueNumber, op);
       const key = undoKey(repo, issue.id);
@@ -561,7 +581,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const current = await requireBead(repo, issueNumber, op);
     const key = undoKey(repo, current.id);
     const previous = previousAssignees.has(key) ? (previousAssignees.get(key) ?? null) : null;
@@ -597,7 +617,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
     issueNumber: number,
     stateReason?: IssueCloseReason
   ): Promise<Issue> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const id = await requireBeadId(repo, issueNumber, op);
     const actor = await resolveActor();
     const data = await request<{ issue: BeadNode }>(repo, op, {
@@ -609,7 +629,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const id = await requireBeadId(repo, issueNumber, op);
     const actor = await resolveActor();
     const data = await request<{ issue: BeadNode }>(repo, op, {
@@ -625,13 +645,13 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
     if (input.title !== undefined) patch.title = input.title;
     if (input.body !== undefined) patch.description = input.body;
     if (Object.keys(patch).length === 0) throw new Error("Nothing to edit");
-    const op = beginOp();
+    const op = beginOp(repo);
     const id = await requireBeadId(repo, issueNumber, op);
     return patchBead(repo, id, op, patch);
   },
 
   async addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const id = await requireBeadId(repo, issueNumber, op);
     const author = await resolveActor();
     const comment = await request<BeadComment>(repo, op, {
@@ -643,14 +663,14 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const id = await requireBeadId(repo, issueNumber, op);
     return (await patchBead(repo, id, op, { add_labels: [label] })).labels;
   },
 
   /** Beads drops an absent label silently; the host's contract is to refuse it. */
   async removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]> {
-    const op = beginOp();
+    const op = beginOp(repo);
     const issue = await requireBead(repo, issueNumber, op);
     if (!issue.labels.some((l) => l.name === label)) {
       throw new Error(`Beads issue ${issue.id} has no label "${label}"`);

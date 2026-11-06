@@ -588,6 +588,39 @@ describe("mutations", () => {
     expect(call(5).body).toMatchObject({ patch: { assignee: "grace" } });
   });
 
+  it("keeps an assignment's Undo when another server is forgotten mid-write", async () => {
+    const other: RepoRef = {
+      ...REPO,
+      owner: "https://other.example.com",
+      rawData: { projectId: "proj-2" },
+    };
+    await bind("https://other.example.com", "proj-2");
+    fetchMock().mockResolvedValueOnce(page([bead("dfat-1")]));
+    await beadsForgeProvider.listIssues(other, {});
+    await seen("dfat-9");
+    const n = beadNumber("dfat-1");
+    let answer!: (r: Response) => void;
+    fetchMock()
+      .mockResolvedValueOnce(json(bead("dfat-1", { assignee: "grace" })))
+      .mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    const assigning = beadsForgeProvider.assignIssue(other, n, "ada");
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+    fetchMock().mockResolvedValueOnce(
+      problem(400, "invalid_argument", { param: "Bd-Project-Id", reason: "project_mismatch" })
+    );
+    await expect(beadsForgeProvider.getIssue(REPO, beadNumber("dfat-9"))).rejects.toThrow(
+      /different workspace/
+    );
+    answer(patched("dfat-1", { assignee: "ada" }));
+    await assigning;
+    fetchMock()
+      .mockResolvedValueOnce(json(bead("dfat-1", { assignee: "ada" })))
+      .mockResolvedValueOnce(patched("dfat-1", { assignee: "grace" }));
+    await beadsForgeProvider.unassignIssue(other, n, "ada");
+    expect(call(4).url.host).toBe("other.example.com");
+    expect(call(4).body).toMatchObject({ patch: { assignee: "grace" } });
+  });
+
   it("reads the bead back when someone else took it before Undo landed", async () => {
     await seen("dfat-1");
     const n = beadNumber("dfat-1");
