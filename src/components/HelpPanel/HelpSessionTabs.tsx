@@ -390,7 +390,7 @@ export function HelpSessionTabs({
             </DropdownMenuTrigger>
           </TooltipTrigger>
           {hasTip && (
-            <TooltipContent side="bottom" align="start" className="max-w-[320px]">
+            <TooltipContent side="bottom" align="start">
               {/* A bare `Session N` is already on the trigger in full. */}
               {tipNamesSession && <span className="block">{title}</span>}
               {hasBackground && (
