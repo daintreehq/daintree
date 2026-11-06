@@ -53,6 +53,13 @@ import {
 } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { buildFirstPrompt } from "@shared/utils/firstPrompt";
+import {
+  presetLaunchContent,
+  presetLaunchMatchesApproval,
+  resolvePresetLaunchParts,
+  type HostApprovedPluginPresetLaunch,
+} from "@shared/utils/agentPresetLaunchConsent";
+import { rememberApprovedPresetLaunch } from "@/services/plugin/pluginPresetLaunchApprovals";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 export { buildLaunchIdentity, type LaunchAgentIdentity };
@@ -233,6 +240,12 @@ export interface LaunchAgentOptions {
    * pane's `launchedByPluginId`. Only ever `ActionContext.callerPluginId`.
    */
   launchedByPluginId?: string;
+  /**
+   * The preset a person approved this plugin launch on (#16324). Only ever
+   * `ActionContext.hostApprovedPluginPresetLaunch`. The launch refuses unless
+   * the preset it resolves has exactly the approved content.
+   */
+  approvedPluginPreset?: HostApprovedPluginPresetLaunch;
   /**
    * Focus policy for the new panel. `"preserve"` keeps focus where it is
    * (background/MCP spawns). Omitted defaults to the resolved policy from
@@ -615,6 +628,32 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           },
         });
         if (plan.unloadedPresetId !== undefined) return declinePresetsLoading();
+        // Checked after every await the plan makes, against the preset it will
+        // launch on: the person approved that content, and a preset that
+        // changed since, or a different one, runs on nobody's say-so (#16324).
+        const approvedPreset = launchOptions?.approvedPluginPreset;
+        if (approvedPreset !== undefined) {
+          const sources = presetSources();
+          const matches =
+            approvedPreset.agentId === agentId &&
+            plan.preset?.id === approvedPreset.presetId &&
+            presetLaunchContent(plan.preset) === approvedPreset.content &&
+            presetLaunchMatchesApproval(
+              approvedPreset,
+              resolvePresetLaunchParts(
+                agentId,
+                approvedPreset.presetId,
+                sources.settings?.agents?.[agentId]?.customPresets,
+                sources.ccrPresets,
+                sources.projectPresets
+              )
+            );
+          if (!matches) {
+            throw new Error(
+              `The preset "${approvedPreset.presetId}" isn't the one that was approved for this plugin: it changed or isn't available here. Launch again to be asked about it as it is now.`
+            );
+          }
+        }
         if (plan.missingAccountId !== undefined) {
           logWarn(`Declined a launch of ${agentId}: its account no longer exists`);
           notifyAccountMissing(agentId, agentConfig?.name ?? agentId, effectiveWorktreeId);
@@ -817,6 +856,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           markRendererPerformance("agentlaunch.addpanel", { agentId });
           const terminalId = await addPanel(options, addPanelCommit);
           if (!terminalId) return declineAddPanel();
+          // A fallback hop on this pane is held to what was approved with it.
+          if (launchOptions?.approvedPluginPreset) {
+            rememberApprovedPresetLaunch(terminalId, launchOptions.approvedPluginPreset);
+          }
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
           // "background" only when the caller parked it: a panel the user
           // backgrounded in the meantime still reports where the launch put it.

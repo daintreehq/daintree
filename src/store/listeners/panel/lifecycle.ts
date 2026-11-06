@@ -1,6 +1,8 @@
 import type { TerminalStatusPayload } from "@shared/types";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
+import { presetLaunchContent } from "@shared/utils/agentPresetLaunchConsent";
+import { fallbackHopApproved } from "@/services/plugin/pluginPresetLaunchApprovals";
 import { terminalRegistryController } from "@/controllers";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -170,6 +172,34 @@ export async function handleFallbackTriggered(data: {
       priority: "high",
       title: "Fallback preset missing",
       message: `Preset "${nextPresetId}" is no longer configured. Check fallback settings or restart the terminal.`,
+      duration: 12000,
+      supersedeKey: fallbackSupersedeKey,
+      context: { ...fallbackAddress },
+      action: {
+        label: "Open agent settings",
+        actionId: "app.settings.openTab",
+        actionArgs: { tab: "agents" },
+        onClick: () => {
+          void actionService.dispatch(
+            "app.settings.openTab",
+            { tab: "agents" },
+            { source: "user" }
+          );
+        },
+      },
+    });
+    fallbackInFlight.delete(terminalId);
+    return;
+  }
+
+  // A pane a plugin launched on an approved preset hops only to a fallback the
+  // person approved with it, as it was then (#16324).
+  if (!fallbackHopApproved(terminalId, nextPresetId, presetLaunchContent(nextPreset))) {
+    notify({
+      type: "error",
+      priority: "high",
+      title: "Fallback preset changed",
+      message: `"${nextPreset.name}" changed after the plugin's launch on ${fromName} was approved, so the terminal didn't switch to it. Restart the terminal to continue.`,
       duration: 12000,
       supersedeKey: fallbackSupersedeKey,
       context: { ...fallbackAddress },

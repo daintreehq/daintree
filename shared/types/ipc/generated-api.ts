@@ -1432,9 +1432,15 @@ export interface GeneratedElectronAPI {
     listPanelAttention(
       ...args: IpcInvokeMap["plugin-capability:list-panel-attention"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:list-panel-attention"]["result"]>;
+    listPresetGrants(
+      ...args: IpcInvokeMap["plugin-capability:list-preset-grants"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:list-preset-grants"]["result"]>;
     resolveConsent(
       ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;
+    revokePresetGrant(
+      ...args: IpcInvokeMap["plugin-capability:revoke-preset-grant"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:revoke-preset-grant"]["result"]>;
     setOsNotifications(
       ...args: IpcInvokeMap["plugin-capability:set-os-notifications"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:set-os-notifications"]["result"]>;

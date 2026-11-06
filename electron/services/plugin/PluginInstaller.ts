@@ -45,6 +45,7 @@ import {
   type PluginGrantKey,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginInstalledRecordsStore } from "./PluginInstalledRecordsStore.js";
+import { AGENT_LAUNCH_PRESET_CAPABILITY } from "../../../shared/utils/agentPresetLaunchConsent.js";
 
 // proper-lockfile is CJS-only and ships no bundled types. Require it via the
 // same createRequire interop as ajv and declare the narrow surface we use.
@@ -1479,6 +1480,9 @@ export class PluginInstaller {
  */
 function stillAsksFor(manifest: Readonly<PluginManifest>, capability: PluginGrantKey): boolean {
   if (capability === EXTERNAL_LINK_CONSENT) return false;
+  // Declaring the capability says nothing about which presets the new code may
+  // use, so each preset asks again (#16324).
+  if (capability === AGENT_LAUNCH_PRESET_CAPABILITY) return false;
   if (capability === PLUGIN_PANEL_ATTENTION_GRANT) {
     return manifest.contributes.panels.some((panel) => panel.reportsActivity === true);
   }

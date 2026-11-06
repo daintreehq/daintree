@@ -357,4 +357,73 @@ describe("PluginCapabilityConsentStore", () => {
       expect(store.list()).toEqual([]);
     });
   });
+
+  describe("preset grants (#16324)", () => {
+    const zai = {
+      pluginId: "acme.x",
+      capability: "agent:launch-preset",
+      preset: { agentId: "claude", presetId: "zai", source: "custom" },
+    } as const;
+
+    it("answers only for its own preset, source, plugin and scope, and survives a reload", () => {
+      const { store, getConfig } = makeStore();
+      store.grant(zai, { fingerprint: "f1", presetName: "Z.ai" });
+      expect(store.getGrant(zai)?.preset?.fingerprint).toBe("f1");
+      expect(store.getGrant({ ...zai, preset: { ...zai.preset, presetId: "other" } })).toBe(
+        undefined
+      );
+      expect(store.getGrant({ ...zai, preset: { ...zai.preset, source: "project" } })).toBe(
+        undefined
+      );
+      expect(store.getGrant({ ...zai, preset: { ...zai.preset, agentId: "codex" } })).toBe(
+        undefined
+      );
+      expect(store.getGrant({ ...zai, pluginId: "acme.y" })).toBe(undefined);
+      expect(store.getGrant({ ...zai, scopeKey: "proj-1" })).toBe(undefined);
+      // A grant for the capability alone names no preset.
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "agent:launch-preset" })).toBe(false);
+      expect(makeStore(getConfig()).store.getGrant(zai)?.preset).toEqual({
+        ...zai.preset,
+        fingerprint: "f1",
+        presetName: "Z.ai",
+      });
+    });
+
+    it("never mints a preset grant without the content it was approved for", () => {
+      const { store } = makeStore();
+      expect(() => store.grant(zai)).toThrow();
+      expect(store.setGrant(zai, true)).toBe(false);
+      const shell = { pluginId: "acme.x", capability: "shell:exec" } as const;
+      expect(store.grantAll([zai, shell])).toBe(true);
+      // The ordinary grant in the same batch still lands.
+      expect(store.list().map((record) => record.capability)).toEqual(["shell:exec"]);
+    });
+
+    it("drops a persisted preset grant whose preset or fingerprint can't be read", () => {
+      const { store } = makeStore({
+        grants: [
+          { pluginId: "acme.x", capability: "agent:launch-preset", approvedAt: 1 },
+          {
+            pluginId: "acme.x",
+            capability: "agent:launch-preset",
+            preset: { agentId: "claude", presetId: "zai", source: "custom", presetName: "Z" },
+            approvedAt: 1,
+          },
+          {
+            pluginId: "acme.x",
+            capability: "agent:launch-preset",
+            preset: {
+              agentId: "claude",
+              presetId: "zai",
+              source: "elsewhere",
+              fingerprint: "f",
+              presetName: "Z",
+            },
+            approvedAt: 1,
+          },
+        ],
+      });
+      expect(store.list()).toEqual([]);
+    });
+  });
 });

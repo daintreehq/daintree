@@ -41,6 +41,7 @@ import { countPanelLimitUsage } from "./panelCount";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { cancelDriveLeaseHold, clearPanelDriveLeaseMark } from "@/store/driveLeaseWaitStore";
+import { forgetApprovedPresetLaunch } from "@/services/plugin/pluginPresetLaunchApprovals";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -159,6 +160,7 @@ export const createCorePanelActions = (
 
   removePanel: (id, options) => {
     clearTrashExpiryTimer(id);
+    forgetApprovedPresetLaunch(id);
     cancelReconnectErrorDebounce(id);
     const state = get();
     const removedIndex = state.panelIds.indexOf(id);
@@ -247,6 +249,7 @@ export const createCorePanelActions = (
     for (const id of idSet) {
       clearTrashExpiryTimer(id);
       cancelReconnectErrorDebounce(id);
+      forgetApprovedPresetLaunch(id);
       const terminal = state.panelsById[id];
       if (!terminal) continue;
 

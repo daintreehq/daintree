@@ -73,6 +73,11 @@ export const CAPABILITY_META = {
     description: "Type, press keys and submit text in running agent sessions",
     severity: "warning",
   },
+  "agent:launch-preset": {
+    label: "Launch agents on your presets",
+    description: "Start agents on presets you approve one at a time, with their flags and env",
+    severity: "warning",
+  },
   "terminal:read": {
     label: "Read your terminals",
     description:

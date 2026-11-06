@@ -275,6 +275,41 @@ describe("agentActions adversarial", () => {
     ]);
   });
 
+  // Only a plugin dispatch's host-stamped context carries a preset approval to
+  // the launcher, which holds the launch to it (#16324).
+  it("agent.launch hands the launcher a plugin dispatch's preset approval and no other", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const approval = {
+      agentId: "claude",
+      presetId: "zai",
+      source: "custom" as const,
+      content: "[1]",
+      fallbacks: [],
+    };
+
+    await callAction(
+      actions,
+      "agent.launch",
+      { agentId: "claude", presetId: "zai" },
+      {
+        dispatchSource: "plugin",
+        callerPluginId: "beads",
+        hostApprovedPluginPresetLaunch: approval,
+      }
+    );
+    await callAction(
+      actions,
+      "agent.launch",
+      { agentId: "claude", presetId: "zai" },
+      { dispatchSource: "agent", hostApprovedPluginPresetLaunch: approval }
+    );
+
+    expect(
+      callbacks.onLaunchAgent.mock.calls.map(([, options]) => options.approvedPluginPreset)
+    ).toEqual([approval, undefined]);
+  });
+
   it("agent.launch refuses a schedule source in its arguments", () => {
     const schema = getDefinition(setupActions(makeCallbacks()), "agent.launch").argsSchema;
     if (!schema) throw new Error("agent.launch has no argsSchema");

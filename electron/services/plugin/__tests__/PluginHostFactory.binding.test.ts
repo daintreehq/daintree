@@ -52,6 +52,15 @@ const viewless = vi.hoisted(() => ({
 vi.mock("../../viewless/index.js", () => ({
   runViewlessAction: viewless.runViewlessAction,
 }));
+const presetGate = vi.hoisted(() => ({
+  gatePluginPresetLaunch: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({
+    kind: "pass",
+  })),
+}));
+vi.mock("../pluginPresetLaunchGate.js", () => ({
+  gatePluginPresetLaunch: presetGate.gatePluginPresetLaunch,
+  createPluginPresetLaunchGateDeps: async () => ({}),
+}));
 
 import {
   createHost,
@@ -740,6 +749,75 @@ describe("createHost dispatch, catalog and prompts", () => {
     expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
     expect(h.sendActionsGetToRenderer).toHaveBeenCalledWith("terminal.focus", PROJECT_A, PLUGIN_ID);
     for (const call of h.requestPrompt.mock.calls) expect(call[2]).toBe(PROJECT_A);
+  });
+
+  it("asks about a named preset before dispatching and carries the approval beside it (#16324)", async () => {
+    const h = makeHarness();
+    const approval = {
+      agentId: "claude",
+      presetId: "zai",
+      source: "custom",
+      content: "[1]",
+      fallbacks: [],
+    };
+    let answer!: (value: unknown) => void;
+    presetGate.gatePluginPresetLaunch.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    // The loaded plugin carries its binding, as ensureCapabilityConsent reads it.
+    const plugin = fakePlugin();
+    h.plugins.set(PLUGIN_ID, {
+      ...plugin,
+      manifest: { ...plugin.manifest, capabilities: ["agent:launch-preset"] },
+      binding: BOUND,
+    } as LoadedPlugin);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const args = { agentId: "claude", presetId: "zai", prompt: "Plan it" };
+
+    const pending = host.dispatch("agent.launch", args);
+    await vi.waitFor(() => expect(presetGate.gatePluginPresetLaunch).toHaveBeenCalled());
+    // Nothing reaches the renderer while the person is still being asked.
+    expect(h.sendDispatchToRenderer).not.toHaveBeenCalled();
+    answer({ kind: "approved", approval });
+    await pending;
+
+    const [caller, actionId, gatedArgs, projectId] =
+      presetGate.gatePluginPresetLaunch.mock.calls[0]!;
+    // Scope and identity come from the plugin's own binding, never its arguments.
+    expect(caller).toEqual({
+      pluginId: PLUGIN_ID,
+      displayName: "Acme",
+      declaredCapabilities: ["agent:launch-preset"],
+      scopeKey: PROJECT_A,
+    });
+    expect([actionId, gatedArgs, projectId]).toEqual(["agent.launch", args, PROJECT_A]);
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledExactlyOnceWith(
+      "agent.launch",
+      args,
+      PROJECT_A,
+      PLUGIN_ID,
+      approval
+    );
+  });
+
+  it("answers a refused preset launch without reaching the renderer (#16324)", async () => {
+    const h = makeHarness();
+    const refusal = { ok: false, error: { code: "VALIDATION_ERROR", message: "no such preset" } };
+    presetGate.gatePluginPresetLaunch.mockResolvedValueOnce({ kind: "refused", result: refusal });
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.dispatch("agent.launch", { agentId: "claude", presetId: "gone" })
+    ).resolves.toEqual(refusal);
+    expect(h.sendDispatchToRenderer).not.toHaveBeenCalled();
+  });
+
+  it("never consults the preset gate for a launch that names no preset", async () => {
+    const h = makeHarness();
+    presetGate.gatePluginPresetLaunch.mockClear();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    await host.dispatch("agent.launch", { agentId: "claude", prompt: "hi" });
+    expect(presetGate.gatePluginPresetLaunch).not.toHaveBeenCalled();
   });
 
   it("forwards each prompt's cancellation signal to the dispatcher (#12279)", async () => {

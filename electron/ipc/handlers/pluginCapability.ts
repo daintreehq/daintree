@@ -42,6 +42,9 @@ import {
   type PluginOsNotificationsUpdate,
   type PluginPanelAttentionQuery,
   type PluginPanelAttentionUpdate,
+  type PluginPresetGrantEntry,
+  type PluginPresetGrantRevoke,
+  type PluginPresetGrantsQuery,
   type PluginProjectTargetingQuery,
   type PluginProjectTargetingUpdate,
   type PluginWorktreeDeleteNotesQuery,
@@ -138,11 +141,14 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
     // host's browser, which `system.openExternal` already refuses for a remote
     // driver, so a site prompt reaching here has no one to ask; an offer-back
     // after a replacing install has no remote form, so its grants stay off.
+    // Neither has a preset prompt (#16324): a dialog without the preset's
+    // summary would ask the person to approve something they can't see.
     if (request.restore !== undefined) return Promise.resolve("undeliverable");
     const { capability } = request;
     if (request.site !== undefined || capability === EXTERNAL_LINK_CONSENT) {
       return Promise.resolve("undeliverable");
     }
+    if (request.preset !== undefined) return Promise.resolve("undeliverable");
     return requestRemoteConsent(frontend.endpoint, frontend.leaseId, { ...request, capability });
   }
   if (frontend.kind === "none") {
@@ -245,6 +251,7 @@ export function requestConsentInWebContents(
                 pluginDisplayName: request.pluginDisplayName,
                 capability: request.capability,
                 ...(request.site !== undefined ? { site: request.site } : {}),
+                ...(request.preset !== undefined ? { preset: request.preset } : {}),
                 declaredCapabilities: request.declaredCapabilities,
               },
       });
@@ -532,6 +539,50 @@ export async function handleSetPanelAttention(input: PluginPanelAttentionUpdate)
   return store.hasGrant(identity);
 }
 
+const PRESET_SOURCES: ReadonlySet<string> = new Set(["custom", "project", "ccr", "registry"]);
+
+function presetGrantPluginId(pluginId: unknown): string {
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new Error("pluginId must be a non-empty string");
+  }
+  return pluginId;
+}
+
+/** The presets a plugin may launch agents on, one entry per grant (#16324). */
+export async function handleListPresetGrants(
+  input: PluginPresetGrantsQuery
+): Promise<PluginPresetGrantEntry[]> {
+  return getPluginCapabilityConsentService().listPresetGrants(presetGrantPluginId(input?.pluginId));
+}
+
+/**
+ * Withdraw one preset grant (#16324). Only ever takes a grant away, so the
+ * renderer naming it is enough; the next launch on that preset asks again.
+ */
+export async function handleRevokePresetGrant(input: PluginPresetGrantRevoke): Promise<void> {
+  const pluginId = presetGrantPluginId(input?.pluginId);
+  const { agentId, presetId, source, scopeKey } = input;
+  if (
+    typeof agentId !== "string" ||
+    typeof presetId !== "string" ||
+    typeof source !== "string" ||
+    !PRESET_SOURCES.has(source) ||
+    typeof scopeKey !== "string" ||
+    scopeKey === ""
+  ) {
+    throw new Error("A preset grant is named by its agent, preset, source and scope");
+  }
+  if (
+    !getPluginCapabilityConsentService().revokePresetGrant(
+      pluginId,
+      { agentId, presetId, source },
+      scopeKey
+    )
+  ) {
+    throw new Error("The preset permission could not be removed");
+  }
+}
+
 export const pluginCapabilityNamespace = defineIpcNamespace({
   name: "pluginCapability",
   ops: {
@@ -578,6 +629,14 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
     listPanelAttention: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.listPanelAttention,
       handleListPanelAttention
+    ),
+    listPresetGrants: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.listPresetGrants,
+      handleListPresetGrants
+    ),
+    revokePresetGrant: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.revokePresetGrant,
+      handleRevokePresetGrant
     ),
   },
 });

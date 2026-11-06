@@ -519,6 +519,10 @@ export const agentActionRuns = {
       // Host-stamped, never an argument: it is what lets the plugin hold this
       // pane on restart later, and only this plugin (#14017).
       launchedByPluginId: ctx?.dispatchSource === "plugin" ? ctx.callerPluginId : undefined,
+      // Host-stamped, never an argument: the preset main asked the person
+      // about, which the launcher holds the launch to (#16324).
+      approvedPluginPreset:
+        ctx?.dispatchSource === "plugin" ? ctx.hostApprovedPluginPresetLaunch : undefined,
       focusPolicy,
       requestedId,
       force,

@@ -1827,6 +1827,8 @@ export interface IpcEventMap {
     args: unknown;
     /** The calling plugin, from its host's closure; absent for host-internal dispatches. */
     pluginId?: string;
+    /** Main's consent for an `agent.launch` on one preset (#16324); never from the plugin. */
+    approvedPresetLaunch?: import("../../utils/agentPresetLaunchConsent.js").HostApprovedPluginPresetLaunch;
   };
 
   /**

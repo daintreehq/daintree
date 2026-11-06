@@ -2628,6 +2628,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         actionId: string;
         args?: unknown;
         pluginId?: string;
+        /** Main's consent for an `agent.launch` on one preset (#16324). */
+        approvedPresetLaunch?: import("../../utils/agentPresetLaunchConsent.js").HostApprovedPluginPresetLaunch;
       }) => void
     ): () => void;
     /** Send the plugin action dispatch result back to the main process. */

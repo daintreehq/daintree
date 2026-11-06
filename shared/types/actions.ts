@@ -4,6 +4,7 @@ import type { z } from "zod";
 import type { CopyTreeRunSource } from "./ipc/copyTreeHistory.js";
 import type { GitPushReview } from "./git.js";
 import type { ScheduledRunRef } from "./scheduledRunRef.js";
+import type { HostApprovedPluginPresetLaunch } from "../utils/agentPresetLaunchConsent.js";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
@@ -253,6 +254,14 @@ export interface ActionContext {
    * to its own contributions (`layout.apply`, #13780).
    */
   callerPluginId?: string;
+  /**
+   * The preset a person approved this plugin's launch on (#16324), stamped by
+   * `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostApprovedPluginPresetLaunch} for `"plugin"`
+   * dispatches only. The launch refuses unless the preset it resolves has
+   * exactly the approved content.
+   */
+  hostApprovedPluginPresetLaunch?: HostApprovedPluginPresetLaunch;
   /**
    * The scheduled run a launch is for (#15977), stamped by
    * `ActionService.dispatch` from {@link ActionDispatchOptions.scheduledRun}
@@ -689,6 +698,13 @@ export interface ActionDispatchOptions {
    * other source.
    */
   callerPluginId?: string;
+  /**
+   * Main's consent for a plugin's `agent.launch` on one preset (#16324) — NOT
+   * a plugin-supplied value. Set only by the plugin bridge, from the dispatch
+   * envelope main built after the person approved the preset. Ignored for
+   * every other source.
+   */
+  hostApprovedPluginPresetLaunch?: HostApprovedPluginPresetLaunch;
   /**
    * The scheduled run a launch is for (#15977) — NOT a client- or
    * plugin-supplied value. Set only by Daintree's own scheduled launch, and by
