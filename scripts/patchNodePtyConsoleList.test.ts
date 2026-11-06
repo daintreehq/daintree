@@ -12,7 +12,11 @@ const INSTALLED = path.resolve(
   "windowsPtyAgent.js"
 );
 
-const installed = fs.readFileSync(INSTALLED, "utf8");
+// The unpatched source: CI's install has already patched node_modules.
+const unpatched = fs.readFileSync(
+  path.join(__dirname, "__fixtures__", "node-pty-windowsPtyAgent-beta18.js.txt"),
+  "utf8"
+);
 
 interface Agent {
   _innerPid: number;
@@ -46,10 +50,15 @@ const refusingFork = () => {
 };
 
 describe("patchNodePtyConsoleListSource", () => {
-  const patched = patchNodePtyConsoleListSource(installed);
+  const patched = patchNodePtyConsoleListSource(unpatched);
 
-  it("the installed node-pty forks the console-list agent unguarded, so a refused fork rejects", async () => {
-    await expect(agentWith(installed, refusingFork)._getConsoleProcessList()).rejects.toThrow(
+  it("the installed node-pty is patched, or still matches the edit so postinstall can patch it", () => {
+    const installed = fs.readFileSync(INSTALLED, "utf8");
+    expect(patchNodePtyConsoleListSource(installed)).toContain("catch (_forkError)");
+  });
+
+  it("unpatched, node-pty forks the console-list agent unguarded, so a refused fork rejects", async () => {
+    await expect(agentWith(unpatched, refusingFork)._getConsoleProcessList()).rejects.toThrow(
       /runAsNode fuse/
     );
   });
@@ -72,12 +81,12 @@ describe("patchNodePtyConsoleListSource", () => {
 
   it("is idempotent and keeps CRLF line endings", () => {
     expect(patchNodePtyConsoleListSource(patched)).toBe(patched);
-    const crlf = installed.replace(/\n/g, "\r\n");
+    const crlf = unpatched.replace(/\n/g, "\r\n");
     expect(patchNodePtyConsoleListSource(crlf)).toBe(patched.replace(/\n/g, "\r\n"));
   });
 
   it("fails loudly when node-pty changes the code it edits", () => {
-    const moved = installed.replace(
+    const moved = unpatched.replace(
       "conpty_console_list_agent'), [",
       "conpty_console_list_agent'),  ["
     );

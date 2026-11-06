@@ -42,7 +42,10 @@ const PTY_AGENT_JS = path.resolve(
   "lib",
   "windowsPtyAgent.js"
 );
-const UNPATCHED_PTY_AGENT = fs.readFileSync(PTY_AGENT_JS, "utf8");
+const UNPATCHED_PTY_AGENT = fs.readFileSync(
+  path.join(__dirname, "__fixtures__", "node-pty-windowsPtyAgent-beta18.js.txt"),
+  "utf8"
+);
 const PATCHED_PTY_AGENT = patchNodePtyConsoleListSource(UNPATCHED_PTY_AGENT);
 
 function serveFiles({
