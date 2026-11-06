@@ -832,12 +832,16 @@ describe("restartTerminal and panes that run away from their conversation (#1243
       usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
       mockKill.mockClear();
       mockGracefulKill.mockClear();
+      const paint = (await import("@/services/TerminalInstanceService")).createTerminalPaintPlane();
+      const destroy = paint.destroy as ReturnType<typeof vi.fn>;
+      destroy.mockClear();
 
       const refused = await usePanelStore
         .getState()
         .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
       expect(refused.success).toBe(false);
       // Refused before anything was torn down: the running session is untouched.
+      expect(destroy).not.toHaveBeenCalled();
       expect(mockKill).not.toHaveBeenCalled();
       expect(mockGracefulKill).not.toHaveBeenCalled();
       expect(mockSpawn).not.toHaveBeenCalled();
