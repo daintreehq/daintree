@@ -5,7 +5,7 @@
     <meta name="variants" content="@shots" />
     <meta
       name="narrow"
-      content="pilot-fiordland review-hub-hokkaido worktree-overview-arashiyama"
+      content="hero-daintree hero-bondi pilot-fiordland review-hub-hokkaido worktree-overview-arashiyama canopy-redwoods"
     />
     <meta name="format" content="webp" />
     <link rel="stylesheet" href="base.css" />
@@ -47,12 +47,20 @@
         // Review Hub reads at the same scale as the palettes once the sidebar,
         // already shown in the hero, is cropped away.
         "review-hub-hokkaido": { x: 352, y: 0, w: 1248, h: 1000 },
+        // Canopy fills the window; stop under the inbox and the screen beside it.
+        "canopy-redwoods": { x: 0, y: 0, w: 1600, h: 612 },
       };
-      // Phones get the part of each feature that carries it, near 1:1.
+      // Phones get the part of each feature that carries it, near 1:1: the
+      // worktrees with their agents and state, Pilot's state tabs over its runs,
+      // the staged files with their viewed marks for Review Hub, and for the hero
+      // the pane waiting on a prompt. Legibility wins over showing every column.
       const NARROW_CROPS = {
-        "pilot-fiordland": { x: 466, y: 262, w: 668, h: 214 },
-        "worktree-overview-arashiyama": { x: 362, y: 262, w: 560, h: 380 },
-        "review-hub-hokkaido": { x: 976, y: 54, w: 624, h: 560 },
+        "hero-daintree": { x: 948, y: 76, w: 650, h: 430 },
+        "hero-bondi": { x: 948, y: 76, w: 650, h: 430 },
+        "pilot-fiordland": { x: 466, y: 230, w: 668, h: 248 },
+        "worktree-overview-arashiyama": { x: 348, y: 262, w: 700, h: 340 },
+        "review-hub-hokkaido": { x: 356, y: 46, w: 620, h: 256 },
+        "canopy-redwoods": { x: 0, y: 48, w: 448, h: 550 },
       };
       const crop = (narrow ? NARROW_CROPS : CROPS)[name];
       const src = shots[name];

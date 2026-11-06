@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="variants" content="wide narrow" />
+    <meta name="variants" content="dark-wide dark-narrow light-wide light-narrow" />
     <meta name="format" content="webp-lossless" />
     <link rel="stylesheet" href="base.css" />
     <script src="glyphs.js"></script>
@@ -38,7 +38,7 @@
         display: flex;
         flex-direction: column;
         gap: 14px;
-        min-height: 178px;
+        min-height: 150px;
       }
       .stage h3 {
         display: flex;
@@ -50,10 +50,6 @@
       .stage h3 .n {
         font: 400 12px/1 var(--mono);
         color: var(--text-ter);
-      }
-      .stage p {
-        font: 400 13px/1.45 var(--sans);
-        color: var(--text-sec);
       }
       .vignette {
         margin-top: auto;
@@ -112,7 +108,7 @@
         flex: none;
       }
       .row.attn {
-        border-color: rgba(197, 154, 78, 0.5);
+        border-color: var(--warning-border);
       }
       .row.attn .st {
         color: var(--warning);
@@ -144,63 +140,20 @@
         color: var(--text-sec);
       }
       .diff .add {
-        background: rgba(54, 206, 148, 0.08);
-        color: #9fd8bf;
+        background: var(--add-bg);
+        color: var(--add-ink);
       }
       .diff .del {
-        background: rgba(200, 116, 108, 0.1);
-        color: #d99a93;
+        background: var(--del-bg);
+        color: var(--del-ink);
       }
       .plus {
-        color: #6fcf9f;
+        color: var(--plus);
       }
       .minus {
-        color: #d98a82;
+        color: var(--minus);
       }
 
-      .commit {
-        display: flex;
-        gap: 6px;
-      }
-      .commit .msg {
-        flex: 1;
-        height: 26px;
-        display: flex;
-        align-items: center;
-        padding: 0 9px;
-        background: var(--bg-grid);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        font: 400 11px/1 var(--mono);
-        color: var(--text);
-        white-space: nowrap;
-        overflow: hidden;
-      }
-      .commit .btn {
-        height: 26px;
-        padding: 0 10px;
-        display: flex;
-        align-items: center;
-        border-radius: 5px;
-        background: var(--accent);
-        color: var(--on-accent);
-        font: 600 11.5px/1 var(--sans);
-        white-space: nowrap;
-      }
-      .commit .ghost {
-        height: 26px;
-        padding: 0 10px;
-        display: flex;
-        align-items: center;
-        border-radius: 5px;
-        border: 1px solid var(--border-strong);
-        color: var(--text-sec);
-        font: 500 11.5px/1 var(--sans);
-      }
-      .commit .btn {
-        flex: 1;
-        justify-content: center;
-      }
       .pr {
         background: var(--bg-grid);
         border: 1px solid var(--border);
@@ -257,7 +210,7 @@
         display: none;
       }
       body[data-layout="narrow"] .stage {
-        min-height: 168px;
+        min-height: 146px;
         padding: 13px 12px 14px;
         gap: 12px;
       }
@@ -265,16 +218,22 @@
         font-size: 17px;
       }
       body[data-layout="narrow"] .diff {
-        font-size: 10px;
+        font-size: 9.5px;
       }
-      body[data-layout="narrow"] .diff .long {
-        display: none;
+      body[data-layout="narrow"] .row {
+        gap: 6px;
+        padding: 0 8px;
+        font-size: 10.5px;
       }
-      body[data-layout="narrow"] .diff .short {
-        display: block;
+      body[data-layout="narrow"] .row .st {
+        margin-left: 6px;
+        font-size: 10.5px;
       }
-      .diff .short {
-        display: none;
+      /* On white cards the rows and panels sit one step down, as in the app. */
+      body[data-scheme="light"] .row,
+      body[data-scheme="light"] .diff,
+      body[data-scheme="light"] .pr {
+        background: var(--bg);
       }
     </style>
   </head>
@@ -298,10 +257,9 @@
                 session.ts<b><span class="plus">+62</span> <span class="minus">−14</span></b>
               </div>
               <div class="l del">- return fetch(url)</div>
-              <div class="l add long">+ const res = await fetch(url)</div>
-              <div class="l add short">+ const res =</div>
-              <div class="l add short">+&nbsp;&nbsp;await fetch(url)</div>
-              <div class="l add">+ if (res.status === 401)</div>
+              <div class="l add">+ const r =</div>
+              <div class="l add">+&nbsp;&nbsp;await fetch(url)</div>
+              <div class="l add">+ if (r.status === 401)</div>
               <div class="l add">+&nbsp;&nbsp;await refresh()</div>
             </div>
           </div>
@@ -320,11 +278,11 @@
         </section>
       </div>
     </div>
+    <script src="frame.js"></script>
     <script>
-      document.body.dataset.layout = window.__ART__.scheme;
       const byId = new Map(window.__ART__.data.agents.map((a) => [a.id, a]));
       const mark = (id) =>
-        `<span class="mark" style="color:${byId.get(id).ink}">${byId.get(id).svg}</span>`;
+        `<span class="mark" style="color:${ART.ink(byId.get(id))}">${byId.get(id).svg}</span>`;
       document.getElementById("delegate").innerHTML = [
         ["claude", "feat/sso"],
         ["codex", "fix/navbar"],
@@ -355,7 +313,8 @@
         const r = el.getBoundingClientRect();
         return r.left - box.left + r.width / 2;
       });
-      const STEM = "#4a4846";
+      const STEM = ART.token("--stem");
+      const NODE = ART.token("--bg");
       const add = (tag, attrs) => {
         const el = document.createElementNS(ns, tag);
         for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
@@ -370,7 +329,7 @@
       });
       for (const x of centres) {
         add("path", { d: `M ${x} ${y} V 34`, stroke: STEM, "stroke-width": 1.5, fill: "none" });
-        add("circle", { cx: x, cy: y, r: 5, fill: "#1a1918", stroke: STEM, "stroke-width": 1.5 });
+        add("circle", { cx: x, cy: y, r: 5, fill: NODE, stroke: STEM, "stroke-width": 1.5 });
       }
       window.__artReady = true;
     </script>

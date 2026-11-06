@@ -1,0 +1,456 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="dark-wide dark-narrow light-wide light-narrow" />
+    <meta name="format" content="webp-lossless" />
+    <link rel="stylesheet" href="base.css" />
+    <style>
+      #art {
+        width: 896px;
+        padding: 40px 36px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+      }
+      .stage {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .term {
+        width: 452px;
+        background: var(--bg-grid);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+        z-index: 1;
+      }
+      .term header {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        font: 500 13px/1 var(--sans);
+        color: var(--text);
+      }
+      .term header .mark {
+        width: 15px;
+        height: 15px;
+      }
+      .term header .chip {
+        font: 400 12px/1 var(--mono);
+        color: var(--text-sec);
+        background: var(--bg-elevated);
+        border-radius: 4px;
+        padding: 4px 7px;
+      }
+      .lines {
+        padding: 16px 18px 6px;
+        font: 400 13px/1.7 var(--mono);
+        color: var(--text);
+        display: grid;
+        grid-template-columns: 14px 1fr;
+        column-gap: 8px;
+      }
+      .lines > .gap {
+        grid-column: 1 / -1;
+        height: 8px;
+      }
+      .dot::before {
+        content: "●";
+        font-size: 9px;
+        vertical-align: 2px;
+        color: var(--text-ter);
+      }
+      .prompt {
+        color: var(--text-ter);
+      }
+      .muted {
+        color: var(--text-ter);
+      }
+      .tool {
+        font-weight: 500;
+      }
+      .later {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 10px 18px 12px;
+        font: 400 11.5px/1 var(--mono);
+        color: var(--text-ter);
+      }
+      .later::before,
+      .later::after {
+        content: "";
+        flex: 1;
+        border-top: 1px solid var(--border-strong);
+      }
+      .answer {
+        border-left: 2px solid var(--accent);
+        background: rgba(54, 206, 148, 0.04);
+        padding: 10px 18px 10px 16px;
+        font: 400 13px/1.7 var(--mono);
+      }
+      body[data-scheme="light"] .answer {
+        background: rgba(20, 147, 106, 0.05);
+      }
+      .answer .tag {
+        color: var(--accent);
+      }
+      .answer .key {
+        color: var(--text-ter);
+      }
+      .answer .val {
+        font-weight: 500;
+      }
+      .lines.after {
+        padding: 12px 18px 16px;
+      }
+
+      .phone {
+        width: 254px;
+        padding: 9px;
+        background: var(--bezel);
+        border: 1px solid var(--border-strong);
+        border-radius: 34px;
+        position: relative;
+        z-index: 1;
+      }
+      .screen {
+        background: var(--bg-card);
+        border-radius: 26px;
+        padding: 14px 14px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .notch {
+        width: 70px;
+        height: 18px;
+        margin: 0 auto 2px;
+        background: var(--bezel);
+        border-radius: 10px;
+      }
+      .notice {
+        display: flex;
+        gap: 9px;
+        align-items: center;
+        padding: 9px 10px;
+        background: var(--bg-elevated);
+        border-radius: 12px;
+      }
+      .notice .icon {
+        width: 26px;
+        height: 26px;
+        flex: none;
+        border-radius: 7px;
+        background: var(--bg-grid);
+        color: var(--accent);
+        display: grid;
+        place-items: center;
+      }
+      .notice .icon .mark {
+        width: 16px;
+        height: 12px;
+      }
+      .notice b {
+        display: block;
+        font: 600 11px/1.25 var(--sans);
+      }
+      .notice span {
+        font: 400 11px/1.25 var(--sans);
+        color: var(--text-sec);
+      }
+      .from {
+        font: 500 11px/1 var(--sans);
+        color: var(--text-ter);
+        margin-top: 2px;
+      }
+      .from b {
+        color: var(--text-sec);
+        font-weight: 600;
+      }
+      .q {
+        font: 600 16px/1.3 var(--sans);
+        margin-top: -4px;
+      }
+      .ctx {
+        font: 400 12px/1.45 var(--sans);
+        color: var(--text-sec);
+      }
+      .opts {
+        display: flex;
+        gap: 7px;
+      }
+      .opt {
+        font: 500 12px/1 var(--sans);
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border-strong);
+        color: var(--text-sec);
+      }
+      .opt.on {
+        border-color: var(--accent-border);
+        background: var(--accent-subtle);
+        color: var(--accent);
+      }
+      .opt.on::before {
+        content: "✓ ";
+      }
+      .compose {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        padding: 10px 8px 8px 11px;
+        background: var(--bg-elevated);
+        border-radius: 14px;
+        font: 400 12px/1.4 var(--sans);
+      }
+      .compose .send {
+        width: 26px;
+        height: 26px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--text);
+        color: var(--bg);
+        display: grid;
+        place-items: center;
+        font: 600 14px/1 var(--sans);
+      }
+
+      svg.rails {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      .label {
+        position: absolute;
+        z-index: 2;
+        transform: translate(-50%, -50%);
+        font: 400 11.5px/1 var(--mono);
+        color: var(--text-sec);
+        background: var(--bg);
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        padding: 5px 10px;
+      }
+      .label.signed {
+        color: var(--accent);
+        border-color: var(--accent-border);
+      }
+
+      body[data-layout="narrow"] #art {
+        width: 400px;
+        padding: 18px 16px 22px;
+      }
+      /* Phone: read top to bottom in time order. The question leaves the
+         terminal, is answered on the phone, and lands back in the terminal,
+         drawn as a second card for the same pane. */
+      body[data-layout="narrow"] .stage {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 60px;
+      }
+      body[data-layout="narrow"] .term {
+        width: 100%;
+      }
+      .term.again,
+      body[data-layout="narrow"] #term .reply {
+        display: none;
+      }
+      body[data-layout="narrow"] .term.again {
+        display: block;
+      }
+      .term.again .later {
+        margin-top: 14px;
+      }
+      body[data-layout="narrow"] .lines,
+      body[data-layout="narrow"] .answer {
+        font-size: 12px;
+      }
+      body[data-layout="narrow"] .phone {
+        align-self: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art">
+      <div class="stage" id="stage">
+        <svg class="rails" id="rails"></svg>
+        <div class="term" id="term">
+          <header>
+            <span class="mark" id="agent"></span>Claude Code
+            <span class="chip">feat/billing-tab</span>
+          </header>
+          <div class="lines">
+            <span class="prompt">›</span
+            ><span>Move billing into its own settings tab. Check with me first.</span>
+            <span class="gap"></span>
+            <span class="dot" id="ask"></span
+            ><span><span class="tool">ask_human</span> <span class="muted">(decisions)</span></span>
+            <span></span><span>“Split billing into its own tab?”</span> <span></span
+            ><span class="muted">⎿ Queued. Ending my turn.</span>
+          </div>
+          <div class="reply" id="reply"></div>
+        </div>
+        <div class="phone" id="phone">
+          <div class="screen">
+            <div class="notch"></div>
+            <div class="notice" id="notice">
+              <span class="icon"><span class="mark" id="mark"></span></span>
+              <div><b>Decisions</b><span>A question needs your input</span></div>
+            </div>
+            <div class="from"><b>Claude Code</b> · feat/billing-tab</div>
+            <div class="q" id="q">Split billing into its own tab?</div>
+            <div class="ctx">
+              Settings is getting long. Billing would get its own tab, and the old link would break.
+            </div>
+            <div class="opts">
+              <span class="opt on">Approve</span><span class="opt">Reject</span>
+            </div>
+            <div class="compose" id="compose">
+              <span style="flex: 1">Keep the old link redirecting.</span><span class="send">↑</span>
+            </div>
+          </div>
+        </div>
+        <div class="term again" id="term2">
+          <header>
+            <span class="mark" id="agent2"></span>Claude Code
+            <span class="chip">feat/billing-tab</span>
+          </header>
+          <div class="reply" id="reply2"></div>
+        </div>
+        <span class="label" id="l-ask">encrypted</span>
+        <span class="label signed" id="l-answer">signed</span>
+      </div>
+    </div>
+    <script src="frame.js"></script>
+    <script>
+      const { data } = window.__ART__;
+      const { layout } = ART;
+      document.getElementById("mark").innerHTML = data.daintreeMark;
+      const claude = data.agents.find((a) => a.id === "claude");
+      for (const id of ["agent", "agent2"]) {
+        const agentMark = document.getElementById(id);
+        agentMark.style.color = ART.ink(claude);
+        agentMark.innerHTML = claude.svg;
+      }
+      // The answer as Daintree types it, in the block format the agent reads.
+      const REPLY = `
+        <div class="later">2 hours later</div>
+        <div class="answer">
+          <div class="tag">[DAINTREE DECISION ANSWER]</div>
+          <div><span class="key">choice_label:</span> <span class="val">Approve</span></div>
+          <div><span class="key">comment:</span> <span class="val">Keep the old link redirecting.</span></div>
+          <div class="tag">[END DAINTREE DECISION ANSWER]</div>
+        </div>
+        <div class="lines after">
+          <span class="dot"></span><span>Approved. Moving billing, with a redirect.</span>
+        </div>`;
+      document.getElementById("reply").innerHTML = REPLY;
+      document.getElementById("reply2").innerHTML = REPLY;
+
+      // Two rails: the question leaves the terminal for the phone, the answer
+      // comes back from the composer into the answer block.
+      const stage = document.getElementById("stage").getBoundingClientRect();
+      const box = (id) => {
+        const r = document.getElementById(id).getBoundingClientRect();
+        return {
+          left: r.left - stage.left,
+          right: r.right - stage.left,
+          top: r.top - stage.top,
+          bottom: r.bottom - stage.top,
+          cx: r.left - stage.left + r.width / 2,
+          cy: r.top - stage.top + r.height / 2,
+        };
+      };
+      const term = box("term");
+      const phone = box("phone");
+      const answer = {
+        cy: (() => {
+          const r = document.querySelector("#reply .answer").getBoundingClientRect();
+          return r.top - stage.top + r.height / 2;
+        })(),
+      };
+      const compose = box("compose");
+      const ask = box("ask");
+      const notice = box("notice");
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.getElementById("rails");
+      const STEM = ART.token("--stem");
+      const ACCENT = ART.token("--accent");
+      const NODE = ART.token("--bg");
+      const line = (d, color) => {
+        const p = document.createElementNS(ns, "path");
+        p.setAttribute("d", d);
+        p.setAttribute("fill", "none");
+        p.setAttribute("stroke", color);
+        p.setAttribute("stroke-width", "1.5");
+        p.setAttribute("stroke-linecap", "round");
+        p.setAttribute("stroke-linejoin", "round");
+        svg.append(p);
+      };
+      const node = (x, y, color) => {
+        const c = document.createElementNS(ns, "circle");
+        c.setAttribute("cx", x);
+        c.setAttribute("cy", y);
+        c.setAttribute("r", "4");
+        c.setAttribute("fill", NODE);
+        c.setAttribute("stroke", color);
+        c.setAttribute("stroke-width", "1.5");
+        svg.append(c);
+      };
+      const label = (id, x, y) => {
+        const el = document.getElementById(id);
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+      };
+
+      if (layout === "narrow") {
+        // Down from the terminal into the phone, then down again into the
+        // terminal card the answer is typed into.
+        const term2 = box("term2");
+        const x = phone.cx;
+        const down = (top, bottom, color) => {
+          line(`M ${x} ${top + 9} V ${bottom - 8} m -5 -6 l 5 6 l 5 -6`, color);
+          node(x, top + 5, color);
+        };
+        down(term.bottom, phone.top, STEM);
+        down(phone.bottom, term2.top, ACCENT);
+        label("l-ask", x, (term.bottom + phone.top) / 2);
+        label("l-answer", x, (phone.bottom + term2.top) / 2);
+      } else {
+        const gapMid = (term.right + phone.left) / 2;
+        const r = 14;
+        const askY = ask.cy;
+        const inY = notice.cy;
+        const ansY = answer.cy;
+        const outY = compose.cy;
+        const sx = term.right;
+        const ex = phone.left;
+        line(
+          `M ${sx + 9} ${askY} H ${gapMid - r} Q ${gapMid} ${askY} ${gapMid} ${askY - r}` +
+            ` V ${inY + r} Q ${gapMid} ${inY} ${gapMid + r} ${inY} H ${ex - 8} m -6 -5 l 6 5 l -6 5`,
+          STEM
+        );
+        node(sx + 5, askY, STEM);
+        line(
+          `M ${ex - 9} ${outY} H ${gapMid + r} Q ${gapMid} ${outY} ${gapMid} ${outY - r}` +
+            ` V ${ansY + r} Q ${gapMid} ${ansY} ${gapMid - r} ${ansY} H ${sx + 8} m 6 -5 l -6 5 l 6 5`,
+          ACCENT
+        );
+        node(ex - 5, outY, ACCENT);
+        label("l-ask", gapMid, (askY + inY) / 2);
+        label("l-answer", gapMid, (ansY + outY) / 2);
+      }
+      window.__artReady = true;
+    </script>
+  </body>
+</html>

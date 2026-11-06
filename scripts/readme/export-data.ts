@@ -34,18 +34,24 @@ const svg = (Component: ComponentType<{ size?: number }>) =>
 // The artwork sits on Daintree's panel colour, so each mark gets the ink the app
 // itself would paint there: the vendor colour, moved only as far as legibility
 // demands (Goose and Open Interpreter ship near-black marks).
+// The light variants sit on a near-white panel, so they take the ink the app
+// paints on Bondi Beach, its default light theme.
 const daintree = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === "daintree");
 if (!daintree) throw new Error("no built-in daintree scheme");
+const bondi = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === "bondi");
+if (!bondi) throw new Error("no built-in bondi scheme");
 
 const agents = Object.values(AGENT_REGISTRY).map((agent) => {
   const mark = brandByIconId.get(agent.iconId);
   if (!mark) throw new Error(`no brand mark for agent ${agent.id} (iconId ${agent.iconId})`);
   const ink = resolveBrandMarkInk(agent.color, daintree, { surface: "surface-panel" });
+  const inkLight = resolveBrandMarkInk(agent.color, bondi, { surface: "surface-panel" });
   return {
     id: agent.id,
     name: agent.name,
     color: agent.color,
     ink: ink?.active ?? agent.color,
+    inkLight: inkLight?.active ?? agent.color,
     svg: svg(mark),
   };
 });
