@@ -833,8 +833,6 @@ export function HelpPanel({
     handleCancelCloseSlot,
     resolveCloseFocusTarget,
   } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId, pausedLane });
-  // Whether the strip has collapsed its tabs into one picker (#16325).
-  const [sessionStripCollapsed, setSessionStripCollapsed] = useState(false);
   // A restart can target a background lane, whose agent may not be the one on
   // screen: read from the same lane record the confirm gate reads. A paused lane
   // has no agent bound, so its captured one names the conversation instead.
@@ -844,8 +842,8 @@ export function HelpPanel({
   const restartDescription = usePastSessionsNote(
     pendingRestartSlot !== null,
     pendingRestartPaused && !pendingRestartPaused.live
-      ? "This tab starts a new conversation"
-      : "The agent stops and this tab starts a new conversation",
+      ? "This session starts a new conversation"
+      : "The agent stops and this session starts a new conversation",
     pendingRestartPaused?.agentId ?? pendingRestartLaneAgentId
   );
   const endSessionDescription = usePastSessionsNote(
@@ -861,7 +859,7 @@ export function HelpPanel({
   // The conversation being left is the running agent's, not the pick's.
   const agentSwitchDescription = usePastSessionsNote(
     showAgentSwitchConfirm,
-    "The current agent stops and the new one starts in this tab",
+    "The current agent stops and the new one starts in this session",
     agentId
   );
 
@@ -1039,6 +1037,28 @@ export function HelpPanel({
       replaceExisting: true,
     });
   }, [activeWorkspaceId, handleOpenParallelSession, launchableAgentId]);
+
+  // A lane with nothing in it yet is where "New session" starts, rather than opening
+  // a second lane and leaving this one empty behind it. A captured conversation counts
+  // as something before its peek has resolved, and so does a version gate, which sits
+  // at `idle` while it blocks.
+  const activeLaneCaptured = useHelpPanelStore((s) =>
+    activeWorkspaceId
+      ? assistantSlotKey(activeWorkspaceId, activeSlot) in s.hibernateSessions
+      : false
+  );
+  const activeLaneEmpty =
+    !terminalId &&
+    !pausedLane &&
+    !resumableAgentId &&
+    !activeLaneCaptured &&
+    session.phase === "idle" &&
+    !session.assistantVersionTooOld &&
+    !session.isCheckingVersion;
+  const handleStripNewSession = useCallback(() => {
+    if (activeLaneEmpty) handleStartAssistant();
+    else handleNewSession();
+  }, [activeLaneEmpty, handleStartAssistant, handleNewSession]);
 
   // A starter never submits into a live session: if one has appeared since the
   // card rendered, the prompt lands in its input as a draft for the user to send.
@@ -1222,22 +1242,18 @@ export function HelpPanel({
       {!globalSelected && (
         <HelpSessionTabs
           tabs={sessionTabs}
-          isRegionFocused={isHighlighted}
           activeSlot={activeSlot}
           onSelect={handleSelectSlot}
           onClose={handleCloseSlot}
           onRestart={handleRestartSlot}
-          // The strip is the only home for this action now. It used to live in the
-          // header's overflow menu as well, which put the one findable route to a
-          // second session two clicks behind an ellipsis.
-          canOpenSession={canOpenParallelSession}
-          onOpenSession={handleNewSession}
+          // The strip's menu is the one home for a new session. An empty lane starts
+          // in place, so it needs an agent to start rather than a free slot.
+          canOpenSession={activeLaneEmpty ? Boolean(launchableAgentId) : canOpenParallelSession}
+          onOpenSession={handleStripNewSession}
           newSessionAgentIds={supportedInstalledAgentIds}
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
-          panelId={sessionBodyId}
-          onCollapsedChange={setSessionStripCollapsed}
         />
       )}
 
@@ -1260,21 +1276,17 @@ export function HelpPanel({
         />
       ))}
 
-      {/* Content — the strip's `tabpanel`. Named by whichever tab is selected, so the
-          relationship the tablist claims through `aria-controls` actually resolves.
+      {/* Content — a region named by the session the strip's picker shows, or by the
+          global run's name.
 
-          No `tabIndex` of its own. The pattern asks for one only on a panel with nothing
-          focusable inside it, and every state this body settles into has something: the
-          terminal's textarea, the empty state's starter prompts, a banner's recovery
-          action. The launching skeleton is the one exception, and giving the body a
+          No `tabIndex` of its own: every state this body settles into has something
+          focusable (the terminal's textarea, the empty state's starter prompts, a
+          banner's recovery action). The launching skeleton is the one exception, and a
           permanent tab stop to cover a state that lasts under a second would cost every
           keyboard user an extra stop on the way past the terminal, forever. */}
       <div
         id={sessionBodyId}
-        // The strip's panel only while the strip draws tabs. The global run has no tab,
-        // and a strip collapsed into its picker has none either: there the body is a
-        // region named by the session the picker shows, under the same id.
-        role={globalSelected || sessionStripCollapsed ? "region" : "tabpanel"}
+        role="region"
         aria-label={globalSelected ? globalAssistantName : undefined}
         aria-labelledby={globalSelected ? undefined : helpSessionTabId(tabIdBase, activeSlot)}
         className="flex-1 flex flex-col min-h-0 relative"

@@ -6,7 +6,6 @@ import type { PortalTab } from "@shared/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabButton } from "@/components/Panel/TabButton";
 import { PortalToolbar } from "@/components/Portal/PortalToolbar";
-import { HelpSessionTabs } from "@/components/HelpPanel/HelpSessionTabs";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { documentTabClassName } from "../document-tab";
 
@@ -24,7 +23,7 @@ vi.mock("@/hooks", async (importOriginal) => ({
 }));
 
 /**
- * The document tab family: grid and dock (TabButton), portal and assistant strips.
+ * The document tab family: grid and dock (TabButton) and portal strips.
  *
  * What is pinned is the rule that they are ONE control — every host draws its tabs from
  * the shared module and honours the same keyboard contract — not the tokens the module
@@ -75,25 +74,6 @@ const STRIPS: Array<[string, () => HTMLElement]> = [
           enabledLinks={[]}
         />
       ).container.querySelector<HTMLElement>('[role="tablist"]')!,
-  ],
-  [
-    "assistant",
-    () =>
-      withTooltips(
-        <HelpSessionTabs
-          tabs={[
-            { slot: 0, label: "Session 1", agentState: undefined },
-            { slot: 1, label: "Session 2", agentState: "working" },
-          ]}
-          activeSlot={0}
-          onSelect={vi.fn()}
-          onClose={vi.fn()}
-          onOpenSession={vi.fn()}
-          canOpenSession
-          idBase="s"
-          panelId="body"
-        />
-      ).container,
   ],
 ];
 

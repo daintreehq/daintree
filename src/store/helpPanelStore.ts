@@ -947,9 +947,9 @@ export function selectOpenSlots(state: HelpPanelState): number[] {
 /**
  * Whether a session can start without displacing one: a slot no tab holds yet,
  * or an open tab with nothing in it — no terminal, no session and no captured
- * conversation of `workspaceId`'s waiting to resume. Looser than the strip's
- * `+`, which only ever opens a new tab, because a session started on a named
- * agent fills an empty tab before it opens another (#13442).
+ * conversation of `workspaceId`'s waiting to resume. Looser than a free slot,
+ * because a session started on a named agent fills an empty tab before it opens
+ * another (#13442).
  */
 export function selectHasRoomForSession(
   state: HelpPanelState,

@@ -309,9 +309,10 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
     const first = await startAssistantLane(() =>
       page.locator('[data-testid="help-start-assistant"]').click()
     );
-    const second = await startAssistantLane(() =>
-      page.locator('[aria-label="New session"]').click()
-    );
+    const second = await startAssistantLane(async () => {
+      await page.locator("[data-session-picker]").click();
+      await page.getByRole("menuitem", { name: "New session", exact: true }).click();
+    });
     assistantId = first.paneId;
     otherLaneId = second.paneId;
     expect(otherLaneId).not.toBe(assistantId);

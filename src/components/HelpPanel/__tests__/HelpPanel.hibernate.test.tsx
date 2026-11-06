@@ -176,6 +176,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuSeparator: () => <hr />,
   DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuMeta: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -2260,11 +2263,14 @@ describe("HelpPanel — assistant header state indicator", () => {
     expect(announcer.getAttribute("data-agent-state")).toBe("working");
     expect(announcer.getAttribute("role")).toBe("status");
     expect(announcer.textContent).toBe("Assistant is working");
-    // Exactly one working marker on screen, and it belongs to a tab — not zero (the
-    // state would be invisible) and not two (the header would be drawing it again).
-    const markers = container.querySelectorAll(".animate-spin-slow");
-    expect(markers).toHaveLength(1);
-    expect(markers[0]!.closest('[role="tab"]')).not.toBeNull();
+    // Exactly one working marker on the closed strip, on the session picker: not zero
+    // (the state would be invisible) and not two (the header drawing it again). The
+    // mocked menu renders its rows inline, so only the trigger and the header count.
+    const markers = Array.from(container.querySelectorAll(".animate-spin-slow"));
+    const onPicker = markers.filter((m) => m.closest("[data-session-picker]"));
+    const outsideStrip = markers.filter((m) => !m.closest("[data-session-strip]"));
+    expect(onPicker).toHaveLength(1);
+    expect(outsideStrip).toHaveLength(0);
   });
 
   it("announces nothing for idle, completed, or exited states", () => {
