@@ -1429,6 +1429,10 @@ export const CHANNELS = {
   // Every instance id with that switch on, so each view can join reports
   // against it without one read per plugin.
   PLUGIN_CAPABILITY_LIST_PANEL_ATTENTION: "plugin-capability:list-panel-attention",
+  // The presets a plugin may launch agents on (#16324), one grant each, and
+  // withdrawing one. Grants are made only by the first-use prompt.
+  PLUGIN_CAPABILITY_LIST_PRESET_GRANTS: "plugin-capability:list-preset-grants",
+  PLUGIN_CAPABILITY_REVOKE_PRESET_GRANT: "plugin-capability:revoke-preset-grant",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the

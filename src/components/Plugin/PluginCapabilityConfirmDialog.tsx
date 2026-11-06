@@ -137,6 +137,10 @@ export function PluginCapabilityConfirmDialog() {
           onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
           variant="destructive"
           hasPreview={true}
+          // A queued prompt for another preset reuses the open dialog: start it
+          // from the top, with focus off the button that approved the last one.
+          focusResetKey={current.requestId}
+          bodyResetKey={current.requestId}
           hint={<span className="min-w-0 leading-tight">Only this preset, as it is now</span>}
         >
           <PresetLaunchDetails preset={preset} />
@@ -251,7 +255,9 @@ function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) 
       mono: preset.customFlags.trim() !== "",
     });
   }
-  if (preset.accountName !== undefined) rows.push({ label: "Account", value: preset.accountName });
+  if (preset.accountName !== undefined) {
+    rows.push({ label: "Account it pins", value: preset.accountName });
+  }
   rows.push({
     label: "Environment",
     value:

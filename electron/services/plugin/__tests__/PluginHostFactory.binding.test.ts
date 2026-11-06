@@ -753,21 +753,45 @@ describe("createHost dispatch, catalog and prompts", () => {
 
   it("asks about a named preset before dispatching and carries the approval beside it (#16324)", async () => {
     const h = makeHarness();
-    const approval = { agentId: "claude", presetId: "zai", content: "[1]" };
-    presetGate.gatePluginPresetLaunch.mockResolvedValueOnce({ kind: "approved", approval });
+    const approval = {
+      agentId: "claude",
+      presetId: "zai",
+      source: "custom",
+      content: "[1]",
+      fallbacks: [],
+    };
+    let answer!: (value: unknown) => void;
+    presetGate.gatePluginPresetLaunch.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
     // The loaded plugin carries its binding, as ensureCapabilityConsent reads it.
-    h.plugins.set(PLUGIN_ID, { ...fakePlugin(), binding: BOUND } as LoadedPlugin);
+    const plugin = fakePlugin();
+    h.plugins.set(PLUGIN_ID, {
+      ...plugin,
+      manifest: { ...plugin.manifest, capabilities: ["agent:launch-preset"] },
+      binding: BOUND,
+    } as LoadedPlugin);
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     const args = { agentId: "claude", presetId: "zai", prompt: "Plan it" };
 
-    await host.dispatch("agent.launch", args);
+    const pending = host.dispatch("agent.launch", args);
+    await vi.waitFor(() => expect(presetGate.gatePluginPresetLaunch).toHaveBeenCalled());
+    // Nothing reaches the renderer while the person is still being asked.
+    expect(h.sendDispatchToRenderer).not.toHaveBeenCalled();
+    answer({ kind: "approved", approval });
+    await pending;
 
     const [caller, actionId, gatedArgs, projectId] =
       presetGate.gatePluginPresetLaunch.mock.calls[0]!;
     // Scope and identity come from the plugin's own binding, never its arguments.
-    expect(caller).toMatchObject({ pluginId: PLUGIN_ID, displayName: "Acme", scopeKey: PROJECT_A });
+    expect(caller).toEqual({
+      pluginId: PLUGIN_ID,
+      displayName: "Acme",
+      declaredCapabilities: ["agent:launch-preset"],
+      scopeKey: PROJECT_A,
+    });
     expect([actionId, gatedArgs, projectId]).toEqual(["agent.launch", args, PROJECT_A]);
-    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledExactlyOnceWith(
       "agent.launch",
       args,
       PROJECT_A,

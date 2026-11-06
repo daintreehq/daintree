@@ -51,10 +51,16 @@ describe("gatePluginPresetLaunch", () => {
     const { deps, ensurePresetLaunchAllowed } = makeDeps();
     const result = await gatePluginPresetLaunch(caller, "agent.launch", launch, null, deps);
 
-    expect(result.kind).toBe("approved");
-    if (result.kind !== "approved") return;
-    expect(result.approval.presetId).toBe("zai");
-    expect(result.approval.agentId).toBe("claude");
+    expect(result).toEqual({
+      kind: "approved",
+      approval: {
+        agentId: "claude",
+        presetId: "zai",
+        source: "custom",
+        content: presetLaunchContent(zai),
+        fallbacks: [["backup", presetLaunchContent(backup)]],
+      },
+    });
     const [, , summary, fingerprint, , scopeKey] = ensurePresetLaunchAllowed.mock.calls[0]!;
     expect(scopeKey).toBe("global");
     expect(summary).toMatchObject({
@@ -71,6 +77,50 @@ describe("gatePluginPresetLaunch", () => {
     expect(JSON.stringify(summary)).not.toContain("sk-secret-value");
     expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(fingerprint).not.toContain("sk-secret-value");
+  });
+
+  it("changes the fingerprint when an env value or a fallback changes, source unchanged", async () => {
+    const fingerprintOf = async (custom: AgentPreset[]) => {
+      const { deps, ensurePresetLaunchAllowed } = makeDeps({
+        settings: { agents: { claude: { customPresets: custom } } } as never,
+      });
+      await gatePluginPresetLaunch(caller, "agent.launch", launch, null, deps);
+      return ensurePresetLaunchAllowed.mock.calls[0]![3];
+    };
+    const base = await fingerprintOf([zai, backup]);
+    expect(await fingerprintOf([zai, backup])).toBe(base);
+    expect(
+      await fingerprintOf([{ ...zai, env: { ANTHROPIC_AUTH_TOKEN: "sk-other" } }, backup])
+    ).not.toBe(base);
+    expect(await fingerprintOf([zai, { ...backup, dangerousMode: "on" }])).not.toBe(base);
+  });
+
+  it("shows only the account the preset pins, never a default it doesn't choose", async () => {
+    const accounts = [
+      { id: "work", name: "Work", configDir: "/w" },
+      { id: "home", name: "Home", configDir: "/h" },
+    ];
+    const pinned = makeDeps({
+      settings: {
+        agents: {
+          claude: {
+            customPresets: [{ ...zai, accountId: "work" }, backup],
+            accounts,
+            accountId: "home",
+          },
+        },
+      } as never,
+    });
+    await gatePluginPresetLaunch(caller, "agent.launch", launch, null, pinned.deps);
+    expect(pinned.ensurePresetLaunchAllowed.mock.calls[0]![2].accountName).toBe("Work");
+
+    const unpinned = makeDeps({
+      settings: {
+        agents: { claude: { customPresets: [zai, backup], accounts, accountId: "home" } },
+      } as never,
+    });
+    await gatePluginPresetLaunch(caller, "agent.launch", launch, null, unpinned.deps);
+    expect(unpinned.ensurePresetLaunchAllowed.mock.calls[0]![2].accountName).toBeUndefined();
   });
 
   it("reads the focused project's presets for an unbound dispatch and the target's otherwise", async () => {
@@ -96,10 +146,10 @@ describe("gatePluginPresetLaunch", () => {
     const repoCall = fromRepo.ensurePresetLaunchAllowed.mock.calls[0]!;
     expect(repoCall[2].source).toBe("project");
     expect(repoCall[3]).not.toBe(customCall[3]);
-    // The launch is still held to the content itself.
-    if (result.kind === "approved") {
-      expect(result.approval.content).toBe(presetLaunchContent({ ...zai }));
-    }
+    expect(result.kind).toBe("approved");
+    if (result.kind !== "approved") throw new Error("expected an approval");
+    expect(result.approval.source).toBe("project");
+    expect(result.approval.content).toBe(presetLaunchContent(zai));
   });
 
   it("passes through, unasked, a plugin that doesn't declare the capability", async () => {
@@ -137,10 +187,13 @@ describe("gatePluginPresetLaunch", () => {
       null,
       deps
     );
-    expect(result.kind).toBe("refused");
-    if (result.kind === "refused" && !result.result.ok) {
-      expect(result.result.error.code).toBe("VALIDATION_ERROR");
-    }
+    expect(result).toEqual({
+      kind: "refused",
+      result: {
+        ok: false,
+        error: { code: "VALIDATION_ERROR", message: expect.stringContaining('"missing"') },
+      },
+    });
     expect(ensurePresetLaunchAllowed).not.toHaveBeenCalled();
   });
 

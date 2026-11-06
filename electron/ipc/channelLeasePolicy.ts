@@ -441,6 +441,9 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin-capability:get-project-targeting": "free",
   "plugin-capability:get-worktree-delete-notes": "free",
   "plugin-capability:list-panel-attention": "free",
+  "plugin-capability:list-preset-grants": "free",
+  // Only ever takes a preset grant away, as the switches above may.
+  "plugin-capability:revoke-preset-grant": "free",
   "plugin-capability:set-os-notifications": "free",
   "plugin-capability:set-panel-attention": "free",
   "plugin-capability:set-project-targeting": "free",

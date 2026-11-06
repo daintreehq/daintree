@@ -52,22 +52,28 @@ describe("PluginPresetGrants (#16324)", () => {
     expect(screen.getByText(/Alt/)).toBeTruthy();
   });
 
-  it("keeps a row whose revoke failed, says so, and offers a retry", async () => {
-    install(
-      async () => [grant("zai", "Z.ai")],
-      vi.fn(async () => {
-        throw new Error("disk full");
+  it("keeps a row whose revoke failed, says so, and a retry revokes it", async () => {
+    let grants = [grant("zai", "Z.ai")];
+    const revoke = vi
+      .fn(async () => {
+        grants = [];
       })
-    );
+      .mockRejectedValueOnce(new Error("disk full"));
+    install(async () => grants, revoke);
     render(<PluginPresetGrants pluginId="beads" />);
     const button = await screen.findByRole("button", { name: /Revoke .* preset Z\.ai/ });
     await act(async () => {
       fireEvent.click(button);
     });
     await vi.waitFor(() => expect(screen.getByText(/Couldn.t revoke this/)).toBeTruthy());
-    expect(screen.getByRole("button", { name: /Revoke .* preset Z\.ai/ }).textContent).toBe(
-      "Retry"
-    );
+    const retry = screen.getByRole("button", { name: /Revoke .* preset Z\.ai/ });
+    expect(retry.textContent).toBe("Retry");
+
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(revoke).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(screen.queryByText(/Z\.ai/)).toBeNull());
   });
 
   it("says each preset asks first when there are no grants yet", async () => {

@@ -431,7 +431,7 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 | `agent:read` | `getAgentState`, `onDidChangeAgentState`, `onDidChangeTerminalLifecycle`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents` (the last two refused to a project plugin) | — |
 | `agent:register` | `contributes.agents` — required by the manifest check | — |
 | `agent:input` | `sendToActiveAgent`, `sendToAgent`, `agents.interrupt`, `agents.sendKeys`, `agents.submit` | First use |
-| `agent:launch-preset` | `dispatch("agent.launch", { agentId, presetId })` with no other launch configuration | First use of each preset, and again whenever the preset changes |
+| `agent:launch-preset` | `dispatch("agent.launch", { agentId, presetId })` with no other launch configuration | First use of each preset, and again whenever it or one of its fallbacks changes. A denial rejects with `PERMISSION_REQUIRED:`. Not available in Host mode, where the prompt can't be shown. |
 | `terminal:read` | `terminals.readScreen` | First use. Not granted by `agent:read`. |
 | `fs:project-read`, `fs:user-data-read` | `fs` reads, `readdir`, `stat`, `watch`; `renderPdf`'s `htmlPath`; `system.*` (read or write of the root class) | — |
 | `fs:project-write`, `fs:user-data-write` | `fs.writeFile`, `appendFile`, `mkdir`; `renderPdf`'s output; `db` handle `backup` destination | First write. The prompt is keyed on the strongest write capability you declare (`fs:project-write` when declared, else `fs:user-data-write`), not on the target's root class, so one grant covers writes to every root, your data directory included. |

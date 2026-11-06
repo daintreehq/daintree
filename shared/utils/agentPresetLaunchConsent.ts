@@ -1,5 +1,10 @@
-import type { AgentPreset } from "../config/agentRegistry.js";
-import type { AgentPresetSource } from "./agentPresets.js";
+import { type AgentPreset, getEffectiveAgentConfig } from "../config/agentRegistry.js";
+import {
+  getMergedPreset,
+  getMergedPresetIdentities,
+  getMergedPresets,
+  type AgentPresetSource,
+} from "./agentPresets.js";
 import {
   AGENT_LAUNCH_ACTION_ID,
   dispatchCarriesAgentLaunchEnv,
@@ -38,7 +43,14 @@ export interface PluginPresetLaunchTarget {
 export interface HostApprovedPluginPresetLaunch {
   agentId: string;
   presetId: string;
+  source: AgentPresetSource;
   content: string;
+  /**
+   * `[id, content]` of each preset the approved one falls back to, in chain
+   * order. A hop runs on one of these without asking again, so the person
+   * approved them with it and each hop is held to its content too.
+   */
+  fallbacks: Array<[string, string]>;
 }
 
 /**
@@ -58,7 +70,7 @@ export interface PluginPresetLaunchSummary {
   dangerousMode: "inherit" | "on" | "off";
   /** Whether a launch on this preset skips permission prompts, with today's agent settings. */
   skipsPermissions: boolean;
-  /** The account a launch signs in as, when the preset or the agent picks one. */
+  /** The account the preset pins, when it pins one. A worktree's own account still wins. */
   accountName?: string;
   envNames: string[];
   /** Presets this one hands over to when its provider fails, in order. */
@@ -148,5 +160,62 @@ export function hostApprovalCoversPresetLaunch(
     request !== null &&
     request.agentId === approval.agentId &&
     request.presetId === approval.presetId
+  );
+}
+
+/** What an approval is made of, resolved from the same layers a launch merges. */
+export interface PresetLaunchParts {
+  preset: AgentPreset;
+  source: AgentPresetSource;
+  content: string;
+  fallbacks: Array<[string, string]>;
+  /** Every merged preset, for naming the fallbacks. */
+  merged: AgentPreset[];
+}
+
+/**
+ * Resolve a preset and its fallback chain the way a launch does: the same
+ * merge, the same precedence, the same CCR-or-registry bucket. Shared by main,
+ * which asks about it, and the launcher, which is held to it, so the two
+ * can only disagree when the presets themselves changed.
+ */
+export function resolvePresetLaunchParts(
+  agentId: string,
+  presetId: string,
+  customPresets: AgentPreset[] | undefined,
+  ccrPresets: AgentPreset[] | undefined,
+  projectPresets: AgentPreset[] | undefined
+): PresetLaunchParts | undefined {
+  const preset = getMergedPreset(agentId, presetId, customPresets, ccrPresets, projectPresets);
+  if (!preset) return undefined;
+  const source =
+    getMergedPresetIdentities(agentId, customPresets, ccrPresets, projectPresets).find(
+      (identity) => identity.id === preset.id
+    )?.source ?? "custom";
+  const merged = getMergedPresets(
+    agentId,
+    customPresets,
+    ccrPresets ?? getEffectiveAgentConfig(agentId)?.presets ?? [],
+    projectPresets
+  );
+  const fallbacks: Array<[string, string]> = [];
+  for (const id of preset.fallbacks ?? []) {
+    const fallback = merged.find((candidate) => candidate.id === id);
+    if (fallback) fallbacks.push([id, presetLaunchContent(fallback)]);
+  }
+  return { preset, source, content: presetLaunchContent(preset), fallbacks, merged };
+}
+
+/** Whether a launch's resolved preset is exactly the one approved, chain included. */
+export function presetLaunchMatchesApproval(
+  approval: HostApprovedPluginPresetLaunch,
+  parts: PresetLaunchParts | undefined
+): boolean {
+  return (
+    parts !== undefined &&
+    parts.preset.id === approval.presetId &&
+    parts.source === approval.source &&
+    parts.content === approval.content &&
+    JSON.stringify(parts.fallbacks) === JSON.stringify(approval.fallbacks)
   );
 }

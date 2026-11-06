@@ -537,7 +537,13 @@ describe("ActionService", () => {
         }),
         run: mockRun,
       });
-      const approval = { agentId: "claude", presetId: "zai", content: "[1]" };
+      const approval = {
+        agentId: "claude",
+        presetId: "zai",
+        source: "custom" as const,
+        content: "[1]",
+        fallbacks: [],
+      };
 
       const approved = await service.dispatch(
         "agent.launch",

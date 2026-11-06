@@ -273,7 +273,13 @@ export class PluginCapabilityConsentService {
     };
     const stored = this.consentStore.getGrant(identity);
     if (stored?.preset?.fingerprint === fingerprint) return;
-    if (stored) this.consentStore.revoke(identity);
+    // Durably, or not at all: an old grant that rehydrates after a restart
+    // would answer again for content the person saw change.
+    if (stored && !this.consentStore.setGrant(identity, false)) {
+      throw new Error(
+        `${PLUGIN_CAPABILITY_DENIED_PREFIX}: the earlier approval of preset "${summary.presetId}" for plugin "${pluginId}" could not be withdrawn after it changed`
+      );
+    }
     return this.ensureSubjectAllowed(identity, pluginDisplayName, declaredCapabilities, {
       summary,
       fingerprint,
@@ -464,7 +470,9 @@ export class PluginCapabilityConsentService {
 function restoreList(grants: readonly PluginCapabilityIdentity[]): PluginRestorableGrant[] {
   const list = new Set<PluginRestorableGrant>();
   for (const { capability } of grants) {
-    if (capability !== EXTERNAL_LINK_CONSENT) list.add(capability);
+    if (capability !== EXTERNAL_LINK_CONSENT && capability !== AGENT_LAUNCH_PRESET_CAPABILITY) {
+      list.add(capability);
+    }
   }
   return [...list];
 }

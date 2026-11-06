@@ -4,6 +4,9 @@ import {
   hostApprovalCoversPresetLaunch,
   pluginPresetLaunchRequest,
   presetLaunchContent,
+  presetLaunchMatchesApproval,
+  resolvePresetLaunchParts,
+  type HostApprovedPluginPresetLaunch,
 } from "../agentPresetLaunchConsent.js";
 
 const preset: AgentPreset = {
@@ -90,7 +93,13 @@ describe("pluginPresetLaunchRequest", () => {
 });
 
 describe("hostApprovalCoversPresetLaunch", () => {
-  const approval = { agentId: "claude", presetId: "zai", content: "[]" };
+  const approval: HostApprovedPluginPresetLaunch = {
+    agentId: "claude",
+    presetId: "zai",
+    source: "custom",
+    content: "[]",
+    fallbacks: [],
+  };
   const args = { agentId: "claude", presetId: "zai" };
 
   it("covers the launch it was made for", () => {
@@ -108,5 +117,52 @@ describe("hostApprovalCoversPresetLaunch", () => {
       hostApprovalCoversPresetLaunch(approval, "agent.launch", { ...args, env: { X: "1" } })
     ).toBe(false);
     expect(hostApprovalCoversPresetLaunch(undefined, "agent.launch", args)).toBe(false);
+  });
+});
+
+describe("resolvePresetLaunchParts / presetLaunchMatchesApproval", () => {
+  const other: AgentPreset = { id: "other", name: "Other", env: { WHO: "other" } };
+  const approve = (custom?: AgentPreset[], project?: AgentPreset[]) => {
+    const parts = resolvePresetLaunchParts("claude", "zai", custom, undefined, project)!;
+    const approval: HostApprovedPluginPresetLaunch = {
+      agentId: "claude",
+      presetId: parts.preset.id,
+      source: parts.source,
+      content: parts.content,
+      fallbacks: parts.fallbacks,
+    };
+    return { parts, approval };
+  };
+
+  it("names the layer that won and carries each fallback's content in chain order", () => {
+    const { parts } = approve([preset, other]);
+    expect(parts.source).toBe("custom");
+    expect(parts.fallbacks.map(([id]) => id)).toEqual(["other"]);
+    expect(parts.fallbacks[0]![1]).toBe(presetLaunchContent(parts.merged[1]!));
+  });
+
+  it("matches the same presets and nothing that changed", () => {
+    const { approval } = approve([preset, other]);
+    const again = resolvePresetLaunchParts("claude", "zai", [preset, other], undefined, undefined);
+    expect(presetLaunchMatchesApproval(approval, again)).toBe(true);
+
+    const editedFallback = resolvePresetLaunchParts(
+      "claude",
+      "zai",
+      [preset, { ...other, env: { WHO: "someone else" } }],
+      undefined,
+      undefined
+    );
+    expect(presetLaunchMatchesApproval(approval, editedFallback)).toBe(false);
+    expect(presetLaunchMatchesApproval(approval, undefined)).toBe(false);
+  });
+
+  it("does not let the same content from another source answer for the approved one", () => {
+    const { approval } = approve([preset, other]);
+    // The custom copy is gone; the repo holds identical presets.
+    const fromRepo = resolvePresetLaunchParts("claude", "zai", [], undefined, [preset, other]);
+    expect(fromRepo?.content).toBe(approval.content);
+    expect(fromRepo?.source).toBe("project");
+    expect(presetLaunchMatchesApproval(approval, fromRepo)).toBe(false);
   });
 });

@@ -8,20 +8,15 @@ import {
   type AgentSettings,
 } from "../../../shared/types/agentSettings.js";
 import type { BuiltInPluginCapability, PluginScopeKey } from "../../../shared/types/plugin.js";
-import { resolveLaunchAccount } from "../../../shared/utils/agentAccounts.js";
+import { sanitizeAgentAccounts } from "../../../shared/utils/agentAccounts.js";
 import {
   AGENT_LAUNCH_PRESET_CAPABILITY,
   pluginPresetLaunchRequest,
-  presetLaunchContent,
+  resolvePresetLaunchParts,
   type HostApprovedPluginPresetLaunch,
   type PluginPresetLaunchSummary,
 } from "../../../shared/utils/agentPresetLaunchConsent.js";
-import {
-  applyPresetBehaviorOverrides,
-  getMergedPreset,
-  getMergedPresetIdentities,
-  getMergedPresets,
-} from "../../../shared/utils/agentPresets.js";
+import { applyPresetBehaviorOverrides } from "../../../shared/utils/agentPresets.js";
 
 /** The three layers a launch merges presets from, as main reads them. */
 export interface PresetLaunchSources {
@@ -91,46 +86,31 @@ export async function gatePluginPresetLaunch(
 
   const sources = await deps.readSources(agentId, projectId ?? deps.ambientProjectId());
   const entry = sources.settings?.agents?.[agentId] ?? {};
-  const preset = getMergedPreset(
+  const parts = resolvePresetLaunchParts(
     agentId,
     presetId,
     entry.customPresets,
     sources.ccrPresets,
     sources.projectPresets
   );
-  if (!preset) {
+  if (!parts) {
     return refused(
       `${agentConfig.name} has no preset "${presetId.slice(0, 100)}". Ask for one of its presets by id.`
     );
   }
-  const source =
-    getMergedPresetIdentities(
-      agentId,
-      entry.customPresets,
-      sources.ccrPresets,
-      sources.projectPresets
-    ).find((identity) => identity.id === preset.id)?.source ?? "custom";
-  const content = presetLaunchContent(preset);
+  const { preset, source, content, fallbacks, merged } = parts;
+  // The source and the fallbacks' contents count too: the dialog names the
+  // source and a hop runs on a fallback unasked.
   const fingerprint = createHash("sha256")
-    .update(JSON.stringify([source, content]))
+    .update(JSON.stringify([source, content, fallbacks]))
     .digest("hex");
 
-  const merged = getMergedPresets(
-    agentId,
-    entry.customPresets,
-    sources.ccrPresets ?? agentConfig.presets ?? [],
-    sources.projectPresets
-  );
-  const record = args as Record<string, unknown>;
-  const account = resolveLaunchAccount(
-    agentId,
-    entry,
-    typeof record.worktreeId === "string" ? record.worktreeId : undefined,
-    typeof record.accountId === "string" || record.accountId === null
-      ? record.accountId
-      : undefined,
-    preset.accountId
-  );
+  // Only the account the preset itself pins: the worktree's or the agent's
+  // default would sign in any launch there, plugin or not, and which one wins
+  // depends on where the view lands the launch.
+  const pinnedAccount = preset.accountId
+    ? sanitizeAgentAccounts(entry.accounts).find((account) => account.id === preset.accountId)
+    : undefined;
   const summary: PluginPresetLaunchSummary = {
     agentId,
     agentName: agentConfig.name,
@@ -145,10 +125,10 @@ export async function gatePluginPresetLaunch(
       agentId,
       sources.settings?.globalSkipPermissions
     ),
-    ...(account.kind === "account" ? { accountName: account.account.name } : {}),
+    ...(pinnedAccount ? { accountName: pinnedAccount.name } : {}),
     envNames: Object.keys(preset.env ?? {}).sort(),
-    fallbackNames: (preset.fallbacks ?? []).map(
-      (id) => merged.find((candidate) => candidate.id === id)?.name ?? id
+    fallbackNames: fallbacks.map(
+      ([id]) => merged.find((candidate) => candidate.id === id)?.name ?? id
     ),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true,
   };
@@ -161,7 +141,10 @@ export async function gatePluginPresetLaunch(
     caller.declaredCapabilities,
     caller.scopeKey
   );
-  return { kind: "approved", approval: { agentId, presetId: preset.id, content } };
+  return {
+    kind: "approved",
+    approval: { agentId, presetId: preset.id, source, content, fallbacks },
+  };
 }
 
 function refused(message: string): PluginPresetLaunchGateResult {

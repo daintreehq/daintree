@@ -393,8 +393,10 @@ describe("PluginCapabilityConsentStore", () => {
       const { store } = makeStore();
       expect(() => store.grant(zai)).toThrow();
       expect(store.setGrant(zai, true)).toBe(false);
-      expect(store.grantAll([zai])).toBe(true);
-      expect(store.list()).toEqual([]);
+      const shell = { pluginId: "acme.x", capability: "shell:exec" } as const;
+      expect(store.grantAll([zai, shell])).toBe(true);
+      // The ordinary grant in the same batch still lands.
+      expect(store.list().map((record) => record.capability)).toEqual(["shell:exec"]);
     });
 
     it("drops a persisted preset grant whose preset or fingerprint can't be read", () => {

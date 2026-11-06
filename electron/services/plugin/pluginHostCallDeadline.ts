@@ -13,10 +13,12 @@ import {
   PLUGIN_SERVICE_RPC_GRACE_MS,
 } from "../../../shared/config/pluginBudgets.js";
 import type {
+  DispatchParams,
   PluginHostCallMethod,
   SendToAgentParams,
   ServicesCallParams,
 } from "../../../shared/types/pluginDevWorker.js";
+import { pluginPresetLaunchRequest } from "../../../shared/utils/agentPresetLaunchConsent.js";
 
 /** No deadline: the call waits on a person, for as long as they take. */
 const NONE = 0;
@@ -53,7 +55,14 @@ const HOST_CALL_DEADLINES = {
   runRecipe: NONE,
   showToast: DEFAULT,
   notify: DEFAULT,
-  dispatch: DEFAULT,
+  // A launch that names a preset may wait on its first-use prompt (#16324):
+  // the dialog's own five minutes plus delivery, then the dispatch itself.
+  dispatch: (params) => {
+    const call = params as DispatchParams | undefined;
+    return call !== undefined && pluginPresetLaunchRequest(call.actionId, call.args) !== null
+      ? INTERACTIVE
+      : DEFAULT;
+  },
   reloadPanel: DEFAULT,
   restartWorker: DEFAULT,
   setContext: DEFAULT,

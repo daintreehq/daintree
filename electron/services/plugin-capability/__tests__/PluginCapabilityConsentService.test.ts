@@ -635,13 +635,33 @@ describe("PluginCapabilityConsentService", () => {
     it("ends the grant when the preset changes, even if the new content is refused", async () => {
       const { service, store } = makeService();
       store.grant(identity, { fingerprint: "f1", presetName: "Z.ai" });
-      service.setConsentBridge(async () => "rejected");
+      const bridge = vi.fn(async () => "rejected" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
 
       await expect(
         service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f2", PRESET_CAPS, "global")
-      ).rejects.toThrow(/PERMISSION_REQUIRED/);
-      // Reverting to the old content asks again rather than reviving the grant.
+      ).rejects.toThrow(/PERMISSION_REQUIRED.*denied/);
+      expect(bridge).toHaveBeenCalledTimes(1);
       expect(store.getGrant(identity)).toBe(undefined);
+      // Reverting to the old content asks again rather than reviving the grant.
+      await expect(
+        service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f1", PRESET_CAPS, "global")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      expect(bridge).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses rather than asking when the old grant can't be durably withdrawn", async () => {
+      const { service, store } = makeService();
+      store.grant(identity, { fingerprint: "f1", presetName: "Z.ai" });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(store, "setGrant").mockReturnValue(false);
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+
+      await expect(
+        service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f2", PRESET_CAPS, "global")
+      ).rejects.toThrow(/PERMISSION_REQUIRED.*could not be withdrawn/);
+      expect(bridge).not.toHaveBeenCalled();
     });
 
     it("does not join a launch on edited content to the old content's open dialog", async () => {
@@ -676,26 +696,48 @@ describe("PluginCapabilityConsentService", () => {
         "global"
       );
       await Promise.resolve();
+      // The two identical requests share one dialog; the edited one gets its own.
       expect(bridge).toHaveBeenCalledTimes(2);
-      for (const release of releases) release("approved-once");
-      await expect(Promise.all([first, again, edited])).resolves.toBeDefined();
+      releases[0]!("approved-once");
+      releases[1]!("rejected");
+      await expect(first).resolves.toBeUndefined();
+      await expect(again).resolves.toBeUndefined();
+      await expect(edited).rejects.toThrow(/PERMISSION_REQUIRED/);
     });
 
     it("lists each preset grant and revokes one without touching the others", async () => {
       const { service, store } = makeService();
       store.grant(identity, { fingerprint: "f1", presetName: "Z.ai" });
-      const other = { ...identity, preset: { ...identity.preset, presetId: "codex-alt" } };
+      const other = {
+        ...identity,
+        preset: { agentId: "codex", presetId: "alt", source: "project" as const },
+        scopeKey: "proj-1",
+      };
       store.grant(other, { fingerprint: "f2", presetName: "Alt" });
       store.grant({ pluginId: "acme.x", capability: "shell:exec" });
 
-      expect(
-        service
-          .listPresetGrants("acme.x")
-          .map((g) => g.presetName)
-          .sort()
-      ).toEqual(["Alt", "Z.ai"]);
-      expect(service.revokePresetGrant("acme.x", identity.preset, "global")).toBe(true);
-      expect(service.listPresetGrants("acme.x").map((g) => g.presetId)).toEqual(["codex-alt"]);
+      const byName = (a: { presetName: string }, b: { presetName: string }) =>
+        a.presetName.localeCompare(b.presetName);
+      expect(service.listPresetGrants("acme.x").sort(byName)).toEqual([
+        {
+          agentId: "codex",
+          presetId: "alt",
+          source: "project",
+          presetName: "Alt",
+          scopeKey: "proj-1",
+          approvedAt: expect.any(Number),
+        },
+        {
+          agentId: "claude",
+          presetId: "zai",
+          source: "custom",
+          presetName: "Z.ai",
+          scopeKey: "global",
+          approvedAt: expect.any(Number),
+        },
+      ]);
+      expect(service.revokePresetGrant("acme.x", other.preset, "proj-1")).toBe(true);
+      expect(service.listPresetGrants("acme.x").map((g) => g.presetId)).toEqual(["zai"]);
       expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(true);
     });
 
@@ -713,6 +755,25 @@ describe("PluginCapabilityConsentService", () => {
         })
       ).resolves.toBe(false);
       expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it("restores the ordinary grants beside a preset grant and leaves the preset off", async () => {
+      const { service, store } = makeService();
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+      const shell = { pluginId: "acme.x", capability: "shell:exec" as const, scopeKey: "global" };
+      await expect(
+        service.offerRestore({
+          pluginId: "acme.x",
+          pluginDisplayName: "Acme",
+          grants: [identity, shell],
+          declaredCapabilities: ["shell:exec", "agent:launch-preset"],
+          isCurrent: () => true,
+        })
+      ).resolves.toBe(true);
+      expect(bridge).toHaveBeenCalledWith(expect.objectContaining({ restore: ["shell:exec"] }));
+      expect(store.hasGrant(shell)).toBe(true);
+      expect(service.listPresetGrants("acme.x")).toEqual([]);
     });
   });
 });

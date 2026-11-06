@@ -344,6 +344,57 @@ describe("handleFallbackTriggered — activation failure", () => {
   });
 });
 
+describe("handleFallbackTriggered — a pane a plugin launched on an approved preset (#16324)", () => {
+  const primary = { id: "preset-1", name: "Primary", fallbacks: ["preset-2"] };
+  const fallback = { id: "preset-2", name: "Fallback", env: { TOKEN: "approved" } };
+  const original = usePanelStore.getState().activateFallbackPreset;
+
+  async function approveThenHop(fallbackNow: typeof fallback) {
+    const { presetLaunchContent } = await import("@shared/utils/agentPresetLaunchConsent");
+    const { getMergedPresets } = await import("@shared/utils/agentPresets");
+    const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+    const approvedFallback = getMergedPresets("testAgent", [primary, fallback]).find(
+      (preset) => preset.id === "preset-2"
+    )!;
+    approvals.rememberApprovedPresetLaunch("term-1", {
+      agentId: "testAgent",
+      presetId: "preset-1",
+      source: "custom",
+      content: "[]",
+      fallbacks: [["preset-2", presetLaunchContent(approvedFallback)]],
+    });
+    useAgentSettingsStore.setState({
+      settings: { agents: { testAgent: { customPresets: [primary, fallbackNow] } } },
+    });
+    setupPanel({ agentPresetId: "preset-1", fallbackChainIndex: 0 });
+    const activate = vi.fn(async () => ({ success: true }));
+    usePanelStore.setState({ activateFallbackPreset: activate });
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "connection",
+    });
+    approvals.forgetApprovedPresetLaunch("term-1");
+    return activate;
+  }
+
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  it("hops to a fallback that is as it was approved", async () => {
+    const activate = await approveThenHop(fallback);
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it("holds the hop, and says so, when the fallback changed since the approval", async () => {
+    const activate = await approveThenHop({ ...fallback, env: { TOKEN: "swapped" } });
+    expect(activate).not.toHaveBeenCalled();
+    expect(vi.mocked(notify).mock.lastCall![0].title).toBe("Fallback preset changed");
+  });
+});
+
 describe("handleFallbackTriggered — rate limits (#14370)", () => {
   const original = usePanelStore.getState().activateFallbackPreset;
   afterEach(() => {

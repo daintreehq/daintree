@@ -5,6 +5,7 @@ import {
   PluginCapabilityConfirmDialog,
   presetLaunchTitleFor,
 } from "../PluginCapabilityConfirmDialog";
+import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
 import {
   __resetPluginCapabilityConfirmStoreForTesting,
   requestPluginCapabilityConsent,
@@ -45,27 +46,29 @@ vi.stubGlobal(
   }
 );
 
-const summary = {
+const summary: PluginPresetLaunchSummary = {
   agentId: "claude",
   agentName: "Claude",
   presetId: "zai",
   presetName: "Z.ai",
-  source: "project" as const,
+  source: "project",
   args: ["--model", "glm"],
-  dangerousMode: "inherit" as const,
+  dangerousMode: "inherit",
   skipsPermissions: true,
   envNames: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
   fallbackNames: ["Backup"],
   fallbackOnRateLimit: true,
+  accountName: "Work",
+  customFlags: "--verbose",
 };
 
-function ask(requestId: string) {
+function ask(requestId: string, preset = summary) {
   return requestPluginCapabilityConsent({
     requestId,
     pluginId: "digitalfrontier.beads",
     pluginDisplayName: "Beads",
     capability: "agent:launch-preset",
-    preset: summary,
+    preset,
     declaredCapabilities: ["agent:launch-preset"],
   });
 }
@@ -84,7 +87,11 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
 
     const dialog = screen.getByRole("dialog");
     expect(screen.getByText(presetLaunchTitleFor("Beads", summary))).toBeTruthy();
+    expect(presetLaunchTitleFor("Beads", summary)).toContain("'Z.ai'");
+    expect(presetLaunchTitleFor("Beads", summary)).toContain("Claude");
     const text = dialog.textContent ?? "";
+    expect(text).toContain("Work");
+    expect(text).toContain("--verbose");
     expect(text).toContain("--model glm");
     expect(text).toContain(".daintree/presets");
     expect(text).toContain("Skipped: from Claude's settings");
@@ -97,7 +104,12 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     let second!: ReturnType<typeof ask>;
     act(() => {
       first = ask("preset-1");
-      second = ask("preset-2");
+      second = ask("preset-2", {
+        ...summary,
+        presetId: "danger",
+        presetName: "Danger zone",
+        dangerousMode: "on",
+      });
     });
     render(<PluginCapabilityConfirmDialog />);
 
@@ -105,6 +117,10 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
       fireEvent.click(screen.getByRole("button", { name: "Allow and remember" }));
     });
     await expect(first).resolves.toBe("approved-and-pin");
+    // The next prompt names its own preset, not the one just approved.
+    const next = screen.getByRole("dialog").textContent ?? "";
+    expect(next).toContain("Danger zone");
+    expect(next).toContain("Skipped: the preset turns bypass on");
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Deny" }));
     });

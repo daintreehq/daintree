@@ -8,6 +8,10 @@ import {
   PLUGIN_SERVICE_DEFAULT_TIMEOUT_MS,
   PLUGIN_SERVICE_MAX_TIMEOUT_MS,
 } from "../../../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+} from "../../../../shared/types/pluginCapabilityConsent.js";
 
 describe("hostCallDeadlineMs (#13410)", () => {
   it("leaves the prompts unbounded, since they wait on a person", () => {
@@ -26,6 +30,28 @@ describe("hostCallDeadlineMs (#13410)", () => {
     expect(
       hostCallDeadlineMs("sendToAgent", { text: "hi", options: { terminalId: "t1" } })
     ).toBeGreaterThan(0);
+  });
+
+  it("lets a preset launch outlast its consent prompt, and nothing else dispatched (#16324)", () => {
+    const presetLaunch = hostCallDeadlineMs("dispatch", {
+      actionId: "agent.launch",
+      args: { agentId: "claude", presetId: "zai", prompt: "go" },
+    });
+    expect(presetLaunch).toBeGreaterThan(
+      PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS + PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS
+    );
+    const plain = hostCallDeadlineMs("dispatch", {
+      actionId: "agent.launch",
+      args: { agentId: "claude", prompt: "go" },
+    });
+    expect(plain).toBeGreaterThan(0);
+    expect(plain).toBeLessThan(presetLaunch);
+    expect(
+      hostCallDeadlineMs("dispatch", {
+        actionId: "agent.launch",
+        args: { agentId: "claude", presetId: "zai", env: { X: "1" } },
+      })
+    ).toBe(plain);
   });
 
   it("waits longer for a call that can raise a consent dialog than for a plain read", () => {
