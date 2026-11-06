@@ -73,9 +73,22 @@ export interface PluginPresetLaunchSummary {
   /** The account the preset pins, when it pins one. A worktree's own account still wins. */
   accountName?: string;
   envNames: string[];
-  /** Presets this one hands over to when its provider fails, in order. */
-  fallbackNames: string[];
+  /**
+   * Presets this one hands over to when its provider fails, in order. A hop
+   * runs on one unasked, so the person sees what each turns on too.
+   */
+  fallbacks: PluginPresetFallbackSummary[];
   fallbackOnRateLimit: boolean;
+}
+
+/** What one fallback in the chain turns on, display-safe like the summary. */
+export interface PluginPresetFallbackSummary {
+  presetName: string;
+  args: string[];
+  customFlags?: string;
+  dangerousMode: "inherit" | "on" | "off";
+  skipsPermissions: boolean;
+  envNames: string[];
 }
 
 /**

@@ -228,20 +228,30 @@ export function presetSourceLabel(source: PluginPresetLaunchSummary["source"]): 
   }
 }
 
-/** Whether a launch on the preset skips permission prompts, and why. Exported for tests. */
-export function presetBypassLabel(preset: PluginPresetLaunchSummary): string {
+/** Whether a launch on a preset skips permission prompts, and why. Exported for tests. */
+export function presetBypassLabel(
+  preset: Pick<PluginPresetLaunchSummary, "dangerousMode" | "skipsPermissions">,
+  agentName: string
+): string {
   if (preset.dangerousMode === "on") return "Skipped: the preset turns bypass on";
   if (preset.dangerousMode === "off") return "Asked: the preset turns bypass off";
   return preset.skipsPermissions
-    ? `Skipped: from ${preset.agentName}'s settings`
-    : `Asked: from ${preset.agentName}'s settings`;
+    ? `Skipped: from ${agentName}'s settings`
+    : `Asked: from ${agentName}'s settings`;
 }
 
-/** What launching on a preset turns on. Env values are never sent here, only names. */
-function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) {
-  const rows: Array<{ label: string; value: string; mono?: boolean }> = [
-    { label: "Source", value: presetSourceLabel(preset.source) },
-    { label: "Permission prompts", value: presetBypassLabel(preset) },
+type DetailRow = { label: string; value: string; mono?: boolean };
+
+/** The rows one preset contributes: bypass, arguments, flags and env names. */
+function configurationRows(
+  preset: Pick<
+    PluginPresetLaunchSummary,
+    "dangerousMode" | "skipsPermissions" | "args" | "customFlags" | "envNames"
+  >,
+  agentName: string
+): DetailRow[] {
+  const rows: DetailRow[] = [
+    { label: "Permission prompts", value: presetBypassLabel(preset, agentName) },
     {
       label: "Arguments",
       value: preset.args.length > 0 ? preset.args.join(" ") : "None",
@@ -255,9 +265,6 @@ function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) 
       mono: preset.customFlags.trim() !== "",
     });
   }
-  if (preset.accountName !== undefined) {
-    rows.push({ label: "Account it pins", value: preset.accountName });
-  }
   rows.push({
     label: "Environment",
     value:
@@ -266,17 +273,13 @@ function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) 
         : "None",
     mono: preset.envNames.length > 0,
   });
-  if (preset.fallbackNames.length > 0) {
-    rows.push({
-      label: preset.fallbackOnRateLimit ? "Falls back to, on errors and limits" : "Falls back to",
-      value: preset.fallbackNames.join(", "),
-    });
-  }
+  return rows;
+}
+
+function DetailList({ heading, rows }: { heading: string; rows: DetailRow[] }) {
   return (
     <div>
-      <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>
-        {preset.agentName} · {preset.presetName}
-      </div>
+      <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>{heading}</div>
       <dl className="space-y-1.5">
         {rows.map((row) => (
           <div key={row.label} className="grid grid-cols-[9rem_1fr] gap-2 text-xs">
@@ -287,6 +290,32 @@ function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) 
           </div>
         ))}
       </dl>
+    </div>
+  );
+}
+
+/**
+ * What launching on a preset turns on, and what each fallback a hop could
+ * switch to turns on. Env values are never sent here, only names.
+ */
+function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) {
+  const rows: DetailRow[] = [
+    { label: "Source", value: presetSourceLabel(preset.source) },
+    ...configurationRows(preset, preset.agentName),
+  ];
+  if (preset.accountName !== undefined) {
+    rows.push({ label: "Account it pins", value: preset.accountName });
+  }
+  return (
+    <div className="space-y-3">
+      <DetailList heading={`${preset.agentName} · ${preset.presetName}`} rows={rows} />
+      {preset.fallbacks.map((fallback, index) => (
+        <DetailList
+          key={`${index}-${fallback.presetName}`}
+          heading={`${preset.fallbackOnRateLimit ? "On errors and limits" : "On errors"}, falls back to · ${fallback.presetName}`}
+          rows={configurationRows(fallback, preset.agentName)}
+        />
+      ))}
     </div>
   );
 }

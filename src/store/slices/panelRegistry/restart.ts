@@ -111,6 +111,11 @@ import {
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
 import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import { presetLaunchContent } from "@shared/utils/agentPresetLaunchConsent";
+import {
+  fallbackHopApproved,
+  forgetApprovedPresetLaunch,
+} from "@/services/plugin/pluginPresetLaunchApprovals";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -1850,6 +1855,22 @@ async function respawnAgentOnPreset(
     if (!nextPreset && (mode.kind !== "account" || nextPresetId !== undefined)) {
       throw new Error(`preset "${nextPresetId}" not found`);
     }
+    // Checked against the preset this respawn is built from, before teardown:
+    // a pane a plugin launched on an approved preset hops only to a fallback
+    // as it was approved (#16324). The listener checks first for a clearer
+    // notice; this is the check that holds.
+    if (
+      mode.kind === "fallback" &&
+      nextPreset &&
+      !fallbackHopApproved(id, nextPreset.id, presetLaunchContent(nextPreset))
+    ) {
+      throw new Error(
+        `fallback preset "${nextPreset.id}" changed since the plugin's launch was approved`
+      );
+    }
+    // The person chose this preset themselves; the plugin's approval no longer
+    // describes the pane.
+    if (mode.kind === "switch") forgetApprovedPresetLaunch(id);
     const presetKept = mode.kind === "account" && nextPreset !== undefined;
     // A switch makes the chosen preset the pane's own: the chain it was
     // walking, and the tooltip that says so, belong to the preset it left.

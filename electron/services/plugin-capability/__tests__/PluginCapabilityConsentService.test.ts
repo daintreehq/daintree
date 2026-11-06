@@ -592,7 +592,7 @@ describe("PluginCapabilityConsentService", () => {
       dangerousMode: "inherit" as const,
       skipsPermissions: false,
       envNames: ["TOKEN"],
-      fallbackNames: [],
+      fallbacks: [],
       fallbackOnRateLimit: false,
     };
     const PRESET_CAPS = ["agent:launch-preset"] as const;
@@ -650,18 +650,45 @@ describe("PluginCapabilityConsentService", () => {
       expect(bridge).toHaveBeenCalledTimes(2);
     });
 
-    it("refuses rather than asking when the old grant can't be durably withdrawn", async () => {
-      const { service, store } = makeService();
+    it("keeps refusing until a failed withdrawal reaches disk, then asks", async () => {
+      // A real store over a disk that fails, then recovers.
+      let disk: Record<string, unknown> = {};
+      let failing = false;
+      const store = new PluginCapabilityConsentStore(
+        (patch) => {
+          if (failing) throw new Error("disk full");
+          disk = { ...disk, ...patch };
+        },
+        () => disk
+      );
+      const service = new PluginCapabilityConsentService(store);
       store.grant(identity, { fingerprint: "f1", presetName: "Z.ai" });
       vi.spyOn(console, "error").mockImplementation(() => {});
-      vi.spyOn(store, "setGrant").mockReturnValue(false);
-      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      const bridge = vi.fn(async () => "rejected" as PluginCapabilityConsentDecision);
       service.setConsentBridge(bridge);
 
+      failing = true;
       await expect(
         service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f2", PRESET_CAPS, "global")
-      ).rejects.toThrow(/PERMISSION_REQUIRED.*could not be withdrawn/);
+      ).rejects.toThrow(/could not be withdrawn/);
+      // Memory dropped it, but the saved copy still holds it: still refused.
+      await expect(
+        service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f2", PRESET_CAPS, "global")
+      ).rejects.toThrow(/could not be withdrawn/);
       expect(bridge).not.toHaveBeenCalled();
+
+      failing = false;
+      await expect(
+        service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f2", PRESET_CAPS, "global")
+      ).rejects.toThrow(/denied/);
+      expect(bridge).toHaveBeenCalledTimes(1);
+      // What reached disk no longer holds the old grant, so a restart can't revive it.
+      expect(
+        new PluginCapabilityConsentStore(
+          () => {},
+          () => disk
+        ).list()
+      ).toEqual([]);
     });
 
     it("does not join a launch on edited content to the old content's open dialog", async () => {

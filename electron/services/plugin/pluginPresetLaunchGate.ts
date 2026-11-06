@@ -127,9 +127,24 @@ export async function gatePluginPresetLaunch(
     ),
     ...(pinnedAccount ? { accountName: pinnedAccount.name } : {}),
     envNames: Object.keys(preset.env ?? {}).sort(),
-    fallbackNames: fallbacks.map(
-      ([id]) => merged.find((candidate) => candidate.id === id)?.name ?? id
-    ),
+    fallbacks: fallbacks.flatMap(([id]) => {
+      const fallback = merged.find((candidate) => candidate.id === id);
+      if (!fallback) return [];
+      return [
+        {
+          presetName: fallback.name,
+          args: fallback.args ?? [],
+          ...(fallback.customFlags !== undefined ? { customFlags: fallback.customFlags } : {}),
+          dangerousMode: resolveDangerousMode(fallback),
+          skipsPermissions: resolveEffectiveBypass(
+            applyPresetBehaviorOverrides(entry, fallback),
+            agentId,
+            sources.settings?.globalSkipPermissions
+          ),
+          envNames: Object.keys(fallback.env ?? {}).sort(),
+        },
+      ];
+    }),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true,
   };
 

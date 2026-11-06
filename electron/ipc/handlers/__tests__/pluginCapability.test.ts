@@ -204,7 +204,7 @@ describe("pluginCapability consent bridge — routing (#11708)", () => {
       dangerousMode: "on" as const,
       skipsPermissions: true,
       envNames: ["TOKEN"],
-      fallbackNames: [],
+      fallbacks: [],
       fallbackOnRateLimit: false,
     };
     const settled = getPluginCapabilityConsentService().ensurePresetLaunchAllowed(
@@ -981,7 +981,7 @@ describe("pluginCapability consent bridge — Host mode routing", () => {
           dangerousMode: "on",
           skipsPermissions: true,
           envNames: [],
-          fallbackNames: [],
+          fallbacks: [],
           fallbackOnRateLimit: false,
         },
         "f1",

@@ -809,6 +809,46 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     expect(ptyAfterRestart().conversationCwd).toBeUndefined();
   });
 
+  it("holds a hop on a plugin-approved pane to the fallback as it was approved (#16324)", async () => {
+    const { presetLaunchContent } = await import("@shared/utils/agentPresetLaunchConsent");
+    const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+    const amber = {
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    };
+    approvals.rememberApprovedPresetLaunch("test-1", {
+      agentId: "codex",
+      presetId: "blue-provider",
+      source: "custom",
+      content: "[]",
+      fallbacks: [["amber-provider", presetLaunchContent(amber)]],
+    });
+    try {
+      // What the respawn reads now: amber has gained bypass since the approval.
+      getMergedPresetMock.mockReturnValue({ ...amber, dangerousMode: "on" });
+      const pane = { ...movedPane, agentPresetId: "blue-provider" };
+      usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+      const refused = await usePanelStore
+        .getState()
+        .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+      expect(refused.success).toBe(false);
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(ptyAfterRestart().isRestarting).toBeFalsy();
+
+      getMergedPresetMock.mockReturnValue(amber);
+      const hopped = await usePanelStore
+        .getState()
+        .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+      expect(hopped.success).toBe(true);
+      expect(mockSpawn).toHaveBeenCalled();
+    } finally {
+      approvals.forgetApprovedPresetLaunch("test-1");
+    }
+  });
+
   it("refuses a fallback hop for a pane held for recovery", async () => {
     // A resolvable preset, so only the hold can stop the hop.
     getMergedPresetMock.mockReturnValue({

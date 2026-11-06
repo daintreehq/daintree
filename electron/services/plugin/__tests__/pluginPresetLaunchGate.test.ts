@@ -17,7 +17,12 @@ const zai: AgentPreset = {
   fallbacks: ["backup"],
   fallbackOnRateLimit: true,
 };
-const backup: AgentPreset = { id: "backup", name: "Backup" };
+const backup: AgentPreset = {
+  id: "backup",
+  name: "Backup",
+  args: ["--fast"],
+  env: { BACKUP_KEY: "backup-secret" },
+};
 
 const caller: PluginPresetLaunchCaller = {
   pluginId: "digitalfrontier.beads",
@@ -70,11 +75,20 @@ describe("gatePluginPresetLaunch", () => {
       dangerousMode: "on",
       skipsPermissions: true,
       envNames: ["ANTHROPIC_AUTH_TOKEN"],
-      fallbackNames: ["Backup"],
+      fallbacks: [
+        {
+          presetName: "Backup",
+          args: ["--fast"],
+          dangerousMode: "inherit",
+          skipsPermissions: false,
+          envNames: ["BACKUP_KEY"],
+        },
+      ],
       fallbackOnRateLimit: true,
     });
     // Env values never reach the dialog.
     expect(JSON.stringify(summary)).not.toContain("sk-secret-value");
+    expect(JSON.stringify(summary)).not.toContain("backup-secret");
     expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(fingerprint).not.toContain("sk-secret-value");
   });

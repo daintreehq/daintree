@@ -95,6 +95,9 @@ export class PluginCapabilityConsentService {
   // belongs to the plugin that was removed, so its answer must not mint a grant
   // a same-id reinstall would inherit.
   private readonly purgeEpochs = new Map<string, number>();
+  // Preset grants whose withdrawal didn't reach disk (#16324). Memory already
+  // dropped them, so only this remembers that the saved copy must still go.
+  private readonly pendingPresetWithdrawals = new Set<string>();
 
   constructor(private readonly consentStore: PluginCapabilityConsentStore) {}
 
@@ -271,14 +274,23 @@ export class PluginCapabilityConsentService {
       preset: { agentId: summary.agentId, presetId: summary.presetId, source: summary.source },
       scopeKey,
     };
-    const stored = this.consentStore.getGrant(identity);
-    if (stored?.preset?.fingerprint === fingerprint) return;
-    // Durably, or not at all: an old grant that rehydrates after a restart
-    // would answer again for content the person saw change.
-    if (stored && !this.consentStore.setGrant(identity, false)) {
-      throw new Error(
+    const withdrawalFailed = () =>
+      new Error(
         `${PLUGIN_CAPABILITY_DENIED_PREFIX}: the earlier approval of preset "${summary.presetId}" for plugin "${pluginId}" could not be withdrawn after it changed`
       );
+    // Durably, or not at all: an old grant that rehydrates after a restart
+    // would answer again for content the person saw change. A withdrawal that
+    // failed earlier is retried first, since memory no longer holds the grant.
+    const withdrawalKey = JSON.stringify([scopeKey ?? "global", pluginId, identity.preset]);
+    if (this.pendingPresetWithdrawals.has(withdrawalKey)) {
+      if (!this.consentStore.setGrant(identity, false)) throw withdrawalFailed();
+      this.pendingPresetWithdrawals.delete(withdrawalKey);
+    }
+    const stored = this.consentStore.getGrant(identity);
+    if (stored?.preset?.fingerprint === fingerprint) return;
+    if (stored && !this.consentStore.setGrant(identity, false)) {
+      this.pendingPresetWithdrawals.add(withdrawalKey);
+      throw withdrawalFailed();
     }
     return this.ensureSubjectAllowed(identity, pluginDisplayName, declaredCapabilities, {
       summary,
@@ -463,6 +475,7 @@ export class PluginCapabilityConsentService {
     this.bridge = null;
     this.inFlight.clear();
     this.purgeEpochs.clear();
+    this.pendingPresetWithdrawals.clear();
   }
 }
 

@@ -56,7 +56,15 @@ const summary: PluginPresetLaunchSummary = {
   dangerousMode: "inherit",
   skipsPermissions: true,
   envNames: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
-  fallbackNames: ["Backup"],
+  fallbacks: [
+    {
+      presetName: "Backup",
+      args: ["--fast"],
+      dangerousMode: "on",
+      skipsPermissions: true,
+      envNames: ["BACKUP_KEY"],
+    },
+  ],
   fallbackOnRateLimit: true,
   accountName: "Work",
   customFlags: "--verbose",
@@ -96,7 +104,11 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     expect(text).toContain(".daintree/presets");
     expect(text).toContain("Skipped: from Claude's settings");
     expect(text).toContain("ANTHROPIC_AUTH_TOKEN=••••");
-    expect(text).toContain("Backup");
+    // A hop runs on the fallback unasked, so what it turns on is shown too.
+    expect(text).toContain("falls back to · Backup");
+    expect(text).toContain("--fast");
+    expect(text).toContain("BACKUP_KEY=••••");
+    expect(text).toContain("Skipped: the preset turns bypass on");
   });
 
   it("answers approved-and-pin on allow and rejected on deny", async () => {
@@ -109,14 +121,23 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
         presetId: "danger",
         presetName: "Danger zone",
         dangerousMode: "on",
+        fallbacks: [],
       });
     });
     render(<PluginCapabilityConfirmDialog />);
 
+    const allow = screen.getByRole("button", { name: "Allow and remember" });
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Allow and remember" }));
+      allow.focus();
+      fireEvent.click(allow);
     });
     await expect(first).resolves.toBe("approved-and-pin");
+    // The next prompt doesn't inherit focus on the button that approved the last.
+    await vi.waitFor(() =>
+      expect(document.activeElement).not.toBe(
+        screen.getByRole("button", { name: "Allow and remember" })
+      )
+    );
     // The next prompt names its own preset, not the one just approved.
     const next = screen.getByRole("dialog").textContent ?? "";
     expect(next).toContain("Danger zone");
