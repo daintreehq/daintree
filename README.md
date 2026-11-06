@@ -145,6 +145,14 @@ The Assistant is Claude Code or Codex, signed in the way you already are, runnin
 
 One list of every agent across every open project, ranked by what it needs from you. Permission prompts go to the top, and you can answer them from the list; a risky one takes a second press. A run that went quiet behind a spinner, or has been waiting on you for ten minutes, surfaces instead of hiding in a pane. Every placement quotes the screen it came from, and Canopy never rewrites or hides what Daintree observed.
 
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="https://cdn.daintree.org/readme/v2/shot-canopy-redwoods--narrow.webp">
+    <img alt="Canopy in the Redwoods theme: an inbox of five agent runs across the Atlas Ledger project, with Antigravity's shell permission request first under Needs you and the others below it, and on wider screens the asking agent's own terminal beside the list, quoted line by line." src="https://cdn.daintree.org/readme/v2/shot-canopy-redwoods.webp" width="896">
+  </picture>
+  <br><sub>Canopy, in the <a href="#themes">Redwoods</a> theme</sub>
+</p>
+
 Canopy reads each agent's screen with a small open model that runs on your computer, downloaded from Hugging Face the first time. Nothing it reads leaves the machine. It's off until you turn it on under **Settings → Integrations → Canopy**, then opens with <kbd>⌘</kbd>&nbsp;<kbd>E</kbd> (<kbd>Ctrl</kbd>&nbsp;<kbd>Shift</kbd>&nbsp;<kbd>O</kbd> on Windows and Linux).
 
 ## Daintree Decisions

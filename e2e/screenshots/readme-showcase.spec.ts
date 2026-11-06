@@ -19,7 +19,9 @@
  * DAINTREE_README_FEATURES (comma list of feature slugs, or "none").
  *
  * Output: hero-<themeId>.png for every built-in theme, pilot-fiordland.png,
- * worktree-overview-arashiyama.png, review-hub-hokkaido.png and manifest.json.
+ * worktree-overview-arashiyama.png, canopy-redwoods.png, review-hub-hokkaido.png
+ * and manifest.json. The Canopy still turns Canopy on, which downloads its
+ * small reader model from Hugging Face, so a full run needs the network.
  * The run fails if any expected PNG is missing or the wrong size, if a hero was
  * captured with an agent in a state other than the one it was staged for, or
  * if a feature still never reached its surface.
@@ -55,6 +57,8 @@ const THEME_IDS = BUILT_IN_APP_SCHEMES.map((scheme) => scheme.id).filter(
 const FEATURE_SHOTS = [
   "pilot-fiordland",
   "worktree-overview-arashiyama",
+  // After Pilot, so the parked deps run is in the inbox too.
+  "canopy-redwoods",
   // Last: it docks the Claude pane to give the hub and its diff the grid.
   "review-hub-hokkaido",
 ] as const;
@@ -1616,6 +1620,28 @@ test("readme showcase — hero per theme and review hub", async () => {
           (await diffPanel.isVisible().catch(() => false)) &&
           (await message.inputValue()).length > 0
         );
+      },
+      "canopy-redwoods": async () => {
+        // Turned on the way its own offer does; the first time downloads the model.
+        await page.evaluate(() => window.electron.canopy.setMode("on"));
+        await backToFleet("redwoods", false);
+        await act(page, "canopy.toggle");
+        const dialog = page.locator('[data-testid="canopy-dialog"]');
+        await dialog.waitFor({ state: "visible", timeout: T_LONG });
+        const cards = dialog.locator("[data-canopy-list] [data-canopy-card]");
+        await expect.poll(() => cards.count(), { timeout: 90_000 }).toBeGreaterThanOrEqual(4);
+        // Every card read and ranked off its own screen, not just listed.
+        await expect
+          .poll(
+            () =>
+              cards.evaluateAll((all) =>
+                all.every((card) => (card as HTMLElement).dataset.priority !== undefined)
+              ),
+            { timeout: 180_000, intervals: [1000] }
+          )
+          .toBe(true);
+        await settle(page, 2000);
+        return (await cards.count()) >= 4;
       },
       "worktree-overview-arashiyama": async () => {
         await backToFleet("arashiyama", false);
