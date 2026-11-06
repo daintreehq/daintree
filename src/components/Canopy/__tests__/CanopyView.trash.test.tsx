@@ -728,7 +728,13 @@ describe("CanopyView Trash", () => {
       ...trashed(runId, "p2", 20_000),
       expiresAt: Date.now(),
     });
-    await open([due("expired"), due("restored"), trashed("early", "p2", 2_000)]);
+    // From the clock now, like `due`: NOW is from module load, and a slow runner
+    // reaches this last test more than 18 s later, when "early" would be due too.
+    const early: CanopyTrashEntry = {
+      ...trashed("early", "p2", 2_000),
+      expiresAt: Date.now() + 18_000,
+    };
+    await open([due("expired"), due("restored"), early]);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     // All three leave: one let go at its time, one restored at its time (back
     // in the fleet), one restored or removed long before its time.
