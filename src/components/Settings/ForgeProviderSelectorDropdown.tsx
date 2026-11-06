@@ -1,7 +1,8 @@
 import type { ComponentType } from "react";
 import { GitBranch, Settings2 } from "lucide-react";
-import { GitHubIcon, GitLabIcon, LinearIcon } from "@/components/icons/brands";
+import { BeadsIcon, GitHubIcon, GitLabIcon, LinearIcon } from "@/components/icons/brands";
 import {
+  BUILTIN_BEADS_PROVIDER_ID,
   BUILTIN_GITHUB_PROVIDER_ID,
   BUILTIN_GITLAB_PROVIDER_ID,
   BUILTIN_LINEAR_PROVIDER_ID,
@@ -23,6 +24,7 @@ const BRAND_ICONS: Record<string, ProviderIcon> = {
   [BUILTIN_GITHUB_PROVIDER_ID]: GitHubIcon,
   [BUILTIN_GITLAB_PROVIDER_ID]: GitLabIcon,
   [BUILTIN_LINEAR_PROVIDER_ID]: LinearIcon,
+  [BUILTIN_BEADS_PROVIDER_ID]: BeadsIcon,
 };
 
 /** A forge's own mark where we have one; a generic branch for third-party providers. */
