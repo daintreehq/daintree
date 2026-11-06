@@ -128,6 +128,19 @@ An agent that runs your agents. It plans the work, opens worktrees, launches age
 
 It runs on Claude Code or Codex, signed in the way you already are, so there's no extra subscription. Everything it does goes through Daintree's own permissioned actions, with every call in a local audit log. [Meet the Assistant →](https://daintree.org/assistant)
 
+## Daintree Decisions
+
+Answer your agents from your phone. An agent that hits a call it shouldn't make alone asks you with one MCP tool, `ask_human`, and ends its turn. You answer when you get to it, and Daintree types the answer into the terminal that asked.
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="https://cdn.daintree.org/readme/v1/decisions-narrow.webp">
+    <img alt="Claude Code in a Daintree terminal calls ask_human to ask whether billing should move into its own settings tab, and ends its turn. A rail labelled encrypted carries the question to a phone, which shows the notification, the question with Approve chosen and a note. A rail labelled signed carries the answer back: two hours later the answer block, with the choice and the note, is typed into the same terminal and the agent carries on." src="https://cdn.daintree.org/readme/v1/decisions-wide.webp" width="896">
+  </picture>
+</p>
+
+Questions travel through a relay you deploy into your own Cloudflare account, end-to-end encrypted between your computer and your phone, and Daintree runs no server for it. Set it up under **Settings → Integrations → Decisions**. The relay and phone app are open source too. [Daintree Decisions on GitHub →](https://github.com/daintreehq/decisions)
+
 ## Fifteen habitats
 
 Every theme is named for a real place and drawn from it: eight dark, seven light, each tuned for contrast across the whole app.
