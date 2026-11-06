@@ -27,14 +27,12 @@ const caller: PluginPresetLaunchCaller = {
 };
 
 function makeDeps(sources: Partial<PresetLaunchSources> = {}) {
-  const readSources = vi.fn(
-    async (): Promise<PresetLaunchSources> => ({
-      settings: { agents: { claude: { customPresets: [zai, backup] } } } as never,
-      ccrPresets: undefined,
-      projectPresets: undefined,
-      ...sources,
-    })
-  );
+  const readSources = vi.fn(async (): Promise<PresetLaunchSources> => ({
+    settings: { agents: { claude: { customPresets: [zai, backup] } } } as never,
+    ccrPresets: undefined,
+    projectPresets: undefined,
+    ...sources,
+  }));
   const ensurePresetLaunchAllowed = vi.fn<PluginPresetLaunchGateDeps["ensurePresetLaunchAllowed"]>(
     async () => {}
   );

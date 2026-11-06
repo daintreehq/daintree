@@ -363,13 +363,17 @@ describe("useAgentLauncher — a plugin launch on an approved preset (#16324)", 
 
   it("refuses, launching nothing, when the preset changed after it was approved", async () => {
     saveChoices({ customPresets: [{ ...MINE, env: { WHO: "someone else" } }] });
-    await expect(launchApproved(approvedContent)).rejects.toThrow(/isn't the one that was approved/);
+    await expect(launchApproved(approvedContent)).rejects.toThrow(
+      /isn't the one that was approved/
+    );
     expect(addPanel).not.toHaveBeenCalled();
   });
 
   it("refuses rather than launching without the preset when it is gone", async () => {
     saveChoices({ customPresets: [] });
-    await expect(launchApproved(approvedContent)).rejects.toThrow(/isn't the one that was approved/);
+    await expect(launchApproved(approvedContent)).rejects.toThrow(
+      /isn't the one that was approved/
+    );
     expect(addPanel).not.toHaveBeenCalled();
   });
 });

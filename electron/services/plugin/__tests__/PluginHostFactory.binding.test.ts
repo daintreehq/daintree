@@ -53,7 +53,9 @@ vi.mock("../../viewless/index.js", () => ({
   runViewlessAction: viewless.runViewlessAction,
 }));
 const presetGate = vi.hoisted(() => ({
-  gatePluginPresetLaunch: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ kind: "pass" })),
+  gatePluginPresetLaunch: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({
+    kind: "pass",
+  })),
 }));
 vi.mock("../pluginPresetLaunchGate.js", () => ({
   gatePluginPresetLaunch: presetGate.gatePluginPresetLaunch,
@@ -760,7 +762,8 @@ describe("createHost dispatch, catalog and prompts", () => {
 
     await host.dispatch("agent.launch", args);
 
-    const [caller, actionId, gatedArgs, projectId] = presetGate.gatePluginPresetLaunch.mock.calls[0]!;
+    const [caller, actionId, gatedArgs, projectId] =
+      presetGate.gatePluginPresetLaunch.mock.calls[0]!;
     // Scope and identity come from the plugin's own binding, never its arguments.
     expect(caller).toMatchObject({ pluginId: PLUGIN_ID, displayName: "Acme", scopeKey: PROJECT_A });
     expect([actionId, gatedArgs, projectId]).toEqual(["agent.launch", args, PROJECT_A]);

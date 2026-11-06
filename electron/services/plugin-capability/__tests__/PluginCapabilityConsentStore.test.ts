@@ -381,9 +381,7 @@ describe("PluginCapabilityConsentStore", () => {
       expect(store.getGrant({ ...zai, pluginId: "acme.y" })).toBe(undefined);
       expect(store.getGrant({ ...zai, scopeKey: "proj-1" })).toBe(undefined);
       // A grant for the capability alone names no preset.
-      expect(store.hasGrant({ pluginId: "acme.x", capability: "agent:launch-preset" })).toBe(
-        false
-      );
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "agent:launch-preset" })).toBe(false);
       expect(makeStore(getConfig()).store.getGrant(zai)?.preset).toEqual({
         ...zai.preset,
         fingerprint: "f1",

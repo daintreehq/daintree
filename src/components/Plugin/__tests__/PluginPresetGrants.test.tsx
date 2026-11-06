@@ -74,7 +74,9 @@ describe("PluginPresetGrants (#16324)", () => {
     install(async () => []);
     render(<PluginPresetGrants pluginId="beads" />);
     await vi.waitFor(() =>
-      expect(screen.getByText(/asks the first time the plugin launches an agent on it/)).toBeTruthy()
+      expect(
+        screen.getByText(/asks the first time the plugin launches an agent on it/)
+      ).toBeTruthy()
     );
   });
 });

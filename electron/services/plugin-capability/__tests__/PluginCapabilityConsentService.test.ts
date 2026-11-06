@@ -608,13 +608,27 @@ describe("PluginCapabilityConsentService", () => {
       const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
       service.setConsentBridge(bridge);
 
-      await service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f1", PRESET_CAPS, "global");
+      await service.ensurePresetLaunchAllowed(
+        "acme.x",
+        "Acme",
+        summary,
+        "f1",
+        PRESET_CAPS,
+        "global"
+      );
       expect(bridge).toHaveBeenCalledWith(
         expect.objectContaining({ capability: "agent:launch-preset", preset: summary })
       );
       expect(store.getGrant(identity)?.preset?.fingerprint).toBe("f1");
 
-      await service.ensurePresetLaunchAllowed("acme.x", "Acme", summary, "f1", PRESET_CAPS, "global");
+      await service.ensurePresetLaunchAllowed(
+        "acme.x",
+        "Acme",
+        summary,
+        "f1",
+        PRESET_CAPS,
+        "global"
+      );
       expect(bridge).toHaveBeenCalledTimes(1);
     });
 
@@ -638,13 +652,28 @@ describe("PluginCapabilityConsentService", () => {
       );
       service.setConsentBridge(bridge);
       const first = service.ensurePresetLaunchAllowed(
-        "acme.x", "Acme", summary, "f1", PRESET_CAPS, "global"
+        "acme.x",
+        "Acme",
+        summary,
+        "f1",
+        PRESET_CAPS,
+        "global"
       );
       const again = service.ensurePresetLaunchAllowed(
-        "acme.x", "Acme", summary, "f1", PRESET_CAPS, "global"
+        "acme.x",
+        "Acme",
+        summary,
+        "f1",
+        PRESET_CAPS,
+        "global"
       );
       const edited = service.ensurePresetLaunchAllowed(
-        "acme.x", "Acme", summary, "f2", PRESET_CAPS, "global"
+        "acme.x",
+        "Acme",
+        summary,
+        "f2",
+        PRESET_CAPS,
+        "global"
       );
       await Promise.resolve();
       expect(bridge).toHaveBeenCalledTimes(2);
@@ -659,10 +688,12 @@ describe("PluginCapabilityConsentService", () => {
       store.grant(other, { fingerprint: "f2", presetName: "Alt" });
       store.grant({ pluginId: "acme.x", capability: "shell:exec" });
 
-      expect(service.listPresetGrants("acme.x").map((g) => g.presetName).sort()).toEqual([
-        "Alt",
-        "Z.ai",
-      ]);
+      expect(
+        service
+          .listPresetGrants("acme.x")
+          .map((g) => g.presetName)
+          .sort()
+      ).toEqual(["Alt", "Z.ai"]);
       expect(service.revokePresetGrant("acme.x", identity.preset, "global")).toBe(true);
       expect(service.listPresetGrants("acme.x").map((g) => g.presetId)).toEqual(["codex-alt"]);
       expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(true);

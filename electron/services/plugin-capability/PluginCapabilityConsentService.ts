@@ -349,7 +349,9 @@ export class PluginCapabilityConsentService {
     if (outcome === "approved-and-pin") {
       this.consentStore.grant(
         identity,
-        preset ? { fingerprint: preset.fingerprint, presetName: preset.summary.presetName } : undefined
+        preset
+          ? { fingerprint: preset.fingerprint, presetName: preset.summary.presetName }
+          : undefined
       );
       return;
     }

@@ -534,15 +534,15 @@ Prior to #8321, the renderer trusted the plugin's self-reported `danger` field. 
 
 The host consults the set `CONFIRM_TRIGGERING_CAPABILITIES` (defined in `shared/config/pluginCapabilities.ts`; the derivation lives in `electron/services/plugin/pluginDangerLattice.ts`, which `PluginService.ts` calls):
 
-| Capability           | Effect            |
-| -------------------- | ----------------- |
-| `shell:exec`         | Raises to confirm |
-| `git:write`          | Raises to confirm |
-| `fs:project-write`   | Raises to confirm |
-| `fs:user-data-write` | Raises to confirm |
-| `agent:invoke`       | Raises to confirm |
-| `agent:register`     | Raises to confirm |
-| `agent:input`        | Raises to confirm |
+| Capability            | Effect            |
+| --------------------- | ----------------- |
+| `shell:exec`          | Raises to confirm |
+| `git:write`           | Raises to confirm |
+| `fs:project-write`    | Raises to confirm |
+| `fs:user-data-write`  | Raises to confirm |
+| `agent:invoke`        | Raises to confirm |
+| `agent:register`      | Raises to confirm |
+| `agent:input`         | Raises to confirm |
 | `agent:launch-preset` | Raises to confirm |
 
 When a plugin's declared manifest `capabilities` includes any of these tokens, every action that plugin registers gets `effectiveDanger: "confirm"` regardless of the self-reported value. The compound-capability lattice (`manifestTriggersCompoundElevation()`) raises danger for the multi-capability threat classes described under [Capability disclosure](#capability-disclosure).

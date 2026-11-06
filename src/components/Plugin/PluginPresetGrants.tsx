@@ -63,7 +63,9 @@ export function PluginPresetGrants({ pluginId }: { pluginId: string }) {
       {readFailed ? (
         <div className="flex items-center gap-2">
           <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden="true" />
-          <span className="text-2xs text-text-secondary">Couldn&rsquo;t read these permissions.</span>
+          <span className="text-2xs text-text-secondary">
+            Couldn&rsquo;t read these permissions.
+          </span>
           <Button variant="ghost" size="xs" onClick={() => setReadNonce((n) => n + 1)}>
             Retry
           </Button>
@@ -89,7 +91,9 @@ export function PluginPresetGrants({ pluginId }: { pluginId: string }) {
                   {failed === key && (
                     <div className="flex items-center gap-2 mt-0.5">
                       <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden="true" />
-                      <span className="text-2xs text-text-secondary">Couldn&rsquo;t revoke this.</span>
+                      <span className="text-2xs text-text-secondary">
+                        Couldn&rsquo;t revoke this.
+                      </span>
                     </div>
                   )}
                 </div>

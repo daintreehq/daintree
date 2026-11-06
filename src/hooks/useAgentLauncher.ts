@@ -53,7 +53,10 @@ import {
 } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { buildFirstPrompt } from "@shared/utils/firstPrompt";
-import { presetLaunchContent, type HostApprovedPluginPresetLaunch } from "@shared/utils/agentPresetLaunchConsent";
+import {
+  presetLaunchContent,
+  type HostApprovedPluginPresetLaunch,
+} from "@shared/utils/agentPresetLaunchConsent";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 export { buildLaunchIdentity, type LaunchAgentIdentity };

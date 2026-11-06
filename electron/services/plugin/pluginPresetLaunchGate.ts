@@ -111,7 +111,9 @@ export async function gatePluginPresetLaunch(
       sources.projectPresets
     ).find((identity) => identity.id === preset.id)?.source ?? "custom";
   const content = presetLaunchContent(preset);
-  const fingerprint = createHash("sha256").update(JSON.stringify([source, content])).digest("hex");
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify([source, content]))
+    .digest("hex");
 
   const merged = getMergedPresets(
     agentId,
@@ -191,7 +193,9 @@ export async function createPluginPresetLaunchGateDeps(): Promise<PluginPresetLa
       // Discovered presets exist for Claude only, as the view holds them.
       const ccr = agentId === "claude" ? await CcrConfigService.getInstance().loadAndApply() : [];
       const path = projectId ? projectStore.getProjectById(projectId)?.path : undefined;
-      const projectPresets = path ? (await projectStore.readInRepoPresets(path))[agentId] : undefined;
+      const projectPresets = path
+        ? (await projectStore.readInRepoPresets(path))[agentId]
+        : undefined;
       return {
         settings: store.get("agentSettings") ?? null,
         ccrPresets: ccr.length > 0 ? ccr : undefined,
