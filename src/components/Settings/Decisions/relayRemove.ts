@@ -10,7 +10,7 @@ import { isRemovableRelayOrigin } from "@shared/config/relayRemoval";
  * The published CLI the guided removal runs. `remove` first shipped in
  * 0.3.0 and uploads no relay, so it stays pinned independently of deploy.
  */
-export const DECISIONS_REMOVE_CLI_VERSION = "0.5.0";
+export const DECISIONS_REMOVE_CLI_VERSION = "0.6.0";
 
 export const RELAY_REMOVE_TERMINAL_TITLE = "Remove Decisions relay";
 
