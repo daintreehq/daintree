@@ -37,10 +37,14 @@ export const BUILTIN_GITLAB_PROVIDER_ID = makeForgeProviderId("daintree.gitlab",
 /** Canonical id of the built-in Linear issues provider. */
 export const BUILTIN_LINEAR_PROVIDER_ID = makeForgeProviderId("daintree.linear", "linear");
 
+/** Canonical id of the built-in Beads issues provider. */
+export const BUILTIN_BEADS_PROVIDER_ID = makeForgeProviderId("daintree.beads", "beads");
+
 export type BuiltInForgeProviderId =
   | typeof BUILTIN_GITHUB_PROVIDER_ID
   | typeof BUILTIN_GITLAB_PROVIDER_ID
-  | typeof BUILTIN_LINEAR_PROVIDER_ID;
+  | typeof BUILTIN_LINEAR_PROVIDER_ID
+  | typeof BUILTIN_BEADS_PROVIDER_ID;
 
 /**
  * Open union — built-in ids autocomplete while still allowing any

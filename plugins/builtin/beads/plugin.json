@@ -1,0 +1,45 @@
+{
+  "name": "daintree.beads",
+  "version": "0.1.0",
+  "displayName": "Beads",
+  "description": "First-party Beads issues provider — pick beads from a bd serve server for worktrees, on bead/<id> branches, while your code forge keeps pull requests and CI.",
+  "tagline": "Beads issues for your worktrees, alongside your code forge",
+  "category": "forge",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": [],
+  "contributes": {
+    "settings": [
+      {
+        "id": "serverUrl",
+        "type": "string",
+        "label": "Beads server URL",
+        "description": "The address of the bd serve this project's beads come from. Leave it empty to use the one bd connect recorded in the project's .beads/http_target.json.",
+        "scope": "project"
+      }
+    ],
+    "forgeProviders": [
+      {
+        "id": "beads",
+        "name": "Beads",
+        "matches": [],
+        "roles": ["issues"],
+        "capabilities": ["issues", "assignees", "identity"],
+        "credentialFields": [
+          {
+            "id": "token",
+            "label": "Server token",
+            "type": "password",
+            "helpText": "The bearer token from the file bd serve was started with (--auth-token-file). A server started without one needs none."
+          }
+        ],
+        "settingsScopeRef": "serverUrl",
+        "slots": {
+          "icon": "beads.providerIcon"
+        }
+      }
+    ]
+  }
+}
