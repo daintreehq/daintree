@@ -1021,6 +1021,11 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
 
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
     await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    // The relay holds it before the Host records the publish; a slow runner reads between the two.
+    await vi.waitFor(
+      async () => expect((await store.getQuestion(asked))!.local_status).toBe("open"),
+      { timeout: 15_000 }
+    );
     const before = (await store.getQuestion(asked))!;
 
     // Connected: queued at once, then published by the Host's own device.
