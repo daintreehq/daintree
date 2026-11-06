@@ -32,6 +32,8 @@ function osUserName(): string | null {
 }
 
 let cached: string | null = null;
+/** Bumps on clear, so a git lookup started before can't refill the cache. */
+let cacheGeneration = 0;
 
 /**
  * Who Daintree acts as on a Beads server. A `bd serve` token carries no
@@ -45,9 +47,10 @@ export async function resolveActor(): Promise<string> {
   const fromEnv = process.env.BEADS_ACTOR?.trim() || process.env.BD_ACTOR?.trim();
   if (fromEnv) return fromEnv;
   if (cached) return cached;
+  const started = cacheGeneration;
   const fromGit = await gitUserName();
   if (fromGit) {
-    cached = fromGit;
+    if (started === cacheGeneration) cached = fromGit;
     return fromGit;
   }
   return osUserName() ?? "daintree";
@@ -55,4 +58,5 @@ export async function resolveActor(): Promise<string> {
 
 export function clearActorCache(): void {
   cached = null;
+  cacheGeneration++;
 }

@@ -164,12 +164,33 @@ describe("requests", () => {
     await expect(beadsForgeProvider.getIssue(REPO, beadNumber("dfat-1"))).rejects.toThrow(
       /now serves a different workspace/
     );
-    // The number is no longer known, and the stale stamp is gone: the next
-    // lookup relists without one.
+    // The number is no longer known, and a ref resolved against the old
+    // workspace keeps naming it, so the server goes on refusing it.
     fetchMock().mockResolvedValueOnce(page([])).mockResolvedValueOnce(page([]));
     await expect(beadsForgeProvider.getIssue(REPO, beadNumber("dfat-1"))).resolves.toBeNull();
     expect(call(2).url.pathname).toBe("/dfat/v0/beads/issues");
-    expect(call(2).headers["Bd-Project-Id"]).toBeUndefined();
+    expect(call(2).headers["Bd-Project-Id"]).toBe("proj-1");
+    // The next resolve asks the server who it is again, and stamps that.
+    setServerUrlSettingReader(async () => SERVER);
+    fetchMock().mockResolvedValueOnce(json({ database: "other", project_id: "proj-2" }));
+    const repo = await beadsForgeProvider.resolveIssueRepo!("/projects/dfat");
+    expect(call(4).url.pathname).toBe("/dfat/v0/beads/context");
+    fetchMock().mockResolvedValueOnce(page([]));
+    await beadsForgeProvider.listIssues(repo!, {});
+    expect(call(5).headers["Bd-Project-Id"]).toBe("proj-2");
+  });
+
+  it("doesn't learn numbers from a response that lands after a reset", async () => {
+    let answer!: (r: Response) => void;
+    fetchMock().mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    const pending = beadsForgeProvider.listIssues(REPO, {});
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+    clearBeadsCaches();
+    answer(page([bead("dfat-1")]));
+    await pending;
+    fetchMock().mockResolvedValueOnce(page([])).mockResolvedValueOnce(page([]));
+    await expect(beadsForgeProvider.getIssue(REPO, beadNumber("dfat-1"))).resolves.toBeNull();
+    expect(call(1).url.pathname).toBe("/dfat/v0/beads/issues");
   });
 });
 

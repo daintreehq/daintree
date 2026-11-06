@@ -125,6 +125,8 @@ export function clearBeadsCaches(): void {
 }
 
 function forgetServer(server: string): void {
+  // Work in flight learned from the old workspace; none of it may land.
+  generation++;
   numbers.forget(server);
   serverProjects.delete(server);
   for (const key of [...contextCache.keys()]) {
@@ -145,6 +147,17 @@ function tokenFor(server: string, op: Op): string | null {
 const WITHHELD_TOKEN_HINT =
   "This Beads server's address came from the project's .beads/http_target.json, so the saved token isn't sent to it. Enter the address as the Beads server URL in Project settings to use the token.";
 
+/**
+ * The workspace a ref was resolved against. Pinned to the ref rather than read
+ * from the shared map, so an operation already under way keeps refusing the
+ * old workspace's beads at an address that now serves another one.
+ */
+function projectIdOf(repo: RepoRef): string | undefined {
+  const pinned = (repo.rawData as { projectId?: unknown } | null)?.projectId;
+  if (typeof pinned === "string" && pinned) return pinned;
+  return serverProjects.get(serverOf(repo));
+}
+
 /** The server a ref addresses. `owner` carries it, since `rawData` is opaque to the host. */
 function serverOf(repo: RepoRef): string {
   return repo.owner;
@@ -161,7 +174,7 @@ async function request<T>(
     return await beadsRequest<T>(server, {
       ...req,
       token,
-      projectId: serverProjects.get(server),
+      projectId: projectIdOf(repo),
       ...(op.token && !token ? { withheldTokenHint: WITHHELD_TOKEN_HINT } : {}),
     });
   } catch (err) {
@@ -183,9 +196,9 @@ function beadPath(id: string, suffix = ""): string {
   return `/v0/beads/issues/${encodeURIComponent(id)}${suffix}`;
 }
 
-function remember(repo: RepoRef, node: BeadNode): Issue {
+function remember(repo: RepoRef, node: BeadNode, op: Op): Issue {
   const issue = mapBead(node);
-  numbers.remember(serverOf(repo), node.id, issue.number);
+  if (isCurrent(op)) numbers.remember(serverOf(repo), node.id, issue.number);
   return issue;
 }
 
@@ -220,7 +233,7 @@ function checkOrder(opts: ListOptions): void {
 
 async function getBead(repo: RepoRef, id: string, op: Op): Promise<Issue | null> {
   try {
-    return remember(repo, await request<BeadNode>(repo, op, { path: beadPath(id) }));
+    return remember(repo, await request<BeadNode>(repo, op, { path: beadPath(id) }), op);
   } catch (err) {
     if (err instanceof BeadsApiError && err.status === 404) return null;
     throw err;
@@ -250,6 +263,9 @@ async function resolveBeadId(repo: RepoRef, number: number, op: Op): Promise<str
         path: "/v0/beads/issues",
         query: { ...query, limit: LOOKUP_PAGE_SIZE, cursor },
       });
+      if (!isCurrent(op)) {
+        throw new Error(`The Beads connection changed while looking up #${number}. Try again.`);
+      }
       for (const item of data.items) numbers.remember(server, item.id, beadNumber(item.id));
       const found = numbers.lookup(server, number);
       if (found) return found;
@@ -286,7 +302,7 @@ async function patchBead(
     path: beadPath(id),
     body: { actor, patch, ...extra },
   });
-  return remember(repo, data.issue);
+  return remember(repo, data.issue, op);
 }
 
 function undoKey(repo: RepoRef, id: string): string {
@@ -322,7 +338,9 @@ async function countOpenBeads(repo: RepoRef, op: Op): Promise<number | null> {
       query: { limit: COUNT_PAGE_SIZE, cursor },
     });
     count += data.items.length;
-    for (const item of data.items) numbers.remember(serverOf(repo), item.id, beadNumber(item.id));
+    if (isCurrent(op)) {
+      for (const item of data.items) numbers.remember(serverOf(repo), item.id, beadNumber(item.id));
+    }
     if (!data.has_more || !data.next_cursor) return count;
     cursor = data.next_cursor;
   }
@@ -414,10 +432,10 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async resolveIssueRepo(projectPath: string): Promise<RepoRef | null> {
+    const op = beginOp();
     const target = await resolveServerUrl(projectPath, await serverUrlSettingReader?.(projectPath));
     if (!target) return null;
     const serverUrl = target.url;
-    const op = beginOp();
     if (target.source === "setting" || isLoopbackUrl(serverUrl)) trustedServers.add(serverUrl);
     const cacheKey = `${op.version}\u0000${serverUrl}`;
     let context = contextCache.get(cacheKey);
@@ -445,9 +463,10 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
 
   async listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
     checkOrder(opts);
+    const op = beginOp();
     const limit = Math.min(Math.max(opts.perPage ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     const search = opts.search?.trim();
-    const data = await request<IssuesPage>(repo, beginOp(), {
+    const data = await request<IssuesPage>(repo, op, {
       path: "/v0/beads/issues",
       query: {
         ...stateQuery(opts.state),
@@ -459,7 +478,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
       },
     });
     return {
-      items: data.items.map((node) => remember(repo, node)),
+      items: data.items.map((node) => remember(repo, node, op)),
       nextCursor: data.has_more ? (data.next_cursor ?? null) : null,
       hasMore: data.has_more && Boolean(data.next_cursor),
     };
@@ -500,7 +519,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
         priority: 2,
       },
     });
-    return remember(repo, node);
+    return remember(repo, node, op);
   },
 
   /**
@@ -586,7 +605,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
       path: beadPath(id, ":close"),
       body: { actor, ...(stateReason ? { reason: CLOSE_REASONS[stateReason] } : {}) },
     });
-    return remember(repo, data.issue);
+    return remember(repo, data.issue, op);
   },
 
   async reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue> {
@@ -598,7 +617,7 @@ export const beadsForgeProvider: ForgeIssueProviderImpl = {
       path: beadPath(id, ":reopen"),
       body: { actor },
     });
-    return remember(repo, data.issue);
+    return remember(repo, data.issue, op);
   },
 
   async editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue> {
