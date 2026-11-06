@@ -778,9 +778,9 @@ export function HelpSessionTabs({
   // lane is reached through the picker, so it takes the focus a lane would.
   const focusSlot = useCallback(
     (slot: number) =>
-      (
-        tabElement(slot) ?? rowEl?.querySelector<HTMLElement>("[data-session-picker]")
-      )?.focus({ preventScroll: true }),
+      (tabElement(slot) ?? rowEl?.querySelector<HTMLElement>("[data-session-picker]"))?.focus({
+        preventScroll: true,
+      }),
     [rowEl, tabElement]
   );
 
