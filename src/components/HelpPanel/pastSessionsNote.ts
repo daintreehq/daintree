@@ -44,10 +44,10 @@ export interface PendingCloseCost {
 export function closeSessionDescription({ working, agentId, dormant, sole }: PendingCloseCost) {
   const agentName = agentId ? (getAgentConfig(agentId)?.name ?? agentId) : "The agent";
   const ends = working
-    ? `${agentName} is working. Closing stops its current turn and closes this tab.`
+    ? `${agentName} is working. Closing stops its current turn and closes this session.`
     : dormant
-      ? "This tab closes."
-      : `${agentName} stops and this tab closes.`;
+      ? "This session closes."
+      : `${agentName} stops and this session closes.`;
   return `${ends} You can't resume this conversation in Daintree.${sole ? " The assistant panel closes too." : ""}`;
 }
 

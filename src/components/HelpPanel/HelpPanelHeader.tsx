@@ -273,7 +273,8 @@ export function HelpPanelHeader({
           conversation, while the strip a row below grew a control that opened
           another session — two plus-shaped affordances a few pixels apart doing
           different things, and only the destructive one was visible. Restarting
-          is now a named overflow item, and the strip owns the only `+`. */}
+          is now a named overflow item, and a new session lives in the strip's
+          session menu. */}
       {scope === "global" && (
         <div ref={globalControlsRef} className="contents" data-testid="assistant-global-controls" />
       )}
@@ -299,11 +300,10 @@ export function HelpPanelHeader({
           <DropdownMenuContent align="end" className="min-w-[180px]">
             {/* Named for what it does to the conversation, not for what it does to
               the session. "Start new session" read as "give me another session",
-              which is the strip's `+` — and this is the one that throws the
-              current conversation away. Opening a parallel session is NOT
-              mirrored here: the strip's `+` is its single home. Opening one on
-              a particular agent is, because the `+` starts the default and has
-              no room to ask (#13442). */}
+              which is the strip's "New session" — and this is the one that
+              throws the current conversation away. Opening a parallel session
+              is NOT mirrored here: the strip's menu is its single home. Opening
+              one on a particular agent is (#13442). */}
             {canRestartConversation && (
               <>
                 <DropdownMenuItem destructive onSelect={onRestartConversation}>
