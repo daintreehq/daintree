@@ -1293,7 +1293,10 @@ describe("HelpSessionTabs past three lanes (#16218)", () => {
       },
     });
   }
-  const flushTimers = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  // Past the zero-delay timers a menu's focus restore and the strip's blur settle run on.
+  const DEFERRED_FOCUS_SETTLE_MS = 20;
+  const flushTimers = () =>
+    act(() => new Promise((resolve) => setTimeout(resolve, DEFERRED_FOCUS_SETTLE_MS)));
   const picker = () => screen.queryByTestId("assistant-session-picker");
   const openPicker = async () => {
     fireEvent.keyDown(picker()!, { key: "Enter" });
