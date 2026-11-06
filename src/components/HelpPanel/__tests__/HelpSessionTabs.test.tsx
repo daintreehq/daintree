@@ -98,6 +98,16 @@ const openPicker = async () => {
 };
 const description = () =>
   document.getElementById(picker().getAttribute("aria-describedby") ?? "")?.textContent ?? null;
+/**
+ * A menu a previous test closed arms the one-shot close-time tooltip suppression on
+ * whatever takes focus next; let something else take it before a tooltip is opened.
+ */
+const spendTooltipSuppression = () => {
+  const sink = document.createElement("button");
+  document.body.appendChild(sink);
+  act(() => sink.focus());
+  sink.remove();
+};
 // Past the exit animation and the zero-delay timer a menu's focus restore runs on.
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 250)));
 
@@ -196,13 +206,59 @@ describe("HelpSessionTabs", () => {
     ]);
     expect(description()).toBe("working, 1 other session working, 1 other session directing");
 
-    // Quiet lanes draw and say nothing.
-    rerender(strip({ tabs: lanes(MAX_ASSISTANT_SLOTS, () => ({ agentState: "waiting" })) }));
+    // An agent that reported it is waiting is counted too.
+    rerender(
+      strip({
+        tabs: lanes(3, (slot) => (slot > 0 ? { agentState: "waiting", isLive: true } : {})),
+      })
+    );
+    expect(counts()).toEqual([["waiting", "2"]]);
+    expect(description()).toBe("2 other sessions waiting");
+
+    // A lane merely ready at its prompt, or finished, is not activity to count.
+    rerender(
+      strip({
+        tabs: lanes(3, (slot) => ({
+          agentState: slot === 1 ? "idle" : slot === 2 ? "completed" : undefined,
+          isLive: slot > 0,
+        })),
+      })
+    );
     expect(pill()).toBeNull();
     expect(picker().hasAttribute("aria-describedby")).toBe(false);
   });
 
+  it("marks every lane the way an agent terminal's tab does", async () => {
+    const tabs = lanes(6, (slot) => {
+      const states: Array<Partial<HelpSessionTab>> = [
+        { agentState: "working", isLive: true },
+        { agentState: "waiting", isLive: true },
+        { agentState: "directing", isLive: true },
+        // At its prompt with an agent bound: ready for input.
+        { agentState: "idle", isLive: true },
+        { agentState: "exited", isLive: true },
+        // Nothing bound yet.
+        { agentState: undefined, isLive: false },
+      ];
+      return states[slot]!;
+    });
+    const { rerender } = render(strip({ tabs, activeSlot: 3 }));
+    const rows = within(await openPicker()).getAllByRole("menuitemradio");
+    expect(
+      rows.map((row) => row.querySelector("[data-agent-state]")?.getAttribute("data-agent-state"))
+    ).toEqual(["working", "waiting", "directing", "waiting", undefined, undefined]);
+    // The trigger draws the selected lane's mark and says it.
+    expect(
+      picker().querySelector(":scope > [data-agent-state]")?.getAttribute("data-agent-state")
+    ).toBe("waiting");
+    expect(description()).toContain("waiting");
+
+    rerender(strip({ tabs, activeSlot: 5 }));
+    expect(picker().querySelector(":scope > [data-agent-state]")).toBeNull();
+  });
+
   it("explains in words what only a glyph says, and stays quiet for a bare Session N", async () => {
+    spendTooltipSuppression();
     const { rerender } = render(strip({ tabs: lanes(2) }));
     fireEvent.pointerMove(picker());
     fireEvent.focus(picker());
@@ -493,12 +549,7 @@ describe("HelpSessionTabs — what the tabs used to pin, as the picker carries i
       agentId: slot === 0 ? "claude" : "codex",
       ...(slot === 0 ? { label: "Refactor the…", fullTitle: "Refactor the session store" } : {}),
     }));
-    // A menu closed by the test before arms the one-shot close-time tooltip suppression
-    // on whatever takes focus next; let something else take it.
-    const sink = document.createElement("button");
-    document.body.appendChild(sink);
-    act(() => sink.focus());
-    sink.remove();
+    spendTooltipSuppression();
     render(strip({ tabs }));
     fireEvent.focus(picker());
     const tip = await screen.findByRole("tooltip");

@@ -20,14 +20,14 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isTabCloseKey } from "@/hooks/useKeyboardTabClose";
 import { pluralize } from "@/lib/pluralize";
 import type { AgentState } from "@/types";
+import { STATE_COLORS, STATE_ICONS, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
 
 /**
- * The states a lane's marker draws: work in flight, either the agent's or the
- * user's own. A stop draws nothing. Amber is only for an ask Canopy read, and
- * Canopy never reads an assistant (it reads fleet runs, and assistants aren't
- * any), so a lane sitting at its prompt is not asking for anything and wears no
- * waiting ring. Idle and exited lanes stay quiet too.
+ * The states the header's scope switch marks on the scope that is off screen: work
+ * in flight, the agent's or the user's own. The session picker draws more (see
+ * {@link laneDisplayState}).
  */
 type TabMarkerState = "working" | "directing";
 
@@ -36,17 +36,11 @@ function tabMarkerState(agentState: AgentState | null | undefined): TabMarkerSta
 }
 
 /**
- * Per-lane state marker (#12108).
+ * The activity mark the header's scope switch puts on the scope that is off screen.
  *
- * Same glyphs and the same tokens the rest of the app uses for agent state, at the
- * 14px the header used to draw them at. This is the whole reason the strip carries
- * state at all: a background session at work is otherwise invisible until the user
- * happens to switch to it.
- *
- * The size is load-bearing rather than cosmetic. These marks are read peripherally,
- * and at 12px the silhouettes stopped being separable from each other — a filled
- * ring and a gapped arc collapse to "small coloured dot", which leaves hue as the
- * only carrier and fails exactly the reader who most needs a second cue.
+ * Same glyphs and tokens as an agent terminal, at 14px: these are read peripherally,
+ * and at 12px a filled ring and a gapped arc collapse to "small coloured dot", which
+ * leaves hue as the only carrier.
  */
 export function TabStateIndicator({ agentState }: { agentState: AgentState | null | undefined }) {
   const marker = tabMarkerState(agentState);
@@ -118,6 +112,40 @@ function SessionLabel({ label, isTaskTitle }: { label: string; isTaskTitle: bool
 
 const EMPTY_AGENT_IDS: readonly string[] = [];
 
+/**
+ * What a lane's glyph says, by the rule an agent terminal's tab follows
+ * (`getTerminalAgentDisplayState`): working, waiting or directing as observed, a live
+ * agent at its prompt as waiting (ready for input), and nothing once it has exited or
+ * while no agent is bound.
+ */
+function laneDisplayState(tab: HelpSessionTab): AgentState | undefined {
+  return getTerminalAgentDisplayState(
+    { isAgent: tab.isLive === true, hasExited: tab.agentState === "exited" },
+    tab.agentState ?? undefined
+  );
+}
+
+/**
+ * A lane's state glyph in the picker: the agent terminal's own marks and hues, at the
+ * 14px these are read at peripherally, where a filled ring and a gapped arc stay
+ * separable.
+ */
+function SessionStateGlyph({ state }: { state: AgentState | undefined }) {
+  if (!state) return null;
+  const Icon = STATE_ICONS[state];
+  return (
+    <span data-agent-state={state} aria-hidden="true" className="flex shrink-0">
+      <Icon
+        className={cn(
+          "w-3.5 h-3.5",
+          STATE_COLORS[state],
+          state === "working" && "animate-spin-slow motion-reduce:animate-none"
+        )}
+      />
+    </span>
+  );
+}
+
 export interface HelpSessionTab {
   slot: number;
   /** What the lane is called: the agent's trimmed task title, or `Session N`. */
@@ -136,6 +164,8 @@ export interface HelpSessionTab {
    * header's own gate for "Restart conversation".
    */
   canRestart?: boolean;
+  /** A terminal and an agent are bound, so a lane at its prompt reads as ready. */
+  isLive?: boolean;
 }
 
 /**
@@ -171,20 +201,22 @@ interface HelpSessionTabsProps {
 }
 
 /**
- * How many lanes other than the selected one each marker covers: what the closed
- * picker says about the sessions it isn't showing.
+ * What the closed picker counts on the lanes it isn't showing: work in flight, and an
+ * agent that reported it is waiting. A lane that is merely ready at its prompt shows
+ * that in the list, not in the count, or every live lane would be counted.
  */
+type BackgroundMarker = "working" | "waiting" | "directing";
+const BACKGROUND_MARKERS: readonly BackgroundMarker[] = ["working", "waiting", "directing"];
+
 function backgroundMarkerCounts(tabs: readonly HelpSessionTab[], activeSlot: number) {
-  const counts: Record<TabMarkerState, number> = { working: 0, directing: 0 };
+  const counts: Record<BackgroundMarker, number> = { working: 0, waiting: 0, directing: 0 };
   for (const tab of tabs) {
     if (tab.slot === activeSlot) continue;
-    const marker = tabMarkerState(tab.agentState);
-    if (marker) counts[marker] += 1;
+    const state = tab.agentState;
+    if (state === "working" || state === "waiting" || state === "directing") counts[state] += 1;
   }
   return counts;
 }
-
-const BACKGROUND_MARKERS: readonly TabMarkerState[] = ["working", "directing"];
 
 /**
  * The session strip: one menu button naming the session on screen, whatever the lane
@@ -246,7 +278,8 @@ export function HelpSessionTabs({
   // The agent joins the name rather than the description: it is what tells two
   // `Session N` lanes apart, which is the job of a name.
   const title = agentName ? `${activeTitle} — ${agentName}` : activeTitle;
-  const marker = tabMarkerState(activeTab.agentState);
+  const activeState = laneDisplayState(activeTab);
+  const marker = activeState ? STATE_LABELS[activeState] : null;
   const background = backgroundMarkerCounts(tabs, activeTab.slot);
   const backgroundSummary = BACKGROUND_MARKERS.flatMap((kind) =>
     background[kind] > 0 ? [`${pluralize(background[kind], "other session")} ${kind}`] : []
@@ -262,7 +295,7 @@ export function HelpSessionTabs({
   const canRestart = !!onRestart && !!activeTab.canRestart;
   // One column per kind of leading glyph across every row, so titles share a left edge
   // whether or not their lane is busy.
-  const stateColumn = tabs.some((t) => tabMarkerState(t.agentState) !== null);
+  const stateColumn = tabs.some((t) => laneDisplayState(t) !== undefined);
   const capReason = (
     <span className="sr-only">, {MAX_ASSISTANT_SLOTS} sessions is the maximum for one project</span>
   );
@@ -308,7 +341,7 @@ export function HelpSessionTabs({
                 )}
               >
                 {agentName && activeTab.agentId && <TabAgentMark agentId={activeTab.agentId} />}
-                <TabStateIndicator agentState={activeTab.agentState} />
+                <SessionStateGlyph state={activeState} />
                 <span className="flex min-w-0 flex-1 items-center">
                   <SessionLabel
                     label={activeTitle}
@@ -327,7 +360,7 @@ export function HelpSessionTabs({
                     {BACKGROUND_MARKERS.map((kind) =>
                       background[kind] > 0 ? (
                         <span key={kind} data-marker={kind} className="flex items-center gap-0.5">
-                          <TabStateIndicator agentState={kind} />
+                          <SessionStateGlyph state={kind} />
                           {background[kind]}
                         </span>
                       ) : null
@@ -394,7 +427,8 @@ export function HelpSessionTabs({
             onValueChange={(value) => handOff(() => onSelect(Number(value)))()}
           >
             {tabs.map((tab) => {
-              const itemMarker = tabMarkerState(tab.agentState);
+              const itemState = laneDisplayState(tab);
+              const itemMarker = itemState ? STATE_LABELS[itemState] : null;
               const itemAgent = showAgent && tab.agentId ? agentDisplayName(tab.agentId) : null;
               const itemTitle = tab.fullTitle ?? tab.label;
               return (
@@ -418,7 +452,7 @@ export function HelpSessionTabs({
                     )}
                     {stateColumn && (
                       <span className="mt-px flex size-3.5 shrink-0">
-                        <TabStateIndicator agentState={tab.agentState} />
+                        <SessionStateGlyph state={itemState} />
                       </span>
                     )}
                     {/* Wrapped, never truncated: this list is where a title is read whole. */}

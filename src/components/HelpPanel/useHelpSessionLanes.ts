@@ -192,6 +192,7 @@ export function useHelpSessionLanes({
           agentState: laneAgentStates[index],
           agentId: laneAgentIds[index] ?? null,
           canRestart: laneIsLive[index] || pausedLane?.slot === slot,
+          isLive: laneIsLive[index],
         };
       }),
     [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneIsLive, pausedLane]
