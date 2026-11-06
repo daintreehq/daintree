@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import Module from "module";
 import { patchNodePtyConptySource } from "./patchNodePtyConpty.cjs";
+import { patchNodePtyConsoleListSource } from "./patchNodePtyConsoleList.cjs";
 
 const mockRebuild = vi.fn();
 const mockExecSync = vi.fn();
@@ -33,11 +34,26 @@ const UNPATCHED_CONPTY = fs.readFileSync(
   "utf8"
 );
 const PATCHED_CONPTY = patchNodePtyConptySource(UNPATCHED_CONPTY);
+const PTY_AGENT_JS = path.resolve(
+  __dirname,
+  "..",
+  "node_modules",
+  "node-pty",
+  "lib",
+  "windowsPtyAgent.js"
+);
+const UNPATCHED_PTY_AGENT = fs.readFileSync(PTY_AGENT_JS, "utf8");
+const PATCHED_PTY_AGENT = patchNodePtyConsoleListSource(UNPATCHED_PTY_AGENT);
 
-function serveFiles({ gyp = UNPATCHED_GYP, conpty = PATCHED_CONPTY } = {}) {
+function serveFiles({
+  gyp = UNPATCHED_GYP,
+  conpty = PATCHED_CONPTY,
+  ptyAgent = PATCHED_PTY_AGENT,
+} = {}) {
   mockReadFileSync.mockImplementation((file: string) => {
     if (file === BINDING_GYP) return gyp;
     if (file === CONPTY_CC) return conpty;
+    if (file === PTY_AGENT_JS) return ptyAgent;
     throw new Error(`ENOENT: unexpected read of ${file}`);
   });
 }
@@ -324,5 +340,27 @@ describe("postinstall", () => {
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
     expect(errorCalls).toMatch(/node-pty conpty\.cc patch/);
     expect(errorCalls).toMatch(/#965/);
+  });
+  it("patches node-pty's windowsPtyAgent.js so a refused console-list fork can't crash the pty-host", async () => {
+    serveFiles({ gyp: PATCHED_GYP, ptyAgent: UNPATCHED_PTY_AGENT });
+
+    await runPostinstall();
+
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    const [writtenPath, written] = mockWriteFileSync.mock.calls[0];
+    expect(writtenPath).toBe(PTY_AGENT_JS);
+    expect(written).toBe(PATCHED_PTY_AGENT);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("fails the install when the windowsPtyAgent.js patch cannot apply", async () => {
+    serveFiles({ gyp: PATCHED_GYP, ptyAgent: "module.exports = {};\n" });
+
+    await runPostinstall();
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/node-pty windowsPtyAgent\.js patch/);
   });
 });
