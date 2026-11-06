@@ -10,7 +10,7 @@ Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as
 
 [![Release](https://img.shields.io/github/v/release/daintreehq/daintree?label=release&color=0f7a4a)](https://daintree.org/changelog) [![Build](https://img.shields.io/github/actions/workflow/status/daintreehq/daintree/ci.yml?branch=main&label=build)](https://github.com/daintreehq/daintree/actions/workflows/ci.yml?query=branch%3Amain) [![License](https://img.shields.io/badge/license-Apache%202.0-0f7a4a)](LICENSE)
 
-[Download](#download) · [How&nbsp;it&nbsp;works](#how-it-works) · [Agent&nbsp;CLIs](#agent-clis) · [MCP&nbsp;server](#mcp-server) · [Decisions](#daintree-decisions) · [Build&nbsp;from&nbsp;source](#build-from-source) · [Docs](#documentation)
+[Download](#download) · [How&nbsp;it&nbsp;works](#how-it-works) · [Agent&nbsp;CLIs](#agent-clis) · [MCP&nbsp;server](#mcp-server) · [Canopy](#canopy-inbox) · [Decisions](#daintree-decisions) · [Build&nbsp;from&nbsp;source](#build-from-source) · [Docs](#documentation)
 
 <picture>
   <source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset="https://cdn.daintree.org/readme/v2/shot-hero-daintree--narrow.webp">
@@ -140,6 +140,12 @@ The Assistant is Claude Code or Codex, signed in the way you already are, runnin
     <img alt="Claude Code running as the Daintree Assistant fans one request out over MCP to five agents in five worktrees. Four are working; feat/billing is waiting on you to approve overwriting a migration." src="https://cdn.daintree.org/readme/v2/assistant-dark-wide.webp" width="896">
   </picture>
 </p>
+
+## Canopy inbox
+
+One list of every agent across every open project, ranked by what it needs from you. Permission prompts go to the top, and you can answer them from the list; a risky one takes a second press. A run that went quiet behind a spinner, or has been waiting on you for ten minutes, surfaces instead of hiding in a pane. Every placement quotes the screen it came from, and Canopy never rewrites or hides what Daintree observed.
+
+Canopy reads each agent's screen with a small open model that runs on your computer, downloaded from Hugging Face the first time. Nothing it reads leaves the machine. It's off until you turn it on under **Settings → Integrations → Canopy**, then opens with <kbd>⌘</kbd>&nbsp;<kbd>E</kbd> (<kbd>Ctrl</kbd>&nbsp;<kbd>Shift</kbd>&nbsp;<kbd>O</kbd> on Windows and Linux).
 
 ## Daintree Decisions
 
