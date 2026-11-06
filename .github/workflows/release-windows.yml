@@ -18,6 +18,16 @@ on:
         required: false
         type: boolean
         default: false
+      package_only:
+        description: "Dry runs only — validate packaging after test gates have been proved separately"
+        required: false
+        type: boolean
+        default: false
+      package_artifact_run_id:
+        description: "Packaging-only dry runs: reuse the x64 and arm64 build artifacts from this run for assembly and final smoke"
+        required: false
+        type: string
+        default: ""
       smoke_artifact_run_id:
         description: "Optional existing release-windows run ID whose release-daintree-windows-latest artifact should be smoke-tested without rebuilding"
         required: false
@@ -45,7 +55,7 @@ env:
 
 jobs:
   checks:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    if: github.event_name != 'workflow_dispatch' || (inputs.smoke_artifact_run_id == '' && !(inputs.dry_run && inputs.package_only))
     name: Checks
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -70,7 +80,7 @@ jobs:
         run: npm run check
 
   unit-tests:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    if: github.event_name != 'workflow_dispatch' || (inputs.smoke_artifact_run_id == '' && !(inputs.dry_run && inputs.package_only))
     name: Unit Tests (Windows ${{ matrix.shard }}/2)
     runs-on: windows-2022
     # Windows runs the same suite ~2.6x slower than macOS (25m vs 9m30s at
@@ -101,7 +111,7 @@ jobs:
   # Spawns a child per perf scenario and takes 6-8 minutes on its own, so it
   # runs beside the unit suite instead of setting its tail (ci.yml does the same).
   perf-liveness:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    if: github.event_name != 'workflow_dispatch' || (inputs.smoke_artifact_run_id == '' && !(inputs.dry_run && inputs.package_only))
     name: Perf scenario liveness (Windows)
     runs-on: windows-2022
     timeout-minutes: 30
@@ -122,7 +132,7 @@ jobs:
         run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
 
   e2e-core-gate:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    if: github.event_name != 'workflow_dispatch' || (inputs.smoke_artifact_run_id == '' && !(inputs.dry_run && inputs.package_only))
     needs: [checks, unit-tests, perf-liveness]
     uses: ./.github/workflows/e2e.yml
     with:
@@ -136,7 +146,7 @@ jobs:
   # extra Windows slices to keep restart-heavy shards under the reusable
   # workflow timeout.
   e2e-full-gate:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    if: github.event_name != 'workflow_dispatch' || (inputs.smoke_artifact_run_id == '' && !(inputs.dry_run && inputs.package_only))
     needs: [checks, unit-tests, perf-liveness]
     strategy:
       fail-fast: false
@@ -155,7 +165,12 @@ jobs:
       platform: windows
 
   build-daintree-x64:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    # Packaging-only validation cannot publish: it applies only to dry runs.
+    if: >-
+      !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == '') && !(github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.package_only && inputs.package_artifact_run_id != '') && ((github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.package_only) ||
+       (needs.checks.result == 'success' && needs.unit-tests.result == 'success' &&
+        needs.perf-liveness.result == 'success' && needs.e2e-core-gate.result == 'success' &&
+        needs.e2e-full-gate.result == 'success'))
     needs: [checks, unit-tests, perf-liveness, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Windows x64)
     runs-on: windows-2022
@@ -343,7 +358,12 @@ jobs:
           if-no-files-found: error
 
   build-daintree-arm64:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    # Packaging-only validation cannot publish: it applies only to dry runs.
+    if: >-
+      !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == '') && !(github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.package_only && inputs.package_artifact_run_id != '') && ((github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.package_only) ||
+       (needs.checks.result == 'success' && needs.unit-tests.result == 'success' &&
+        needs.perf-liveness.result == 'success' && needs.e2e-core-gate.result == 'success' &&
+        needs.e2e-full-gate.result == 'success'))
     needs: [checks, unit-tests, perf-liveness, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Windows arm64)
     runs-on: windows-11-arm
@@ -437,7 +457,10 @@ jobs:
           if-no-files-found: error
 
   assemble-windows-release:
-    if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
+    # Explicit status checks also allow deliberately skipped dry-run ancestors.
+    if: >-
+      !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == '') && ((github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.package_only && inputs.package_artifact_run_id != '') ||
+       (needs.build-daintree-x64.result == 'success' && needs.build-daintree-arm64.result == 'success'))
     needs: [build-daintree-x64, build-daintree-arm64]
     name: Assemble Windows release
     runs-on: ubuntu-22.04
@@ -467,12 +490,16 @@ jobs:
         with:
           name: release-daintree-windows-x64
           path: release/
+          run-id: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.package_only && inputs.package_artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download arm64 artifacts
         uses: actions/download-artifact@v7
         with:
           name: release-daintree-windows-arm64
           path: release/
+          run-id: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.package_only && inputs.package_artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Generate and validate update metadata
         shell: bash
