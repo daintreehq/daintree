@@ -1691,6 +1691,8 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
 
     h.delivery.start();
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    // The relay report is real async work a fixed clock step can outrun on a slow runner.
+    await until(async () => (await messageOf(h, M1)).delivery?.reported === "received");
     expect(h.client.submitted).toEqual([]);
     expect((await messageOf(h, M1)).delivery).toMatchObject({
       status: "received",
